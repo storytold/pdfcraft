@@ -100,7 +100,7 @@ fn plural_ukrainian(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 14] = [
+pub static LANGUAGES: [LangInfo; 15] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -127,6 +127,8 @@ pub static LANGUAGES: [LangInfo; 14] = [
     LangInfo { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
     // Ukrainian; every `uk-*` locale (`uk-UA`, `uk_UA.UTF-8`) resolves here.
     LangInfo { code: "uk", name: "Українська", source: include_str!("uk.tsv"), plural: plural_ukrainian, catalog: OnceLock::new() },
+    // Italian; every `it-*` locale (`it-IT`) resolves here.
+    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -719,6 +721,37 @@ mod tests {
         assert!(missing.is_empty(), "untranslated Japanese UI literals: {missing:#?}");
     }
 
+    /// Italian translates every registered command and every All tools group, section and item.
+    #[test]
+    fn italian_covers_commands_and_catalogue() {
+        let it = Lang::from_code("it").expect("it registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(it, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(it, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(it, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(it, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(it, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// New tl!("literal") labels must not silently fall back to English in Italian.
+    #[test]
+    fn italian_covers_ui_literals() {
+        let it = Lang::from_code("it").expect("it registered");
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(it, label)).collect();
+        assert!(missing.is_empty(), "untranslated Italian UI literals: {missing:#?}");
+    }
+
     /// With craft-fonts, every Japanese translation has glyphs: with all interface faces (desktop)
     /// and with BIZ UDPGothic Regular alone (the web build's only Japanese face).
     #[test]
@@ -816,6 +849,78 @@ mod tests {
         let mut restored = crate::PdfCraftApp::default();
         restored.restore(&app.persist());
         assert_eq!(restored.language, "pt-br");
+    }
+
+    /// Brazilian Portuguese translates every registered command and every All tools group, section and item.
+    #[test]
+    fn brazilian_portuguese_covers_commands_and_catalogue() {
+        let pt = Lang::from_code("pt-br").expect("pt-br registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(pt, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(pt, menu), "missing menu: {menu}");
+            }
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(pt, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(pt, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(pt, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// Check direct lookups and multiline literals as well as ordinary tl!("literal") calls,
+    /// following the complete-catalog check for Simplified Chinese.
+    #[test]
+    fn brazilian_portuguese_covers_ui_literals() {
+        let pt = Lang::from_code("pt-br").expect("pt-br registered");
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literals = std::collections::BTreeSet::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).expect("UI source directory") {
+                let path = entry.expect("UI source entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|name| name != "i18n") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(path).expect("UI source file").replace("\r\n", "\n").replace("crate::i18n::t(", "tl!(");
+                    let mut rest = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+                    while let Some((_, after)) = rest.split_once("tl!(") {
+                        let after = after.trim_start();
+                        let Some(after) = after.strip_prefix('"') else {
+                            rest = after;
+                            continue;
+                        };
+                        let mut escaped = false;
+                        let end = after
+                            .char_indices()
+                            .find_map(|(i, c)| {
+                                if c == '"' && !escaped {
+                                    return Some(i);
+                                }
+                                escaped = c == '\\' && !escaped;
+                                None
+                            })
+                            .expect("closed tl! literal");
+                        let (raw, tail) = after.split_at(end);
+                        let closing = tail.strip_prefix('"').expect("closing quote").trim_start();
+                        let closing = closing.strip_prefix(',').unwrap_or(closing).trim_start();
+                        if closing.starts_with(')') {
+                            let label: String = serde_json::from_str(&format!("\"{raw}\"")).expect("UI literal escapes");
+                            literals.insert(label);
+                        }
+                        rest = tail.strip_prefix('"').expect("closing quote");
+                    }
+                }
+            }
+        }
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(pt, label)).collect();
+        assert!(missing.is_empty(), "untranslated Brazilian Portuguese UI literals: {missing:#?}");
     }
 
     #[test]
