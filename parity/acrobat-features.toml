@@ -6696,8 +6696,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution)"
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
 
 [[feature]]
 id = "create.from-multipage-tiff"
