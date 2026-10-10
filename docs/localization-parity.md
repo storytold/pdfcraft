@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first per-language status, measured from the catalogs) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Chinese UI source fix prepared; released-version assessment retained) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -45,6 +45,8 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 languages. **≈ 60–115 h** to bring all twelve to `full`, of which ≈ 35–60 h is engineering (Hans
 face, RTL layout, bidi text) and the rest catalogs and fixes; native-speaker review needs humans.
 
+**Next release:** the source now includes Droid Sans Fallback for Simplified and Traditional Chinese on desktop and web. Tests cover every translated character and prevent Japanese/tofu fallbacks, and packages retain font notices. The table above describes existing releases; readiness percentages and review status await release verification.
+
 No language is `full` except English: every catalog leaves engine error details in English, and
 none has translated help.
 
@@ -69,4 +71,5 @@ Hebrew.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Chinese UI font delivery and full catalog glyph gates prepared for the next release; released-version percentages unchanged |
 | 2026-10-10 | major | Created. Catalog counts measured from `crates/ui-egui/src/i18n/*.tsv` against the 2,143-key union; Acrobat's localizations from its bundle's `.lproj` and Sequences folder names |

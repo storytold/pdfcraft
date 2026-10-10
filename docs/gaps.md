@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha markers removed after the gate was re-judged: no gap blocks alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Chinese UI source fix prepared; existing release status and estimates retained) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
@@ -107,13 +107,13 @@ update the numbers.
 
 ### 5. Chinese UI shows missing-glyph boxes in releases
 
-- **Missing:** a Simplified Chinese (`Hans`) UI face in release builds and a working fallback.
+- **Release status:** existing releases lack an allowed Chinese UI face. The source now pins Droid Sans Fallback for Hans/Hant on desktop and web, with complete catalog glyph gates and packaged licences; release verification remains. This does not fix Chinese PDF text editing, rendering, search or OCR.
 - **Evidence:** [#826](https://github.com/storytold/pdfcraft/issues/826),
   [#688](https://github.com/storytold/pdfcraft/issues/688),
   [#728](https://github.com/storytold/pdfcraft/issues/728),
   [#758](https://github.com/storytold/pdfcraft/issues/758),
   [#689](https://github.com/storytold/pdfcraft/issues/689) (Flatpak). `AGENTS.md` §1.1 bars Noto
-  CJK (Source Han rebranded), so craft-fonts needs another openly licensed Hans face.
+  CJK (Source Han rebranded), so the new craft-fonts pin supplies the independently designed Apache-2.0 Droid Sans Fallback face.
 - **Impact:** the second-largest language group sees a broken interface although the catalog is 97%
   translated.
 - **Estimate:** 6–12 h (font sourcing in craft-fonts plus the fallback chain). **Doc:**
@@ -300,6 +300,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Gap 5: Chinese UI font delivery and glyph gates implemented in source; existing releases still need replacement and verification |
 | 2026-10-10 | minor | Removed the alpha markers: with the cross-app gate rule, gaps 1 and 8 are partial sub-cases, not blockers; stage alpha |
 | 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |
 | 2026-10-10 | major | Created. Ranked 24 gaps from the 2026-10-10 re-measure, the open GitHub issues and the former ROADMAP.md §Where we're lacking and where we're going (renderer, hardening, fidelity, editing, Pro workflows, 1.0 polish), which this file replaces |

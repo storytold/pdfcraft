@@ -19,7 +19,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "d79b409519f49bc8d257eda7abb3381a0fc62fec31c88712c95c53c95d756162"
+sha256 = "c76213054530160ff5428735bf55eeb553a9c3e381b159332305bf8ff1df0695"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/zh-hant.tsv"
@@ -3223,13 +3223,13 @@ sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"
-title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho; Arabic font: Noto Sans Arabic"
-author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU), The Noto Project Authors (Noto Sans Arabic)"
-source = "https://github.com/storytold/craft-fonts (pinned by commit in .github/workflows/release.yml)"
-licence = "OFL-1.1"
-attribution = "https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md"
+title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho; Chinese UI font: Droid Sans Fallback; Arabic font: Noto Sans Arabic"
+author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU), The Noto Project Authors (Noto Sans Arabic), The Android Open Source Project (Droid Sans Fallback)"
+source = "https://github.com/storytold/craft-fonts/commit/1e39ddaf4c468a059c69ce11b5e5849fd54a39fa"
+licence = "OFL-1.1 AND Apache-2.0"
+attribution = "https://github.com/storytold/craft-fonts/blob/1e39ddaf4c468a059c69ce11b5e5849fd54a39fa/ATTRIBUTION.md"
 kind = "font"
-usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1)"
+usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Simplified and Traditional Chinese desktop/web interface fallback (Droid Sans Fallback, Apache-2.0); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds BIZ UDPGothic Regular, Droid Sans Fallback and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1)"
 
 [[asset]]
 path = "crates/sign/tests/data/x509-rsa-sha1.pdf"

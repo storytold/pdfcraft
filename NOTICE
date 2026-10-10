@@ -22,6 +22,10 @@ list (author, source, license) is in ATTRIBUTION.md.
   https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (BIZ UDPGothic, Shippori Mincho,
   BIZ UDMincho; the web build only BIZ UDPGothic Regular) under the SIL Open Font License 1.1. Those
   packages carry each font's licence as OFL-<family>.txt.
+- Chinese interface fallback from craft-fonts: Droid Sans Fallback, Copyright (c) 2005-2008
+  The Android Open Source Project — Apache License 2.0. Packages built with CRAFT_FONTS_DIR
+  carry its full licence and copyright notice as NOTICE-droid-sans-fallback.txt. The font is
+  unmodified; desktop and web builds include it.
 - hayro (rendering, via crates.io) — Apache-2.0 OR MIT. Its `embed-fonts` feature bundles the Foxit
   standard-14 Type 1 fonts under BSD-3-Clause ("Copyright 2014 PDFium Authors"), and hayro-cmap bundles
   Adobe CMap resources under BSD-3-Clause.

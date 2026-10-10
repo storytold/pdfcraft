@@ -133,6 +133,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-10 (M14, Chinese interface fonts):** desktop and web builds include Apache-2.0 Droid Sans Fallback through craft-fonts, preferring Hans/Hant faces for the selected Chinese language. CI checks every translated character in both Chinese catalogs against desktop and web font sets, including that primary-font gaps are covered by the Chinese face. Packages copy licences by manifest path (including upstream NOTICE without an extension), and MSI assertions verify every font licence. Parity counts and milestone estimates are unchanged.
+
 | Area | Shipped | What's strong / what's missing |
 |---|---|---|
 | A Core | 75% | Parser, repair, encryption, incremental saves. Missing: lazy loading (`ByteSource`), own image codecs, PDF 2.0 extras, Arlington validation |
