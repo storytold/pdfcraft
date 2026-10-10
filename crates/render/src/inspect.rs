@@ -264,6 +264,9 @@ pub struct Annotation {
     pub locked: bool,
     /// `/IT`, the intent: `FreeTextCallout`, `PolygonCloud`, `FreeTextTypeWriter`…
     pub intent: Option<String>,
+    /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
+    /// signature or initials (the rules of `pdfcraft_annot::is_fill_sign`).
+    pub fill_sign: bool,
 }
 
 impl Annotation {
@@ -551,6 +554,25 @@ impl<'a> Inspector<'a> {
 
     fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
         self.resolve(d.get(key).ok()?).as_name().ok().map(|n| String::from_utf8_lossy(n).into_owned())
+    }
+
+    /// Whether an annotation is a Fill & Sign mark. Keep in step with
+    /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
+    fn is_fill_sign(&self, d: &Dictionary, subtype: &str) -> bool {
+        let yes = |key: &[u8]| matches!(d.get(key).map(|o| self.resolve(o)), Ok(Object::Boolean(true)));
+        if yes(b"PCFillSign") {
+            return true;
+        }
+        match subtype {
+            "FreeText" => self.name(d, b"IT").as_deref() == Some("FreeTextTypeWriter"),
+            "Stamp" => match self.name(d, b"Name").as_deref() {
+                Some("PCCheck" | "PCCross" | "PCDot" | "PCLine" | "PCTypedSignature") => true,
+                Some("PCCustomSignature" | "PCCustomInitials") => yes(b"PCPictureImage"),
+                _ => false,
+            },
+            "Ink" => self.text(d, b"Subj").as_deref() == Some("Signature"),
+            _ => false,
+        }
     }
 
     fn page_of(&self, o: &Object) -> Option<usize> {
@@ -871,6 +893,7 @@ impl<'a> Inspector<'a> {
                     _ => Vec::new(),
                 };
                 let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+                let fill_sign = self.is_fill_sign(d, &subtype);
                 info.annotations.push(Annotation {
                     page,
                     subtype,
@@ -886,6 +909,7 @@ impl<'a> Inspector<'a> {
                     quads,
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
+                    fill_sign,
                 });
             }
         }
