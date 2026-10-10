@@ -74,6 +74,8 @@ mod home;
 mod icon_data;
 pub mod icons;
 pub mod last_session;
+#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+mod macos_menu;
 mod pageboxes;
 mod palette;
 mod panels;
@@ -426,6 +428,10 @@ pub struct PdfCraftApp {
     pub failed_inbox: FailedInbox,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    /// macOS: the native menu bar, when it is installed (issue #80). Absent everywhere else, and in
+    /// the UI tests, where the menus are drawn in the window instead.
+    #[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+    native_menu: Option<macos_menu::NativeMenu>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -649,6 +655,30 @@ fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
 }
 
 impl PdfCraftApp {
+    /// Whether the menus live in the native macOS menu bar, hiding the in-window menu (issue #80).
+    /// False everywhere else, and in the UI tests, which drive the in-window menu.
+    pub fn native_menu_active(&self) -> bool {
+        #[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+        {
+            self.native_menu.is_some()
+        }
+        #[cfg(not(all(target_os = "macos", not(target_arch = "wasm32"))))]
+        {
+            false
+        }
+    }
+
+    /// Put the app's menus in the macOS menu bar (issue #80). Call once, on the UI thread, after the
+    /// app is created; see [`macos_menu`].
+    #[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+    pub fn install_native_menu(&mut self) {
+        if self.native_menu.is_none() {
+            self.native_menu = Some(macos_menu::NativeMenu::install());
+        }
+    }
+}
+
+impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -690,6 +720,8 @@ impl PdfCraftApp {
             startup_superseded: false,
             failed_inbox: Default::default(),
             os_events: None,
+            #[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+            native_menu: None,
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -1850,6 +1882,11 @@ impl eframe::App for PdfCraftApp {
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
+        }
+        // The native macOS menu bar, when installed: run what was picked, and keep it in step.
+        #[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+        if self.native_menu.is_some() {
+            macos_menu::poll(self);
         }
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);

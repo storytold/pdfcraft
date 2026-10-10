@@ -45,6 +45,9 @@ skrifa = "0.44"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
+# The macOS menu bar (issue #80): safe AppKit menu wrappers (main-thread only). Objective-C class
+# declarations need `unsafe`, which this workspace forbids; muda wraps them.
+muda = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # Auto interface language: the Windows display language, without starting a process.
