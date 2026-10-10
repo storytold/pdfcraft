@@ -77,6 +77,10 @@ fn failed(e: impl std::fmt::Display) -> ToolError {
 const DEFAULT_DPI: f64 = 96.0;
 const MAX_DPI: f64 = 600.0;
 
+/// Bookmarks in one page of the bookmark list, by default and at most.
+const BOOKMARK_PAGE: usize = 100;
+const MAX_BOOKMARK_PAGE: usize = 1000;
+
 /// Page texts of one document version: (the working bytes, one slot per page).
 type TextCache = (Arc<Vec<u8>>, Vec<Option<Arc<PageText>>>);
 
@@ -242,7 +246,7 @@ impl Automation {
                 out["labels"] = json!(self.doc(&a)?.info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>());
                 out
             }
-            "bookmark_list" => json!({ "bookmarks": bookmark_tree(&self.doc(&a)?.info.outline, &[]) }),
+            "bookmark_list" => self.bookmark_listing(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -270,7 +274,9 @@ impl Automation {
             }
             "bookmark_from_structure" => {
                 let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
-                out["bookmarks"] = json!(bookmark_tree(&self.doc(&a)?.info.outline, &[]));
+                let listing = self.bookmark_listing(&a)?;
+                out["bookmarks"] = listing["bookmarks"].clone();
+                out["next"] = listing["next"].clone();
                 out
             }
             "doc_protect" => self.doc_protect(&a)?,
@@ -537,6 +543,8 @@ impl Automation {
             "link_delete" => self.link_delete(&a)?,
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
+            "object_list" => self.object_list(&a)?,
+            "object_move" => self.object_move(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
@@ -631,6 +639,24 @@ impl Automation {
     }
 
     // ---- documents ---------------------------------------------------------------------------
+
+    /// One page of a document's bookmarks: `offset` (from 0) and `limit` (1 to `MAX_BOOKMARK_PAGE`).
+    fn bookmark_listing(&self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        let offset = a.opt_int("offset")?.unwrap_or(0);
+        let offset = usize::try_from(offset).map_err(|_| ToolError::InvalidArgs("offset must be 0 or more".into()))?;
+        let limit = a.opt_int("limit")?.unwrap_or(BOOKMARK_PAGE as i64);
+        let limit = usize::try_from(limit)
+            .ok()
+            .filter(|l| (1..=MAX_BOOKMARK_PAGE).contains(l))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("limit must be from 1 to {MAX_BOOKMARK_PAGE}")))?;
+        let page = self
+            .session
+            .bookmark_page(id, offset, limit)
+            .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
+        Ok(json!({ "bookmarks": nest_rows(&page.rows), "next": page.next, "truncated": page.truncated }))
+    }
 
     fn doc(&self, a: &Args) -> Result<&Document> {
         let id = a.int("doc")?;
@@ -1046,7 +1072,7 @@ impl Automation {
                     (None, Some(p)) => {
                         let path = self.resolve(p, false)?;
                         let t = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), String::from_utf8_lossy(&t).into_owned())
+                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), pdfcraft_engine::decode_text(&t))
                     }
                     (None, None) => return Err(ToolError::InvalidArgs("text needs `text` or `path`".into())),
                 };
@@ -1704,17 +1730,36 @@ impl Args<'_> {
     }
 }
 
-/// The bookmark tree as JSON, with 1-based paths and pages.
-fn bookmark_tree(items: &[pdfcraft_render::OutlineItem], parent: &[usize]) -> Vec<Value> {
-    items
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            let mut path = parent.to_vec();
-            path.push(i + 1);
-            json!({ "path": path, "title": o.title, "page": o.page.map(|p| p + 1), "open": o.open, "children": bookmark_tree(&o.children, &path) })
-        })
-        .collect()
+/// Bookmark rows in listing order as JSON: a row holds the rows that follow it on the page at the
+/// next level down in `children`, and paths and pages are 1-based.
+fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow]) -> Vec<Value> {
+    // The open rows, outermost first, with their depth and the children gathered so far.
+    let mut open: Vec<(usize, Value, Vec<Value>)> = Vec::new();
+    let mut roots = Vec::new();
+    for row in rows {
+        let depth = row.path.len().saturating_sub(1);
+        while open.last().is_some_and(|(d, _, _)| *d >= depth) {
+            close_row(&mut open, &mut roots);
+        }
+        let path: Vec<usize> = row.path.iter().map(|p| p.saturating_add(1)).collect();
+        let fields = json!({ "path": path, "title": row.title, "page": row.page.map(|p| p.saturating_add(1)), "open": row.open });
+        open.push((depth, fields, Vec::new()));
+    }
+    while !open.is_empty() {
+        close_row(&mut open, &mut roots);
+    }
+    roots
+}
+
+/// Closes the innermost open row: it joins the row above it as a child, or the top level.
+fn close_row(open: &mut Vec<(usize, Value, Vec<Value>)>, roots: &mut Vec<Value>) {
+    if let Some((_, mut fields, children)) = open.pop() {
+        fields["children"] = Value::Array(children);
+        match open.last_mut() {
+            Some((_, _, siblings)) => siblings.push(fields),
+            None => roots.push(fields),
+        }
+    }
 }
 
 fn one_based(pages: &[i64]) -> Result<Vec<usize>> {
@@ -1784,6 +1829,7 @@ fn info(d: &Document) -> Value {
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),
         "outline": outline(&i.outline),
+        "outline_more": i.outline_more,
         // Rectangles use the tools' convention (top-left of the displayed page, like
         // comment_list and link_list), not raw PDF user space, so they can be fed back to
         // geometry-taking tools (#129).

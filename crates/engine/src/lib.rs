@@ -35,7 +35,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, source_kind};
+pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, decode_text, source_kind};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -49,6 +49,8 @@ pub use pdfcraft_a11y as a11y;
 pub use pdfcraft_edit::{BlockStyle, PageImage, TextBlock, TextLine, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
+
+pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +273,32 @@ impl Document {
     /// Edit a PDF: the images `page` draws (0-based).
     pub fn page_images(&self, page: usize) -> Vec<pdfcraft_edit::PageImage> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::page_images(&e.cos, page).ok()).unwrap_or_default()
+    }
+
+    /// Mixed editable objects on one page. Source inventories are zero-based and added items
+    /// appear once. Rectangles are user-space points, independent of the viewer's zoom.
+    pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
+    }
+
+    /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,
+    /// so even a large crop-box origin cannot erase a small drag by cancellation.
+    pub fn object_move_offset(&self, page: usize, delta: [f64; 2]) -> Result<[f64; 2], String> {
+        let p = self.info.pages.get(page).ok_or("the page no longer exists")?;
+        let [x0, y0, x1, y1] = p.crop.map(f64::from);
+        let (a, b) = (delta[0] / f64::from(p.width.max(1e-3)), delta[1] / f64::from(p.height.max(1e-3)));
+        let (u, v) = match p.rotation {
+            90 => (b, -a),
+            180 => (-a, -b),
+            270 => (-b, a),
+            _ => (a, b),
+        };
+        let offset = [u * (x1 - x0), -v * (y1 - y0)];
+        if !offset.iter().all(|v| v.is_finite()) {
+            return Err("the move must be finite and non-zero".into());
+        }
+        Ok(offset)
     }
 
     /// Save image as: image `index` on `page` as a file (extension, bytes).
@@ -555,6 +583,51 @@ fn apply_layer_state(layers: &mut [Layer], groups: &[Vec<(u32, u16)>], changes: 
 
 /// A file to combine: its name (the bookmark title), bytes, and page range (`None`: all).
 pub type CombineSource = (String, Arc<Vec<u8>>, Option<String>);
+
+/// A bookmark as the bookmark list shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkRow {
+    /// Child indices from the top level, 0-based, as the edit functions take them.
+    pub path: Vec<usize>,
+    pub title: String,
+    /// Shown expanded (a positive `/Count`).
+    pub open: bool,
+    /// The 0-based page it goes to.
+    pub page: Option<usize>,
+}
+
+/// One page of the bookmark list, in outline order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookmarkPage {
+    pub rows: Vec<BookmarkRow>,
+    /// Where the next page starts, or `None` at the end.
+    pub next: Option<usize>,
+    /// Set only when the document's structure could not be read for editing: its listing then
+    /// comes from the viewer's copy of the outline, which is shorter than the file's.
+    pub truncated: bool,
+}
+
+/// The rows of a viewer outline, in outline order, with their paths.
+fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<BookmarkRow> {
+    let mut rows = Vec::new();
+    // One entry per open level: its items, and how many of them have been listed.
+    let mut levels: Vec<(&[pdfcraft_render::OutlineItem], usize)> = vec![(items, 0)];
+    while let Some(&(list, next)) = levels.last() {
+        let Some(item) = list.get(next) else {
+            levels.pop();
+            continue;
+        };
+        if let Some(top) = levels.last_mut() {
+            top.1 += 1;
+        }
+        let path: Vec<usize> = levels.iter().map(|(_, listed)| listed.saturating_sub(1)).collect();
+        rows.push(BookmarkRow { path, title: item.title.clone(), open: item.open, page: item.page });
+        if !item.children.is_empty() {
+            levels.push((&item.children, 0));
+        }
+    }
+    rows
+}
 
 /// A document's working file captured for crash recovery.
 #[derive(Clone, Debug)]
@@ -994,6 +1067,13 @@ pub enum Edit {
         index: usize,
         change: ImageEdit,
     },
+    /// Move mixed existing and added objects together. References resolve before any change;
+    /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
+    MoveObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+        offset: [f64; 2],
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {
@@ -1183,6 +1263,7 @@ impl Edit {
             Edit::SetDocumentScript { script: None, .. } => "Delete document JavaScript".into(),
             Edit::SetDocumentScript { .. } => "Edit document JavaScript".into(),
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => "Edit text".into(),
+            Edit::MoveObjects { objects, .. } => plural("Move object", objects.len()),
             Edit::EditPageImage { change, .. } => match change {
                 ImageEdit::Move(_) => "Move image".into(),
                 ImageEdit::Rotate(_) => "Rotate image".into(),
@@ -1335,6 +1416,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::AddText { .. }
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
+        | Edit::MoveObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::ClearRedactions
@@ -1635,6 +1717,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }
+        Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }
@@ -1809,6 +1892,17 @@ fn keys_after(edit: &Edit) -> Option<Keys> {
         Edit::RemoveProtection => Some(Keys::default()),
         Edit::Batch { edits, .. } => edits.iter().rev().find_map(keys_after),
         _ => None,
+    }
+}
+
+/// The recovered user password of an R2–R4 file as text for the renderer, which tries a password
+/// as its UTF-8 bytes and then in PDFDocEncoding: UTF-8 bytes (as some writers store passwords
+/// PDFDocEncoding can't hold, such as "şifre") stay UTF-8, and other bytes are read as
+/// PDFDocEncoding, so either way the renderer gets back exactly these bytes.
+fn renderer_password(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().map(|b| pdfcraft_cos::pdfdoc_char(*b)).collect(),
     }
 }
 
@@ -2129,7 +2223,7 @@ impl Session {
                     Ok(Ok(d)) => d.security().and_then(|s| s.recovered_user_password()),
                     _ => None,
                 };
-                let user: String = user.ok_or(OpenError::WrongPassword)?.iter().map(|b| char::from(*b)).collect();
+                let user = renderer_password(&user.ok_or(OpenError::WrongPassword)?);
                 (inspect(bytes.clone(), Some(&user))?, Some(user))
             }
             Err(e) => return Err(e),
@@ -2703,7 +2797,7 @@ impl Session {
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &String::from_utf8_lossy(bytes)),
+            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
@@ -2935,10 +3029,29 @@ impl Session {
         out
     }
 
+    /// A page of the bookmark list in outline order: up to `limit` bookmarks from position `offset`.
+    /// The document's own structure is read for it, so every bookmark can be reached by paging.
+    pub fn bookmark_page(&self, id: DocId, offset: usize, limit: usize) -> Option<BookmarkPage> {
+        let doc = self.get(id)?;
+        if let Some(editor) = doc.editor.as_ref() {
+            let page = pdfcraft_organize::bookmark_page(&editor.cos, offset, limit);
+            let rows = page.bookmarks.into_iter().map(|b| BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page }).collect();
+            return Some(BookmarkPage { rows, next: page.next, truncated: false });
+        }
+        let all = outline_rows(&doc.info.outline);
+        let end = offset.saturating_add(limit);
+        let rows = all.iter().skip(offset).take(limit).cloned().collect();
+        Some(BookmarkPage { rows, next: (end < all.len()).then_some(end), truncated: doc.info.outline_more })
+    }
+
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
-        let mut out: Vec<(usize, String)> = doc.info.outline.iter().filter_map(|o| Some((o.page?, o.title.clone()))).collect();
+        let top: Vec<(Option<usize>, String)> = match doc.editor.as_ref() {
+            Some(editor) => pdfcraft_organize::top_level_bookmarks(&editor.cos).into_iter().map(|b| (b.page, b.title)).collect(),
+            None => doc.info.outline.iter().map(|o| (o.page, o.title.clone())).collect(),
+        };
+        let mut out: Vec<(usize, String)> = top.into_iter().filter_map(|(page, title)| Some((page?, title))).collect();
         out.sort_by_key(|x| x.0);
         out.dedup_by_key(|x| x.0);
         out

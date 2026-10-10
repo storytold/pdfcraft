@@ -353,6 +353,7 @@ pub struct DocView {
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
+    pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
@@ -545,6 +546,7 @@ impl DocView {
             edit_lines: HashMap::new(),
             line_editor: None,
             edit_images: HashMap::new(),
+            objects: Default::default(),
             image_selection: None,
             block_drag: None,
             pending_action: None,
@@ -1772,7 +1774,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
-    let unobstructed = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open;
+    let unobstructed = !app.modal_open() && !app.palette_open;
+    let view = &mut app.views[index];
     if view.organize {
         organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
         return;
@@ -1969,6 +1972,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.prepare.selected = None;
     }
+    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
     let added = doc.added.clone();
     let doc_links = if tool == QuickTool::Link { doc.links.clone() } else { Vec::new() };
     if editing_content {
@@ -2257,7 +2261,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 field_placed |= o.placed;
                 o.consumed || field_tool.is_some()
             } else {
-                tool == QuickTool::Select && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
+                tool == QuickTool::Select
+                    && !comments::select_grabs(ui, &pcx, view)
+                    && crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
             };
             // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
             let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -2269,11 +2275,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 };
                 crate::redact_ui::page_input(ui, &resp, &xf, i, info, over_text, view)
             };
-            let on_content = editing_content && can_modify && {
+            let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, i, doc, view);
+            let on_content = !on_objects && editing_content && can_modify && {
                 crate::content_ui::page_input(ui, &resp, &xf, i, info, &added, tool == QuickTool::AddText, &text_style, view)
                     || tool == QuickTool::AddText
             };
-            let on_edit_text = tool == QuickTool::EditText && can_modify && {
+            let on_edit_text = !on_objects && tool == QuickTool::EditText && can_modify && {
                 let generation = doc.edit_generation();
                 let lines = match view.edit_lines.get(&i) {
                     Some((g, l)) if *g == generation => l.clone(),
@@ -2296,7 +2303,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     || crate::edit_text_ui::page_input(ui, &resp, &xf, i, info, &lines, view)
             };
             let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
-            let consumed = on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
+            let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, &resp, &pcx, view);
 
             let preview_target =
                 (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
@@ -2427,6 +2434,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             comments::paint_page(ui, painter, &pcx, view);
             if editing_content {
                 crate::content_ui::paint_page(ui, painter, &xf, i, info, &added, view);
+            }
+            if tool == QuickTool::EditText {
+                crate::object_ui::paint(painter, &xf, i, info, &view.objects);
             }
             if tool == QuickTool::Link {
                 crate::link_ui::paint(ui, painter, &xf, i, info, &doc_links, view);
@@ -2654,6 +2664,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, &added);
     if typed.is_some() {
         view.pending_edit = typed;
+    }
+    if let Some(why) = view.objects.notice.take() {
+        refused = Some(why);
     }
     let form_notice = view.forms.notice.take();
     // One crop, then back to selecting (as Acrobat does).
@@ -3273,7 +3286,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
 }
 
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
-fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     let targets = view.target_pages();
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
@@ -3379,8 +3392,9 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
             });
         });
     });
-    // Keys act on the selection unless a text field has focus.
-    if editable && !ui.ctx().egui_wants_keyboard_input() {
+    // Keys act on the selection unless a text field or a dialog has them (Delete under
+    // Preferences deleted the selected pages).
+    if editable && unobstructed && !ui.ctx().egui_wants_keyboard_input() {
         use egui::{Key, Modifiers};
         let (del, esc) = ui.input_mut(|i| {
             (
@@ -3431,16 +3445,16 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
     resp.on_hover_text(label).clicked()
 }
 
-fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, auto_scroll_enabled: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
     let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 56.0);
     let anchor = view.grid_anchor.take();
     let mut open_page = None;
-    organize_toolbar(view, info, editable, dirty, ui, t);
+    organize_toolbar(view, info, editable, dirty, unobstructed, ui, t);
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
-    let auto_delta = if auto_scroll_enabled {
+    let auto_delta = if unobstructed {
         view.auto_scroll.update(ui, viewport, true)
     } else {
         view.auto_scroll.cancel();

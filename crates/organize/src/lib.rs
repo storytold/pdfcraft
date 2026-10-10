@@ -27,8 +27,8 @@ pub use dedupe::dedupe_resources;
 pub use import::{Run, SplitBy, combine, combine_grouped, combine_selected, extract_pages, import_pages, page_as_form, split, split_ranges};
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
-    Bookmark, OutlineEntry, OutlineError, add_bookmark, add_bookmark_tree, bookmarks, delete_bookmark, move_bookmark, rename_bookmark,
-    set_bookmark_open, set_bookmark_page,
+    Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark, move_bookmark,
+    rename_bookmark, set_bookmark_open, set_bookmark_page, top_level_bookmarks,
 };
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
 

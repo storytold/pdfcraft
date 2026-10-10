@@ -951,8 +951,19 @@ fn combine_stores_an_image_once_when_its_colour_space_is_an_indirect_name() {
 
 // ---- bookmarks (M4.6) --------------------------------------------------------------------------
 
+/// The titles with children in brackets (`Parent[Child,Child]`), one per top-level bookmark.
 fn titles(b: &[crate::Bookmark]) -> Vec<String> {
-    b.iter().map(|x| if x.children.is_empty() { x.title.clone() } else { format!("{}[{}]", x.title, titles(&x.children).join(",")) }).collect()
+    fn level(b: &[crate::Bookmark], at: &mut usize, depth: usize) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Some(x) = b.get(*at).filter(|x| x.path.len() == depth + 1) {
+            *at += 1;
+            let kids = level(b, at, depth + 1);
+            out.push(if kids.is_empty() { x.title.clone() } else { format!("{}[{}]", x.title, kids.join(",")) });
+        }
+        out
+    }
+    let mut at = 0;
+    level(b, &mut at, 0)
 }
 
 fn count_of(doc: &Document, r: ObjRef) -> Option<i64> {
@@ -1013,11 +1024,12 @@ fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
 
     let b = crate::bookmarks(&d);
     let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
-    assert_eq!((count_of(&d, root), count_of(&d, b[0].obj), count_of(&d, b[0].children[0].obj)), (Some(6), Some(4), Some(2)));
-    let one = d.get(b[0].children[0].obj).as_dict().cloned().unwrap();
+    // Listing order: Untitled, One, Deep, Two, Next, Existing.
+    assert_eq!((count_of(&d, root), count_of(&d, b[0].obj), count_of(&d, b[1].obj)), (Some(6), Some(4), Some(2)));
+    let one = d.get(b[1].obj).as_dict().cloned().unwrap();
     assert_eq!(one.get(b"SE"), Some(&Object::Ref(se)));
     let pages = crate::walk(&d).unwrap();
-    let next = d.get(b[0].children[1].obj).as_dict().cloned().unwrap();
+    let next = d.get(b[4].obj).as_dict().cloned().unwrap();
     assert_eq!(next.get(b"Dest").and_then(|x| x.as_array()).map(|a| a[0].clone()), Some(Object::Ref(pages[2].0)));
 
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &[]), Err(crate::OutlineError::NoEntries));
@@ -1039,6 +1051,136 @@ fn bookmark_edits_keep_unknown_keys_and_touch_few_objects() {
     assert_eq!(b[0].title, "Uno");
     assert!(d.get(b[0].obj).as_dict().unwrap().get(b"C").is_some(), "colour kept");
     assert_eq!(d.modified_objects(), vec![b[0].obj.num], "a rename rewrites only that item");
+}
+
+/// A flat outline of `n` top-level bookmarks, `Item 0` to `Item n-1`, all going to one page.
+fn flat_outline(n: usize) -> Vec<u8> {
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        format!("<< /Type /Outlines /First 5 0 R /Last {} 0 R /Count {n} >>", 4 + n),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    for k in 0..n {
+        let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+        let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+        b.push(format!("<< /Title (Item {k}) /Parent 3 0 R{prev}{next} /Dest [4 0 R /Fit] >>"));
+    }
+    build(&b, "/Root 1 0 R")
+}
+
+#[test]
+fn a_bookmark_past_the_hundred_thousandth_is_listed() {
+    let d = open(flat_outline(100_005));
+    let all = crate::bookmarks(&d);
+    assert_eq!(all.len(), 100_005);
+    assert_eq!(all.last().map(|b| b.title.as_str()), Some("Item 100004"));
+}
+
+/// A chain of `n` nested bookmarks: each is the first child of the one before it.
+fn deep_outline(n: usize) -> Vec<u8> {
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 5 0 R /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    for k in 0..n {
+        let parent = if k == 0 { 3 } else { 4 + k };
+        let first = if k + 1 == n { String::new() } else { format!(" /First {} 0 R /Count -1", 6 + k) };
+        b.push(format!("<< /Title (Deep {k}) /Parent {parent} 0 R{first} /Dest [4 0 R /Fit] >>"));
+    }
+    build(&b, "/Root 1 0 R")
+}
+
+#[test]
+fn deep_bookmark_chains_edit_without_recursion() {
+    let mut d = open(deep_outline(100_000));
+    // Adding at the top level recounts the whole outline, which walks the entire chain.
+    crate::add_bookmark(&mut d, &[], 1, "Extra", 0).unwrap();
+    // Listing enters levels 0 to 32 of the chain; the rest is reached by path only.
+    let listed = crate::bookmarks(&d);
+    assert_eq!(listed.len(), 34);
+    assert_eq!(listed.last().map(|b| (b.title.as_str(), b.path.clone())), Some(("Extra", vec![1])));
+    assert_eq!(listed[32].path.len(), 33);
+    assert_eq!(crate::bookmark_page(&d, 33, 10).bookmarks.len(), 1);
+}
+
+/// A one-page document whose outline is the given bookmark bodies, as objects 5, 6, … in order.
+fn outline_with(items: &[&str]) -> Document {
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        format!("<< /Type /Outlines /First 5 0 R /Count {} >>", items.len()),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    b.extend(items.iter().map(|s| s.to_string()));
+    open(build(&b, "/Root 1 0 R"))
+}
+
+#[test]
+fn hostile_outlines_end_their_runs_and_never_loop() {
+    let listed = |items: &[&str]| titles(&crate::bookmarks(&outline_with(items)));
+    // A bookmark that is its own next sibling, or its own first child.
+    assert_eq!(listed(&["<< /Title (Self) /Parent 3 0 R /Next 5 0 R >>"]), ["Self"]);
+    assert_eq!(listed(&["<< /Title (Self) /Parent 3 0 R /First 5 0 R >>"]), ["Self"]);
+    // Two siblings that point at each other: the run ends where it would repeat.
+    assert_eq!(listed(&["<< /Title (A) /Parent 3 0 R /Next 6 0 R >>", "<< /Title (B) /Parent 3 0 R /Next 5 0 R >>"]), ["A", "B"]);
+    // A child that leads back to its ancestor.
+    assert_eq!(listed(&["<< /Title (A) /Parent 3 0 R /First 6 0 R >>", "<< /Title (B) /Parent 5 0 R /First 5 0 R >>"]), ["A[B]"]);
+    // A broken `/Next` (a missing object, then a number) and a missing first bookmark.
+    assert_eq!(listed(&["<< /Title (A) /Parent 3 0 R /Next 99 0 R >>"]), ["A"]);
+    assert_eq!(listed(&["<< /Title (A) /Parent 3 0 R /Next 6 0 R >>", "42"]), ["A"]);
+    assert!(listed(&[]).is_empty());
+}
+
+#[test]
+fn bookmark_pages_list_every_bookmark_once() {
+    let d = open(flat_outline(250));
+    let mut seen = Vec::new();
+    let mut offset = 0;
+    while let Some(next) = {
+        let page = crate::bookmark_page(&d, offset, 100);
+        assert!(page.bookmarks.len() <= 100);
+        seen.extend(page.bookmarks.iter().map(|b| b.title.clone()));
+        page.next
+    } {
+        assert_eq!(next, seen.len(), "a page ends where the next one starts");
+        offset = next;
+    }
+    assert_eq!(seen.len(), 250);
+    assert_eq!(seen.last().map(String::as_str), Some("Item 249"));
+
+    let big = open(flat_outline(100_005));
+    let first = crate::bookmark_page(&big, 0, 100);
+    assert_eq!((first.bookmarks.len(), first.next), (100, Some(100)));
+    let late = crate::bookmark_page(&big, 100_000, 100);
+    assert_eq!(
+        late.bookmarks.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(),
+        ["Item 100000", "Item 100001", "Item 100002", "Item 100003", "Item 100004"]
+    );
+    assert_eq!((late.bookmarks[4].path.clone(), late.next), (vec![100_004], None));
+}
+
+#[test]
+fn bookmarks_name_their_pages_through_every_kind_of_destination() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R /Names << /Dests 9 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Outlines /First 6 0 R /Last 11 0 R /Count 6 >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Title (Named) /Parent 3 0 R /Next 7 0 R /Dest (intro) >>".into(),
+        "<< /Title (GoTo) /Parent 3 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [5 0 R /Fit] >> >>".into(),
+        "<< /Title (Appendix) /Parent 3 0 R /Prev 7 0 R /Next 10 0 R /Dest /appendix >>".into(),
+        "<< /Names [(appendix) 12 0 R (intro) [4 0 R /Fit]] >>".into(),
+        "<< /Title <FEFF00480069> /Parent 3 0 R /Prev 8 0 R /Next 11 0 R /Dest [1 /Fit] >>".into(),
+        "<< /Title (  Padded  ) /Parent 3 0 R /Prev 10 0 R /Dest [2 0 R /Fit] >>".into(),
+        "<< /D [5 0 R /Fit] >>".into(),
+    ];
+    let d = open(build(&objs, "/Root 1 0 R"));
+    let listed: Vec<String> = crate::bookmarks(&d).iter().map(|b| format!("{}@{:?}", b.title, b.page)).collect();
+    assert_eq!(listed, ["Named@Some(0)", "GoTo@Some(1)", "Appendix@Some(1)", "Hi@Some(1)", "Padded@None"]);
 }
 
 // ---- page labels (M4.4) ------------------------------------------------------------------------

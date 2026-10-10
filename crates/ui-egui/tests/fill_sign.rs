@@ -124,6 +124,39 @@ fn text_marks_and_date() {
     assert!(v.iter().any(|(t, _)| t == "Stamp"));
 }
 
+/// The open type box, found as the focused text input.
+fn type_box_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
+    h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).expect("an open type box").rect()
+}
+
+#[test]
+fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.run_steps(1);
+    // Still on Add text: the next click starts a new box, and must keep the first one.
+    click(&mut h, 50.0, 150.0);
+    h.run_steps(2);
+    let v = items(&h);
+    assert_eq!(v, vec![("FreeText".to_string(), Some("Ada Lovelace".to_string()))]);
+    assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
+}
+
+#[test]
+fn the_type_box_grows_as_text_is_typed() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.run_steps(2);
+    let empty = type_box_rect(&h).width();
+    h.event(egui::Event::Text("Ada Lovelace, Countess of Lovelace".into()));
+    h.run_steps(3);
+    let full = type_box_rect(&h).width();
+    assert!(full > empty * 2.0, "the box widens with its text: {empty} -> {full}");
+}
+
 #[test]
 fn signing_draws_a_signature_once_and_places_it() {
     let mut h = harness();
@@ -1159,4 +1192,46 @@ fn drawn_signatures_resize_from_their_corners() {
     let saved = h.state().session.save_bytes(id).unwrap();
     let h = harness_bytes(&saved);
     assert_rect(rects(&h)[0], now);
+}
+
+/// A signature placed over a form field is picked up by the Select tool: the field under it
+/// doesn't take the press. Away from the signature, a click still fills the field.
+#[test]
+fn select_tool_picks_up_a_signature_over_a_form_field() {
+    let mut h = harness_bytes(include_bytes!("data/form.pdf"));
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 150.0, 270.0);
+    let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+    // Onto the `city` text field (user space y 180..200).
+    let mid_y = (placed[1] + placed[3]) / 2.0;
+    let id = h.state().views[0].id;
+    let index = h.state().session.get(id).unwrap().info.annotations[0].index;
+    let dy = (190.0 - mid_y) as f64;
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::MoveAnnotation { page: 0, index, dx: 0.0, dy }).unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(3);
+    let [over] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+    let mid = ((over[0] + over[2]) / 2.0, (over[1] + over[3]) / 2.0);
+
+    h.hover_at(at(&h, mid.0, mid.1));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move);
+    // A hand's drag: a few points per frame, so it starts while still over the field.
+    let (a, b) = (at(&h, mid.0, mid.1), at(&h, mid.0, mid.1 + 80.0));
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=40 {
+        h.hover_at(a + (b - a) * (k as f32 / 40.0));
+        h.run_steps(1);
+    }
+    h.drop_at(b);
+    h.run_steps(4);
+    assert_rect(rects(&h)[0], [over[0], over[1] + 80.0, over[2], over[3] + 80.0]);
+    assert!(h.state().views[0].forms.focus.is_none(), "the field under the signature isn't focused");
+
+    // Clear of the signature, the field still takes the click.
+    click(&mut h, 270.0, 190.0);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
 }
