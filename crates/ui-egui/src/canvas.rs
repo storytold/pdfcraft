@@ -1357,7 +1357,7 @@ impl DocView {
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (max_w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
                 let zw = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row);
                 let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
@@ -1367,6 +1367,16 @@ impl DocView {
             Fit::None => {}
         }
         self.zoom = self.zoom.clamp(0.08, 64.0);
+    }
+
+    /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
+    /// wider page elsewhere in the document can't push the shown one off-centre.
+    fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
+        let single = (self.layout == PageLayout::Single).then(|| self.current.min(info.pages.len().saturating_sub(1)));
+        let shown = info.pages.iter().enumerate().filter(|&(i, _)| single.is_none_or(|c| c == i));
+        let max_w = shown.map(|(_, p)| self.display_size(p).0).fold(0.0, f32::max);
+        let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
+        (max_w * self.zoom * PT * per_row + 2.0 * SIDE).max(avail_w)
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
@@ -1612,7 +1622,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
         view.fit = Fit::Width;
         view.goto = Some((view.current, 0.0));
     }
-    if pressed(cmd(Key::G)) {
+    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
+        view.find_step(false);
+    } else if pressed(cmd(Key::G)) {
         view.find_step(true);
     }
     if pressed(cmd(Key::OpenBracket)) {
@@ -1620,9 +1632,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
     if pressed(cmd(Key::CloseBracket)) {
         view.view_history(true);
-    }
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
-        view.find_step(false);
     }
     // ⌘C arrives as a Copy event on most platforms.
     let copy = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
@@ -1756,11 +1765,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Vec2::ZERO
     };
 
-    let max_w = info.pages.iter().map(|p| view.display_size(p).0).fold(0.0, f32::max)
-        * view.zoom
-        * PT
-        * if view.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-    let content_w = (max_w + 2.0 * SIDE).max(avail.width());
+    let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w);
     let middle_gesture = view.auto_scroll.blocks_input();
     // Single page: when the whole page fits, the wheel would do nothing, so it turns pages
@@ -4078,6 +4083,31 @@ trailer << /Root 1 0 R >>
             v.fit_zoom(&info);
             assert!(v.zoom > big, "{fit:?}: single-page view fits the page it shows");
         }
+    }
+
+    #[test]
+    fn fit_width_fits_the_shown_page_in_single_page_view_only() {
+        let page =
+            |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+        let info = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 400.0)], ..Default::default() };
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        (v.fit, v.viewport_w, v.viewport_h) = (Fit::Width, 1000.0, 800.0);
+        v.layout = PageLayout::Single;
+        v.fit_zoom(&info);
+        let narrow = v.zoom;
+        // The shown page fills the width between the side gutters, not centred for the wide page.
+        let shown = v.layout(&info, v.content_width(&info, 1000.0))[0];
+        assert!((shown.left() - SIDE).abs() < 1e-2 && (shown.width() - 860.0).abs() < 1e-2, "{shown:?}");
+        v.current = 1;
+        v.fit_zoom(&info);
+        assert!((narrow / v.zoom - 2.0).abs() < 1e-3, "the narrow page gets twice the zoom of the wide one");
+        // Scrolling views keep one zoom for the whole document.
+        v.layout = PageLayout::Continuous;
+        v.fit_zoom(&info);
+        let wide = v.zoom;
+        v.current = 0;
+        v.fit_zoom(&info);
+        assert_eq!(v.zoom, wide, "continuous fit width holds still across page sizes");
     }
 
     #[test]

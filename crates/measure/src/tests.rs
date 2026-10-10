@@ -120,6 +120,16 @@ fn rejects_invalid_geometry_and_unsupported_scales() {
     assert!(set_scale(&mut d, 0, [0.0; 4], "bad", &Scale::default()).is_err());
 }
 #[test]
+fn filled_open_triangle_snaps_to_closing_edge() {
+    for (op, closed) in [("f", true), ("F", true), ("f*", true), ("B", true), ("B*", true), ("h f", true), ("S", false)] {
+        let d = fixture(&format!("40 50 m 160 50 l 100 170 l {op}"), "", &[]);
+        let paths = snap::geometry(&d, 0).unwrap();
+        assert_eq!(paths.segments.len(), if closed { 3 } else { 2 }, "{op}");
+        let hit = paths.snap([70.0, 110.0], 5.0, snap::SnapOptions::default()).unwrap();
+        assert_eq!(hit.is_some(), closed, "{op}");
+    }
+}
+#[test]
 fn snap_paths_endpoints_midpoints_and_intersections() {
     let d = fixture("10 20 m 110 20 l S 60 0 m 60 80 l S 10 100 100 40 re S", "", &[]);
     let paths = snap::geometry(&d, 0).unwrap();
