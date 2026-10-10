@@ -81,3 +81,15 @@
 	Slash	Barra
 	Scroll tabs left	Rolar as abas para a esquerda
 	Scroll tabs right	Rolar as abas para a direita
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Propriedades comuns dos campos
+	{n} fields selected	{n} campos selecionados
+	Mixed	Valores diferentes
+	Custom font	Fonte personalizada
+	Only checked properties will change. Mixed means the selected fields have different values.	Somente as propriedades marcadas serão alteradas. “Valores diferentes” indica que os campos selecionados têm valores distintos.
+	Shift- or Ctrl/Command-click to select several fields.	Clique com Shift ou Ctrl/Command para selecionar vários campos.
+	Font size 0 uses automatic sizing.	O tamanho de fonte 0 ativa o ajuste automático.
+	Character limit:	Limite de caracteres:
+	Character limit 0 means no limit. A comb of characters needs a limit.	O limite de caracteres 0 significa sem limite. As caixas de caracteres precisam de um limite.
+	To change locked fields, also set Locked to No.	Para alterar campos bloqueados, defina também “Bloqueado” como “Não”.

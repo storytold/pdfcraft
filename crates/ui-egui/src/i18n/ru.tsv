@@ -2026,3 +2026,15 @@
 	This printer offers no settings of its own.	У этого принтера нет собственных параметров.
 	Scroll tabs left	Прокрутить вкладки влево
 	Scroll tabs right	Прокрутить вкладки вправо
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Общие свойства полей
+	{n} fields selected	Выбрано полей: {n}
+	Mixed	Разные значения
+	Custom font	Пользовательский шрифт
+	Only checked properties will change. Mixed means the selected fields have different values.	Изменятся только отмеченные свойства. «Разные значения» означает, что значения выбранных полей различаются.
+	Shift- or Ctrl/Command-click to select several fields.	Щёлкните с Shift или Ctrl/Command, чтобы выбрать несколько полей.
+	Font size 0 uses automatic sizing.	Размер шрифта 0 включает автоматический подбор размера.
+	Character limit:	Ограничение символов:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Ограничение 0 означает отсутствие ограничения. Для посимвольных ячеек нужно задать ограничение.
+	To change locked fields, also set Locked to No.	Чтобы изменить заблокированные поля, также установите «Заблокировано» в «Нет».

@@ -2075,3 +2075,15 @@ action wizard	Start	Старт
 	This printer offers no settings of its own.	Този принтер няма собствени настройки.
 	Scroll tabs left	Превърти разделите наляво
 	Scroll tabs right	Превърти разделите надясно
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Общи свойства на полетата
+	{n} fields selected	Избрани полета: {n}
+	Mixed	Различни стойности
+	Custom font	Потребителски шрифт
+	Only checked properties will change. Mixed means the selected fields have different values.	Ще се променят само отметнатите свойства. „Различни стойности“ означава, че избраните полета имат различни стойности.
+	Shift- or Ctrl/Command-click to select several fields.	Щракнете с Shift или Ctrl/Command, за да изберете няколко полета.
+	Font size 0 uses automatic sizing.	Размер на шрифта 0 включва автоматично оразмеряване.
+	Character limit:	Ограничение на знаците:
+	Character limit 0 means no limit. A comb of characters needs a limit.	Ограничение 0 означава без ограничение. Клетките за знаци изискват ограничение.
+	To change locked fields, also set Locked to No.	За да промените заключени полета, задайте и „Заключено“ на „Не“.

@@ -2029,3 +2029,15 @@
 	This printer offers no settings of its own.	Esta impresora no ofrece ajustes propios.
 	Scroll tabs left	Desplazar las pestañas a la izquierda
 	Scroll tabs right	Desplazar las pestañas a la derecha
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Propiedades comunes de los campos
+	{n} fields selected	{n} campos seleccionados
+	Mixed	Valores distintos
+	Custom font	Fuente personalizada
+	Only checked properties will change. Mixed means the selected fields have different values.	Solo se cambiarán las propiedades marcadas. «Valores distintos» indica que los campos seleccionados tienen valores diferentes.
+	Shift- or Ctrl/Command-click to select several fields.	Haz clic con Mayús o Ctrl/Comando para seleccionar varios campos.
+	Font size 0 uses automatic sizing.	El tamaño de fuente 0 ajusta el tamaño automáticamente.
+	Character limit:	Límite de caracteres:
+	Character limit 0 means no limit. A comb of characters needs a limit.	El límite de caracteres 0 significa sin límite. Las casillas de caracteres necesitan un límite.
+	To change locked fields, also set Locked to No.	Para cambiar campos bloqueados, establece también «Bloqueado» en «No».

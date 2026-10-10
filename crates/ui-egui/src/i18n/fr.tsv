@@ -2113,3 +2113,15 @@ comment menu	Edit	Modifier
 signature pad	Type	Saisir
 	Scroll tabs left	Faire défiler les onglets vers la gauche
 	Scroll tabs right	Faire défiler les onglets vers la droite
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Propriétés communes des champs
+	{n} fields selected	{n} champs sélectionnés
+	Mixed	Valeurs différentes
+	Custom font	Police personnalisée
+	Only checked properties will change. Mixed means the selected fields have different values.	Seules les propriétés cochées seront modifiées. « Valeurs différentes » indique que les champs sélectionnés ont des valeurs différentes.
+	Shift- or Ctrl/Command-click to select several fields.	Cliquez avec Maj ou Ctrl/Commande pour sélectionner plusieurs champs.
+	Font size 0 uses automatic sizing.	La taille de police 0 active le dimensionnement automatique.
+	Character limit:	Limite de caractères :
+	Character limit 0 means no limit. A comb of characters needs a limit.	Une limite de caractères de 0 signifie aucune limite. Les cases de caractères nécessitent une limite.
+	To change locked fields, also set Locked to No.	Pour modifier les champs verrouillés, réglez aussi « Verrouillé » sur « Non ».

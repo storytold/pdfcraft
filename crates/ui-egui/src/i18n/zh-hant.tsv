@@ -1999,3 +1999,15 @@
 	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
 	Scroll tabs left	向左捲動索引標籤
 	Scroll tabs right	向右捲動索引標籤
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共用欄位屬性
+	{n} fields selected	已選取 {n} 個欄位
+	Mixed	混合
+	Custom font	自訂字型
+	Only checked properties will change. Mixed means the selected fields have different values.	只會變更勾選的屬性。「混合」表示所選欄位的值不同。
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 點按可選取多個欄位。
+	Font size 0 uses automatic sizing.	字型大小為 0 時自動調整大小。
+	Character limit:	字元數限制：
+	Character limit 0 means no limit. A comb of characters needs a limit.	字元數限制為 0 表示無限制。分格字元必須設定字元數限制。
+	To change locked fields, also set Locked to No.	若要變更鎖定的欄位，也須將「鎖定」設為「否」。

@@ -23,8 +23,8 @@ pub mod detect;
 mod scripting;
 pub use actions::{FieldAction, Trigger, field_actions, set_field_actions};
 pub use author::{
-    BorderStyle, CheckStyle, FieldFont, FieldProps, Look, NewField, add_field, check_style, delete_field, duplicate_field, look, redraw_field,
-    set_button_icon, set_props,
+    BorderStyle, CheckStyle, FieldFont, FieldProps, Look, LookPatch, NewField, add_field, check_style, delete_field, duplicate_field, look,
+    redraw_field, set_button_icon, set_props,
 };
 pub use scripting::{
     FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,

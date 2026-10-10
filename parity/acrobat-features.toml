@@ -4302,8 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page"]
-notes = "read-only list with jump-to-field; filling and editing are separate features (M6)"
+evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/ui-egui/tests/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
+notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties"
 
 [[feature]]
 id = "form.highlight-fields"
@@ -4662,8 +4662,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_add_field", "form_set_props", "form_delete_field"]
-evidence = ["crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/ui-egui/tests/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/engine/src/tests.rs::preparing_a_form_adds_renames_and_deletes_fields"]
-notes = "fields shown with blue fill and name tags; select, move, resize by corners, Delete (every selected field, one undo step); field tools return to Select after one field. Not yet: editing shared properties of several fields at once"
+evidence = ["crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/ui-egui/tests/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/engine/src/tests.rs::preparing_a_form_adds_renames_and_deletes_fields", "crates/ui-egui/tests/bulk_fields.rs::shared_properties_preserve_mixed_values_and_undo_the_whole_change", "crates/ui-egui/tests/bulk_fields.rs::select_all_in_prepare_a_form_selects_only_the_current_pages_fields", "crates/ui-egui/tests/bulk_fields.rs::dragging_an_empty_page_area_selects_fields_without_moving_them"]
+notes = "fields shown with blue fill and name tags; select, move, resize by corners, Delete (every selected field, one undo step); field tools return to Select after one field. Shared General, Appearance and applicable Options edits are atomic and opt-in; Ctrl/Command+A selects the current page, rectangle and panel selection are supported. Names, positions, choices/defaults and script tabs remain individual GUI edits"
 
 [[feature]]
 id = "form.add-text-field"
@@ -4806,8 +4806,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/automation.rs::preparing_a_form_through_tools"]
-notes = "name, tooltip, read only, required (visibility/orientation pending)"
+evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/automation.rs::preparing_a_form_through_tools", "crates/ui-egui/tests/bulk_fields.rs::locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction", "crates/ui-egui/tests/bulk_fields.rs::visiting_shared_property_tabs_without_changes_does_not_dirty_the_document"]
+notes = "name, tooltip, read only, required, locked; shared tooltip/flags are opt-in, mixed values preserved, failures keep the draft and roll back the batch (visibility pending)"
 
 [[feature]]
 id = "form.props-appearance"
@@ -4818,8 +4818,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::appearance_properties_restyle_every_widget", "crates/ui-egui/tests/prepare.rs::appearance_tab_restyles_the_field", "crates/automation/tests/automation.rs::tab_order_and_field_appearance_through_tools"]
-notes = "border/fill colour, thin/medium/thick, solid/dashed/beveled/inset/underline, text colour, Helvetica/Times/Courier, font size"
+evidence = ["crates/forms/src/tests.rs::appearance_properties_restyle_every_widget", "crates/ui-egui/tests/prepare.rs::appearance_tab_restyles_the_field", "crates/automation/tests/automation.rs::tab_order_and_field_appearance_through_tools", "crates/forms/src/tests.rs::partial_appearance_keeps_custom_default_appearance_and_font_resources", "crates/forms/src/tests.rs::partial_appearance_preserves_each_widgets_indirect_colours_and_border_extensions", "crates/automation/tests/form_bulk.rs::bulk_properties_are_one_undo_step_preserve_other_looks_and_survive_save"]
+notes = "border/fill colour, line width, solid/dashed/beveled/inset/underline, text colour, Helvetica/Times/Courier, font size; shared GUI and partial tool edits preserve untouched custom fonts, widget styles and unknown keys. Appearance regeneration still uses approximate metrics"
 
 [[feature]]
 id = "form.props-position"
@@ -4842,8 +4842,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/automation/tests/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::options_tab_flags_alignment_and_defaults", "crates/ui-egui/tests/prepare.rs::options_tab_sets_flags_alignment_and_defaults"]
-notes = "text: alignment, default, multi-line, scroll, rich text flag, limit, password, file selection, spell check, comb; choices: items, default, sort, custom text, multiple selection, commit immediately; check boxes and radios: checked by default, radios in unison"
+evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/automation/tests/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::options_tab_flags_alignment_and_defaults", "crates/ui-egui/tests/prepare.rs::options_tab_sets_flags_alignment_and_defaults", "crates/automation/tests/form_bulk.rs::bulk_options_apply_per_field_and_refuse_an_invalid_comb_atomically"]
+notes = "text: alignment, default, multi-line, scroll, rich text flag, limit, password, file selection, spell check, comb; choices: items, default, sort, custom text, multiple selection, commit immediately; check boxes and radios: checked by default, radios in unison. Shared GUI offers applicable text/choice flags, alignment, text limits and check styles; choices/defaults remain individual GUI edits"
 
 [[feature]]
 id = "form.props-actions"

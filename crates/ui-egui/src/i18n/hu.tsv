@@ -2111,3 +2111,15 @@ action wizard	Start	Indítás
 	This printer offers no settings of its own.	Ennek a nyomtatónak nincsenek saját beállításai.
 	Scroll tabs left	Lapok görgetése balra
 	Scroll tabs right	Lapok görgetése jobbra
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Közös mezőtulajdonságok
+	{n} fields selected	{n} mező kijelölve
+	Mixed	Eltérő értékek
+	Custom font	Egyéni betűtípus
+	Only checked properties will change. Mixed means the selected fields have different values.	Csak a bejelölt tulajdonságok változnak. Az „Eltérő értékek” azt jelenti, hogy a kijelölt mezők értékei különböznek.
+	Shift- or Ctrl/Command-click to select several fields.	Több mező kijelöléséhez kattints a Shift vagy Ctrl/Command nyomva tartásával.
+	Font size 0 uses automatic sizing.	A 0 betűméret automatikus méretezést jelent.
+	Character limit:	Karakterkorlát:
+	Character limit 0 means no limit. A comb of characters needs a limit.	A 0 karakterkorlát korlátlan hosszt jelent. A karaktercellákhoz korlát szükséges.
+	To change locked fields, also set Locked to No.	Zárolt mezők módosításához a „Zárolt” értékét is állítsd „Nem”-re.

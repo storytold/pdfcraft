@@ -2077,3 +2077,15 @@
 	This printer offers no settings of its own.	此打印机没有专属设置。
 	Scroll tabs left	向左滚动选项卡
 	Scroll tabs right	向右滚动选项卡
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	共享字段属性
+	{n} fields selected	已选择 {n} 个字段
+	Mixed	混合
+	Custom font	自定义字体
+	Only checked properties will change. Mixed means the selected fields have different values.	只会更改勾选的属性。“混合”表示所选字段的值不同。
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 单击可选择多个字段。
+	Font size 0 uses automatic sizing.	字号为 0 时自动调整大小。
+	Character limit:	字符数限制：
+	Character limit 0 means no limit. A comb of characters needs a limit.	字符数限制为 0 表示无限制。分格字符必须设置字符数限制。
+	To change locked fields, also set Locked to No.	要更改锁定的字段，还需将“锁定”设为“否”。
