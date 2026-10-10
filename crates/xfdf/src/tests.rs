@@ -331,3 +331,117 @@ fn unicode_annotation_colours_are_ignored_without_panicking() {
         assert_eq!(report.comments, 1);
     }
 }
+
+/// Importing the same note again must not leave the earlier pop-up on the page.
+#[test]
+fn reimporting_a_note_replaces_its_popup() {
+    let xfdf = concat!(
+        r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="n1" rect="10,10,30,30"><contents>body</contents>"#,
+        r#"<popup page="0" rect="40,10,140,60" open="no"/></text></annots></xfdf>"#,
+    );
+    let mut doc = blank();
+    for _ in 0..3 {
+        import(&mut doc, xfdf.as_bytes()).unwrap();
+    }
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let annots = doc.get(page).as_dict().and_then(|p| p.get(b"Annots").cloned()).and_then(|a| doc.resolve(&a).as_array().cloned()).unwrap();
+    let refs: Vec<ObjRef> = annots.iter().filter_map(|a| a.as_ref()).collect();
+    let is_popup = |r: &ObjRef| doc.get(*r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(b"Popup".as_slice());
+    let popups: Vec<ObjRef> = refs.iter().copied().filter(is_popup).collect();
+    assert_eq!(popups.len(), 1, "one current pop-up, not one per import");
+    let parent = doc.get(popups[0]).as_dict().and_then(|d| d.reference(b"Parent")).unwrap();
+    assert!(refs.contains(&parent), "the pop-up belongs to a note that is still on the page");
+}
+
+/// The `/Vertices` of every annotation on the document's pages, by subtype.
+fn vertices(doc: &Document) -> Vec<(String, Vec<f64>)> {
+    let mut out = Vec::new();
+    for p in pdfcraft_model::pages(doc) {
+        for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+            let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
+            let sub = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+            let v = nums_of(doc, d.get(b"Vertices"));
+            if !v.is_empty() {
+                out.push((sub, v));
+            }
+        }
+    }
+    out
+}
+
+/// storytold/pdfcraft#809: XFDF exchange dropped polygon and polyline vertices, so the
+/// imported comments had no shape (and no appearance).
+#[test]
+fn xfdf_keeps_polygon_and_polyline_vertices() {
+    let mut src = blank();
+    let meta = |id: &str| Meta { date: Some("D:20261002120000Z".into()), id: id.into() };
+    let polygon = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 120.0], [150.0, 220.5]], cloud: false };
+    let polyline = Shape::PolyLine {
+        vertices: vec![[50.0, 300.0], [120.0, 380.0], [200.0, 310.0]],
+        start: pdfcraft_annot::LineEnding::None,
+        end: pdfcraft_annot::LineEnding::ClosedArrow,
+    };
+    for (page, shape, id) in [(0, polygon, "pg"), (1, polyline, "pl")] {
+        let new = NewAnnotation { page, style: Style::default_for(&shape), shape, contents: id.into(), author: "Ada".into() };
+        add_annotation(&mut src, &new, &meta(id)).unwrap();
+    }
+    let xfdf = export_xfdf(&src, true, false, "shapes.pdf");
+    assert!(xfdf.contains("<vertices>100,100;200,120;150,220.5</vertices>"), "{xfdf}");
+    assert!(xfdf.contains("<vertices>50,300;120,380;200,310</vertices>"), "{xfdf}");
+    let mut dst = blank();
+    let r = import(&mut dst, xfdf.as_bytes()).unwrap();
+    assert_eq!(r.comments, 2, "{r:?}");
+    assert_eq!(vertices(&dst), vertices(&src));
+    // The imported shapes are drawn again.
+    for p in pdfcraft_model::pages(&dst) {
+        for a in p.dict.get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+            let d = dst.resolve(&a).as_dict().cloned().unwrap();
+            assert!(d.get(b"AP").is_some(), "{d:?}");
+        }
+    }
+    // Acrobat-style input: a stray trailing number is dropped and only whole points are kept.
+    let odd = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots>
+        <polygon page="0" rect="0,0,50,50" name="odd"><vertices>1,2;3,4;5,6;7</vertices></polygon>
+        <polygon page="0" rect="0,0,50,50" name="none"><vertices>junk</vertices></polygon>
+        </annots></xfdf>"#;
+    let mut dst = blank();
+    import(&mut dst, odd.as_bytes()).unwrap();
+    assert_eq!(vertices(&dst), vec![("Polygon".to_string(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]);
+}
+
+#[test]
+fn xfdf_keeps_callout_leader_inset_and_ending() {
+    let mut src = blank();
+    let shape = Shape::Callout {
+        rect: [40.0, 300.0, 180.0, 360.0],
+        knee: [260.0, 330.0],
+        point: [320.0, 200.0],
+        font_size: 12.0,
+        ending: pdfcraft_annot::LineEnding::ClosedArrow,
+    };
+    let meta = Meta { date: Some("D:20261002120000Z".into()), id: "c1".into() };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "leader".into(), author: "Ada".into() },
+        &meta,
+    )
+    .unwrap();
+    let xfdf = export_xfdf(&src, true, false, "form.pdf");
+    let mut dst = blank();
+    import(&mut dst, xfdf.as_bytes()).unwrap();
+    let callout_keys = |doc: &Document| {
+        let page = pdfcraft_model::pages(doc).remove(0);
+        let annots = page.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let d = annots.iter().filter_map(|a| doc.resolve(a).as_dict().cloned()).find(|d| d.name(b"Subtype") == Some(b"FreeText")).unwrap();
+        (
+            nums_of(doc, d.get(b"Rect")),
+            nums_of(doc, d.get(b"CL")),
+            nums_of(doc, d.get(b"RD")),
+            d.name(b"IT").map(<[u8]>::to_vec),
+            d.get(b"LE").and_then(|o| o.as_name()).map(<[u8]>::to_vec),
+        )
+    };
+    let want = callout_keys(&src);
+    assert_eq!(want.1.len(), 6, "{want:?}");
+    assert_eq!(callout_keys(&dst), want, "{xfdf}");
+}
