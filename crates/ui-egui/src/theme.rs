@@ -140,19 +140,37 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
 
 /// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
+/// The name of the installed Han face [`installed_font_definitions`] adds when the build has no
+/// embedded CJK faces (see [`crate::system_fonts::cjk`]) so the Chinese interface still draws.
+pub const SYSTEM_FALLBACK_CJK: &str = "system-fallback-cjk";
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
-/// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
+/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, up to two
+/// faces already installed on this machine as the last fallbacks of every family. They only
+/// draw characters no embedded face has: an Arabic file name, and CJK interface text in a
+/// build without craft-fonts; `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+    {
+        if let Some(data) = crate::system_fonts::fallback() {
+            fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+        }
+        // A build without craft-fonts embeds no Han faces; cover the Chinese interface with
+        // one installed CJK face instead. With craft-fonts the embedded faces come first and
+        // this last face would rarely, if ever, be reached, so it is left out then.
+        if pdfcraft_fonts::ui_cjk_fonts(prefer_hans).is_empty()
+            && let Some(data) = crate::system_fonts::cjk()
+        {
+            fonts.font_data.insert(SYSTEM_FALLBACK_CJK.to_owned(), data);
+        }
         for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+            if fonts.font_data.contains_key(SYSTEM_FALLBACK) {
+                stack.push(SYSTEM_FALLBACK.to_owned());
+            }
+            if fonts.font_data.contains_key(SYSTEM_FALLBACK_CJK) {
+                stack.push(SYSTEM_FALLBACK_CJK.to_owned());
+            }
         }
     }
     fonts
