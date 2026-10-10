@@ -215,6 +215,30 @@ fn wheel_turns_one_page_per_notch_and_per_trackpad_swipe() {
 }
 
 #[test]
+fn precise_touchpad_wheel_scrolls_one_to_one() {
+    // A precision touchpad's pixel delta scrolls the page by that amount in the same frame,
+    // instead of egui easing it over several frames so the page lags the finger (#759). A single
+    // 200 px precise event is well over egui's 8 px smoothing threshold, so without the fix only
+    // a fraction would land on the first frame.
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "100")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let before = rect(&h, 0).expect("page 1 on screen").min.y;
+    h.event(wheel(MouseWheelUnit::Point, -200.0, TouchPhase::Move));
+    // A few frames for the event to reach the ScrollArea and the new offset to be drawn. The
+    // page jumps the full 200 px at once; an eased path would ramp there over ~0.1 s (6 frames).
+    h.run_steps(4);
+    let moved = before - rect(&h, 0).expect("page 1 still laid out").min.y;
+    assert!(moved > 190.0, "a 200 px precise swipe scrolls ~200 px at once, not an eased fraction: moved {moved}");
+    // And it stops with the finger: idle frames must not drift on a leftover easing tail.
+    let settled = rect(&h, 0).unwrap().min.y;
+    h.run_steps(20);
+    let drift = settled - rect(&h, 0).unwrap().min.y;
+    assert!(drift.abs() < 2.0, "no easing tail after the swipe: drifted {drift}");
+}
+
+#[test]
 fn page_display_commands_switch_layouts() {
     let mut h = harness(&[]);
     h.state_mut().execute("view.layout.single");

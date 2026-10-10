@@ -414,6 +414,20 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     if !(hf.font_size.is_finite() && hf.font_size > 0.0 && hf.font_size <= 200.0 && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)) {
         return Err(EditError::Invalid("invalid font size or margins".into()));
     }
+    // Page numbers count up from start_number, so the last selected page needs the most room.
+    // Refuse the whole run before drawing anything: headers applied to some pages and then a
+    // failed page number would leave the document half changed.
+    let last_number = u64::from(hf.start_number)
+        .checked_add(pages.len().saturating_sub(1) as u64)
+        .ok_or_else(|| EditError::Invalid("the header page numbers are too large".into()))?;
+    if last_number > u64::from(u32::MAX) {
+        return Err(EditError::Invalid(format!(
+            "the header start number {} leaves no room for {} pages (page numbers stop at {})",
+            hf.start_number,
+            pages.len(),
+            u32::MAX
+        )));
+    }
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
@@ -423,7 +437,8 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
         let (w, h) = page.display_size(doc);
-        let number = hf.start_number + k as u32;
+        let number =
+            u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))?;
         let bates = bates0 + k as u64;
         let size = hf.font_size;
         let [top, bottom, left, right] = hf.margins;

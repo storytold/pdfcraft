@@ -1016,3 +1016,104 @@ fn drawn_and_typed_signatures_stay_upright_on_rotated_pages() {
         assert!(differ * 10 < ink, "rotation {rotation}: {differ} of {ink} ink pixels differ from the unturned page");
     }
 }
+
+/// Press, move in steps and release, from one user-space point to another.
+fn drag(h: &mut Harness<'static, PdfCraftApp>, from: (f32, f32), to: (f32, f32)) {
+    let (a, b) = (at(h, from.0, from.1), at(h, to.0, to.1));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=5 {
+        h.hover_at(a + (b - a) * (k as f32 / 5.0));
+        h.run_steps(1);
+    }
+    h.drop_at(b);
+    h.run_steps(4);
+}
+
+fn rects(h: &Harness<'static, PdfCraftApp>) -> Vec<[f32; 4]> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().info.annotations.iter().map(|a| a.rect).collect()
+}
+
+/// A placed signature moves while a Fill & Sign tool is still active (as in Acrobat), instead of
+/// the drag doing nothing and a click stamping another mark on top of it. Elsewhere on the page
+/// the tool still places its mark.
+#[test]
+fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
+    for tool in ["sign.fill.signature", "sign.fill.initials", "sign.fill.text", "sign.fill.check", "sign.fill.date"] {
+        let mut h = harness();
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+        h.state_mut().execute("sign.fill.signature");
+        click(&mut h, 40.0, 250.0);
+        let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+        assert!(h.state_mut().execute(tool));
+        h.run_steps(2);
+        let mid = ((placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
+        h.hover_at(at(&h, mid.0, mid.1));
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "{tool}: a placed mark can be picked up");
+
+        drag(&mut h, mid, (mid.0 + 40.0, mid.1 - 60.0));
+        assert!(matches!(h.state().quick_tool, QuickTool::Fill(_)), "{tool}: the tool stays");
+        let moved = [placed[0] + 40.0, placed[1] - 60.0, placed[2] + 40.0, placed[3] - 60.0];
+        let [now] = rects(&h)[..] else { panic!("{tool}: still one mark: {:?}", rects(&h)) };
+        assert_rect(now, moved);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Move comment"), "{tool}");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "{tool}");
+
+        // The selected signature's handle resizes it.
+        let corner = at(&h, moved[2], moved[1]);
+        h.hover_at(corner);
+        h.run_steps(2);
+        h.drag_at(corner);
+        h.run_steps(1);
+        h.hover_at(corner + egui::vec2(30.0, 10.0));
+        h.run_steps(2);
+        h.drop_at(corner + egui::vec2(30.0, 10.0));
+        h.run_steps(3);
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"), "{tool}");
+        assert_eq!(rects(&h).len(), 1, "{tool}");
+
+        // A click on it selects it rather than placing another mark on top.
+        h.state_mut().views[0].comments.selected = None;
+        let r = rects(&h)[0];
+        click(&mut h, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+        assert_eq!(rects(&h).len(), 1, "{tool}: no mark stamped on the signature");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "{tool}");
+        assert!(h.state().views[0].fill_text.is_none(), "{tool}: no text box opened on the signature");
+    }
+    // A drawn signature in a saved and reopened file (read by the viewer, not the editor).
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Drawn(vec![vec![[0.05, 0.1], [0.3, 0.2], [0.55, 0.05], [0.95, 0.15]]]));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 40.0, 250.0);
+    let saved = h.state().session.save_bytes(h.state().views[0].id).unwrap();
+    let mut h = harness_bytes(&saved);
+    let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+    h.state_mut().execute("sign.fill.check");
+    let mid = ((placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
+    drag(&mut h, mid, (mid.0 + 40.0, mid.1 - 60.0));
+    assert_rect(rects(&h)[0], [placed[0] + 40.0, placed[1] - 60.0, placed[2] + 40.0, placed[3] - 60.0]);
+
+    // Away from Fill & Sign marks, the tool still places (checks stay repeatable), also on other
+    // comments.
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 40.0, 250.0);
+    let id = h.state().views[0].id;
+    let square = pdfcraft_engine::Shape::Rectangle { rect: [100.0, 80.0, 200.0, 140.0] };
+    let style = pdfcraft_engine::Style::default_for(&square);
+    let new = pdfcraft_engine::NewAnnotation { page: 0, shape: square, style, contents: String::new(), author: "Ada".into() };
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::AddAnnotation(new)).unwrap();
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.check");
+    click(&mut h, 60.0, 100.0);
+    click(&mut h, 150.0, 110.0);
+    assert_eq!(items(&h).len(), 4, "{:?}", items(&h));
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+}
