@@ -82,7 +82,6 @@ fn wheel(unit: MouseWheelUnit, dy: f32, phase: TouchPhase) -> egui::Event {
     egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn middle_button_scrolling_keeps_page_colours_in_both_themes() {
     use egui_kittest::kittest::Queryable;

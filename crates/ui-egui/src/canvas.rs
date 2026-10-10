@@ -471,14 +471,9 @@ impl DocView {
         self.viewport_screen
     }
 
-    /// Whether a middle-button scrolling gesture is active (tests and automation).
+    /// Whether middle-button auto-scroll is on, latched or held (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.auto_scroll.active()
-    }
-
-    /// Whether a held middle-button pan is active, outside Linux (tests and automation).
-    pub fn middle_panning(&self) -> bool {
-        self.auto_scroll.panning()
     }
 
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).

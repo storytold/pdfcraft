@@ -155,7 +155,6 @@ fn language_switch_preserves_document_and_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
 }
 
-#[cfg(target_os = "linux")]
 fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) -> egui::Pos2 {
     let p = h.state().views[0].viewport_rect().center();
     ok(h, c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
@@ -163,16 +162,21 @@ fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) ->
     p
 }
 
+/// Deliver `events` together in one frame. `Harness::event` runs a frame per event, a quarter
+/// second of input time each, which would make a quick click look like a held button.
+fn one_frame(h: &mut Harness<'static, PdfCraftApp>, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    h.run_steps(1);
+}
+
 /// Measure document movement from rendered geometry without requiring an offscreen grid
 /// cell to remain instantiated. Learn the grid's column count and row pitch before scrolling;
 /// any currently rendered cell then identifies the same content origin. This tests actual
 /// layout displacement, independently of the autoscroll velocity calculation.
-#[cfg(target_os = "linux")]
 struct CanvasPosition {
     grid: Option<(usize, f32)>,
 }
 
-#[cfg(target_os = "linux")]
 impl CanvasPosition {
     fn new(h: &Harness<'static, PdfCraftApp>) -> Self {
         let grid = h.state().views[0].organize.then(|| {
@@ -207,7 +211,6 @@ impl CanvasPosition {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions() {
     let (mut h, c) = harness();
@@ -242,51 +245,50 @@ fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions()
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "scrolling never edits the PDF");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools() {
+fn a_quick_press_and_move_latches_without_starting_page_tools() {
     let (mut h, c) = harness();
-    // Keep the tracked page on screen while the faster gesture continues after release.
+    // Keep the tracked page on screen while scrolling continues after the release.
     h.state_mut().set_option("zoom", "400").unwrap();
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(0);
     h.run_steps(2);
-    // A middle drag must not also draw with a selected tool (egui accepts any drag button).
+    // A middle drag must not also crop with a selected tool (egui accepts any drag button).
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
     let p = h.state().views[0].viewport_rect().center();
+    let moved = p + egui::vec2(0.0, 60.0);
     let top = h.state().views[0].page_screen_rect(0).unwrap().top();
-    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 60.0], "steps": 12, "button": "middle" }));
-    h.run_steps(2);
-    assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
-    assert!(h.state().views[0].auto_scrolling(), "release keeps scrolling toggled on even after movement");
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    // Press and move in one frame, release in the next: well inside the half-second hold.
+    one_frame(&mut h, vec![egui::Event::PointerMoved(p), button(p, true), egui::Event::PointerMoved(moved)]);
+    one_frame(&mut h, vec![button(moved, false)]);
+    h.run_steps(1);
+    assert!(h.state().views[0].auto_scrolling(), "a quick press keeps scrolling on even after movement");
     let released = h.state().views[0].page_screen_rect(0).unwrap().top();
     h.run_steps(8);
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
+    assert!(released <= top, "{top} -> {released}");
     assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
     assert!(h.state().dialog.is_none());
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
-    ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y + 60.0, "button": "middle" }));
-    assert!(!h.state().views[0].auto_scrolling(), "the next middle click toggles scrolling off");
+    ok(&mut h, &c, "ui.click", json!({ "x": moved.x, "y": moved.y, "button": "middle" }));
+    assert!(!h.state().views[0].auto_scrolling(), "the next middle press stops it");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() {
     let (mut h, c) = harness();
     let p = h.state().views[0].viewport_rect().center();
     let moved = p + egui::vec2(0.0, 60.0);
     let top = h.state().views[0].page_screen_rect(0).unwrap().top();
-    h.event(egui::Event::PointerMoved(p));
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed: true, modifiers: egui::Modifiers::NONE });
-    h.event(egui::Event::PointerMoved(moved));
-    h.event(egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Middle, pressed: false, modifiers: egui::Modifiers::NONE });
-    h.run_steps(8);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    one_frame(&mut h, vec![egui::Event::PointerMoved(p), button(p, true), egui::Event::PointerMoved(moved), button(moved, false)]);
+    h.run_steps(7);
     assert!(h.state().views[0].auto_scrolling());
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0, "distance is measured from the click, not the last mouse event");
     ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
     for organize in [false, true] {
@@ -315,7 +317,6 @@ fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views() {
     for (organize, scale, zoom) in [(false, 1.0, "100"), (false, 2.0, "100"), (false, 1.0, "400"), (true, 1.0, "100"), (true, 2.0, "100")] {
@@ -375,7 +376,6 @@ fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_vi
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn escape_stops_autoscroll_without_closing_find() {
     let (mut h, c) = harness();
@@ -391,7 +391,6 @@ fn escape_stops_autoscroll_without_closing_find() {
     assert!(h.state().views[0].find.is_some(), "Escape cancels the scrolling gesture first");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
     let (mut h, c) = harness();
@@ -419,7 +418,6 @@ fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
     assert!(!h.state().views[0].auto_scrolling());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
     let (mut h, c) = harness();
@@ -440,7 +438,6 @@ fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
     assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2], "to": [3, 4], "button": "bad" })).is_err());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
     use egui_kittest::kittest::Queryable;
@@ -458,7 +455,6 @@ fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
     assert_eq!(h.state().views[0].target_pages(), vec![1]);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
     let (mut h, c) = harness_pages(40);
@@ -478,43 +474,36 @@ fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
     assert!(h.state().views[0].selected.is_empty());
     assert!(h.state().views[0].org_drag.is_none());
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
-    assert!(h.state().views[0].auto_scrolling(), "releasing the wheel leaves the grid scrolling on");
+    assert!(!h.state().views[0].auto_scrolling(), "releasing a held wheel stops the grid scrolling");
+    start_autoscroll(&mut h, &c);
     h.state_mut().views[0].organize = false;
     h.run_steps(2);
     assert!(!h.state().views[0].auto_scrolling(), "changing canvas mode cancels the gesture");
 }
 
-#[cfg(not(target_os = "linux"))]
 #[test]
-fn middle_button_pans_while_held_outside_linux() {
+fn holding_the_middle_button_scrolls_until_release_without_starting_page_tools() {
     for organize in [false, true] {
         let (mut h, c) = harness_pages(40);
         h.state_mut().views[0].organize = organize;
         h.run_steps(3);
+        // A middle drag must not also crop with a selected tool (egui accepts any drag button).
+        h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
+        let position = CanvasPosition::new(&h);
+        let top = position.top(&h);
         let p = h.state().views[0].viewport_rect().center();
-        ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
-        ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 50.0 }));
+        // Fourteen frames of a quarter second each with the button down: a hold, not a click.
+        ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 80.0], "steps": 12, "button": "middle" }));
+        let released = position.top(&h);
+        assert!(released < top - 30.0, "the held wheel scrolls down: organize={organize}, {top} -> {released}");
+        assert!(!h.state().views[0].auto_scrolling(), "releasing a hold stops scrolling: organize={organize}");
         h.run_steps(8);
-        assert!(!h.state().views[0].auto_scrolling(), "a click does not latch auto-scroll outside Linux: organize={organize}");
-        assert!(!h.state().views[0].middle_panning(), "a released click leaves nothing to pan: organize={organize}");
+        assert_eq!(position.top(&h), released, "no drift after the release: organize={organize}");
+        assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag: organize={organize}");
+        assert!(h.state().views[0].selected.is_empty(), "organize={organize}");
+        assert!(h.state().views[0].org_drag.is_none(), "organize={organize}");
+        assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     }
-    // A drag pans while the button is held, and the Crop tool never sees it.
-    let (mut h, c) = harness();
-    h.state_mut().set_option("zoom", "400").unwrap();
-    h.run_steps(3);
-    h.state_mut().views[0].go_to_page(1);
-    h.run_steps(2);
-    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
-    let p = h.state().views[0].viewport_rect().center();
-    let top = h.state().views[0].page_screen_rect(1).unwrap().top();
-    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y - 60.0], "steps": 12, "button": "middle" }));
-    h.run_steps(2);
-    let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
-    assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
-    h.run_steps(8);
-    assert_eq!(h.state().views[0].page_screen_rect(1).unwrap().top(), moved, "no drift after release");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
-    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
 #[test]
