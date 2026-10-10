@@ -303,8 +303,12 @@ impl Automation {
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
                 let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                // As in the app, a copy that isn't smaller is not written (#490).
+                let written = bytes.len() < before;
+                if written {
+                    write_atomic(&path, &bytes)?;
+                }
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -851,6 +855,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
@@ -1328,13 +1333,21 @@ impl Automation {
         let dir = self.resolve(a.str("out_dir")?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut files = Vec::new();
+        let mut used = std::collections::HashSet::new();
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
             let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
             let file = match titles.iter().find(|t| t.0 + 1 == *first) {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = child(&dir, &file);
+            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another; compared case-insensitively.
+            let mut unique = file.clone();
+            let mut n = 1;
+            while !used.insert(unique.to_lowercase()) {
+                n += 1;
+                unique = format!("{}-{n}.pdf", file.trim_end_matches(".pdf"));
+            }
+            let path = child(&dir, &unique);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }

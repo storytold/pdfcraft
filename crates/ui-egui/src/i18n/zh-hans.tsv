@@ -1455,6 +1455,8 @@
 	Right Edge	右边缘
 	Language	语言
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	已保存{place}：{before} → {after}（缩小了{pct}%）{detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	此文件已经是最小的了（{size}）。未保存副本。
+	Saved {place}: {before} → {after} (not smaller){detail}	已保存{place}：{before} → {after}（未缩小）{detail}
 	Couldn't save the image: {e}	无法保存图像：{e}
 	Adding images arrives on the web with file pickers for images	Web 端添加图像将使用图像文件选择器
 	Replacing images on page {p} arrives on the web with image pickers ({i})	在 Web 端替换第{p}页的图像将使用图像选择器（{i}）

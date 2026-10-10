@@ -1448,6 +1448,8 @@
 	Right Edge	Десен ръб
 	Language	Език
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Записано {place}: {before} → {after} (с {pct}% по-малко){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Файлът вече е възможно най-малък ({size}). Не е записано копие.
+	Saved {place}: {before} → {after} (not smaller){detail}	Записано {place}: {before} → {after} (не е по-малко){detail}
 	Couldn't save the image: {e}	Изображението не можа да бъде записано: {e}
 	Adding images arrives on the web with file pickers for images	Добавянето на изображения в уеб версията ще стане достъпно с инструментите за избор на файлове с изображения
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Замяната на изображения на страница {p} в уеб версията ще стане достъпна с инструментите за избор на изображения ({i})

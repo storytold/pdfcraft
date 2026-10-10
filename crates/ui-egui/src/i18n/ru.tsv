@@ -1497,6 +1497,8 @@
 	Right Edge	Правый край
 	Language	Язык
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Сохранено {place}: {before} → {after} (на {pct}% меньше){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Этот файл уже минимального размера ({size}). Копия не сохранена.
+	Saved {place}: {before} → {after} (not smaller){detail}	Сохранено {place}: {before} → {after} (не меньше){detail}
 	Couldn't save the image: {e}	Не удалось сохранить изображение: {e}
 	Adding images arrives on the web with file pickers for images	Добавление изображений появится в веб-версии с выбором файлов изображений
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Замена изображений на стр. {p} появится в веб-версии с выбором изображений ({i})

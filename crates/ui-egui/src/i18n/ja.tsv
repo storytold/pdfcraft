@@ -1496,6 +1496,8 @@
 	Right Edge	右端
 	Language	言語
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place} に保存: {before} → {after}（{pct}% 削減）{detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	このファイルはすでに最小のサイズです（{size}）。コピーは保存されませんでした。
+	Saved {place}: {before} → {after} (not smaller){detail}	{place} に保存: {before} → {after}（縮小なし）{detail}
 	Couldn't save the image: {e}	画像を保存できませんでした: {e}
 	Adding images arrives on the web with file pickers for images	Web 版の画像追加は画像ファイル選択に対応した際に利用可能になります
 	Replacing images on page {p} arrives on the web with image pickers ({i})	ページ {p} の画像置換は Web 版の画像選択に対応した際に利用可能になります（{i}）

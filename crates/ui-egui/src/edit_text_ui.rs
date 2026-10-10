@@ -87,6 +87,11 @@ impl LineEditor {
         (self.max_width > self.rect.width()).then_some(self.max_width)
     }
 
+    /// Whether the edited text differs from the original (unsaved changes).
+    pub fn has_unsaved_text(&self) -> bool {
+        self.text != self.original
+    }
+
     /// The formatting the panel changed.
     pub fn style(&self) -> pdfcraft_engine::BlockStyle {
         let (l, o) = (&self.look, &self.look0);

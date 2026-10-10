@@ -237,8 +237,16 @@ fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], 
     let mut new_pages = Vec::new();
     let mut done: HashMap<ObjRef, ObjRef> = HashMap::new();
     for (page, new, inherited) in targets {
-        // A page listed twice: make a second, independent page object sharing resources.
-        let new = if done.contains_key(&page) { dst.add(Object::Null) } else { new };
+        // A page listed twice: make a second, independent page object sharing resources. Its
+        // annotations (with their popups and form fields) are copied again, so each page owns its
+        // copies and their `/P` names it, as Duplicate Pages does (#818).
+        let new = if done.contains_key(&page) {
+            let copies: std::collections::HashSet<ObjRef> = copier.annots.iter().chain(&copier.fields).copied().collect();
+            copier.map.retain(|_, &mut d| !copies.contains(&d));
+            dst.add(Object::Null)
+        } else {
+            new
+        };
         let src_dict = src.get(page).as_dict().cloned().unwrap_or_default();
         let mut d = Dict::new();
         for (k, v) in src_dict.iter() {
