@@ -271,6 +271,16 @@ fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::Nativ
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
+    // manager showed a "no" cursor. Run through XWayland when it's there; PDFCRAFT_WAYLAND=1
+    // keeps the native Wayland backend.
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("PDFCRAFT_WAYLAND").is_none() {
+        native.event_loop_builder = Some(Box::new(|b| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            b.with_x11();
+        }));
+    }
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
