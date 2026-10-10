@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Original, text-only native MSI dialogs. No third-party UI artwork or custom-action DLLs.
-     Full UI gets welcome (with the desktop-shortcut checkbox)/progress/outcome screens; /qn and /qb stay unattended. -->
+     Full UI gets welcome (with per-user vs all-users scope selection and desktop-shortcut checkbox)/progress/outcome screens; /qn and /qb stay unattended. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <UI Id="PdfcraftInstallerUI">
@@ -8,16 +8,36 @@
       <TextStyle Id="InstallerTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
       <Property Id="DefaultUIFont" Value="InstallerNormal" />
 
-      <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40"
-            Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
-        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17"
-            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
-          <Publish Event="EndDialog" Value="Return" />
+      <Dialog Id="InstallWelcome" Width="370" Height="220" Title="[ProductName] Setup">
+        <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
+        <Control Id="Description" Type="Text" X="20" Y="42" Width="330" Height="20"
+            Text="Choose whether to install [ProductName] for yourself or all users:" />
+        <Control Id="ScopeRadioGroup" Type="RadioButtonGroup" Property="INSTALLSCOPE"
+            X="20" Y="65" Width="330" Height="50">
+          <RadioButtonGroup Property="INSTALLSCOPE">
+            <RadioButton Value="PerUser" Text="Install for current &amp;user only" X="0" Y="0" Width="320" Height="17" />
+            <RadioButton Value="PerMachine" Text="Install for &amp;all users (requires administrator privileges)" X="0" Y="25" Width="320" Height="17" />
+          </RadioButtonGroup>
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="125" Width="330" Height="17"
+            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="InstallUser" Type="PushButton" X="195" Y="180" Width="75" Height="23" Default="yes" Text="&amp;Install"
+            ShowCondition="INSTALLSCOPE = &quot;PerUser&quot;"
+            HideCondition="INSTALLSCOPE &lt;&gt; &quot;PerUser&quot;"
+            DefaultCondition="INSTALLSCOPE = &quot;PerUser&quot;">
+          <Publish Property="ALLUSERS" Value="2" Order="1" />
+          <Publish Property="MSIINSTALLPERUSER" Value="1" Order="2" />
+          <Publish Event="EndDialog" Value="Return" Order="3" />
+        </Control>
+        <Control Id="InstallMachine" Type="PushButton" X="195" Y="180" Width="75" Height="23" ElevationShield="yes" Text="&amp;Install"
+            ShowCondition="INSTALLSCOPE = &quot;PerMachine&quot;"
+            HideCondition="INSTALLSCOPE &lt;&gt; &quot;PerMachine&quot;"
+            DefaultCondition="INSTALLSCOPE = &quot;PerMachine&quot;">
+          <Publish Property="ALLUSERS" Value="2" Order="1" />
+          <Publish Property="MSIINSTALLPERUSER" Value="{}" Order="2" />
+          <Publish Event="EndDialog" Value="Return" Order="3" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="280" Y="180" Width="70" Height="23" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>
@@ -89,9 +109,7 @@
         </Control>
       </Dialog>
 
-      <!-- Shown by Windows Installer (Restart Manager) when an upgrade or repair must replace files
-           that a running PdfCraft holds open. OK closes those programs (MSIRMSHUTDOWN=2) and
-           continues; Cancel ends setup. -->
+      <!-- Shown by Windows Installer (Restart Manager) when an upgrade or repair must replace files\n           that a running PdfCraft holds open. OK closes those programs (MSIRMSHUTDOWN=2) and\n           continues; Cancel ends setup. -->
       <Dialog Id="MsiRMFilesInUse" Width="370" Height="200" Title="[ProductName] Setup" KeepModeless="yes">
         <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Files in use" />
         <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30"

@@ -110,20 +110,25 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - Before packaging, it reads both executables' PE headers: the machine type must match `-Arch`, and
   `pdfcraft.exe` must be a GUI-subsystem program (no console window, #57) while `pdfcraft-cli.exe`
   stays a console program.
-- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut, a
-  desktop shortcut (on by default) and an App Paths entry. Both shortcuts are plain links to
-  `pdfcraft.exe`, not advertised MSI shortcuts (#107, #143). The MSI version is the numeric `X.Y.Z`
+- `pdfcraft.wxs` (WiX v5) supports dual-purpose installation: per-user into `LocalAppData\Programs`
+  without administrator privileges, or per-machine into `Program Files` with administrator privileges.
+  Both scopes create a Start Menu shortcut, an optional desktop shortcut (on by default) and an
+  App Paths entry. Both shortcuts are plain links to `pdfcraft.exe`, not advertised MSI shortcuts
+  (#107, #143). Registry entries use `HKMU` to register file handlers and context menus in `HKCU` or
+  `HKLM` dynamically according to the installation scope. The MSI version is the numeric `X.Y.Z`
   (MSI has no pre-release field), and same-version upgrades are allowed so release candidates replace
   each other. Icon ids end in `.ico` or `.exe` (Windows Installer requires it); packaging-lint checks
   this.
-- `installer-ui.wxs` supplies native welcome, maintenance, progress, files-in-use and outcome
-  dialogs. Full UI confirms success with Finish; failures and cancellations have distinct messages.
-  The welcome dialog has a "Create a desktop shortcut" checkbox, ticked by default. `/qn` and `/qb`
-  stay unattended and create the desktop shortcut unless `INSTALLDESKTOPSHORTCUT=0` is passed.
-- `test-msi.ps1 <file.msi>` checks the compiled shortcut and dialog tables. Packaging runs it in a
-  child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
-  smoke test checks that both all-users shortcuts point at the installed `pdfcraft.exe` and are
-  removed on uninstall, and that `INSTALLDESKTOPSHORTCUT=0` skips the desktop one.
+- `installer-ui.wxs` supplies native welcome (with per-user vs all-users scope selection and desktop
+  shortcut checkbox), maintenance, progress, files-in-use and outcome dialogs. Full UI confirms
+  success with Finish; failures and cancellations have distinct messages. The welcome dialog lets the
+  user choose between "Install for current user only" (no administrator elevation required) and
+  "Install for all users (requires administrator privileges)". `/qn` and `/qb` stay unattended and
+  default to per-user unless overridden via `ALLUSERS=1` or `INSTALLSCOPE=PerMachine`.
+- `test-msi.ps1 <file.msi>` checks the compiled install scope, shortcuts, and dialog tables. Packaging
+  runs it in a child process before signing, so the MSI isn't held open when signtool runs. The ARM64
+  install smoke test verifies per-user installation without elevation, per-user uninstallation,
+  per-machine installation, shortcuts, and that `INSTALLDESKTOPSHORTCUT=0` skips the desktop shortcut.
 - The portable zip holds both executables, the README, the licences, the OFL licence of each
   embedded craft-fonts family, and `portable.txt`. That marker beside `pdfcraft.exe` keeps the
   settings, logs, crash recovery and new digital IDs in `PdfCraftData\` next to the exe instead of

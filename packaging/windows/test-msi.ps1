@@ -32,39 +32,16 @@ function Assert-NoRow([string] $Sql, [string] $What) {
   } finally { [void] $view.Close() }
 }
 
-# Test the compiled condition with Windows Installer's evaluator, in a restricted session that
-# cannot change machine state. Normal installs/repairs work, per-user overrides fail, and removal
-# of an older incorrectly scoped installation remains possible (#305).
-$scopeMessage = 'PdfCraft must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported.'
-$scopeCondition = Read-Row ('SELECT `Condition` FROM `LaunchCondition` WHERE `Description` = ''' + $scopeMessage + '''') 1
-$Installer.UILevel = 2
-$session = $null
-try {
-  $session = $Installer.OpenPackage((Resolve-Path -LiteralPath $Path).Path, 1)
-  foreach ($case in @(
-      @('machine install', '1', '', '', '', 1),
-      @('machine repair', '1', '', '1', '', 1),
-      @('forced per-user install', '2', '1', '', '', 0),
-      @('empty ALLUSERS', '', '', '', '', 0),
-      @('resolved per-user install', '', '1', '', '', 0),
-      @('forced per-user repair', '2', '1', '1', '', 0),
-      @('machine uninstall', '1', '', '1', 'ALL', 1),
-      @('legacy per-user uninstall', '', '1', '1', 'ALL', 1))) {
-    $session.Property('ALLUSERS') = $case[1]
-    $session.Property('MSIINSTALLPERUSER') = $case[2]
-    $session.Property('Installed') = $case[3]
-    $session.Property('REMOVE') = $case[4]
-    Assert-Equal ($session.EvaluateCondition($scopeCondition[0])) $case[5] $case[0]
-  }
-} finally {
-  if ($session) { [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($session) }
-}
+# Ensure there is no launch condition forbidding per-user installs. Dual-purpose packages
+# support both per-user (without elevation) and per-machine (with elevation) installation.
+Assert-NoRow 'SELECT `Condition` FROM `LaunchCondition` WHERE `Description` LIKE ''%per-user installation is not supported%''' 'no per-user reject launch condition'
+
 foreach ($sequence in @('InstallUISequence', 'InstallExecuteSequence')) {
   $launch = Read-Row ('SELECT `Condition`, `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''LaunchConditions''') 2
   Assert-Equal $launch[0] '' "$sequence launch conditions are unconditional"
   $cost = Read-Row ('SELECT `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''CostInitialize''') 1
   if ([int] $launch[1] -le 0 -or [int] $launch[1] -ge [int] $cost[0]) {
-    throw "$sequence must reject per-user overrides before costing"
+    throw "$sequence must evaluate launch conditions before costing"
   }
 }
 $manufacturer = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''Manufacturer''' 1
@@ -92,29 +69,55 @@ $default = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''INSTALL
 Assert-Equal $default[0] '1' 'Desktop shortcut default'
 $secure = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''SecureCustomProperties''' 1
 if (($secure[0] -split ';') -notcontains 'INSTALLDESKTOPSHORTCUT') { throw "INSTALLDESKTOPSHORTCUT is not secure: '$($secure[0])'" }
+if (($secure[0] -split ';') -notcontains 'INSTALLSCOPE') { throw "INSTALLSCOPE is not secure: '$($secure[0])'" }
+
+$scopeDefault = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''INSTALLSCOPE''' 1
+Assert-Equal $scopeDefault[0] 'PerUser' 'INSTALLSCOPE default'
+
 $checkbox = Read-Row 'SELECT `Type`, `Property`, `Text` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''DesktopShortcut''' 3
 Assert-Equal $checkbox[0] 'CheckBox' 'Welcome desktop-shortcut control'
 Assert-Equal $checkbox[1] 'INSTALLDESKTOPSHORTCUT' 'Welcome checkbox property'
 if ($checkbox[2] -notmatch 'desktop shortcut') { throw "Welcome checkbox label: '$($checkbox[2])'" }
 $checked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLDESKTOPSHORTCUT''' 1
 Assert-Equal $checked[0] '1' 'Welcome checkbox value'
+
+$scopeCtrl = Read-Row 'SELECT `Type`, `Property` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''ScopeRadioGroup''' 2
+Assert-Equal $scopeCtrl[0] 'RadioButtonGroup' 'Welcome scope radio group control'
+Assert-Equal $scopeCtrl[1] 'INSTALLSCOPE' 'Welcome scope radio group property'
+foreach ($val in @('PerUser', 'PerMachine')) {
+  $radio = Read-Row ('SELECT `Property`, `Value` FROM `RadioButton` WHERE `Property` = ''INSTALLSCOPE'' AND `Value` = ''' + $val + '''') 2
+  Assert-Equal $radio[0] 'INSTALLSCOPE' "RadioButton $val property"
+  Assert-Equal $radio[1] $val "RadioButton $val value"
+}
+$userInstall = Read-Row 'SELECT `Type`, `Text` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''InstallUser''' 2
+Assert-Equal $userInstall[0] 'PushButton' 'Welcome InstallUser control'
+Assert-Equal $userInstall[1] '&Install' 'Welcome InstallUser label'
+$machInstall = Read-Row 'SELECT `Type`, `Text` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''InstallMachine''' 2
+Assert-Equal $machInstall[0] 'PushButton' 'Welcome InstallMachine control'
+Assert-Equal $machInstall[1] '&Install' 'Welcome InstallMachine label'
+
 $app = Read-Row 'SELECT `KeyPath` FROM `Component` WHERE `Component` = ''PdfcraftApp''' 1
 Assert-Equal $app[0] 'PdfcraftExe' 'Shortcut executable key path'
 $scope = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''ALLUSERS''' 1
-Assert-Equal $scope[0] '1' 'Per-machine shortcut scope'
+Assert-Equal $scope[0] '2' 'Dual-purpose ALLUSERS scope'
+$perUser = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''MSIINSTALLPERUSER''' 1
+Assert-Equal $perUser[0] '1' 'Dual-purpose MSIINSTALLPERUSER default'
 
-# Image context menu opens the DPI chooser; the app component owns every registry row so
-# uninstall removes it. No image default association is changed.
+# Registry entries use HKMU (-1) so they resolve to HKCU for per-user installs and HKLM for per-machine installs.
 foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
   $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.CreatePdf'
   $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
   Assert-Equal $menu[0] 'Create PDF with PdfCraft…' "$ext context menu label"
   Assert-Equal $menu[1] 'PdfcraftApp' "$ext context menu component"
-  Assert-Equal $menu[2] '2' "$ext context menu HKLM root"
+  Assert-Equal $menu[2] '-1' "$ext context menu HKMU root"
   $command = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 1
   Assert-Equal $command[0] '"[#PdfcraftExe]" --create-images "%1"' "$ext context menu command"
   $selection = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MultiSelectModel''') 1
   Assert-Equal $selection[0] 'Single' "$ext context menu selection"
+}
+foreach ($sName in @('StartMenu', 'Desktop')) {
+  $reg = Read-Row ('SELECT `Root` FROM `Registry` WHERE `Key` = ''Software\PdfCraft\Shortcuts'' AND `Name` = ''' + $sName + '''') 1
+  Assert-Equal $reg[0] '-1' "$sName shortcut HKMU root"
 }
 
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
@@ -147,4 +150,4 @@ $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: dual-purpose install scope (per-user/per-machine), publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

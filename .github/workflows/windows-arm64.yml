@@ -73,13 +73,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
-          # A command-line override must not put files in a user profile while registering
-          # their handlers machine-wide (#305). This runs on a disposable CI runner.
+          # Verify per-user installation without administrator privileges.
           $p = Start-Process msiexec.exe -WindowStyle Hidden -ArgumentList '/i', "`"$msi`"", '/qn', 'ALLUSERS=2', 'MSIINSTALLPERUSER=1', '/l*v', 'per-user.log' -Wait -PassThru
-          if ($p.ExitCode -ne 1603) { Get-Content per-user.log -Tail 60; throw "per-user install should fail with 1603, got $($p.ExitCode)" }
-          if (-not (Select-String -Path per-user.log -SimpleMatch 'PdfCraft must be installed for all users.')) {
-            Get-Content per-user.log -Tail 60; throw 'per-user install did not fail on the scope guard'
-          }
+          if ($p.ExitCode -ne 0) { Get-Content per-user.log -Tail 60; throw "per-user install failed with exit code $($p.ExitCode)" }
+          $p = Start-Process msiexec.exe -WindowStyle Hidden -ArgumentList '/x', "`"$msi`"", '/qn', '/l*v', 'per-user-uninstall.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content per-user-uninstall.log -Tail 60; throw "per-user uninstall failed with exit code $($p.ExitCode)" }
           $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
           $shortcuts = @(
