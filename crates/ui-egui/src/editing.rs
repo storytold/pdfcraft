@@ -349,6 +349,7 @@ impl PdfCraftApp {
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+            || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
     }
 
     /// Save the active document. Returns `true` if it was written.
@@ -605,8 +606,14 @@ impl PdfCraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    /// Publish whether any document has unsaved work, for the browser's reload warning (#812).
+    pub(crate) fn sync_unsaved_flag(&self) {
+        self.unsaved_flag.store(self.first_dirty().is_some(), std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Intercept window close while documents have unsaved changes.
     pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
+        self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
@@ -939,6 +946,19 @@ mod revert_draft_tests {
         let form = app.session.get(app.views[index].id).unwrap().form.clone();
         crate::forms_ui::commit(&mut app.views[index], &form);
         assert!(app.views[index].forms.committed.is_some() && app.views[index].pending_edit.is_some());
+    }
+
+    #[test]
+    fn unsaved_flag_follows_dirty_state() {
+        use std::sync::atomic::Ordering;
+        // `guard_quit` runs every frame, also on the web, where no close request ever arrives.
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.guard_quit(&ctx);
+        assert!(!app.unsaved_flag.load(Ordering::Relaxed));
+        assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
+        app.guard_quit(&ctx);
+        assert!(app.unsaved_flag.load(Ordering::Relaxed));
     }
 
     #[test]
