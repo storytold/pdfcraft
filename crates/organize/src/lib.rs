@@ -149,6 +149,9 @@ fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {
 
 /// Rotate pages by a multiple of 90° (positive = clockwise), adjusting `/Rotate` (§7.7.3.3).
 pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Result<(), OrganizeError> {
+    if degrees % 90 != 0 {
+        return Err(OrganizeError::Invalid("rotation must be a multiple of 90 degrees".into()));
+    }
     let all = walk(doc)?;
     check(indices, all.len())?;
     let delta = (degrees / 90) * 90;
@@ -192,7 +195,7 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
 }
 
 /// Bookmarks, and links on the `keep` pages, that go to one of the `gone` pages lose that
-/// destination (/Dest, or a GoTo /A), rather than pointing at nothing.
+/// destination (/Dest, or a GoTo /A), rather than pointing at nothing; so does the catalog's /OpenAction.
 fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
     let mut holders = outline::items(doc);
     for (p, _) in keep {
@@ -217,6 +220,18 @@ fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Di
         let action = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned());
         if action.is_some_and(|a| a.name(b"S") == Some(b"GoTo") && to_gone(a.get(b"D"))) {
             dead.push((h, b"A"));
+        }
+    }
+    // The catalog's /OpenAction is either a destination array or a GoTo action; one that opens a
+    // deleted page is dropped, as a bookmark's would be.
+    if let Some(root) = doc.root() {
+        let open = doc.get(root).as_dict().and_then(|c| c.get(b"OpenAction").map(|o| doc.resolve(o)));
+        let opens_gone = match open.as_deref() {
+            Some(Object::Dict(a)) => a.name(b"S") == Some(b"GoTo") && to_gone(a.get(b"D")),
+            other => to_gone(other),
+        };
+        if opens_gone {
+            dead.push((root, b"OpenAction"));
         }
     }
     for (h, key) in dead {

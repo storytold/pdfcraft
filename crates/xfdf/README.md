@@ -17,6 +17,7 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
 - **Form data**: Acrobat's XML (`xfdf:original` keeps names that aren't XML names), CSV and
   tab-delimited text (a row of names, a row of values).
 
-Import replaces comments with the same `/NM`, draws appearances PdfCraft can draw, and sets
-values through the form's own checks (formats, validation, recalculation); read-only fields take
-imported values, as in Acrobat. XML is read with `roxmltree`.
+Import replaces comments with the same `/NM` (and drops the replaced comment's pop-up), draws
+appearances PdfCraft can draw, and sets values through the form's own checks (formats,
+validation, recalculation); read-only fields take imported values, as in Acrobat. XML is read
+with `roxmltree`.
