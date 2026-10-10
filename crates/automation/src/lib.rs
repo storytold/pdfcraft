@@ -1032,7 +1032,7 @@ impl Automation {
                     (None, Some(p)) => {
                         let path = self.resolve(p, false)?;
                         let t = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), String::from_utf8_lossy(&t).into_owned())
+                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), pdfcraft_engine::decode_text(&t))
                     }
                     (None, None) => return Err(ToolError::InvalidArgs("text needs `text` or `path`".into())),
                 };

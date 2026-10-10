@@ -290,6 +290,28 @@ fn jpeg_2000_images_are_embedded_as_is() {
 }
 
 #[test]
+fn text_files_are_decoded_by_byte_order_mark_then_utf8_then_code_page() {
+    let utf16 = |text: &str, big: bool| -> Vec<u8> {
+        let mut v = if big { vec![0xFE, 0xFF] } else { vec![0xFF, 0xFE] };
+        for u in text.encode_utf16() {
+            v.extend_from_slice(&if big { u.to_be_bytes() } else { u.to_le_bytes() });
+        }
+        v
+    };
+    assert_eq!(decode_text("Kış İstanbul".as_bytes()), "Kış İstanbul");
+    assert_eq!(decode_text(b"\xEF\xBB\xBFMerhaba"), "Merhaba", "a UTF-8 byte order mark is dropped");
+    assert_eq!(decode_text(&utf16("Kış İstanbul\r\nŞubat", false)), "Kış İstanbul\r\nŞubat");
+    assert_eq!(decode_text(&utf16("Grüße 日本", true)), "Grüße 日本");
+    // Not UTF-8: Windows-1254 for Turkish, 1252 for other Western text (Icelandic included).
+    assert_eq!(decode_text(b"K\xFD\xFE \xDDstanbul \xF0\xFC\xE7"), "Kış İstanbul ğüç");
+    assert_eq!(decode_text(b"\xDE\xF3r\xF0ur \xE1 \xEDslandi"), "Þórður á íslandi");
+    assert_eq!(decode_text(b"caf\xE9 \x80 5"), "café € 5");
+    // Odd and broken input never fails.
+    assert_eq!(decode_text(&[0xFF, 0xFE, b'A']), "\u{FFFD}");
+    assert_eq!(decode_text(b""), "");
+}
+
+#[test]
 fn source_kind_tells_pdfs_images_and_text_apart() {
     assert_eq!(source_kind("a.bin", b"%PDF-1.7\n"), Some(SourceKind::Pdf));
     assert_eq!(source_kind("a.txt", b"junk before\n%PDF-1.4"), Some(SourceKind::Pdf), "a header after leading junk");

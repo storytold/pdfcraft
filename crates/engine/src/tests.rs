@@ -466,6 +466,24 @@ fn mixed_files_convert_and_combine_in_order() {
 }
 
 #[test]
+fn utf16_and_code_page_text_files_convert_to_their_text() {
+    let mut s = Session::new();
+    // Notepad's "Unicode": UTF-16 little endian with a byte order mark.
+    let mut utf16 = vec![0xFF, 0xFE];
+    utf16.extend("Grüße aus Köln".encode_utf16().flat_map(u16::to_le_bytes));
+    let (_, pdf) = s.convert_to_pdf("notes.txt", &Arc::new(utf16)).unwrap();
+    let id = s.open_new("notes.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), ["Grüße aus Köln"]);
+    // A UTF-8 byte order mark is not text; Windows-1252 bytes are not replacement characters.
+    let (_, pdf) = s.convert_to_pdf("menu.txt", &Arc::new(b"\xEF\xBB\xBFCaf\xC3\xA9".to_vec())).unwrap();
+    let id = s.open_new("menu.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), ["Café"]);
+    let (_, pdf) = s.convert_to_pdf("old.txt", &Arc::new(b"Cr\xE8me br\xFBl\xE9e".to_vec())).unwrap();
+    let id = s.open_new("old.pdf", pdf).unwrap();
+    assert_eq!(page_texts(&s, id), ["Crème brûlée"]);
+}
+
+#[test]
 fn files_that_cannot_be_converted_are_refused_clearly() {
     let s = Session::new();
     let err = s.convert_to_pdf("report.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err();
