@@ -1,8 +1,8 @@
 # PdfCraft roadmap
 
-**Stage: alpha** · next: beta, ~28% (ready for real work 47% → 75%) and ~400–700 h away
+**Stage: alpha** · next: beta, ~26% (ready for real work 49% → 75%) and ~400–700 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (readiness table with hours per audience; full number as weighted sum 49%; earlier: second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -31,7 +31,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 |---|---|---|
 | **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
-| **Ready for real work**, full Acrobat Pro | **≈ 47%** (44–50%) | estimated ([method](docs/target-app-parity.md#how-this-was-measured)) |
+| **Ready for real work**, full Acrobat Pro | **≈ 49%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
 | Remaining to **beta** | ≈ 400–700 Opus 5.5 agent-hours | estimated |
@@ -44,22 +44,32 @@ and share (password-protected files we write don't open in Acrobat or Reader, #7
 Office→PDF; Word export loses layout, #773). Those, unmeasured quality against Acrobat, the borrowed
 `hayro` renderer, no printing on Windows (#756) and 245 open issues keep it far from beta.
 
+### Readiness by audience
+
+| Audience | Ready | Opus 5.5 agent-hours to ≈ 95% | Work that dominates |
+|---|---|---|---|
+| Full Acrobat Pro (ready for real work) | ≈ 49% | ≈ 780–1,400 h (≈ 300–550 h wall clock with 3–5 agents; 60–70% parallelizes) | Own renderer and fidelity harness, editing existing content, OCR and Office conversion, Preflight and PDF/A/X/UA, accessibility tagging, signatures for institutions |
+| Mainstream practitioner | ≈ 55% | ≈ 500–900 h (≈ 200–400 h wall clock; ≈ 60% parallelizes) | Rendering fidelity, editing existing text (CJK, RTL, subsets), conversion (Word layout, Excel, PowerPoint, Office→PDF), OCR languages, Windows printing, the bug backlog |
+| Essentials user | ≈ 66% | ≈ 180–330 h (≈ 90–180 h wall clock; ≈ 50% parallelizes) | Rendering fidelity on everyday files, Windows printing, launch and GPU stability, encrypted output Acrobat opens (#774), simple text fixes, Word export layout, Chinese UI glyphs |
+
+Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#effort-and-calibration) (≈ 1k kept lines per agent-hour for new features, 3–10× slower for hardening and fidelity). The audiences are nested subsets, so essentials ≤ mainstream ≤ full.
+
 ## By dimension
 
-| Dimension | Ready | Remaining (h) | Doc |
-|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth · 67% breadth | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
-| UI/UX fidelity | ≈ 55% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
-| File formats and conversion | ≈ 40% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
-| PDF specification and standards | ≈ 60% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
-| Hardware | ≈ 35% | 25–50 | [hardware-parity.md](docs/hardware-parity.md) |
-| Localization | ≈ 59% | 35–60 | [localization-parity.md](docs/localization-parity.md) |
-| Performance | ≈ 40% | 25–45 | [gaps.md](docs/gaps.md) gap 13 |
-| Stability | ≈ 50% | 45–80 | [gaps.md](docs/gaps.md) gap 6 |
-| Platforms | ≈ 70% | 15–30 | [hardware-parity.md](docs/hardware-parity.md#platforms) |
-| Ecosystem and plug-ins | ≈ 30% | 10–20 (within features) | [gaps.md](docs/gaps.md) |
-| AI features | ≈ 0% (in scope: local providers) | 20–40 (within features) | [gaps.md](docs/gaps.md) gap 23 |
-| **Total** | **≈ 47%** | **≈ 780–1,400** | |
+| Dimension | Ready | Weight | Remaining (h) | Doc |
+|---|---|---|---|---|
+| Features (14 areas) | ≈ 49% depth · 67% breadth | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
+| File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
+| PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
+| Hardware | ≈ 35% | 4% | 25–50 | [hardware-parity.md](docs/hardware-parity.md) |
+| Localization | ≈ 59% | 5% | 35–60 | [localization-parity.md](docs/localization-parity.md) |
+| Performance | ≈ 40% | 6% | 25–45 | [gaps.md](docs/gaps.md) gap 13 |
+| Stability | ≈ 50% | 8% | 45–80 | [gaps.md](docs/gaps.md) gap 6 |
+| Platforms | ≈ 70% | 5% | 15–30 | [hardware-parity.md](docs/hardware-parity.md#platforms) |
+| Ecosystem and plug-ins | ≈ 30% | 1% | 10–20 (within features) | [gaps.md](docs/gaps.md) |
+| AI features | ≈ 0% (in scope: local providers) | 1% | 20–40 (within features) | [gaps.md](docs/gaps.md) gap 23 |
+| **Total (weighted sum)** | **≈ 49%** | 100% | **≈ 780–1,400** | |
 
 ## Features
 
@@ -125,6 +135,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-10-10 (progress docs, hours per audience):** Each readiness number gets its own hours to ≈ 95%: full ≈ 49% / 780–1,400 h, mainstream ≈ 55% / 500–900 h, essentials ≈ 66% / 180–330 h. The full number is now the standard's additive weighted sum over the dimensions (written weights), 47% → 49%: method aligned with the standard, no new evidence. Beta ≈ 26 points, ≈ 400–700 h.
 - **2026-10-10 (progress docs, gate consistency check):** Re-judged the convert-and-share row with the rule applied across all Crafting Apps (a workflow blocks only when it can't be completed at all; lossy exchange and missing sub-cases are beta items, as for FilmCraft's .prproj or VectorCraft's .ai). Unencrypted sharing works, encryption interop (#774) and Office→PDF are sub-cases, Word export is lossy rather than absent: partial, not blocking. **Stage pre-alpha → alpha**; numbers unchanged (47%, mainstream 55%; beta ≈ 400–700 h). Added an essentials-user score: ≈ 66% for someone who only opens, reads, comments, fills, signs, prints and rearranges pages.
 - **2026-10-10 (progress docs, second look and alpha gate):** At the owner's request, after practitioners praised PdfCraft, re-examined the numbers. User sentiment: 7,595 stars, 177k + 39k downloads of 0.4.0/0.5.0, 23 user issues with explicit praise and switching reports (#179, #232, #273), issue themes concentrated in core paths (launch/GPU, rendering, editing, CJK, signing, printing). The checklist is not niche-dominated (497 mainstream vs 311 specialist rows; P0 95% / 91%). The first pass's 9-point cross-cutting deduction double-counted Windows printing, interop and glyphs: **ready for real work 40% → 47%**, and **≈ 55% for the mainstream practitioner** (new). The new core-workflow gate (craftrules progress-docs) fails on convert and share (#774, no Office import, #773): **stage alpha → pre-alpha**, ≈ 40–70 h from alpha; beta still ≈ 400–700 h.
 - **2026-10-10 (progress docs, full re-measure):** Re-measured against Acrobat Pro 26.002.21931 (installed bundle inspected: document types, localizations, plug-in and framework names). Checklist: 423 shipped + 74 partial of 808 (56.9%; P0 94.2%), ≈ 67% tier-weighted. Ready for real work ≈ 40%; stage **alpha**; ≈ 400–700 h to beta, ≈ 780–1,400 h to full parity (up from 600–1,100 h: the first public releases surfaced Acrobat interop of encrypted output, Windows printing, Chinese UI glyphs, Word-export layout and a 245-issue backlog). This file restructured to the craftrules progress-docs standard; the honest assessment moved to `docs/target-app-parity.md`, the gap list to `docs/gaps.md`, the milestones (duplicated rows merged) to `docs/roadmap.md`; new `docs/architecture.md`, `docs/localization-parity.md`, `docs/file-format-parity.md`, `docs/pdf-spec-parity.md`, `docs/ui-parity.md`, `docs/hardware-parity.md`.
@@ -284,6 +295,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Readiness table with hours per audience; full number restated as the additive weighted sum over dimensions (47% → 49%; method aligned with the standard, no new evidence) |
 | 2026-10-10 | minor | Essentials-user score added (≈ 66%) |
 | 2026-10-10 | minor | Gate consistency check: convert and share re-judged partial, not blocking; stage pre-alpha → alpha |
 | 2026-10-10 | minor | Second look: ready 40% → 47% (cross-cutting double count removed), mainstream-practitioner numbers and user sentiment added; core-workflow alpha gate applied, stage alpha → pre-alpha |

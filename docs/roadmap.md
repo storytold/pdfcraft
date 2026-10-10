@@ -30,7 +30,7 @@ exchange with Acrobat users or a missing sub-case is `partial, not blocking` (a 
 
 **Result: alpha.** Every core workflow can be completed on macOS; two are lossy or missing sub-cases
 (editing CJK/RTL text; encrypted output for Acrobat users, Office→PDF, Word layout), which are the
-first beta items. Ready for real work, ≈ 47%, is inside the alpha band. (A first application of the
+first beta items. Ready for real work, ≈ 49%, is inside the alpha band. (A first application of the
 gate the same day judged convert and share as blocking and put PdfCraft at pre-alpha; re-judged with
 the shared rule, encryption and Office→PDF are sub-cases and Word export is lossy, not absent.)
 
@@ -79,7 +79,7 @@ total matches the parity estimate.
 | M12 | Accessibility, compare, measure, search, XFA | 200–380 | 30% | 90–160 | Done: new `a11y` crate with the Accessibility Checker (all 32 rules, report, Fix/Skip/Explain, options dialog and results panel, agent tools).<br>Done since: 2D distance, perimeter and area measurements with persistent viewport calibration, snapping, live information and CSV export. Missing: autotag, Tags/Order/Content panels, Reading Order tool, alt-text workflow, compare, geospatial/3D measurement, search index, XFA |
 | M13 | Automation (MCP, Action Wizard, CLI) + AI providers | 60–120 | 45% | 25–45 | Done: MCP resources (document info, text, page images); headless tool table (123 tools incl. signing, optimizing, initial view, links, stamps, data exchange, comment review, forms authoring and scripts, redaction, sanitize, print, add content), opt-in MCP server over stdio, CLI `run`/`tools` (closed stdout pipes exit cleanly), UI control channel with drag. Missing: Action Wizard, AI providers |
 | M14 | 1.0 polish: performance, localization, installers | 120–250 | 15% | 80–150 | Done: PhotoCraft's translation system (`i18n/`: TSV catalogs, `tl!`, command-id and plural entries, system-language detection, strict catalog tests); every dialog, panel and notice goes through `tl!`. Catalogs of ≈ 2,000–2,140 entries for Japanese, Simplified and Traditional Chinese, Russian, Bulgarian, German, Spanish, French, Telugu, Hungarian, Ukrainian, Italian, Brazilian Portuguese and Arabic (logical-order catalog put into display order; layout not yet mirrored); Czech covers the menus. Signed and notarized macOS builds, signed Windows installers (x64, x86, ARM64), AppImage, deb, rpm, Flatpak and FreeBSD packages. #307 (bounded large-PDF memory): shared resource indexes and parser metadata, lazy inspection, bounded caches; a 9,156-page file inspects in ≈ 1.8 s at ≈ 500 MiB instead of exceeding 10 GiB. Missing: a right-to-left layout, a Chinese UI face in releases, Hindi/Indonesian/Korean/Vietnamese, file-backed input and global memory budgets, performance budgets, keyboard-only operation |
-| | **Total** | **2,085–3,840** | **≈ 47% ready** | **≈ 770–1,400** | Area view of the same work: [target-app-parity.md](target-app-parity.md#by-feature-area) |
+| | **Total** | **2,085–3,840** | **≈ 49% ready** | **≈ 770–1,400** | Area view of the same work: [target-app-parity.md](target-app-parity.md#by-feature-area) |
 
 ## Upcoming milestones, ranked
 
