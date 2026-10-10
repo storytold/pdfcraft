@@ -134,28 +134,71 @@ pub fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(font_definitions());
 }
 
+/// The interface language's claim on the CJK fallback faces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CjkPreference {
+    /// Japanese faces first (every non-Chinese language).
+    #[default]
+    Default,
+    SimplifiedChinese,
+    TraditionalChinese,
+}
+
+impl CjkPreference {
+    /// The preference for a UI language code (`zh-hans`, `zh-hant`, anything else).
+    pub fn for_language(code: &str) -> Self {
+        match code {
+            "zh-hans" => Self::SimplifiedChinese,
+            "zh-hant" => Self::TraditionalChinese,
+            _ => Self::Default,
+        }
+    }
+}
+
 /// Install the interface fonts with the CJK fallback order for the UI language (Chinese
-/// first for Simplified Chinese, Japanese first otherwise). Call it when the language
-/// changes; the new faces take effect next frame.
-pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
-    ctx.set_fonts(installed_font_definitions(prefer_hans));
+/// first for Chinese, Japanese first otherwise). Call it when the language changes; the new
+/// faces take effect next frame.
+pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
+    ctx.set_fonts(installed_font_definitions(cjk));
 }
 
 /// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
+/// already installed on this machine. It only draws characters no embedded face has.
+///
+/// - In a Chinese interface built without a `Hans` craft-fonts face (every release so far,
+///   #826), it is a Chinese system face (Microsoft YaHei, PingFang, …), placed before the
+///   Japanese craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …),
+///   and one line drawn from two faces with different vertical metrics would not sit on one
+///   baseline.
+/// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
+///   craft-fonts).
+///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
-pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
+pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
-    let mut fonts = font_definitions_for(prefer_hans);
+    let mut fonts = font_definitions_for(cjk == CjkPreference::SimplifiedChinese);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
-        for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+    {
+        use crate::system_fonts::{Need, fallback};
+        let need = match cjk {
+            _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
+            CjkPreference::SimplifiedChinese => Need::Hans,
+            CjkPreference::TraditionalChinese => Need::Hant,
+            CjkPreference::Default => Need::Other,
+        };
+        if let Some(data) = fallback(need) {
+            fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+            let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
+            for stack in fonts.families.values_mut() {
+                let at = match need {
+                    Need::Other => None,
+                    Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
+                };
+                stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());
+            }
         }
     }
     fonts

@@ -129,7 +129,7 @@ fn telugu_ui_text_uses_craft_fonts() {
 #[test]
 fn system_fallback_fills_missing_scripts() {
     assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_FALLBACK));
-    let defs = theme::installed_font_definitions(false);
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
     if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
         eprintln!("skipping system_fallback_fills_missing_scripts: no installed fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
         assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_FALLBACK)));
@@ -145,6 +145,62 @@ fn system_fallback_fills_missing_scripts() {
         assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
     }
     assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// The Han characters of a catalog's translations.
+fn catalog_han(catalog: &str) -> String {
+    let mut han: Vec<char> = catalog
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split('\t').nth(2))
+        .flat_map(str::chars)
+        .filter(|c| matches!(*c, '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'))
+        .collect();
+    han.sort_unstable();
+    han.dedup();
+    han.into_iter().collect()
+}
+
+/// In a Chinese interface built without a `Hans` face (every release so far, #826), a Chinese
+/// face installed on this machine goes before the Japanese faces, which lack hundreds of the
+/// catalog's characters, and draws every Han character of both Chinese catalogs.
+#[test]
+fn chinese_ui_uses_an_installed_chinese_face() {
+    if !pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        eprintln!("skipping chinese_ui_uses_an_installed_chinese_face: a Hans face is bundled");
+        return;
+    }
+    for (cjk, catalog) in [
+        (theme::CjkPreference::SimplifiedChinese, include_str!("../src/i18n/zh-hans.tsv")),
+        (theme::CjkPreference::TraditionalChinese, include_str!("../src/i18n/zh-hant.tsv")),
+    ] {
+        let defs = theme::installed_font_definitions(cjk);
+        if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
+            eprintln!("skipping chinese_ui_uses_an_installed_chinese_face: no installed Chinese face (or PDFCRAFT_SYSTEM_FONTS=0)");
+            return;
+        }
+        for (family, stack) in &defs.families {
+            let system = stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).expect("in every family");
+            assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
+            let own = stack.iter().position(|n| n.starts_with("Inter") || n == "JetBrainsMono").expect("the app's own font");
+            assert!(own < system, "{family:?}: {stack:?}");
+            if let Some(first_ja) = stack.iter().position(|n| n.starts_with("BIZ UDPGothic")) {
+                assert!(system < first_ja, "{family:?}: {stack:?}");
+            }
+        }
+        let han = catalog_han(catalog);
+        assert!(han.contains('欢') || han.contains('說'), "{cjk:?}");
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in families() {
+            let missing: String = han.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
+            assert!(missing.is_empty(), "{cjk:?} {id:?} lacks {missing}");
+        }
+    }
+    // Other languages keep the installed face last, as before.
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    for stack in defs.families.values() {
+        assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
+    }
 }
 
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls
