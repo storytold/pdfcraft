@@ -31,8 +31,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-ARCH="$(uname -m)"
+ARCH="${CROSS_ARCH:-$(uname -m)}"
 case "$ARCH" in
+  riscv64) DEB_ARCH=riscv64 ;;
   x86_64) DEB_ARCH=amd64 ;;
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
@@ -43,9 +44,13 @@ BASENAME="pdfcraft-$VERSION-linux-$ARCH"
 echo "==> PdfCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+  if [ -n "${CROSS_TARGET:-}" ]; then
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+  else
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+  fi
 fi
-BIN="$CARGO_TARGET_DIR/release"
+BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"
@@ -53,7 +58,7 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
 install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
-strip "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -151,6 +156,10 @@ if has appimage; then
   fi
 fi
 
-"$STAGE/usr/bin/pdfcraft-cli" --version
+if [ -z "${CROSS_TARGET:-}" ]; then
+  "$STAGE/usr/bin/pdfcraft-cli" --version
+elif [ -n "${EMULATOR:-}" ]; then
+  $EMULATOR "$STAGE/usr/bin/pdfcraft-cli" --version
+fi
 echo "==> done"
 ls -lh "$DIST"
