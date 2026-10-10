@@ -145,24 +145,32 @@ rm -f "$DMG"
 # attaches a device while it copies, which fails now and then on CI runners ("Resource busy"), so
 # it gets a few tries. The volume name has no version: .DS_Store finds the background through an
 # alias that includes it.
-for attempt in 1 2 3 4 5; do
-  if hdiutil create -srcfolder "$STAGE" -volname "PdfCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"; then
-    break
-  fi
-  rm -f "$DMG"
-  [ "$attempt" = 5 ] && { echo "hdiutil create failed 5 times" >&2; exit 1; }
-  warn "hdiutil create failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
-  sleep $((attempt * 10))
-done
+# Usage: hdiutil_retry <what> <hdiutil args…>; tries five times with growing pauses.
+hdiutil_retry() {
+  local what="$1" attempt
+  shift
+  for attempt in 1 2 3 4 5; do
+    if hdiutil "$@"; then
+      return 0
+    fi
+    [ "$attempt" = 5 ] && { echo "hdiutil $what failed 5 times" >&2; return 1; }
+    warn "hdiutil $what failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
+    sleep $((attempt * 10))
+  done
+}
+hdiutil_retry create create -srcfolder "$STAGE" -volname "PdfCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 # The app inside the image must still pass --strict, so a makehybrid-style regression can't ship.
 MOUNT="$WORK/dmg-check"
 rm -rf "$MOUNT"
 mkdir -p "$MOUNT"
-hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
-codesign --verify --strict --deep --verbose=2 "$MOUNT/PdfCraft.app" || { hdiutil detach "$MOUNT" >/dev/null; exit 1; }
-hdiutil detach "$MOUNT" >/dev/null
+hdiutil_retry attach attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+if ! codesign --verify --strict --deep --verbose=2 "$MOUNT/PdfCraft.app"; then
+  hdiutil_retry detach detach "$MOUNT" >/dev/null || true
+  exit 1
+fi
+hdiutil_retry detach detach "$MOUNT" >/dev/null
 if [ "$NOTARIZE" = 1 ]; then
   notarize "$DMG"
   xcrun stapler staple "$DMG"
