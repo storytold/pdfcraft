@@ -17,7 +17,8 @@ build input. `build.rs` embeds them as `CRAFT_FONTS` when the build sets
 set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 
 - `ui_japanese_fonts`: the `Jpan` faces for the interface, BIZ UDPGothic first.
-- `ui_chinese_fonts`: the `Hans` faces for the interface, in manifest order (without one,
+- `ui_chinese_fonts`: the `Hans` faces for the interface, in manifest order (desktop releases
+  bundle Droid Sans Fallback, a sans face under Apache-2.0; without one,
   Chinese characters the Japanese faces lack show the replacement glyph).
 - `ui_cjk_fonts(prefer_hans)`: both in fallback order for the UI language (Chinese group first
   in Chinese mode, so one line never mixes faces with different vertical metrics).

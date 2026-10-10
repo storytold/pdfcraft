@@ -46,11 +46,12 @@ fn japanese_ui_text_uses_craft_fonts() {
 }
 
 /// Chinese mode orders the CJK fallback with the `Hans` group first, so one line never
-/// mixes faces with different vertical metrics. Without an allowed `Hans` face in the
-/// build input the order part still holds; glyph coverage follows the craft-fonts checkout.
+/// mixes faces with different vertical metrics. Optional builds can skip without an allowed
+/// `Hans` face; required-font CI must provide one covering the Simplified Chinese catalog.
 #[test]
 fn chinese_ui_text_prefers_the_chinese_face() {
     if pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "required craft-fonts input has no allowed Chinese UI face");
         eprintln!(
             "skipping chinese_ui_text_prefers_the_chinese_face: no Hans face bundled (set CRAFT_FONTS_DIR with an allowed Chinese face to run it)"
         );
@@ -68,6 +69,13 @@ fn chinese_ui_text_prefers_the_chinese_face() {
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, CHINESE), "{id:?} lacks {CHINESE}");
+    }
+    // Cover the real catalog, including simplified-only hanzi missing from Japanese faces.
+    let hanzi: String =
+        include_str!("../src/i18n/zh-hans.tsv").chars().filter(|c| matches!(*c, '\u{3400}'..='\u{9fff}' | '\u{20000}'..='\u{3134f}')).collect();
+    assert!(!hanzi.is_empty());
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, &hanzi), "{id:?} lacks Chinese catalog glyphs");
     }
     for w in layout_widths(&mut fonts, CHINESE) {
         assert!(w > 13.0 * 0.8 * CHINESE.chars().count() as f32, "{w}");

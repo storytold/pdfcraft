@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Check the compiled MSI's install scope, publisher, shortcuts, native UI and OCR models, without installing it.
+  Check the compiled MSI's install scope, publisher, shortcuts, native UI, OCR models and font licences, without installing it.
 .EXAMPLE
   pwsh packaging/windows/test-msi.ps1 dist/release/pdfcraft-0.2.1-windows-x64.msi
 #>
@@ -143,8 +143,23 @@ try {
   while ($record = $view.Fetch()) { if ($record.StringData(1) -match '\.rten$') { $modelFiles++ } }
 } finally { [void] $view.Close() }
 if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
+# The embedded Chinese fallback is Apache-licensed: its full notice must reach the MSI too.
+$licencesDir = Read-Row 'SELECT `Directory_Parent` FROM `Directory` WHERE `Directory` = ''LicencesFolder''' 1
+Assert-Equal $licencesDir[0] 'INSTALLFOLDER' 'Licences folder parent'
+$licenceFiles = @()
+$view = $Database.OpenView('SELECT `File`.`FileName` FROM `File`, `Component` WHERE `File`.`Component_` = `Component`.`Component` AND `Component`.`Directory_` = ''LicencesFolder''')
+try {
+  [void] $view.Execute()
+  while ($record = $view.Fetch()) { $licenceFiles += ($record.StringData(1) -split '\|')[-1] }
+} finally { [void] $view.Close() }
+foreach ($name in 'NOTICE', 'LICENSE-MIT', 'LICENSE-APACHE') {
+  if ($licenceFiles -notcontains $name) { throw "Missing packaged licence: $name" }
+}
+if ($env:CRAFT_FONTS_DIR -and (Test-Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts\droid-sans-fallback\NOTICE.txt'))) {
+  if ($licenceFiles -notcontains 'NOTICE-droid-sans-fallback.txt') { throw 'Missing Droid Sans Fallback Apache notice in the MSI' }
+}
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models, font licences'

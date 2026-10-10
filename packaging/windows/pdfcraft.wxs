@@ -45,6 +45,7 @@
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="PdfCraft">
         <Directory Id="ModelsFolder" Name="models" />
+        <Directory Id="LicencesFolder" Name="licences" />
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
@@ -53,6 +54,7 @@
     <Feature Id="Main" Title="PdfCraft" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
       <ComponentGroupRef Id="PdfcraftModels" />
+      <ComponentGroupRef Id="PdfcraftLicences" />
     </Feature>
   </Package>
 
@@ -136,6 +138,11 @@
       <Component Id="PdfcraftCli">
         <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
       </Component>
+    </ComponentGroup>
+
+    <!-- Font licences and notices are collected before building the MSI. -->
+    <ComponentGroup Id="PdfcraftLicences" Directory="LicencesFolder">
+      <Files Include="$(var.LicencesDir)\*" />
     </ComponentGroup>
 
     <!-- OCR models (#103), with their licences and ATTRIBUTION.txt, in models\ beside pdfcraft.exe
