@@ -119,6 +119,8 @@ impl FieldTool {
 enum Grab {
     /// Drawing a new field from this screen point.
     Draw(Pos2),
+    /// Selecting fields inside a dragged rectangle.
+    Select(Pos2),
     Move,
     /// Resizing by a corner: (moves left edge, moves top edge) in screen terms.
     Corner(bool, bool),
@@ -133,6 +135,35 @@ pub struct PrepareView {
     /// Select the field an Add field edit creates (the form's length before it).
     pub select_added: Option<usize>,
     grab: Option<(usize, Grab, Pos2)>,
+    marquee_before: Option<Vec<(String, usize)>>,
+    /// Escape ends egui's drag too; ignore its release until the mouse is up.
+    ignore_release: bool,
+}
+
+impl PrepareView {
+    /// Unique field names: selecting several widgets of one radio group still edits one field.
+    pub fn names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for (name, _) in self.selected.iter().chain(self.also.iter()) {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    pub(crate) fn select(&mut self, key: (String, usize), extend: bool) {
+        if !extend || self.selected.is_none() {
+            self.selected = Some(key);
+            self.also.clear();
+        } else if self.selected.as_ref() == Some(&key) {
+            self.selected = if self.also.is_empty() { None } else { Some(self.also.remove(0)) };
+        } else if let Some(index) = self.also.iter().position(|k| *k == key) {
+            self.also.remove(index);
+        } else {
+            self.also.push(key);
+        }
+    }
 }
 
 fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
@@ -173,7 +204,7 @@ fn dragged(r: Rect, grab: Grab, delta: egui::Vec2) -> Rect {
             }
             Rect::from_two_pos(r.min, r.max)
         }
-        Grab::Draw(_) => r,
+        Grab::Draw(_) | Grab::Select(_) => r,
     }
 }
 
@@ -203,6 +234,19 @@ pub(crate) fn page_input(
     let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
     let prep = &mut view.prepare;
 
+    if prep.marquee_before.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        cancel_marquee(prep);
+        out.consumed = true;
+        return out;
+    }
+    if prep.ignore_release {
+        if !ui.input(|i| i.pointer.primary_down()) {
+            prep.ignore_release = false;
+        }
+        out.consumed = true;
+        return out;
+    }
+
     // A grab in progress on this page.
     if let Some((gp, grab, start)) = prep.grab
         && gp == page
@@ -212,6 +256,22 @@ pub(crate) fn page_input(
             prep.grab = None;
             let end = pointer.unwrap_or(start);
             match grab {
+                Grab::Select(from) => {
+                    prep.marquee_before = None;
+                    let rect = Rect::from_two_pos(from, end).intersect(xf.rect);
+                    for f in form {
+                        for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
+                            if screen_rect(xf, info, page, w.rect).intersects(rect) {
+                                let key = (f.name.clone(), wi);
+                                if prep.selected.is_none() {
+                                    prep.selected = Some(key);
+                                } else if prep.selected.as_ref() != Some(&key) && !prep.also.contains(&key) {
+                                    prep.also.push(key);
+                                }
+                            }
+                        }
+                    }
+                }
                 Grab::Draw(from) => {
                     let Some(tool) = tool else { return out };
                     let r = Rect::from_two_pos(from, end).intersect(xf.rect);
@@ -317,10 +377,18 @@ pub(crate) fn page_input(
             prep.selected = Some((f.name.clone(), wi));
             prep.grab = Some((page, Grab::Move, origin));
             out.consumed = true;
+        } else {
+            prep.marquee_before = Some(prep.selected.iter().chain(prep.also.iter()).cloned().collect());
+            if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+                prep.selected = None;
+                prep.also.clear();
+            }
+            prep.grab = Some((page, Grab::Select(origin), origin));
+            out.consumed = true;
         }
         return out;
     }
-    if resp.double_clicked() && hit.is_some() {
+    if resp.double_clicked() && hit.is_some() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
         out.consumed = true;
         out.properties = true;
         return out;
@@ -329,20 +397,8 @@ pub(crate) fn page_input(
         let extend = ui.input(|i| i.modifiers.shift || i.modifiers.command);
         match hit {
             // Shift/⌘-click adds or removes a field from the selection.
-            Some((f, wi)) if extend && prep.selected.is_some() => {
-                let key = (f.name.clone(), wi);
-                if prep.selected.as_ref() != Some(&key) {
-                    if let Some(i) = prep.also.iter().position(|k| *k == key) {
-                        prep.also.remove(i);
-                    } else {
-                        prep.also.push(key);
-                    }
-                }
-                out.consumed = true;
-            }
             Some((f, wi)) => {
-                prep.selected = Some((f.name.clone(), wi));
-                prep.also.clear();
+                prep.select((f.name.clone(), wi), extend);
                 out.consumed = true;
             }
             None if corner.is_none() => {
@@ -491,7 +547,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             }
         }
     }
-    if let (Some((_, Grab::Draw(from), _)), Some(p)) = (grab, pointer) {
+    if let (Some((_, Grab::Draw(from) | Grab::Select(from), _)), Some(p)) = (grab, pointer) {
         let r = Rect::from_two_pos(from, p).intersect(xf.rect);
         painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Inside);
@@ -516,8 +572,32 @@ pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
 }
 
 /// Delete removes the selected fields; Escape clears the selection.
+pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
+    let mut selected =
+        form.iter().flat_map(|f| f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(view.current)).map(|(wi, _)| (f.name.clone(), wi)));
+    view.prepare.selected = selected.next();
+    view.prepare.also = selected.collect();
+}
+
+fn cancel_marquee(prep: &mut PrepareView) {
+    prep.grab = None;
+    prep.ignore_release = true;
+    if let Some(before) = prep.marquee_before.take() {
+        let mut before = before.into_iter();
+        prep.selected = before.next();
+        prep.also = before.collect();
+    }
+}
+
 pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
-    if view.prepare.selected.is_none() || ctx.egui_wants_keyboard_input() {
+    if ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    if view.prepare.marquee_before.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        cancel_marquee(&mut view.prepare);
+        return;
+    }
+    if view.prepare.selected.is_none() {
         return;
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
@@ -531,6 +611,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
 
 /// After an Add field edit: select the new field (the form's last).
 pub(crate) fn after_refresh(view: &mut DocView, form: &[FormField]) {
+    view.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
     if let Some(n) = view.prepare.select_added.take() {
         if form.len() > n
             && let Some(f) = form.last()
@@ -555,7 +636,21 @@ pub(crate) fn after_refresh(view: &mut DocView, form: &[FormField]) {
 impl crate::PdfCraftApp {
     /// Open Field Properties for a field of the active document.
     pub fn open_field_props(&mut self, name: &str, widget: usize) {
-        let Some((_, id)) = self.active_ids() else { return };
+        let Some((index, id)) = self.active_ids() else { return };
+        let names = self.views[index].prepare.names();
+        if names.len() > 1 && names.iter().any(|n| n == name) {
+            let draft = self.session.get(id).map_or(Err("The document is no longer open."), |doc| crate::bulk_fields::Draft::new(doc, names));
+            match draft {
+                Ok(draft) => {
+                    self.field_props = None;
+                    self.bulk_field_props = Some(draft);
+                    self.dialog = Some(crate::Dialog::BulkFieldProps);
+                }
+                Err(why) => self.notify_tr(why),
+            }
+            return;
+        }
+        self.bulk_field_props = None;
         let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name).cloned()) else { return };
         let mut d = FieldDraft::new(&f, widget);
         d.look = self.session.get(id).and_then(|doc| doc.field_look(name));
@@ -682,9 +777,28 @@ pub struct FieldDraft {
     original: Box<Option<FieldDraft>>,
 }
 
-fn da_size(da: &str) -> f64 {
-    let toks: Vec<&str> = da.split_whitespace().collect();
-    toks.windows(2).rev().find(|w| w[1] == "Tf").and_then(|w| w[0].parse().ok()).unwrap_or(0.0)
+pub(crate) fn da_size(da: &str) -> f64 {
+    let mut previous = "";
+    let mut size = 0.0;
+    for token in da.split_whitespace() {
+        if token == "Tf" {
+            size = previous.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
+        }
+        previous = token;
+    }
+    size
+}
+
+pub(crate) fn da_font(da: &str) -> &str {
+    let (mut two_back, mut previous, mut font) = ("", "", "Helv");
+    for token in da.split_whitespace() {
+        if token == "Tf" {
+            font = two_back.trim_start_matches('/');
+        }
+        two_back = previous;
+        previous = token;
+    }
+    font
 }
 
 impl FieldDraft {
@@ -769,6 +883,7 @@ impl FieldDraft {
             }),
             rotation: (self.rotation != o.rotation).then_some((self.widget, self.rotation)),
             look: (self.look != o.look).then_some(self.look).flatten(),
+            appearance: None,
             check_style: (self.check_style != o.check_style).then_some(self.check_style).flatten(),
             format: (self.format != o.format).then(|| self.format.clone()),
             validate: (self.validate != o.validate).then(|| self.validate.clone()),

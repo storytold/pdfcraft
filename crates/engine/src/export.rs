@@ -12,6 +12,8 @@ use crate::Document;
 pub struct Exporter {
     renderer: PageRenderer,
     pages: usize,
+    /// Each page's displayed size in points, for [`Exporter::dpi_used`].
+    sizes: Vec<(f32, f32)>,
 }
 
 /// What an export needs from a document, as plain values that can move to a worker thread.
@@ -20,12 +22,19 @@ pub struct ExportSource {
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub config: pdfcraft_render::RenderConfig,
     pub pages: usize,
+    /// Each page's displayed size in points (after `/Rotate` and `/UserUnit`).
+    pub sizes: Vec<(f32, f32)>,
 }
 
 impl Document {
     /// The current state, for exporting on another thread.
     pub fn export_source(&self) -> ExportSource {
-        ExportSource { bytes: self.display.clone(), config: self.config.clone(), pages: self.info.pages.len() }
+        ExportSource {
+            bytes: self.display.clone(),
+            config: self.config.clone(),
+            pages: self.info.pages.len(),
+            sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
+        }
     }
 }
 
@@ -46,15 +55,29 @@ impl Exporter {
         Self::from_source(doc.export_source())
     }
 
+    /// An exporter that draws a page too large for the renderer's size limits at the largest
+    /// resolution they allow, as the interactive Export does; [`Exporter::dpi_used`] says at what.
+    /// A source whose `config.reject_oversize` is set refuses such pages instead.
     pub fn from_source(src: ExportSource) -> Self {
-        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages }
+        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages, sizes: src.sizes }
+    }
+
+    /// The resolution page `page` is actually exported at when asked for `dpi`: lower than asked
+    /// when the page is too large for the renderer's size limits at that resolution.
+    pub fn dpi_used(&self, page: usize, dpi: f64) -> f64 {
+        let dpi = dpi.clamp(18.0, 1200.0);
+        match self.sizes.get(page) {
+            Some(&(w, h)) => f64::from(pdfcraft_render::effective_scale(w, h, (dpi / 72.0) as f32)) * 72.0,
+            None => dpi,
+        }
     }
 
     fn check(&self, page: usize) -> Result<(), String> {
         if page < self.pages { Ok(()) } else { Err(format!("page {} does not exist", page + 1)) }
     }
 
-    /// Page `page` (0-based) as a PNG at `dpi` (capped by the renderer's size limits).
+    /// Page `page` (0-based) as a PNG at `dpi`, at most the renderer's size limits allow (see
+    /// [`Exporter::dpi_used`]); refused instead when the source asked for `reject_oversize`.
     pub fn png(&mut self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });

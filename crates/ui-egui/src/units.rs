@@ -90,6 +90,15 @@ fn detect() -> Option<Unit> {
             _ => {}
         }
     }
+    // AppleMeasurementUnits only exists once someone changed Measurement system by hand, and apps
+    // started from the Finder get no LANG, so the region of the system locale decides next.
+    #[cfg(target_os = "macos")]
+    if let Ok(out) = std::process::Command::new("/usr/bin/defaults").args(["read", "-g", "AppleLocale"]).output()
+        && out.status.success()
+        && let Some(unit) = unit_for_tag(String::from_utf8_lossy(&out.stdout).trim())
+    {
+        return Some(unit);
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

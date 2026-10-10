@@ -134,6 +134,84 @@ fn edits_update_view_data_and_mark_dirty() {
 }
 
 #[test]
+fn metadata_edit_keeps_the_renderer_without_changing_page_content() {
+    let (mut s, id) = session_with(1);
+    let request = pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() };
+    let render = |session: &Session| {
+        let doc = session.get(id).unwrap();
+        doc.renderer.set_queue(vec![request]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(page) = doc.renderer.try_recv() {
+                assert!(page.error.is_none(), "{:?}", page.error);
+                return (doc.renderer.stats(), page.rgba);
+            }
+            assert!(std::time::Instant::now() < deadline, "page render did not finish");
+            std::thread::yield_now();
+        }
+    };
+
+    let (before, before_pixels) = render(&s);
+    assert_eq!(before.page_interpretations, 1);
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    assert_eq!(s.get(id).unwrap().info_value("Title").as_deref(), Some("Report"));
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1, "a metadata edit keeps the renderer and its page interpretation");
+    let (after, after_pixels) = render(&s);
+    assert_eq!(after.page_interpretations, 2, "the same renderer serves the second request, so its count continues");
+    assert_eq!(before_pixels, after_pixels, "document properties do not change page pixels");
+}
+
+#[test]
+fn metadata_edits_and_history_reuse_the_render_pool() {
+    let (mut s, id) = session_with(1);
+    let pixels = shown(&s, id, 0).rgba;
+    let doc = s.get(id).unwrap();
+    let stats = doc.renderer.stats();
+    let display = doc.display.clone();
+    assert_eq!(stats.page_interpretations, 1);
+
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("Report"));
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+    assert_eq!(pixels.as_ref().len(), 200 * 300 * 4);
+
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title, None);
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+
+    s.redo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("Report"));
+    assert_eq!(doc.renderer.stats(), stats);
+    assert!(Arc::ptr_eq(&doc.display, &display));
+}
+
+#[test]
+fn field_and_comment_edits_still_rebuild_the_render_pool() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let _ = shown(&s, id, 0);
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1);
+
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 0);
+    let _ = shown(&s, id, 0);
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 1);
+
+    let shape = Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Test".into() }),
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().renderer.stats().page_interpretations, 0);
+}
+
+#[test]
 fn undo_and_redo_restore_exact_states() {
     let (mut s, id) = session_with(3);
     let original = s.get(id).unwrap().bytes.clone();
@@ -551,6 +629,51 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
     let mut again = Session::new();
     let id2 = again.open("again.pdf", None, saved, None).unwrap();
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→1", "Finish→3"]);
+}
+
+/// Two pages tagged with an H1 on the first and an H2 on the second.
+fn tagged_headings_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources << /Font << /F1 6 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Length 52 >>\nstream\n/H1 << /MCID 0 >> BDC BT /F1 12 Tf (Intro) Tj ET EMC\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /StructTreeRoot /K [8 0 R 9 0 R] >>",
+        "<< /S /H1 /Pg 3 0 R /K 0 >>",
+        "<< /S /H2 /Pg 4 0 R /ActualText (Details) >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn bookmarks_from_structure_nest_the_headings_and_undo() {
+    let mut s = Session::new();
+    let id = s.open("tagged.pdf", None, Arc::new(tagged_headings_fixture()), None).unwrap();
+    s.apply(id, Edit::BookmarksFromStructure).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Intro→1[Details→2]]"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("New bookmarks from structure"));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+
+    // Untagged: a clear error and nothing changes.
+    let (mut s, id) = session_with(2);
+    let err = s.apply(id, Edit::BookmarksFromStructure).unwrap_err();
+    assert_eq!(err.to_string(), "this document has no tagged headings to make bookmarks from");
+    assert!(s.get(id).unwrap().info.outline.is_empty());
 }
 
 #[test]
@@ -1659,6 +1782,47 @@ fn form_javascript_validates_calculates_and_formats() {
 }
 
 #[test]
+fn edit_history_does_not_replay_field_script_side_effects() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    let initial_qty = value(&s, "qty");
+    let initial_total = value(&s, "total");
+    assert!(s.take_js_output(id).is_empty());
+
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert_eq!(value(&s, "total"), ["10"]);
+    let output = s.take_js_output(id);
+    assert!(output.console.contains(&"times".to_string()), "{output:?}");
+    assert_eq!(output.console.iter().filter(|line| *line == "times").count(), 1, "{output:?}");
+
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    assert!(s.take_js_output(id).is_empty(), "a metadata edit does not rerun field scripts");
+
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.title, None);
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert!(s.take_js_output(id).is_empty(), "undoing metadata does not rerun field scripts");
+
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.title.as_deref(), Some("Report"));
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert!(s.take_js_output(id).is_empty(), "redoing metadata does not rerun field scripts");
+
+    s.undo(id).unwrap();
+    s.undo(id).unwrap();
+    assert_eq!(value(&s, "qty"), initial_qty);
+    assert_eq!(value(&s, "total"), initial_total);
+    assert!(s.take_js_output(id).is_empty(), "undoing the scripted edit does not replay its side effect");
+
+    s.redo(id).unwrap();
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert_eq!(value(&s, "total"), ["10"]);
+    assert!(s.take_js_output(id).is_empty(), "redoing the scripted edit restores its snapshot without replay");
+}
+
+#[test]
 fn detecting_fields_on_a_printed_form() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let text = s.create_from_text("t", "Name: ______________________\n\nEmail address: ____________________\n\nPlain text without blanks.").unwrap();
@@ -1759,6 +1923,34 @@ fn exporting_office_files_keeps_images() {
         std::fs::write(format!("{dir}/pic.docx"), &docx).unwrap();
     }
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
+}
+
+/// #314: a page whose content is drawn through a form XObject exports its text (the file from
+/// the report: no xref table, wrong stream lengths).
+#[test]
+fn exporting_office_files_reads_form_xobjects() {
+    let pdf = b"%PDF-1.4
+1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj
+2 0 obj <</Type/Pages/Kids[3 0 R]/Count 1>> endobj
+3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</XObject<</Fm1 7 0 R>>>>/Contents 5 0 R>> endobj
+4 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>> endobj
+5 0 obj <</Length 22>> stream
+q 1 0 0 1 0 0 cm /Fm1 Do Q
+endstream endobj
+7 0 obj <</Type/XObject/Subtype/Form/BBox[0 0 595 842]/Resources<</Font<</F1 4 0 R>>>>/Length 60>> stream
+BT /F1 18 Tf 72 760 Td (Hello from a test invoice) Tj ET
+endstream endobj
+trailer <</Root 1 0 R>>
+%%EOF
+";
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdf.to_vec()), None).unwrap();
+    let d = s.get(id).unwrap();
+    let blocks: Vec<String> = d.export_pages()[0].blocks.iter().map(|b| b.text.clone()).collect();
+    assert_eq!(blocks, ["Hello from a test invoice"]);
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("Hello from a test invoice"));
+    // Edit text still offers only what the page's own streams show.
+    assert!(d.text_blocks(0).is_empty());
 }
 
 #[test]
@@ -2376,4 +2568,69 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
     for r in [pdfcraft_cos::ObjRef::new(4, 0), pdfcraft_cos::ObjRef::new(5, 0)] {
         assert!(reopened.get(r).as_dict().is_some_and(|d| !d.contains(b"AP")), "{r:?} is saved without /AP");
     }
+}
+
+/// Titles a browser writes for a blank page or a pop-up name no document; real titles stay.
+#[test]
+fn placeholder_titles_are_recognised() {
+    for t in ["about:blank", "About:Blank", " about:srcdoc ", "blob:https://bank.example/3f2a", "data:text/html,x", "Untitled", "untitled"] {
+        assert!(is_placeholder_title(t), "{t:?}");
+    }
+    for t in ["Quarterly report", "Untitled report", "About: our company", "Statement", "blank"] {
+        assert!(!is_placeholder_title(t), "{t:?}");
+    }
+}
+
+/// A form whose fields are only page widgets (the `/Fields` list is empty): they are adopted, and
+/// the leniency is recorded in the repair log rather than applied silently.
+#[test]
+fn adopting_page_only_fields_is_noted_as_a_repair() {
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",                                     // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",                     // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",                                 // 3
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >>",               // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (alpha) /Rect [10 200 90 220] /P 3 0 R >>", // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (beta) /Rect [10 150 90 170] /P 3 0 R >>",  // 6
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",                                // 7
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("orphan.pdf", None, Arc::new(bytes), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let names: Vec<&str> = doc.form.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["alpha", "beta"]);
+    assert!(doc.repair_log().iter().any(|l| l.contains("2 fields") && l.contains("page annotations")), "{:?}", doc.repair_log());
+}
+
+/// A page too large for the renderer at the asked resolution exports at the most it allows (and
+/// says at what), as File ▸ Export does; a source that asks for strictness refuses it instead.
+#[test]
+fn oversized_exports_clamp_and_report_their_dpi_unless_strict() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // 14,400 pt (200 in) wide: 600 dpi would be 120,000 px.
+    let bytes = s.create_blank(14_400.0, 792.0, 1).unwrap();
+    let id = s.open("wide.pdf", None, bytes, None).unwrap();
+    let src = s.get(id).unwrap().export_source();
+    let mut ex = export::Exporter::from_source(src.clone());
+    let used = ex.dpi_used(0, 600.0);
+    assert!(used < 600.0 && used > 0.0, "{used}");
+    let png = ex.png(0, 600.0).expect("clamped, not refused");
+    assert!(png.starts_with(b"\x89PNG"));
+    assert!((ex.dpi_used(0, 18.0) - 18.0).abs() < 0.01, "a small enough request (3,600 px) is drawn as asked");
+    let mut strict = src;
+    strict.config.reject_oversize = true;
+    let err = export::Exporter::from_source(strict).png(0, 600.0).unwrap_err();
+    assert!(err.contains("exceeds renderer limits"), "{err}");
 }

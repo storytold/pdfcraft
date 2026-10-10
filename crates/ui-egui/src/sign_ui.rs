@@ -478,7 +478,14 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
-            ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
+            // Certificate names can be any length: cut both lines with "…" at the row's edge
+            // and show them whole on hover.
+            let line = |text: &str, font: egui::FontId, color: Color32| {
+                let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 50.0).max(0.0));
+                ui.painter().layout_job(job)
+            };
+            let name = line(&e.name, theme::semibold(13.0), t.text);
             let sub = format!(
                 "{keychain}{email}{issued}{issuer}{expires}{date}",
                 keychain = if e.path.starts_with("keychain:") {
@@ -494,7 +501,11 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 expires = tl!(", Expires: "),
                 date = e.expires,
             );
-            ui.painter().text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, sub, theme::regular(11.5), t.text_muted);
+            let details = line(&sub, theme::regular(11.5), t.text_muted);
+            let elided = name.elided || details.elided;
+            ui.painter().galley(rect.min + vec2(40.0, 9.0), name, t.text);
+            ui.painter().galley(rect.min + vec2(40.0, 28.0), details, t.text_muted);
+            let resp = if elided { resp.on_hover_text(format!("{}\n{sub}", e.name)) } else { resp };
             if resp.clicked() {
                 d.selected = Some(i);
             }
@@ -1071,7 +1082,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                         ("Validity starts", c.not_before.to_string()),
                         ("Validity ends", c.not_after.to_string()),
                         ("Public key", c.public_key.describe()),
-                        ("Basic constraints", if c.is_ca { "Certificate authority".into() } else { "End entity".into() }),
+                        ("Basic constraints", tl!(if c.is_ca { "Certificate authority" } else { "End entity" }).to_string()),
                         ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| tl!("Not present").to_string())),
                         ("Self-signed", if c.is_self_signed() { tl!("Yes").to_string() } else { tl!("No").to_string() }),
                         ("SHA-1 digest", hex(&sign::keys::DigestAlg::Sha1.digest(&[&c.raw]))),

@@ -698,8 +698,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = ["page_render"]
-evidence = ["crates/render/src/raster.rs::renders_a_blue_rectangle", "crates/automation/tests/automation.rs::open_inspect_render_and_find"]
-notes = "hayro bootstrap renderer; own DisplayList devices in M2.6"
+evidence = ["crates/render/src/raster.rs::renders_a_blue_rectangle", "crates/automation/tests/automation.rs::open_inspect_render_and_find", "crates/render/src/raster.rs::user_unit_scales_the_page_and_everything_on_it"]
+notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
 
 [[feature]]
 id = "view.render-shadings-patterns"
@@ -927,7 +927,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/ui.rs::selection_works_in_every_view_rotation"]
-notes = ""
+notes = "PdfCraft draws a percentage on its fixed 96-dpi basis: 96/72 logical pixels per PDF point at 100%. Acrobat draws it at its Page Display resolution, with logical pixels per PDF point = ppi / 72 × zoom (checked black-box with Custom resolutions of 96, 110 and 120 ppi on one display), so the same percentage can differ in size. Acrobat's Use System Setting resolution is not reproduced. Tracked with misc.prefs-page-display"
 
 [[feature]]
 id = "view.zoom-actual-size"
@@ -939,7 +939,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/view.rs::actual_size_fit_width_and_fit_page"]
-notes = ""
+notes = "Actual size is 100% on PdfCraft's fixed 96-dpi basis: 96/72 logical pixels per PDF point. Acrobat's Actual Size uses its Page Display resolution (ppi / 72 logical pixels per PDF point at 100%), which PdfCraft does not offer yet, so the two can draw a page at different sizes. Tracked with misc.prefs-page-display"
 
 [[feature]]
 id = "view.zoom-fit-page"
@@ -1238,8 +1238,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/viewer.rs::pages_panel_thumbnails_have_a_context_menu"]
-notes = "Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Extract pages, Cut, Copy and Paste after. Not yet: Rotate, Delete, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
+evidence = ["crates/ui-egui/tests/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page"]
+notes = "Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -1778,8 +1778,8 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = "web build works; IndexedDB/OPFS recent list and download flow are M3.10"
+evidence = ["crates/ui-egui/tests/pickers.rs::a_startup_url_opens_in_front_when_the_user_has_not_started_working", "crates/ui-egui/tests/pickers.rs::a_late_startup_url_preserves_the_current_edit_workspace_and_save_target", "crates/ui-egui/tests/pickers.rs::deliberate_browser_file_opens_still_activate_the_new_tab"]
+notes = "web build works; a late startup ?file= download opens in a background tab after the user starts working, preserving the active document and Save target (#171). IndexedDB/OPFS recent list and download flow are M3.10"
 
 [[feature]]
 id = "view.large-document-performance"
@@ -1806,8 +1806,8 @@ milestone = "M7"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_lines", "text_paragraphs", "text_edit"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
-notes = "click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next"
+evidence = ["crates/edit/src/tests.rs::paragraphs_are_found_and_rewrapped", "crates/edit/src/tests.rs::text_lines_are_found_and_replaced_in_place", "crates/ui-egui/tests/editing.rs::editing_existing_text_in_place", "crates/automation/tests/automation.rs::editing_existing_text_through_tools", "crates/edit/src/tests.rs::a_line_whose_operator_starts_the_next_stream_can_be_edited", "crates/automation/tests/automation.rs::a_line_split_across_content_streams_is_listed_and_edited"]
+notes = "click a paragraph box and retype it in place (font reused or Helvetica substituted, colour and spacing kept, rewrapped); a page's /Contents pieces are parsed joined, so a line whose operands and operator sit in different pieces is listed and edited (lines and paragraphs still don't join across pieces; Edit image still parses each piece alone); drag a box to move it or its right-edge handle to rewrap it (edit.text-move-resize); per-character formatting changes are next"
 
 [[feature]]
 id = "edit.text-reflow"
@@ -2722,8 +2722,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog"]
+notes = "The dialog has a File name field (#737), filled in with the document's name: pages are written as `<name> (page N).pdf` into the chosen folder, and one renamed page as `<name>.pdf`. Extracting into a new tab names the tab (and so Save As) after it."
 
 [[feature]]
 id = "organize.extract-and-delete"
@@ -3259,11 +3259,11 @@ title = "Generate bookmarks from headings or tags"
 area = "D"
 tier = "P1"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["bookmark.from_structure"]
+tools = ["bookmark_from_structure"]
+evidence = ["crates/a11y/src/tests.rs::headings_are_found_with_their_levels_titles_and_pages", "crates/organize/src/tests.rs::a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark", "crates/engine/src/tests.rs::bookmarks_from_structure_nest_the_headings_and_undo", "crates/automation/tests/automation.rs::bookmarks_from_structure_through_tools", "crates/ui-egui/tests/bookmarks.rs::new_bookmarks_from_structure_nest_the_tagged_headings"]
+notes = "Bookmark options ▸ New bookmarks from structure: tagged headings (H1–H6 through the role map; a plain H takes its Sect/Part/Art nesting) become bookmarks nested by level under a new first \"Untitled\" bookmark, each linked to its element (/SE). Titles come from /ActualText, the marked text drawn directly on the page (not inside Form XObjects), /Alt or /T. Not yet: Acrobat's choice of element types (only headings), and destinations go to the heading's page rather than its position on it"
 
 [[feature]]
 id = "organize.attachments-add"
@@ -3819,7 +3819,7 @@ status = "shipped"
 commands = ["comment.list"]
 tools = []
 evidence = ["crates/ui-egui/tests/comments.rs::make_current_properties_default"]
-notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus)"
+notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340)"
 
 [[feature]]
 id = "comment.author-identity"
@@ -4302,8 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page"]
-notes = "read-only list with jump-to-field; filling and editing are separate features (M6)"
+evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect.rs::fields_listed_only_on_the_pages_are_listed", "crates/ui-egui/tests/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
+notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties; fields a file lists only as page widgets (empty /Fields) are adopted too"
 
 [[feature]]
 id = "form.highlight-fields"
@@ -4338,7 +4338,7 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["form_fill", "form_fields"]
-evidence = ["crates/ui-egui/tests/forms.rs::typing_into_a_text_field_and_tabbing_on", "crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/engine/src/tests.rs::filling_a_form_shows_saves_and_undoes"]
+evidence = ["crates/ui-egui/tests/forms.rs::typing_into_a_text_field_and_tabbing_on", "crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/engine/src/tests.rs::filling_a_form_shows_saves_and_undoes", "crates/automation/tests/automation.rs::orphan_form_fields_through_tools"]
 notes = "in-place editor; Enter or clicking away commits, Escape cancels; no format/keystroke JavaScript yet (M6.4)"
 
 [[feature]]
@@ -4662,8 +4662,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_add_field", "form_set_props", "form_delete_field"]
-evidence = ["crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/ui-egui/tests/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/engine/src/tests.rs::preparing_a_form_adds_renames_and_deletes_fields"]
-notes = "fields shown with blue fill and name tags; select, move, resize by corners, Delete (every selected field, one undo step); field tools return to Select after one field. Not yet: editing shared properties of several fields at once"
+evidence = ["crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/ui-egui/tests/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/engine/src/tests.rs::preparing_a_form_adds_renames_and_deletes_fields", "crates/ui-egui/tests/bulk_fields.rs::shared_properties_preserve_mixed_values_and_undo_the_whole_change", "crates/ui-egui/tests/bulk_fields.rs::select_all_in_prepare_a_form_selects_only_the_current_pages_fields", "crates/ui-egui/tests/bulk_fields.rs::dragging_an_empty_page_area_selects_fields_without_moving_them"]
+notes = "fields shown with blue fill and name tags; select, move, resize by corners, Delete (every selected field, one undo step); field tools return to Select after one field. Shared General, Appearance and applicable Options edits are atomic and opt-in; Ctrl/Command+A selects the current page, rectangle and panel selection are supported. Names, positions, choices/defaults and script tabs remain individual GUI edits"
 
 [[feature]]
 id = "form.add-text-field"
@@ -4806,8 +4806,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/automation.rs::preparing_a_form_through_tools"]
-notes = "name, tooltip, read only, required (visibility/orientation pending)"
+evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/automation.rs::preparing_a_form_through_tools", "crates/ui-egui/tests/bulk_fields.rs::locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction", "crates/ui-egui/tests/bulk_fields.rs::visiting_shared_property_tabs_without_changes_does_not_dirty_the_document"]
+notes = "name, tooltip, read only, required, locked; shared tooltip/flags are opt-in, mixed values preserved, failures keep the draft and roll back the batch (visibility pending)"
 
 [[feature]]
 id = "form.props-appearance"
@@ -4818,8 +4818,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::appearance_properties_restyle_every_widget", "crates/ui-egui/tests/prepare.rs::appearance_tab_restyles_the_field", "crates/automation/tests/automation.rs::tab_order_and_field_appearance_through_tools"]
-notes = "border/fill colour, thin/medium/thick, solid/dashed/beveled/inset/underline, text colour, Helvetica/Times/Courier, font size"
+evidence = ["crates/forms/src/tests.rs::appearance_properties_restyle_every_widget", "crates/ui-egui/tests/prepare.rs::appearance_tab_restyles_the_field", "crates/automation/tests/automation.rs::tab_order_and_field_appearance_through_tools", "crates/forms/src/tests.rs::partial_appearance_keeps_custom_default_appearance_and_font_resources", "crates/forms/src/tests.rs::partial_appearance_preserves_each_widgets_indirect_colours_and_border_extensions", "crates/automation/tests/form_bulk.rs::bulk_properties_are_one_undo_step_preserve_other_looks_and_survive_save"]
+notes = "border/fill colour, line width, solid/dashed/beveled/inset/underline, text colour, Helvetica/Times/Courier, font size; shared GUI and partial tool edits preserve untouched custom fonts, widget styles and unknown keys. Appearance regeneration still uses approximate metrics"
 
 [[feature]]
 id = "form.props-position"
@@ -4842,8 +4842,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/automation/tests/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::options_tab_flags_alignment_and_defaults", "crates/ui-egui/tests/prepare.rs::options_tab_sets_flags_alignment_and_defaults"]
-notes = "text: alignment, default, multi-line, scroll, rich text flag, limit, password, file selection, spell check, comb; choices: items, default, sort, custom text, multiple selection, commit immediately; check boxes and radios: checked by default, radios in unison"
+evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/automation/tests/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::options_tab_flags_alignment_and_defaults", "crates/ui-egui/tests/prepare.rs::options_tab_sets_flags_alignment_and_defaults", "crates/automation/tests/form_bulk.rs::bulk_options_apply_per_field_and_refuse_an_invalid_comb_atomically"]
+notes = "text: alignment, default, multi-line, scroll, rich text flag, limit, password, file selection, spell check, comb; choices: items, default, sort, custom text, multiple selection, commit immediately; check boxes and radios: checked by default, radios in unison. Shared GUI offers applicable text/choice flags, alignment, text limits and check styles; choices/defaults remain individual GUI edits"
 
 [[feature]]
 id = "form.props-actions"
@@ -5515,11 +5515,11 @@ title = "Redact lists of words or phrases"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["redact.search"]
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/patterns.rs::word_lists_are_trimmed_unique_and_bounded", "crates/automation/tests/automation.rs::redacting_word_lists_through_tools", "crates/ui-egui/tests/redact.rs::redacting_an_imported_word_list"]
+notes = "Find text and redact ▸ Multiple words or phrases: one per line, typed or imported from a .txt file (at most 1 MB, 1,000 entries of 256 characters); every match of each is marked in one undo step; redact_mark words reports marks per word. Not yet: whole-words-only and case-sensitive options, exporting the list"
 
 [[feature]]
 id = "protect.redact-patterns"
@@ -5579,7 +5579,7 @@ status = "partial"
 commands = ["redact.properties"]
 tools = ["redact_mark"]
 evidence = ["crates/ui-egui/tests/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::overlay_text_takes_its_font_size_colour_alignment_and_repeats"]
-notes = "fill colour or none; overlay text with font, size or auto-size, colour, alignment and repeat; redaction codes pending"
+notes = "fill colour or none; overlay text with font, size or auto-size, colour, alignment and repeat, or redaction codes (protect.redaction-codes)"
 
 [[feature]]
 id = "protect.redaction-codes"
@@ -5587,11 +5587,11 @@ title = "Redaction code sets (e.g. FOIA exemptions)"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["redact.properties"]
+tools = ["redact_mark"]
+evidence = ["crates/redact/src/tests.rs::redaction_codes_join_in_set_order_and_reject_strangers", "crates/automation/tests/automation.rs::redacting_with_codes_through_tools", "crates/ui-egui/tests/redact.rs::redaction_codes_become_the_overlay_text"]
+notes = "built-in U.S. FOIA (5 U.S.C. 552(b)) and U.S. Privacy Act (552a) sets; picked codes become the overlay text, in the set's order. Missing: Edit Codes, custom code sets, import/export of code sets"
 
 [[feature]]
 id = "protect.apply-redactions"
@@ -5822,8 +5822,20 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital", "sign.certify"]
 tools = ["sign_windows_ids", "sign_document"]
-evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
-notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored); smart cards and PKCS #11 still planned."
+evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::a_windows_store_identity_signs_with_its_issuers", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
+notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. The signature embeds the issuers Windows chains the certificate to. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored). Smart cards and tokens whose driver registers a CNG key storage provider sign with the provider's own PIN dialog (checked by hand with a SafeNet token only; no hardware in CI); direct PKCS #11 still planned."
+
+[[feature]]
+id = "sign.encrypted-documents"
+title = "Sign and timestamp password-protected (encrypted) documents"
+area = "H"
+tier = "P0"
+milestone = "M9"
+status = "shipped"
+commands = ["sign.digital", "sign.certify"]
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::encrypted_documents_are_signed_with_an_unencrypted_contents", "crates/sign/tests/pdf.rs::encrypted_documents_are_signed_only_as_their_permissions_allow", "crates/sign/tests/pdf.rs::encrypted_documents_take_a_document_timestamp", "crates/cos/tests/encryption.rs::signature_contents_stay_unencrypted", "crates/automation/tests/automation.rs::signing_an_encrypted_form_through_tools"]
+notes = "RC4-40/128, AES-128 and AES-256 Standard security; the incremental update keeps /Encrypt and /ID, encrypts the new strings and streams, and leaves the signature /Contents unencrypted (§7.6.2), which reading also honours. Opened with the user password, permissions (Table 22) apply: existing signature fields need fill-forms, new fields need annotate + modify, certifying needs modify, a document timestamp needs fill-forms; the owner may do anything. Not yet: certificate (public-key) security, which PdfCraft can't open; checked only against PdfCraft's own validator, not yet against an external one (pyHanko) or Acrobat"
 
 [[feature]]
 id = "sign.pkcs11"
@@ -5942,8 +5954,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::validates_a_signature_made_by_openssl"]
-notes = "validated; new signatures use CAdES"
+evidence = ["crates/sign/tests/pdf.rs::validates_a_signature_made_by_openssl", "crates/sign/tests/pdf.rs::validates_signatures_written_with_ber_indefinite_lengths", "crates/sign/tests/ber.rs::deeply_nested_segmented_content_is_an_error_not_a_stack_overflow", "crates/sign/tests/ber.rs::indefinite_length_nesting_bombs_are_refused"]
+notes = "validated, including BER-encoded CMS (indefinite lengths and segmented strings, as DocuSign, Documenso, Adobe PPKMS and Windows write it; the BER is reported in the details); new signatures use CAdES. Not read: BER high tag numbers. Still missing: multiple SignerInfos, counter-signatures, CMS with the signer's cert referenced but absent"
 
 [[feature]]
 id = "sign.cades-pades-bb"
@@ -5966,8 +5978,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
 tools = ["sign_document"]
-evidence = ["crates/sign/tests/crypto.rs::signatures_round_trip_for_every_key_type"]
-notes = "SHA-256, SHA-384 for P-384; SHA-1 refused for new signatures, validated in old ones"
+evidence = ["crates/sign/tests/crypto.rs::signatures_round_trip_for_every_key_type", "crates/sign/tests/crypto.rs::rsa_signatures_are_read_with_every_digestinfo_variant", "crates/sign/tests/crypto.rs::ecdsa_signatures_are_read_as_der_non_minimal_der_or_raw", "crates/sign/tests/crypto.rs::verifies_ecdsa_on_p521_and_the_brainpool_curves", "crates/sign/tests/crypto.rs::keys_of_unknown_algorithms_are_unsupported_not_wrong", "crates/sign/tests/crypto.rs::tolerated_encodings_are_noted_and_standard_ones_are_not", "crates/sign/tests/crypto.rs::weak_digests_say_so_in_words_that_are_pinned", "crates/sign/tests/crypto.rs::an_rsa_signature_value_not_below_the_modulus_is_refused", "crates/sign/tests/crypto.rs::hostile_rsa_signature_values_are_wrong_not_crashes", "crates/sign/tests/algorithms.rs::rsa_with_sha3_sha512_256_and_ripemd160", "crates/sign/tests/algorithms.rs::rsa_pss_with_its_declared_parameters", "crates/sign/tests/algorithms.rs::ed25519_signs_the_signed_attributes_themselves", "crates/sign/tests/algorithms.rs::ecdsa_on_brainpool_p512r1", "crates/sign/tests/algorithms.rs::brainpool_p512r1_keys_must_have_coordinates_reduced_modulo_p", "crates/sign/tests/algorithms.rs::only_weak_digests_leave_a_note_when_a_signature_validates", "crates/sign/tests/pdf.rs::validates_the_legacy_adbe_x509_rsa_sha1_format"]
+notes = "SHA-256, SHA-384 for P-384; SHA-1 refused for new signatures, validated in old ones. Validation also reads SHA-224, SHA-512/224, SHA-512/256, SHA3-224/256/384/512, RIPEMD-160, RSA PKCS#1 with or without the DigestInfo NULL (a bare digest without any DigestInfo is refused), RSA-PSS with its declared MGF1 hash and salt length, ECDSA as DER/non-minimal DER/raw r||s on P-256, P-384, P-521 and brainpoolP256r1/P384r1/P512r1 (the last hand-written on crypto-bigint, checked against OpenSSL), Ed25519 (RFC 8419), and the legacy adbe.x509.rsa_sha1 format. An RSA value not below the modulus is refused (RFC 8017 5.2.2). SHA-1 and RIPEMD-160 validate but the signature details say the algorithm is weak (wording pinned by tests); tolerated encodings are listed in the details. An algorithm PdfCraft cannot check gives Unknown, not Invalid. Still missing: Ed448/SHAKE, DSA, brainpool curves other than P256/P384/P512, signing with the new digests"
 
 [[feature]]
 id = "sign.certify"
@@ -6086,8 +6098,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = ""
+evidence = ["crates/sign/tests/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid"]
+notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not"
 
 [[feature]]
 id = "sign.signatures-panel"
@@ -6218,8 +6230,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards"]
-notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure"
+evidence = ["crates/sign/tests/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards", "crates/sign/tests/pdf.rs::validation_data_and_xmp_added_after_signing_are_not_tampering", "crates/sign/tests/pdf.rs::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store", "crates/sign/tests/pdf.rs::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it", "crates/sign/tests/pdf.rs::an_existing_array_stays_what_it_is_when_the_store_points_at_it", "crates/sign/tests/pdf.rs::a_signed_store_may_grow_but_not_lose_or_swap_entries", "crates/sign/tests/pdf.rs::a_dictionary_labelled_metadata_is_not_a_metadata_change", "crates/sign/tests/pdf.rs::a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it", "crates/sign/tests/pdf.rs::the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing"]
+notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure. Later revisions that add DSS data (new /Certs, /CRLs, /OCSPs, /VRI objects, or ones of the signed store that only grew) or rewrite the catalog's XMP are permitted changes; a /DSS entry that names other objects, or a /Type /DSS or /Type /Metadata label on an existing dictionary or stream, does not excuse changing them (negative tests at every DocMDP level)"
 
 [[feature]]
 id = "sign.view-signed-version"
@@ -6367,7 +6379,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; runs on a worker thread with progress; one undoable step; pages with text are skipped."
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -6694,8 +6706,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution)"
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
 
 [[feature]]
 id = "create.from-multipage-tiff"
@@ -7658,8 +7670,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
-evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent, fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
+notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"
@@ -7670,8 +7682,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_convert"]
-evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "Fixes XMP, output intent (generated sRGB ICC profile), forbidden actions, annotation flags, interpolation, encryption, AFRelationship. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1."
+evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/compare.rs::pdfa_dialog_verifies_and_converts"]
+notes = "Fixes XMP, output intent (generated sRGB ICC profile, only for documents without DeviceCMYK; CMYK documents need a user-chosen CMYK output intent, not yet offered), forbidden actions, annotation flags, interpolation, encryption, AFRelationship. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1."
 
 [[feature]]
 id = "optimize.pdfa-accessible-levels"
@@ -7830,8 +7842,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["printers", "printer_options", "doc_print"]
-evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/print/src/tests.rs::printer_options_come_from_the_ppd", "crates/print/src/tests.rs::printer_option_defaults_and_job_arguments", "crates/ui-egui/tests/print.rs::print_dialog_shows_the_printer_driver_options"]
-notes = "CUPS printers via lpstat; Save as PDF; Windows spooler pending. Properties…: on CUPS the driver's own PPD job options (tray, paper type, finishing …, not installable options or what the dialog sets) for this job, sent as lp -o; on Windows the driver's Printing Preferences window (printui), saved as that printer's per-user defaults rather than per job"
+evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/print/src/tests.rs::driverless_printers_join_the_list_without_a_queue", "crates/print/src/tests.rs::printer_options_come_from_the_ppd", "crates/print/src/tests.rs::printer_option_defaults_and_job_arguments", "crates/ui-egui/tests/print.rs::print_dialog_shows_the_printer_driver_options"]
+notes = "CUPS queues via lpstat -p -d and driverless destinations without a queue via lpstat -e; Save as PDF; Windows spooler pending. Properties…: on CUPS the driver's own PPD job options (tray, paper type, finishing …, not installable options or what the dialog sets) for this job, sent as lp -o; on Windows the driver's Printing Preferences window (printui), saved as that printer's per-user defaults rather than per job"
 
 [[feature]]
 id = "print.copies-collate"
@@ -9818,8 +9830,8 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = []
-evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::german_certificate_subject_has_a_distinct_context", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/mod.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::hungarian_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/mod.rs::ukrainian_calendar_uses_month_case_for_dates", "crates/ui-egui/src/i18n/mod.rs::ukrainian_catalog_does_not_leave_english_ui_text", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::ukrainian_history_and_diagnostics_preserve_user_values"]
-notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. Engine/OS error details stay untranslated. Auto detects the Windows display language after explicitly named supported locale overrides; neutral C/POSIX launcher locales are skipped on Windows, with Chinese script/region mapping and English fallback. Missing: Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases, a full localization audit."
+evidence = ["crates/ui-egui/src/i18n/mod.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/mod.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/mod.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/mod.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/mod.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/mod.rs::arabic_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::arabic_lookups_are_in_display_order", "crates/ui-egui/src/i18n/mod.rs::arabic_plurals_follow_the_six_cldr_forms", "crates/ui-egui/src/i18n/mod.rs::arabic_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::arabic_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::arabic_labels_have_glyphs", "crates/ui-egui/src/bidi.rs::rtl_labels_keep_placeholders_whole", "crates/ui-egui/src/i18n/mod.rs::japanese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::simplified_chinese_history_and_diagnostics_preserve_user_values", "crates/ui-egui/tests/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/mod.rs::french_is_registered", "crates/ui-egui/src/i18n/mod.rs::french_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::french_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::french_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::german_certificate_subject_has_a_distinct_context", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/mod.rs::telugu_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/mod.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::hungarian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::hungarian_history_and_diagnostics_preserve_user_values", "crates/ui-egui/src/i18n/mod.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/mod.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/mod.rs::ukrainian_calendar_uses_month_case_for_dates", "crates/ui-egui/src/i18n/mod.rs::ukrainian_catalog_does_not_leave_english_ui_text", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_commands_and_catalogue", "crates/ui-egui/src/i18n/mod.rs::ukrainian_covers_ui_literals", "crates/ui-egui/src/i18n/mod.rs::ukrainian_history_and_diagnostics_preserve_user_values"]
+notes = "Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian/Italian/Arabic and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk|it|ar and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Czech and Brazilian Portuguese the menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. Engine/OS error details stay untranslated. Auto detects the Windows display language after explicitly named supported locale overrides; neutral C/POSIX launcher locales are skipped on Windows, with Chinese script/region mapping and English fallback. Arabic (ar and every ar-* locale) covers commands, dialogs and panels with the six CLDR plural forms; its labels are put into display order when the catalog loads, because egui joins Arabic letters but lays words out left to right. Missing: a right-to-left layout (Arabic labels sit in the left-to-right layout, a wrapped Arabic paragraph breaks at the wrong end, and text typed into a field is not reordered), Czech and Brazilian Portuguese dialogs, Chinese and Telugu font delivery in releases (the pinned craft-fonts revision has an Arabic face; its Noto Sans CJK SC is never embedded, AGENTS.md §1.1), a full localization audit."
 
 [[feature]]
 id = "misc.prefs-reading"

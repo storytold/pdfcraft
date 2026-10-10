@@ -89,7 +89,7 @@
 	Double-click	Doble clic
 	Select a word	Seleccionar una palabra
 	Clear selection / close find	Borrar la selección / cerrar la búsqueda
-	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
+	Zoom in / out (also pinch or {key}-scroll)	Acercar / alejar (también con pellizco o {key} + desplazamiento)
 	Rotate view	Girar la vista
 	First / last page	Primera / última página
 	Previous / next page	Página anterior / siguiente
@@ -97,16 +97,16 @@
 	Select all pages (Organize)	Seleccionar todas las páginas (Organizar)
 	Home	Inicio
 	Open	Abrir
-	Open a PDF (⌘O)	Abrir un PDF (⌘O)
+	Open a PDF ({key})	Abrir un PDF ({key})
 	Dark gray theme	Tema gris oscuro
 	Light theme	Tema claro
 	All tools	Todas las herramientas
 	Read	Leer
 	Convert	Convertir
 	E-Sign	Firma electrónica
-	Print (⌘P)	Imprimir (⌘P)
+	Print ({key})	Imprimir ({key})
 	Save (M4)	Guardar (M4)
-	Document properties (⌘D)	Propiedades del documento (⌘D)
+	Document properties ({key})	Propiedades del documento ({key})
 	Find tools and commands	Buscar herramientas y comandos
 	Fit to height	Ajustar al alto
 	Zoom in	Acercar
@@ -135,9 +135,9 @@
 	Compare	Comparar
 	Page thumbnails	Miniaturas de página
 	Form fields	Campos de formulario
-	Zoom out (⌘−)	Alejar (⌘−)
-	Zoom in (⌘+)	Acercar (⌘+)
-	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
+	Zoom out ({key})	Alejar ({key})
+	Zoom in ({key})	Acercar ({key})
+	Rotate view clockwise ({key})	Girar la vista a la derecha ({key})
 	Toggle fit page / fit width	Alternar entre ajustar a la página y al ancho
 	Next page	Página siguiente
 	Previous page	Página anterior
@@ -271,6 +271,7 @@
 	Security properties…	Propiedades de seguridad…
 	Organize pages	Organizar páginas
 	New bookmark	Nuevo marcador
+	New bookmarks from structure	Nuevos marcadores a partir de la estructura
 	Rotate pages clockwise	Girar páginas a la derecha
 	Rotate pages counterclockwise	Girar páginas a la izquierda
 	Delete pages	Eliminar páginas
@@ -1088,10 +1089,16 @@
 	Text in images isn't found; recognise text (OCR) first.	El texto de las imágenes no se encuentra; reconoce antes el texto (OCR).
 	No matches.	Sin coincidencias.
 	{n} match(es) marked for redaction.	{n} coincidencia(s) marcada(s) para censurar.
+	Multiple words or phrases	Varias palabras o frases
+	One word or phrase per line	Una palabra o frase por línea
+	Import list…	Importar lista…
+	{n} word(s) or phrase(s)	{n} palabra(s) o frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} es demasiado grande para una lista de palabras (máximo 1 MB).
 	Redaction Tool Properties	Propiedades de la herramienta de censura
 	Redacted area fill colour:	Color de relleno del área censurada:
 	Use overlay text	Usar texto superpuesto
 	Custom text:	Texto personalizado:
+	Redaction code:	Código de censura:
 	Font:	Fuente:
 	Font size:	Tamaño de fuente:
 	Auto-size text to fit redaction region	Ajustar automáticamente el tamaño del texto a la zona censurada
@@ -1193,7 +1200,7 @@
 	Searchable Image (Exact)	Imagen con búsqueda (exacta)
 	Adds invisible text over each word; the page image is not changed	Añade texto invisible sobre cada palabra; la imagen de la página no cambia
 	Downsample to	Reducir resolución a
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PRINTCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS).
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	El reconocimiento de texto no está instalado: faltan sus archivos de modelo. Reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene.
 	Settings	Ajustes
 	Optional	Opcional
 	Planned · {m}	Previsto · {m}
@@ -1261,7 +1268,7 @@
 	Expand all bookmarks	Expandir todos los marcadores
 	Expand top-level bookmarks	Expandir los marcadores de primer nivel
 	Collapse all bookmarks	Contraer todos los marcadores
-	New bookmark (⌘B)	Nuevo marcador (⌘B)
+	New bookmark ({key})	Nuevo marcador ({key})
 	This document has no bookmarks.	Este documento no tiene marcadores.
 	This document has no layers.	Este documento no tiene capas.
 	This document has no attachments.	Este documento no tiene archivos adjuntos.
@@ -1276,8 +1283,8 @@
 	No matches	Sin coincidencias
 	Searching… {s}/{p}	Buscando… {s}/{p}
 	{c} of {n}{more}	{c} de {n}{more}
-	Previous (⇧⌘G)	Anterior (⇧⌘G)
-	Next (⌘G)	Siguiente (⌘G)
+	Previous ({key})	Anterior ({key})
+	Next ({key})	Siguiente ({key})
 	Find options	Opciones de búsqueda
 	Whole words only	Solo palabras completas
 	Case-sensitive	Distinguir mayúsculas y minúsculas
@@ -1652,6 +1659,7 @@
 	Couldn't open {name}: {e}	No se pudo abrir {name}: {e}
 	Couldn't read {name}: {e}	No se pudo leer {name}: {e}
 	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	El modo portátil está desactivado: no se puede escribir en {folder} ({error}). La configuración se guarda en tu carpeta de usuario.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft está dibujando sin procesador gráfico, así que puede ir lento. Actualizar el controlador gráfico puede ayudar.
 	Couldn't save: {e}	No se pudo guardar: {e}
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	La descarga de archivos adjuntos en la versión web llegará con M3.10 ({n} bytes listos)
 	`{command}` {when}	`{command}` {when}
@@ -1769,7 +1777,7 @@
 	there are no pages to print	no hay páginas que imprimir
 	the document has no tags	el documento no tiene etiquetas
 	{0}: {1}	{0}: {1}
-	the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)	los modelos de reconocimiento de texto no están instalados (ejecuta `cargo xtask models` o define PRINTCRAFT_MODELS)
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	los modelos de reconocimiento de texto no están instalados (reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene)
 	the image is empty	la imagen está vacía
 	this file isn't XFDF, FDF, XML or text form data	este archivo no contiene datos de formulario XFDF, FDF, XML ni de texto
 	nothing in the file matches this document	nada en el archivo coincide con este documento
@@ -1964,7 +1972,6 @@
 	Open this web page?	¿Abrir esta página web?
 	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Los scripts se ejecutan en un entorno aislado, sin acceso a archivos ni a la red. Un script que pida abrir una página web necesita antes tu permiso. Con JavaScript desactivado, las funciones estándar de formato, validación y cálculo de Acrobat siguen funcionando.
 	Sign yourself	Firmar tú mismo
-	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PDFCRAFT_MODELS).
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Se usa al abrir archivos PDF. Un modo de inicio o de control explícito tiene prioridad durante la sesión.
 	Write this email?	¿Escribir este correo?
 	{who} in this document wants to open this address in your browser:	{who} de este documento quiere abrir esta dirección en tu navegador:
@@ -2006,6 +2013,12 @@
 	Go to page…	Ir a la página…
 	For page sizes and margins.	Para tamaños de página y márgenes.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Las fuentes estándar no pueden mostrar «{c}» ({code}). Por ahora solo se pueden añadir como texto caracteres de Europa occidental.
+	Open arrow	Flecha abierta
+	Closed arrow	Flecha cerrada
+	Butt	Extremo recto
+	Reverse open arrow	Flecha abierta invertida
+	Reverse closed arrow	Flecha cerrada invertida
+	Slash	Barra
 	Larger pages	Páginas más grandes
 	Smaller pages	Páginas más pequeñas
 	Reset page size	Restablecer el tamaño de las páginas
@@ -2022,3 +2035,26 @@
 	Printer properties	Propiedades de la impresora
 	Reset to printer defaults	Restablecer los valores predeterminados de la impresora
 	This printer offers no settings of its own.	Esta impresora no ofrece ajustes propios.
+	Scroll tabs left	Desplazar las pestañas a la izquierda
+	Scroll tabs right	Desplazar las pestañas a la derecha
+
+# Shared field properties (Prepare a form).
+	Shared Field Properties	Propiedades comunes de los campos
+	{n} fields selected	{n} campos seleccionados
+	Mixed	Valores distintos
+	Custom font	Fuente personalizada
+	Only checked properties will change. Mixed means the selected fields have different values.	Solo se cambiarán las propiedades marcadas. «Valores distintos» indica que los campos seleccionados tienen valores diferentes.
+	Shift- or Ctrl/Command-click to select several fields.	Haz clic con Mayús o Ctrl/Comando para seleccionar varios campos.
+	Font size 0 uses automatic sizing.	El tamaño de fuente 0 ajusta el tamaño automáticamente.
+	Character limit:	Límite de caracteres:
+	Character limit 0 means no limit. A comb of characters needs a limit.	El límite de caracteres 0 significa sin límite. Las casillas de caracteres necesitan un límite.
+	To change locked fields, also set Locked to No.	Para cambiar campos bloqueados, establece también «Bloqueado» en «No».
+	Comb of characters	Peine de caracteres
+	The document changed while you were editing field properties.	El documento cambió mientras editabas las propiedades de los campos.
+	The document is no longer open.	El documento ya no está abierto.
+	The field properties dialog is no longer open.	El cuadro de propiedades de los campos ya no está abierto.
+	The field properties could not be changed.	No se pudieron cambiar las propiedades de los campos.
+	The selected fields could not be found. Select them again.	No se encontraron los campos seleccionados. Vuelve a seleccionarlos.
+	The field {name} no longer exists.	El campo {name} ya no existe.
+	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)

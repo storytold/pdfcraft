@@ -64,3 +64,10 @@ sync_github_name = true
 real_name = "Tao Chen"
 display_name = "Tao Chen"
 sync_github_name = false
+
+[people.Byxis]
+sync_github_name = true
+
+[people.Hathor875]
+real_name = "Krzysztof Cieślik"
+sync_github_name = true

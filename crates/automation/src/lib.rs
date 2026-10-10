@@ -268,6 +268,11 @@ impl Automation {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
             }
+            "bookmark_from_structure" => {
+                let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
+                out["bookmarks"] = json!(bookmark_tree(&self.doc(&a)?.info.outline, &[]));
+                out
+            }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
                 let pages = self.pages(&a, "pages")?;
@@ -980,13 +985,23 @@ impl Automation {
             f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
         };
         let mut files = Vec::new();
+        let mut lowered = Vec::new();
         for p in pages {
             let img = ex.image(p, dpi, format).map_err(failed)?;
             let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
+            // A page too large for the renderer at `dpi` is drawn at the most it allows.
+            let used = ex.dpi_used(p, dpi);
+            if used < dpi.clamp(18.0, 1200.0) - 0.5 {
+                lowered.push(json!({ "page": p + 1, "dpi": used.floor() }));
+            }
         }
-        Ok(json!({ "count": files.len(), "files": files }))
+        if lowered.is_empty() {
+            Ok(json!({ "count": files.len(), "files": files }))
+        } else {
+            Ok(json!({ "count": files.len(), "files": files, "lower_dpi": lowered }))
+        }
     }
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {

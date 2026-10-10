@@ -3,10 +3,12 @@
 use std::process::ExitCode;
 
 mod assets;
+mod corpus;
 mod demo_pdf;
 mod fuzz;
 mod gates;
 mod layers;
+mod macos_integration;
 mod parity;
 mod screenshots;
 mod version;
@@ -21,10 +23,15 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
-    ("corpus", "Fetch test corpora into corpus/ (git-ignored): pdf.js test PDFs", gates::corpus),
+    ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),
     ("fuzz", "Mutation fuzzing of open/render/edit/save in child processes; findings in fuzz-out/ (--time 300)", fuzz::run),
     ("parity", "Validate parity/acrobat-features.toml against the registry, tools and tests; report progress (--json, --partial)", parity::run),
+    (
+        "macos-integration",
+        "Report macOS bundle, Quick Look, Spotlight and PDF integration diagnostics without mutating system state",
+        macos_integration::run,
+    ),
     ("text-oracle", "Compare text extraction with pdftotext over corpus/ (word F1; target median ≥ 0.97)", gates::text_oracle),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),

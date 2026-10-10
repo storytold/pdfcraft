@@ -7,6 +7,9 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 /// Attributes a page inherits from its ancestors (ISO 32000-2 §7.7.3.4).
 pub const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
 
+/// The largest `/UserUnit` honoured, as in Acrobat (a larger value counts as this one).
+pub const MAX_USER_UNIT: f64 = 75_000.0;
+
 /// A leaf page and its effective (inherited) attributes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
@@ -39,17 +42,26 @@ impl Page {
         self.dict.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).rem_euclid(360) / 90 * 90
     }
 
-    /// The displayed size (width, height) in points.
+    /// The size of the page's user-space unit in points (`/UserUnit`; it isn't inherited), read
+    /// as Acrobat reads it: a number from 1 up, at most [`MAX_USER_UNIT`]; anything else is 1.
+    pub fn user_unit(&self, doc: &Document) -> f64 {
+        self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
+    }
+
+    /// The displayed size (width, height) in points, after `/UserUnit` and `/Rotate`.
     pub fn display_size(&self, doc: &Document) -> (f64, f64) {
         let c = self.crop(doc);
-        let (w, h) = (c[2] - c[0], c[3] - c[1]);
+        let u = self.user_unit(doc);
+        let (w, h) = ((c[2] - c[0]) * u, (c[3] - c[1]) * u);
         if self.rotation(doc) % 180 == 0 { (w, h) } else { (h, w) }
     }
 
-    /// The matrix `[a b c d e f]` from display space (origin at the bottom-left of the page as
-    /// shown, y up, after `/Rotate`) to user space.
+    /// The matrix `[a b c d e f]` from display space (points, origin at the bottom-left of the
+    /// page as shown, y up, after `/UserUnit` and `/Rotate`) to user space.
     pub fn view_matrix(&self, doc: &Document) -> [f64; 6] {
-        view_matrix_for(self.rotation(doc), self.crop(doc))
+        let m = view_matrix_for(self.rotation(doc), self.crop(doc));
+        let u = self.user_unit(doc);
+        if u == 1.0 { m } else { [m[0] / u, m[1] / u, m[2] / u, m[3] / u, m[4], m[5]] }
     }
 }
 
@@ -117,10 +129,15 @@ mod tests {
     use super::*;
 
     fn doc(rotate: i64) -> Document {
+        doc_with(rotate, "", "")
+    }
+
+    /// `pages` and `page` add entries to the page tree node and to the page.
+    fn doc_with(rotate: i64, pages: &str, page: &str) -> Document {
         let objs = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << /Font << >> >> >>"),
-            "<< /Type /Page /Parent 2 0 R /CropBox [10 20 210 320] >>".to_string(),
+            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << /Font << >> >> {pages} >>"),
+            format!("<< /Type /Page /Parent 2 0 R /CropBox [10 20 210 320] {page} >>"),
         ];
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offs = Vec::new();
@@ -164,6 +181,35 @@ mod tests {
                 _ => [210.0, 320.0],
             };
             assert_eq!(tl, expect, "rotation {rotate}");
+        }
+    }
+
+    /// Display space is in points: `/UserUnit 2` doubles it. As in Acrobat, the value isn't
+    /// inherited, values below 1 or not numbers count as 1, and values over 75,000 as 75,000.
+    #[test]
+    fn user_unit_scales_display_space() {
+        for rotate in [0, 90, 180, 270] {
+            let d = doc_with(rotate, "", "/UserUnit 2");
+            let p = &pages(&d)[0];
+            let (w, h) = p.display_size(&d);
+            assert_eq!((w, h), if rotate % 180 == 0 { (400.0, 600.0) } else { (600.0, 400.0) }, "{rotate}");
+            let plain = doc(rotate);
+            let unscaled = pages(&plain)[0].view_matrix(&plain);
+            for (x, y) in [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h), (37.0, 81.0)] {
+                assert_eq!(apply(p.view_matrix(&d), x, y), apply(unscaled, x / 2.0, y / 2.0), "{rotate}: ({x}, {y})");
+            }
+        }
+        for (pages_attrs, page_attrs, unit) in [
+            ("/UserUnit 2", "", 1.0),
+            ("", "/UserUnit 1.5", 1.5),
+            ("", "/UserUnit 0.5", 1.0),
+            ("", "/UserUnit 0", 1.0),
+            ("", "/UserUnit -2", 1.0),
+            ("", "/UserUnit /Two", 1.0),
+            ("", "/UserUnit 100000", MAX_USER_UNIT),
+        ] {
+            let d = doc_with(0, pages_attrs, page_attrs);
+            assert_eq!(pages(&d)[0].user_unit(&d), unit, "{pages_attrs} {page_attrs}");
         }
     }
 }

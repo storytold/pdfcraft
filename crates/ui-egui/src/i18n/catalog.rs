@@ -155,6 +155,15 @@ impl Catalog {
         (c, errors)
     }
 
+    /// Rewrite every translation (each plural form on its own), e.g. into display order for a
+    /// right-to-left language. Keys are untouched.
+    pub fn map_translations(&mut self, f: impl Fn(&str) -> String) {
+        let tables = std::iter::once(&mut self.plain).chain(self.contextual.values_mut()).chain(std::iter::once(&mut self.ids));
+        for translation in tables.flat_map(HashMap::values_mut).chain(self.plurals.values_mut().flatten()) {
+            *translation = f(translation);
+        }
+    }
+
     pub fn plain(&self, s: &str) -> Option<&str> {
         self.plain.get(s).map(String::as_str)
     }

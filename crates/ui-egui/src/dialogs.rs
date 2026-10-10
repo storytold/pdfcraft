@@ -43,7 +43,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut export_now = false;
     let mut props_now = false;
     let mut field_props_now = false;
+    let mut bulk_field_props_now = false;
     let mut redact_now: Option<Dialog> = None;
+    let mut import_words = false;
     let mut print_go = false;
     let mut revert_now = false;
     let mut summarize_now = false;
@@ -64,7 +66,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
-            Dialog::FieldProps => 600.0,
+            Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             _ => 520.0,
         });
@@ -515,10 +517,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::RedactSearch => {
-                let (go, cancel) = crate::redact_ui::search_body(ui, &mut app.redact_search, &t);
+                let (go, cancel, import) = crate::redact_ui::search_body(ui, &mut app.redact_search, &t);
                 if go {
                     redact_now = Some(dialog);
                 }
+                import_words = import;
                 close = cancel;
                 return;
             }
@@ -561,6 +564,12 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     crate::i18n::fmt(tl!("{n} pages selected."), &[("n", &count.to_string())])
                 };
                 ui.label(text);
+                ui.add_space(4.0);
+                // The name the pages are saved under (#737); separate files add " (page N)".
+                ui.horizontal(|ui| {
+                    let l = ui.label(tl!("File name"));
+                    ui.add(egui::TextEdit::singleline(&mut app.extract_draft.name).desired_width(240.0)).labelled_by(l.id);
+                });
                 ui.checkbox(&mut app.extract_draft.delete, tl!("Delete pages after extracting"));
                 ui.checkbox(&mut app.extract_draft.separate, tl!("Extract pages as separate files"));
                 ui.add_space(12.0);
@@ -775,10 +784,18 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let Some(doc) = app.session.get(id) else { return };
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
                 let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                let rasters = crate::print_ui::preview_rasters(
+                    &app.print_draft,
+                    &sizes,
+                    &labels,
+                    ui.ctx().pixels_per_point(),
+                    ui.ctx().input(|i| i.max_texture_side) as f32,
+                );
                 let view = &mut app.views[i];
+                view.queue_print_previews(&rasters);
                 let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
                     view.need_thumbnail(p, true);
-                    view.thumb_id(p)
+                    view.page_preview(p)
                 });
                 print_go = go;
                 close = go || cancel;
@@ -808,6 +825,16 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let (apply, cancel) = crate::prepare::body(ui, d, &t);
                 field_props_now = apply;
                 close = apply || cancel;
+                return;
+            }
+            Dialog::BulkFieldProps => {
+                let Some(d) = app.bulk_field_props.as_mut() else {
+                    close = true;
+                    return;
+                };
+                let (apply, cancel) = crate::bulk_fields::body(ui, d, &t);
+                bulk_field_props_now = apply;
+                close = cancel;
                 return;
             }
             Dialog::CommentProps => {
@@ -1006,32 +1033,43 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Shortcuts => {
                 ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
-                let mac = cfg!(target_os = "macos") || cfg!(target_arch = "wasm32");
+                use crate::commands::{
+                    ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN,
+                    ZOOM_OUT,
+                };
+                let mac = crate::commands::mac_shortcuts(ui.ctx());
                 // Registered commands first (always in sync with the real bindings), then the
                 // keys the document view handles itself.
                 let mut rows: Vec<(String, String)> = pdfcraft_engine::commands::COMMANDS
                     .iter()
                     .filter_map(|c| c.shortcut.map(|k| (k.label(mac), tl!(c.label).trim_end_matches('…').to_string())))
                     .collect();
+                let key = |s: pdfcraft_engine::commands::Shortcut| s.label(mac);
+                let pair = |a, b| format!("{} / {}", key(a), key(b));
+                // Key names, translated where a catalog has them (not scanned as UI literals).
+                let named = |k: &str| tl!(k).to_string();
+                let scroll = crate::i18n::fmt(
+                    tl!("Zoom in / out (also pinch or {key}-scroll)"),
+                    &[("key", pdfcraft_engine::commands::Shortcut::command_name(mac))],
+                );
                 for (k, v) in [
-                    ("⌘G / ⇧⌘G", tl!("Next / previous match")),
-                    ("⌘C", tl!("Copy selected text")),
-                    ("Double-click", tl!("Select a word")),
-                    ("Esc", tl!("Clear selection / close find")),
-                    ("⌘1", tl!("Actual size")),
-                    ("⌘0", tl!("Zoom to page level")),
-                    ("⌘2", tl!("Fit to width")),
-                    ("⌘3", tl!("Fit visible")),
-                    ("⌘+ / ⌘−", tl!("Zoom in / out (also pinch or ⌘-scroll)")),
-                    ("⇧⌘+ / ⇧⌘−", tl!("Rotate view")),
-                    ("Home / End", tl!("First / last page")),
-                    ("← / →, ⌘← / ⌘→", tl!("Previous / next page")),
-                    ("V", tl!("Select (V)")),
-                    ("H / Space (hold)", tl!("Hand (H)")),
-                    ("Delete", tl!("Delete selected pages (Organize)")),
-                    ("⌘A", tl!("Select all pages (Organize)")),
+                    (pair(FIND_NEXT, FIND_PREV), tl!("Next / previous match").to_string()),
+                    (key(COPY), tl!("Copy selected text").to_string()),
+                    (named("Double-click"), tl!("Select a word").to_string()),
+                    (named("Esc"), tl!("Clear selection / close find").to_string()),
+                    (key(ACTUAL_SIZE), tl!("Actual size").to_string()),
+                    (key(PAGE_LEVEL), tl!("Zoom to page level").to_string()),
+                    (key(FIT_WIDTH), tl!("Fit to width").to_string()),
+                    (pair(ZOOM_IN, ZOOM_OUT), scroll),
+                    (pair(ROTATE_CW, ROTATE_CCW), tl!("Rotate view").to_string()),
+                    (named("Home / End"), tl!("First / last page").to_string()),
+                    (format!("← / →, {}", pair(PAGE_PREV, PAGE_NEXT)), tl!("Previous / next page").to_string()),
+                    (named("V"), tl!("Select (V)").to_string()),
+                    (named("H / Space (hold)"), tl!("Hand (H)").to_string()),
+                    (named("Delete"), tl!("Delete selected pages (Organize)").to_string()),
+                    (key(SELECT_ALL), tl!("Select all pages (Organize)").to_string()),
                 ] {
-                    rows.push((tl!(k).to_string(), tl!(v).to_string()));
+                    rows.push((k, v));
                 }
                 egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
                     egui::Grid::new("keys").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
@@ -1179,6 +1217,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if rotate_now {
         app.rotate_with_draft();
     }
+    if import_words {
+        app.pick_files(crate::files::FilePurpose::RedactWords, false);
+    }
     match redact_now {
         Some(Dialog::RedactPages) => app.redact_pages(),
         Some(Dialog::RedactSearch) => {
@@ -1210,6 +1251,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
         }
         _ => {}
+    }
+    if bulk_field_props_now {
+        close = app.apply_bulk_field_props();
     }
     if field_props_now
         && let Some(d) = app.field_props.take()
@@ -1266,6 +1310,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
+        app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
     }

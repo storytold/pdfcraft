@@ -394,6 +394,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut bm_action: Option<BmAction> = None;
     let mut bm_expand: Option<usize> = None;
     let mut panel_edit: Option<pdfcraft_engine::Edit> = None;
+    let mut field_properties = None;
     let mut panel_command: Option<&'static str> = None;
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
@@ -463,26 +464,30 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             };
                             view.comments.search_focus = true;
                         }
-                        if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
+                        if panel == RightPanel::Bookmarks && (bm_editable || !info.outline.is_empty()) {
                             let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Bookmark options"));
                             egui::Popup::menu(&more).show(|ui| {
                                 ui.set_min_width(200.0);
-                                for (levels, label) in [
-                                    (usize::MAX, tl!("Expand all bookmarks")),
-                                    (1, tl!("Expand top-level bookmarks")),
-                                    (0, tl!("Collapse all bookmarks")),
-                                ] {
-                                    if ui.button(label).clicked() {
-                                        bm_expand = Some(levels);
-                                        ui.close();
+                                if bm_editable && ui.button(tl!("New bookmarks from structure")).clicked() {
+                                    bm_action = Some(BmAction::FromStructure);
+                                    ui.close();
+                                }
+                                if !info.outline.is_empty() {
+                                    for (levels, label) in [
+                                        (usize::MAX, tl!("Expand all bookmarks")),
+                                        (1, tl!("Expand top-level bookmarks")),
+                                        (0, tl!("Collapse all bookmarks")),
+                                    ] {
+                                        if ui.button(label).clicked() {
+                                            bm_expand = Some(levels);
+                                            ui.close();
+                                        }
                                     }
                                 }
                             });
                         }
-                        if panel == RightPanel::Bookmarks
-                            && bm_editable
-                            && icons::button(ui, "bookmark-plus", 26.0, false, tl!("New bookmark (⌘B)")).clicked()
-                        {
+                        let new_tip = crate::commands::command_tip(ui.ctx(), tl!("New bookmark ({key})"), "bookmark.add");
+                        if panel == RightPanel::Bookmarks && bm_editable && icons::button(ui, "bookmark-plus", 26.0, false, &new_tip).clicked() {
                             bm_action = Some(BmAction::New);
                         }
                     });
@@ -492,16 +497,19 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let mut bookmark_query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
                 if panel == RightPanel::Bookmarks && !info.outline.is_empty() {
                     ui.horizontal(|ui| {
+                        const CLEAR: f32 = 26.0;
                         let label = ui.label(tl!("Search"));
                         let previous = bookmark_query.clone();
-                        let response =
-                            ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(ui.available_width() - 32.0)).labelled_by(label.id);
+                        // The panel keeps whatever width its content used, so this row must fit
+                        // exactly: any overflow would widen the panel again on every repaint.
+                        let width = ui.available_width() - CLEAR - ui.spacing().item_spacing.x;
+                        let response = ui.add(egui::TextEdit::singleline(&mut bookmark_query).desired_width(width)).labelled_by(label.id);
                         response.widget_info(|| {
                             let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), &previous, &bookmark_query, "");
                             info.label = Some(tl!("Search").to_string());
                             info
                         });
-                        if icons::button(ui, "x", 26.0, false, tl!("Clear")).clicked() {
+                        if icons::button(ui, "x", CLEAR, false, tl!("Clear")).clicked() {
                             bookmark_query.clear();
                         }
                     });
@@ -547,7 +555,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     RightPanel::Pages => pages(ui, &t, info, view, modal, bm_editable, &mut nav),
-                    RightPanel::Fields => fields(ui, &t, info, &doc.form, preparing, &mut nav, &mut panel_edit),
+                    RightPanel::Fields => field_properties = fields(ui, &t, info, &doc.form, preparing, &mut view.prepare, &mut nav, &mut panel_edit),
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
                             empty(ui, &t, "layers", "This document has no layers.");
@@ -626,6 +634,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some(e) = panel_edit {
         app.apply_edit(e);
+    }
+    if let Some((name, widget)) = field_properties {
+        app.open_field_props(&name, widget);
     }
     if let Some(c) = panel_command {
         app.run_command(c);
@@ -713,6 +724,8 @@ pub enum BmAction {
     Indent(Vec<usize>),
     /// Move it out to follow its parent.
     Outdent(Vec<usize>),
+    /// Bookmarks from the tagged headings, under a new first "Untitled" bookmark.
+    FromStructure,
 }
 
 /// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.
@@ -762,7 +775,7 @@ const LABEL_MEASURE_CHARS: usize = 64;
 /// boundary, and the loop always ends (at the ellipsis alone). A label is document text: only
 /// its first [`LABEL_MEASURE_CHARS`] characters are measured, so a huge one can't make each
 /// frame lay out thousands of candidates.
-fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
+pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
     let mut s: String = text.chars().take(LABEL_MEASURE_CHARS).collect();
     if s.len() == text.len() && fits(text) {
         return text.to_owned();
@@ -908,7 +921,17 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
     {
         view.clear_page_selection(Some(view.current));
     }
+    // Delete (or Backspace) deletes the selection, or the current page, likewise.
+    if !modal
+        && editable
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.rect_contains_pointer(ui.clip_rect())
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
+    {
+        delete_pages(view, info.pages.len());
+    }
     let w = (ui.available_width() - 40.0).min(150.0);
+    let count = info.pages.len();
     let mut rows: Vec<Rect> = Vec::with_capacity(info.pages.len());
     let mut dropped = false;
     for (i, p) in info.pages.iter().enumerate() {
@@ -986,11 +1009,36 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
                     view.pending_action = Some(crate::canvas::ViewAction::PastePages);
                     ui.close();
                 }
+                ui.separator();
+                let some_left = view.target_pages().len() < count;
+                // Never every page: a document keeps at least one.
+                if ui.add_enabled(editable && some_left, egui::Button::new(tl!("Delete pages"))).clicked() {
+                    delete_pages(view, count);
+                    ui.close();
+                }
             });
         });
         ui.add_space(4.0);
     }
     page_drag(ui, t, view, &rows, dropped);
+}
+
+/// Queue deleting the selection (or the current page) of a document of `n` pages, unless that
+/// would leave no page. The selection goes; the current page stays on the page it showed, or on
+/// the page that follows the deleted ones.
+fn delete_pages(view: &mut crate::DocView, n: usize) {
+    let mut pages = view.target_pages();
+    pages.sort_unstable();
+    pages.dedup();
+    if pages.is_empty() || pages.len() >= n {
+        return;
+    }
+    // Deleted pages before it shift it up; if it was deleted itself, the page after the deleted
+    // run lands where it was (or the last page, when the deletion ran to the end).
+    let before = pages.iter().filter(|p| **p < view.current).count();
+    view.current = view.current.saturating_sub(before).min(n.saturating_sub(pages.len() + 1));
+    view.clear_page_selection(None);
+    view.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages });
 }
 
 /// The gap (0 = before the first page, n = after the last) the pointer points at in the Pages
@@ -1060,24 +1108,37 @@ fn page_drag(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, rows: &[R
 
 /// The Fields panel: fields by page, in tab order. While preparing a form, each field can move
 /// earlier or later in its page's tab order (Acrobat: Order Tabs Manually).
+#[allow(clippy::too_many_arguments)]
 fn fields(
     ui: &mut egui::Ui,
     t: &Tokens,
     info: &DocInfo,
     form: &[pdfcraft_engine::FormField],
     preparing: bool,
+    selection: &mut crate::prepare::PrepareView,
     nav: &mut Option<Nav>,
     edit: &mut Option<pdfcraft_engine::Edit>,
-) {
+) -> Option<(String, usize)> {
+    let mut properties = None;
     if info.fields.is_empty() {
         empty(ui, t, "text-cursor-input", "This document has no form fields.");
-        return;
+        return None;
     }
     let rank = |name: &str| form.iter().find(|f| f.name == name).and_then(|f| f.widgets.iter().map(|w| w.tab).min()).unwrap_or(usize::MAX);
     let mut ordered: Vec<_> = info.fields.iter().collect();
     ordered.sort_by_key(|f| (f.page, rank(&f.name)));
     if preparing {
         ui.label(egui::RichText::new(tl!("Tab order: move a field with its arrows.")).small().color(t.text_muted));
+        ui.label(egui::RichText::new(tl!("Shift- or Ctrl/Command-click to select several fields.")).small().color(t.text_muted));
+        let names = selection.names();
+        // Keep the field rows in place when the first click selects a field, so the
+        // second click of a double-click still lands on the same row.
+        ui.horizontal(|ui| {
+            ui.label(crate::i18n::fmt(tl!("{n} selected"), &[("n", &names.len().to_string())]));
+            if ui.add_enabled(!names.is_empty(), egui::Button::new(tl!("Properties…"))).clicked() {
+                properties = selection.selected.clone();
+            }
+        });
     }
     let mut pages: Vec<Option<usize>> = info.fields.iter().map(|f| f.page).collect();
     pages.sort();
@@ -1088,6 +1149,11 @@ fn fields(
         ui.add_space(4.0);
         ui.label(egui::RichText::new(label).font(theme::semibold(12.5)).color(t.text_muted));
         for f in ordered.iter().copied().filter(|f| f.page == p) {
+            let key = form
+                .iter()
+                .find(|field| field.name == f.name)
+                .and_then(|field| field.widgets.iter().position(|w| w.page == f.page).map(|wi| (field.name.clone(), wi)));
+            let selected = key.as_ref().is_some_and(|key| selection.selected.as_ref() == Some(key) || selection.also.contains(key));
             let icon = match f.kind {
                 FieldKind::Text => "text-cursor-input",
                 FieldKind::CheckBox => "check-circle-2",
@@ -1099,9 +1165,9 @@ fn fields(
                 FieldKind::Unknown => "square",
             };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &f.name));
-            if resp.hovered() {
-                ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &f.name));
+            if selected || resp.hovered() {
+                ui.painter().rect_filled(rect, CornerRadius::same(6), if selected { t.pressed } else { t.hover });
             }
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, Color32::from_rgb(0x8E, 0x4E, 0xE6));
             ui.painter().text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &f.name, theme::regular(13.0), t.text);
@@ -1134,6 +1200,19 @@ fn fields(
                     }
                 }
             }
+            if preparing && resp.double_clicked() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+                if let Some(key) = key {
+                    if !selected {
+                        selection.select(key.clone(), false);
+                    }
+                    properties = Some(key);
+                }
+            } else if preparing
+                && resp.clicked()
+                && let Some(key) = key
+            {
+                selection.select(key, ui.input(|i| i.modifiers.shift || i.modifiers.command));
+            }
             if resp.on_hover_text(tip).clicked()
                 && let (Some(p), Some(r)) = (f.page, f.rect)
             {
@@ -1141,6 +1220,7 @@ fn fields(
             }
         }
     }
+    properties
 }
 
 pub fn human_size(n: usize) -> String {

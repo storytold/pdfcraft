@@ -71,11 +71,14 @@ fn bmp(password: &str) -> Vec<u8> {
 
 /// The PKCS #12 key derivation function (RFC 7292 Appendix B.2).
 fn pkcs12_kdf(alg: DigestAlg, password: &[u8], salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
+    // Callers only pass the SHA-1/SHA-2 digests PKCS #12 files use (`open` restricts the MAC digest).
     let (u, v) = match alg {
         DigestAlg::Sha1 => (20, 64),
+        DigestAlg::Sha224 => (28, 64),
         DigestAlg::Sha256 => (32, 64),
         DigestAlg::Sha384 => (48, 128),
         DigestAlg::Sha512 => (64, 128),
+        _ => return Vec::new(),
     };
     let _ = u;
     let fill = |s: &[u8]| -> Vec<u8> {
@@ -157,21 +160,25 @@ fn hmac(alg: DigestAlg, key: &[u8], data: &[u8]) -> Result<Vec<u8>, SignError> {
     }
     match alg {
         DigestAlg::Sha1 => run::<sha1::Sha1>(key, data),
+        DigestAlg::Sha224 => run::<sha2::Sha224>(key, data),
         DigestAlg::Sha256 => run::<sha2::Sha256>(key, data),
         DigestAlg::Sha384 => run::<sha2::Sha384>(key, data),
         DigestAlg::Sha512 => run::<sha2::Sha512>(key, data),
+        other => Err(SignError::Unsupported(format!("{} in a PKCS #12 MAC", other.name()))),
     }
 }
 
-fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize) -> Vec<u8> {
+fn pbkdf2(prf: DigestAlg, password: &[u8], salt: &[u8], rounds: u32, len: usize) -> Result<Vec<u8>, SignError> {
     let mut out = vec![0u8; len];
     match prf {
         DigestAlg::Sha1 => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password, salt, rounds, &mut out),
+        DigestAlg::Sha224 => pbkdf2::pbkdf2_hmac::<sha2::Sha224>(password, salt, rounds, &mut out),
         DigestAlg::Sha256 => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password, salt, rounds, &mut out),
         DigestAlg::Sha384 => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(password, salt, rounds, &mut out),
         DigestAlg::Sha512 => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(password, salt, rounds, &mut out),
+        other => return Err(SignError::Unsupported(format!("PBKDF2 with {}", other.name()))),
     }
-    out
+    Ok(out)
 }
 
 /// Decrypt `ct` with the password-based scheme `alg` (an AlgorithmIdentifier).
@@ -215,7 +222,7 @@ fn pbe_decrypt(alg: &Tlv<'_>, password: &str, ct: &[u8]) -> Result<Vec<u8>, Sign
                 other => return Err(SignError::Unsupported(format!("PBES2 cipher {}", other.unwrap_or("?")))),
             };
             let iv = sc.get(1).ok_or_else(|| bad("IV"))?.octets("IV")?;
-            let key = pbkdf2(prf, password.as_bytes(), &salt, rounds, cipher.key_len());
+            let key = pbkdf2(prf, password.as_bytes(), &salt, rounds, cipher.key_len())?;
             cipher.decrypt(&key, &iv, ct)
         }
         PBE_SHA_3DES | PBE_SHA_2DES | PBE_SHA_RC2_128 | PBE_SHA_RC2_40 => {
@@ -355,7 +362,9 @@ pub fn open(bytes: &[u8], password: &str) -> Result<DigitalId, SignError> {
         let digest_info = m.first().ok_or_else(|| bad("MacData"))?.children()?;
         let alg = digest_info.first().ok_or_else(|| bad("MAC algorithm"))?.children()?;
         let alg_oid = alg.first().ok_or_else(|| bad("MAC algorithm"))?.oid()?;
-        let alg = DigestAlg::from_oid(&alg_oid).ok_or_else(|| SignError::Unsupported(format!("MAC digest {alg_oid}")))?;
+        let alg = DigestAlg::from_oid(&alg_oid)
+            .filter(|d| matches!(d, DigestAlg::Sha1 | DigestAlg::Sha224 | DigestAlg::Sha256 | DigestAlg::Sha384 | DigestAlg::Sha512))
+            .ok_or_else(|| SignError::Unsupported(format!("MAC digest {alg_oid}")))?;
         let expected = digest_info.get(1).ok_or_else(|| bad("MAC"))?.octets("MAC")?;
         let salt = m.get(1).ok_or_else(|| bad("MAC salt"))?.octets("MAC salt")?;
         let iterations = m.get(2).map(|i| i.u64()).transpose()?.unwrap_or(1) as u32;
@@ -435,7 +444,7 @@ pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
     const ITER: u32 = 2048;
     let encrypt = |plain: &[u8]| -> Result<Vec<u8>, SignError> {
         let (salt, iv) = (random(16)?, random(16)?);
-        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, ITER, 32);
+        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, ITER, 32)?;
         let ct = cbc::Encryptor::<aes::Aes256>::new_from_slices(&key, &iv)
             .map_err(|_| SignError::Crypto("AES".into()))?
             .encrypt_padded_vec::<Pkcs7>(plain);

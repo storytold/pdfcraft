@@ -540,6 +540,14 @@ impl Document {
         &self.repair_log
     }
 
+    /// Add a line to [`Self::repair_log`]: a leniency applied while reading that the user should
+    /// know about (fidelity: never silent).
+    pub fn note_repair(&mut self, line: String) {
+        let mut log = self.repair_log.as_ref().clone();
+        log.push(line);
+        self.repair_log = Arc::new(log);
+    }
+
     /// `true` when there are unsaved edits.
     pub fn is_modified(&self) -> bool {
         !self.overlay.is_empty()

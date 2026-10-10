@@ -175,6 +175,39 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
 }
 
+/// Display space is in points, so on a `/UserUnit 2` page an item's box maps to half as many
+/// user-space units. Items record the `/UserUnit` they were written for; one without it was
+/// written when display space was in user-space units, and reads back scaled to points.
+#[test]
+fn added_items_follow_the_page_user_unit() {
+    let mut doc = fixture();
+    let page = pdfcraft_model::pages(&doc)[2].obj;
+    doc.update_dict(page, |d| d.set(b"UserUnit".to_vec(), Object::Int(2))).unwrap();
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Scaled".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 2, &Content::Text(text.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let all = list_added(&doc);
+    let on = |page: usize| all.iter().find(|a| a.page == page).unwrap();
+    let Content::Text(t) = &on(2).content else { panic!() };
+    assert_eq!((t.rect[0], t.rect[2], t.rect[3], t.size), (72.0, 300.0, 700.0, 14.0), "read back as written");
+    assert!(streams(&doc, 2).iter().any(|s| s.starts_with("q 0.5 0 0 0.5 0 0 cm")), "display points to user space");
+    let recorded = |doc: &Document, a: &Added| {
+        doc.get(a.obj).as_dict().and_then(|d| d.get(b"PCAdded").cloned()).and_then(|p| p.as_dict().and_then(|p| p.get(b"UserUnit").cloned()))
+    };
+    assert!(recorded(&doc, on(0)).is_none(), "a page without /UserUnit records nothing");
+    assert_eq!(recorded(&doc, on(2)).and_then(|u| u.as_f64()), Some(2.0));
+    // The same item as an earlier version wrote it: no record, box and size in user-space units.
+    let mut legacy = doc.clone();
+    let Object::Stream(mut s) = (*legacy.get(on(2).obj)).clone() else { panic!() };
+    let mut params = s.dict.get(b"PCAdded").and_then(|p| p.as_dict().cloned()).unwrap();
+    params.remove(b"UserUnit");
+    s.dict.set(b"PCAdded".to_vec(), Object::Dict(params));
+    legacy.set(on(2).obj, Object::Stream(s));
+    let Content::Text(old) = &list_added(&legacy).into_iter().find(|a| a.page == 2).unwrap().content else { panic!() };
+    assert_eq!((old.rect[0], old.rect[2], old.rect[3], old.size), (144.0, 600.0, 1400.0, 28.0), "scaled to points");
+}
+
 #[test]
 fn added_text_and_images_are_page_content_that_stays_editable() {
     let mut doc = fixture();
@@ -790,10 +823,58 @@ fn editing_text_keeps_the_tokens_a_stream_shares_with_its_neighbours() {
     assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Target");
     text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
     assert_split_tokens_kept(&reopen(&doc), "Edited");
-    // A paragraph rewrite rebuilds the same piece.
+    // A paragraph rewrite: "Target" and the line after it (split across pieces) are one
+    // paragraph, rewritten whole without stray tokens.
     let mut doc = split_streams_page();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
     text::replace_block(&mut doc, 0, 0, "Rewrapped").unwrap();
-    assert_split_tokens_kept(&reopen(&doc), "Rewrapped");
+    let (joined, ops) = joined_ops(&reopen(&doc));
+    assert!(joined.contains("Rewrapped") && !joined.contains("Target") && !joined.contains("wards"), "{joined}");
+    assert!(ops.iter().find(|o| o.is("BDC")).is_some_and(|o| o.operands.len() == 2), "{joined}");
+}
+
+/// The operators of the page's pieces joined back into one stream, each checked for operands.
+fn joined_ops(doc: &Document) -> (String, Vec<pdfcraft_content::Op>) {
+    let joined = streams(doc, 0).join("\n");
+    let ops = pdfcraft_content::parse(joined.as_bytes());
+    assert_eq!(ops.skipped, 0, "stray tokens: {joined}");
+    (joined, ops.ops)
+}
+
+#[test]
+fn a_line_whose_operator_starts_the_next_stream_can_be_edited() {
+    // #155: `[(After) -20 (wards)]` ends one piece and its `TJ` starts the next.
+    let doc = split_streams_page();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Target", "Afterwards"]);
+    assert!(lines[1].rect[1] < lines[0].rect[1] && lines[1].rect[2] > lines[1].rect[0] + 40.0, "{:?}", lines[1].rect);
+
+    // Retyping it replaces the operator whole, in both pieces it spans.
+    let mut doc = split_streams_page();
+    text::replace_line(&mut doc, 0, 1, "Later").unwrap();
+    let doc = reopen(&doc);
+    let (joined, ops) = joined_ops(&doc);
+    assert!(!joined.contains("After") && !joined.contains("wards") && joined.contains("Target"), "{joined}");
+    assert!(ops.iter().filter(|o| o.is("TJ")).count() == 0, "{joined}");
+    assert!(ops.iter().find(|o| o.is("BDC")).is_some_and(|o| o.operands.len() == 2), "{joined}");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Target", "Later"]);
+    // The pieces stay pieces: the first is untouched, the marked content still closes.
+    let pieces = streams(&doc, 0);
+    assert_eq!(pieces.len(), 3);
+    assert_eq!(pieces[0].trim(), "/P << /MCID 0");
+    assert!(pieces[2].contains("EMC") && !pieces[2].contains("TJ"), "{pieces:?}");
+
+    // As a paragraph with the line before it: both lines are rewritten.
+    let mut doc = split_streams_page();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let last = blocks.iter().position(|b| b.text.contains("Afterwards")).unwrap();
+    text::replace_block(&mut doc, 0, last, "Rewrapped").unwrap();
+    let doc = reopen(&doc);
+    let (joined, ops) = joined_ops(&doc);
+    assert!(!joined.contains("wards") && joined.contains("Rewrapped"), "{joined}");
+    assert!(ops.iter().find(|o| o.is("BDC")).is_some_and(|o| o.operands.len() == 2), "{joined}");
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|l| l.text == "Rewrapped"));
 }
 
 #[test]
@@ -1380,4 +1461,149 @@ fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0()
     assert_eq!(left, ["Note", "keep", "pencil", "secret"]);
     assert!(summaries(&doc).iter().any(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")), "the hidden typewriter stays");
     assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
+}
+
+/// A one-page document from its objects (object 1 is the catalog).
+fn build(objs: &[&str]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+fn stream(dict: &str, data: &str) -> String {
+    format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
+}
+
+/// #314: text and images drawn by (nested) form XObjects are read for export, placed through
+/// every form matrix and set in each form's own fonts; editing still sees only the page's text.
+#[test]
+fn reading_follows_form_xobjects() {
+    let page = stream("", "q 1 0 0 1 10 0 cm /Fm1 Do Q BT /F1 12 Tf 72 100 Td (Page text) Tj ET");
+    let fm1 = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 600 800] /Matrix [1 0 0 1 0 50] /Resources << /Font << /F1 7 0 R >> /XObject << /Fm2 8 0 R >> >>",
+        "BT /F1 18 Tf 72 700 Td (Hello from a test invoice) Tj ET /Fm2 Do",
+    );
+    let fm2 = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 400] /Matrix [2 0 0 2 0 0] /Resources << /Font << /F2 9 0 R >> /XObject << /Im1 10 0 R >> >>",
+        "BT /F2 10 Tf 50 100 Td (Nested) Tj ET q 20 0 0 10 5 5 cm /Im1 Do Q",
+    );
+    let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A");
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 6 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+        &fm1,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &fm2,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>",
+        &image,
+    ]);
+    let close = |a: f64, b: f64| (a - b).abs() < 0.01;
+
+    let blocks = text::reading_blocks(&doc, 0).unwrap();
+    let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(texts, ["Hello from a test invoice", "Nested", "Page text"]);
+    let (hello, nested, own) = (&blocks[0], &blocks[1], &blocks[2]);
+    // Hello: (72, 700) moved by the form's (0, 50) and the page's (10, 0).
+    assert_eq!(hello.base_font, "Helvetica", "the form's own /F1, not the page's");
+    assert!(close(hello.rect[0], 82.0) && close(hello.size, 18.0), "{hello:?}");
+    // Nested: (50, 100) doubled by Fm2, then Fm1 and the page: (110, 250), 20 pt.
+    assert_eq!(nested.base_font, "Times-Bold");
+    assert!(nested.bold);
+    assert!(close(nested.rect[0], 110.0) && close(nested.size, 20.0), "{nested:?}");
+    assert_eq!(own.base_font, "Courier");
+
+    let images = images::reading_images(&doc, 0).unwrap();
+    assert_eq!(images.len(), 1, "{images:?}");
+    let r = images[0].rect;
+    assert!(close(r[0], 20.0) && close(r[1], 60.0) && close(r[2], 60.0) && close(r[3], 80.0), "{r:?}");
+    assert_eq!((images[0].width, images[0].height), (1, 1));
+
+    // Editing works on the page's own streams only, unchanged.
+    let editable: Vec<String> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(editable, ["Page text"]);
+    // The page draws one figure of its own (Fm1, edited as a whole); the image inside Fm2 is not
+    // a page image.
+    let own = images::page_images(&doc, 0).unwrap();
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
+}
+
+/// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
+/// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
+#[test]
+fn form_xobjects_that_fan_out_stop_at_the_visit_budget() {
+    let font = "/Font << /F1 5 0 R >>";
+    let levels = 12;
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> /XObject << /N 6 0 R >> >> /Contents 4 0 R >>"
+            .to_string(),
+        stream("", "/N Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    for level in 0..levels {
+        let next = 7 + level;
+        objs.push(if level + 1 == levels {
+            stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} >>"), "BT /F1 10 Tf 10 10 Td (leaf) Tj ET")
+        } else {
+            stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /N {next} 0 R >> >>"), &"/N Do ".repeat(20))
+        });
+    }
+    let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&refs);
+    let start = std::time::Instant::now();
+    let _ = text::reading_blocks(&doc, 0).unwrap();
+    assert!(images::reading_images(&doc, 0).unwrap().is_empty());
+    assert!(start.elapsed() < std::time::Duration::from_secs(30), "took {:?}", start.elapsed());
+}
+
+/// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
+/// missing are read once (or skipped) without panicking or looping.
+#[test]
+fn hostile_form_xobjects_are_read_once() {
+    let page = stream("", "/Loop Do /A Do /NoRes Do /Bad Do /Missing Do /F1 Do");
+    let font = "/Font << /F1 5 0 R >>";
+    let lp = stream(
+        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
+        "/Loop Do BT /F1 10 Tf 10 10 Td (once) Tj ET",
+    );
+    let a = stream(
+        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /B 8 0 R >> >>"),
+        "/B Do BT /F1 10 Tf 10 100 Td (from a) Tj ET",
+    );
+    let b = stream(
+        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /A 7 0 R >> >>"),
+        "/A Do BT /F1 10 Tf 10 200 Td (from b) Tj ET",
+    );
+    let nores = stream("/Subtype /Form /BBox [0 0 9 9]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
+    let bad = stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> /XObject << /Loop 6 0 R /A 7 0 R /NoRes 9 0 R /Bad 10 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        &lp,
+        &a,
+        &b,
+        &nores,
+        &bad,
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["once", "from b", "from a", "inherited", "bad matrix"]);
+    assert!(images::reading_images(&doc, 0).unwrap().is_empty());
 }
