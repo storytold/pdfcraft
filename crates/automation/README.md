@@ -36,6 +36,26 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 
 Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`, `tools/list` (with `readOnlyHint`/`destructiveHint` annotations), `tools/call` (JSON results also returned as `structuredContent`; images as `image/png`), and `resources/list`, `resources/templates/list` and `resources/read`. The resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON), `…/text`, `…/page/{page}/text` and `…/page/{page}/image{?dpi}` (PNG, 1–600 dpi). Tool failures come back as `isError: true` results, so the agent can read and recover from them.
 
+### From an installed release
+
+The release packages ship `pdfcraft-cli` alongside the desktop app, so no build is needed:
+
+| Install | CLI |
+|---|---|
+| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe`, not added to `PATH` |
+| Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
+| macOS | the separate `pdfcraft-cli-<version>-macos-universal.zip` release asset (the `.app` holds only the desktop app) |
+
+```sh
+# Windows
+claude mcp add pdfcraft -- "C:\Program Files\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
+# Linux, or macOS with the CLI unzipped onto PATH
+claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
+```
+
+An unofficial community plugin, [artcraft-claude-plugin](https://github.com/sawizzle/artcraft-claude-plugin),
+registers the installed ArtCraft apps in Claude Code in one step and adds usage notes for agents.
+
 ## Adding a tool
 
 1. Add the engine capability first, with its tests (the tool is a thin adapter).
