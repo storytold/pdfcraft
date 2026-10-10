@@ -3819,7 +3819,7 @@ status = "shipped"
 commands = ["comment.list"]
 tools = []
 evidence = ["crates/ui-egui/tests/comments.rs::make_current_properties_default"]
-notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus)"
+notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340)"
 
 [[feature]]
 id = "comment.author-identity"
