@@ -1404,6 +1404,19 @@ fn encrypted_documents_are_signed_only_as_their_permissions_allow() {
     assert_eq!(s.certify, Some(2), "{:?}", s.details);
 }
 
+/// A security change that hasn't been saved would turn the signing save into a full rewrite that
+/// applies or removes protection: signing refuses until it is saved.
+#[test]
+fn signing_waits_for_a_pending_security_change_to_be_saved() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let mut owner = open_pw(&protected(pdfcraft_cos::Algorithm::Aes256, FILL_AND_SIGN_ONLY), Some("owner"));
+    owner.remove_encryption();
+    match pdfcraft_sign::sign(&owner, &id, &opts()) {
+        Err(SignError::Pdf(m)) => assert!(m.contains("save the document's new security settings"), "{m}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|b| b.len())),
+    }
+}
+
 #[test]
 fn encrypted_documents_take_a_document_timestamp() {
     let tsa = TestTsa {

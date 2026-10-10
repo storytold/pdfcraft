@@ -1364,6 +1364,11 @@ fn sign_inner(
     opts: &SignOptions,
     tsa: Option<&dyn crate::timestamp::TimestampAuthority>,
 ) -> Result<Vec<u8>, SignError> {
+    // A pending security change would make the incremental save a full rewrite that applies
+    // or removes protection as it signs (and breaks existing signatures): save it first.
+    if doc.encryption_changed() {
+        return Err(SignError::Pdf("save the document's new security settings before signing it".into()));
+    }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
@@ -1537,6 +1542,11 @@ fn sign_inner(
 /// whose `/Contents` is an RFC 3161 token covering the whole current file (`/ETSI.RFC3161`).
 /// The transport is the caller's; a rejected or malformed token produces no file.
 pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampAuthority, date: &str) -> Result<Vec<u8>, SignError> {
+    // A pending security change would make the incremental save a full rewrite that applies
+    // or removes protection as it signs (and breaks existing signatures): save it first.
+    if doc.encryption_changed() {
+        return Err(SignError::Pdf("save the document's new security settings before signing it".into()));
+    }
     if doc.permissions().is_some_and(|p| !p.fill_forms()) {
         return Err(SignError::Pdf(
             "the document's security settings don't allow signing; open it with the permissions password to timestamp it".into(),
