@@ -342,10 +342,8 @@ impl Automation {
                 Ok(r) => {
                     let target = child(&folder, &name);
                     let target = if target.exists() {
-                        let stem = std::path::Path::new(&name)
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "document".into());
+                        let stem =
+                            std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
                         unused(&folder, &stem)
                     } else {
                         target
