@@ -2166,3 +2166,7 @@ certificate	Subject	Власник сертифіката
 	The field {name} no longer exists.	Поле {name} більше не існує.
 	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)
+	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Цей файл змінено на диску. Перезавантажте його, щоб побачити нову версію; незбережені зміни буде втрачено.
+	Reload	Перезавантажити
+	Couldn't reload {name}: {e}	Не вдалося перезавантажити {name}: {e}

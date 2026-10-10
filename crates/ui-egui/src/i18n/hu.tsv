@@ -2141,3 +2141,7 @@ action wizard	Start	Indítás
 	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
 	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)
+	Reload documents when their files change on disk	Dokumentumok újratöltése, ha a fájljuk megváltozik a lemezen
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ez a fájl megváltozott a lemezen. Töltsd újra az új változat megtekintéséhez; a nem mentett módosításaid elvesznek.
+	Reload	Újratöltés
+	Couldn't reload {name}: {e}	{name} újratöltése nem sikerült: {e}
