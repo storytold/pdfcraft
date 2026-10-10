@@ -22,6 +22,7 @@ pub mod mcp;
 mod measure;
 mod printing;
 mod redact;
+pub mod rest_stub;
 mod signing;
 mod tools;
 
