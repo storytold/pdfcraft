@@ -1058,3 +1058,41 @@ fn non_markup_annotations_are_not_comments() {
         assert!(is_comment_subtype(s), "{s}");
     }
 }
+
+/// A drawing (a drawn Fill & Sign signature is one) resizes by scaling its strokes into the new
+/// rectangle, keeping each side's stroke margin, and gets a fresh appearance.
+#[test]
+fn drawings_resize_by_scaling_their_strokes() {
+    let mut doc = fixture();
+    let strokes = vec![vec![[100.0, 400.0], [150.0, 460.0], [200.0, 410.0]], vec![[120.0, 420.0], [180.0, 430.0]]];
+    let i = add_annotation(&mut doc, &new(0, Shape::Ink { strokes }), &meta("i")).unwrap();
+    let nums = |o: &Object| -> Vec<f64> { o.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect() };
+    let points = |doc: &Document| -> Vec<[f64; 2]> {
+        let d = &list(doc, 0)[i];
+        d.get(b"InkList").unwrap().as_array().unwrap().iter().flat_map(|s| nums(s).as_chunks::<2>().0.to_vec()).collect()
+    };
+    let before = points(&doc);
+    let r0 = nums(list(&doc, 0)[i].get(b"Rect").unwrap());
+    let lo = |k: usize| before.iter().map(|p| p[k]).fold(f64::MAX, f64::min);
+    let hi = |k: usize| before.iter().map(|p| p[k]).fold(f64::MIN, f64::max);
+    let margin = [lo(0) - r0[0], lo(1) - r0[1], r0[2] - hi(0), r0[3] - hi(1)];
+    assert!(margin.iter().all(|m| *m > 0.0), "{margin:?}");
+    // Twice the size, bottom-left corner fixed.
+    let rect = [r0[0], r0[1], r0[0] + 2.0 * (r0[2] - r0[0]), r0[1] + 2.0 * (r0[3] - r0[1])];
+    set_rect(&mut doc, 0, i, rect, &meta("r")).unwrap();
+    let d = &list(&doc, 0)[i];
+    let r1 = nums(d.get(b"Rect").unwrap());
+    assert!(r1.iter().zip(rect).all(|(a, b)| (a - b).abs() < 1e-6), "{r1:?} != {rect:?}");
+    // Each point keeps its place relative to the drawing's bounds, inside the same margin.
+    let inner = |r: &[f64]| [r[0] + margin[0], r[1] + margin[1], r[2] - margin[2], r[3] - margin[3]];
+    let (a, b) = (inner(&r0), inner(&r1));
+    for (p, q) in before.iter().zip(points(&doc)) {
+        let expected = [b[0] + (p[0] - a[0]) / (a[2] - a[0]) * (b[2] - b[0]), b[1] + (p[1] - a[1]) / (a[3] - a[1]) * (b[3] - b[1])];
+        assert!((q[0] - expected[0]).abs() < 1e-6 && (q[1] - expected[1]).abs() < 1e-6, "{q:?} != {expected:?}");
+    }
+    let ap = ap_content(&doc, d);
+    let first = points(&doc)[0];
+    assert!(ap.contains(&format!("{} {} m", n(first[0]), n(first[1]))), "appearance redrawn at the new size: {ap}");
+    // Too small to hold the stroke margin.
+    assert!(matches!(set_rect(&mut doc, 0, i, [100.0, 400.0, 101.0, 401.0], &meta("")), Err(AnnotError::Invalid(_))));
+}

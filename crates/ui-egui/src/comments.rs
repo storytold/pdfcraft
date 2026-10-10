@@ -533,10 +533,10 @@ fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
-/// Rectangles, ovals, text boxes and stamps. A callout's `/Rect` also holds its leader line, so it
-/// only moves.
+/// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
+/// `/Rect` also holds its leader line, so it only moves.
 fn resizable(a: &Annotation) -> bool {
-    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp") && a.intent.as_deref() != Some("FreeTextCallout")
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
 }
 
 const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
@@ -854,6 +854,11 @@ fn select_input(
             // On screen, the image is also turned by the view's rotation.
             let turned = !cx.xf.rot.is_multiple_of(180);
             let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
+            // A drawn signature keeps its shape from the corners, as image signatures do.
+            let aspect_ratio = aspect_ratio.or_else(|| {
+                let r = cx.screen_rect(a);
+                (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
+            });
             cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: h, from: o, aspect_ratio });
             consumed = true;
         } else if let Some(a) = cx.hit(o)

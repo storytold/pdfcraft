@@ -1117,3 +1117,46 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
     assert_eq!(items(&h).len(), 4, "{:?}", items(&h));
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
 }
+
+/// A drawn signature resizes from its handles like typed and image ones: the corners keep its
+/// shape, the strokes scale with it, and the size survives undo, redo and saving.
+#[test]
+fn drawn_signatures_resize_from_their_corners() {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Drawn(vec![vec![[0.05, 0.1], [0.3, 0.2], [0.55, 0.05], [0.95, 0.15]]]));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 40.0, 250.0);
+    let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the placed signature is selected");
+
+    // The top-right corner handle, dragged out and a little up.
+    let corner = at(&h, placed[2], placed[3]);
+    h.hover_at(corner);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNeSw);
+    h.drag_at(corner);
+    h.run_steps(1);
+    for k in 1..=10 {
+        h.hover_at(corner + egui::vec2(6.0 * k as f32, -(k as f32)));
+        h.run_steps(1);
+    }
+    h.drop_at(corner + egui::vec2(60.0, -10.0));
+    h.run_steps(4);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Resize comment"));
+    let [now] = rects(&h)[..] else { panic!("still one signature: {:?}", rects(&h)) };
+    let ratio = |r: [f32; 4]| (r[2] - r[0]) / (r[3] - r[1]);
+    assert!(now[2] - now[0] > placed[2] - placed[0] + 20.0, "wider: {placed:?} -> {now:?}");
+    assert!((ratio(now) - ratio(placed)).abs() < 0.02 * ratio(placed), "same shape: {placed:?} -> {now:?}");
+    assert!((now[0] - placed[0]).abs() < 0.01 && (now[1] - placed[1]).abs() < 0.01, "the opposite corner stays put");
+
+    let id = h.state().views[0].id;
+    h.state_mut().session.undo(id).unwrap();
+    assert_rect(rects(&h)[0], placed);
+    h.state_mut().session.redo(id).unwrap();
+    assert_rect(rects(&h)[0], now);
+    let saved = h.state().session.save_bytes(id).unwrap();
+    let h = harness_bytes(&saved);
+    assert_rect(rects(&h)[0], now);
+}
