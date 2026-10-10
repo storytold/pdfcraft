@@ -431,6 +431,19 @@ fn overlay_text_takes_its_font_size_colour_alignment_and_repeats() {
 }
 
 #[test]
+fn redaction_codes_join_in_set_order_and_reject_strangers() {
+    use crate::codes::{CODE_SETS, CodeSet};
+    let foia = CodeSet::from_id("foia").unwrap();
+    assert_eq!(foia.overlay(&["(b)(6)", "(b)(1)(A)", "(b)(6)"]), Ok("(b)(1)(A), (b)(6)".into()));
+    assert_eq!(foia.overlay(&[]), Ok(String::new()));
+    assert_eq!(foia.overlay(&["(b)(6)", "(k)(1)"]), Err("(k)(1)"));
+    let privacy = CodeSet::from_id("privacy-act").unwrap();
+    assert_eq!(privacy.overlay(&["(k)(7)", "(d)(5)"]), Ok("(d)(5), (k)(7)".into()));
+    assert_eq!(CodeSet::from_id("gdpr"), None);
+    assert!(CODE_SETS.iter().all(|s| !s.codes.is_empty() && s.codes.iter().all(|c| !c.is_empty())));
+}
+
+#[test]
 fn tags_lose_what_redaction_removed() {
     let content = b"/P <</MCID 0>> BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC /P <</MCID 1>> BDC BT /F1 10 Tf 10 100 Td (Public) Tj ET EMC";
     let mut doc = pdf(vec![

@@ -95,6 +95,28 @@ fn the_field_tree_is_read_with_inheritance() {
     assert_eq!(field(&all, "address.city").quadding, 1);
 }
 
+#[test]
+fn field_flags_reject_values_outside_the_unsigned_32_bit_domain() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>".into(),
+        "<< /FT /Btn /T (valid) /Ff 65536 >>".into(),
+        "<< /FT /Btn /T (negative) /Ff -1 >>".into(),
+        "<< /FT /Btn /T (overflow) /Ff 4295032832 >>".into(),
+        "<< /FT /Btn /T (wrong_type) /Ff (65536) >>".into(),
+        "<< /FT /Btn /T (missing) >>".into(),
+    ];
+    let all = fields(&document(&objs));
+    assert_eq!(field(&all, "valid").kind, FieldKind::PushButton);
+    assert_eq!(field(&all, "valid").flags, flags::PUSH_BUTTON);
+    for name in ["negative", "overflow", "wrong_type", "missing"] {
+        assert_eq!(field(&all, name).kind, FieldKind::CheckBox, "{name}");
+        assert_eq!(field(&all, name).flags, 0, "{name}");
+    }
+}
+
 /// Some writers leave every field out of `/Fields` and put the widgets only in the page
 /// annotations: the tree walk alone finds nothing, and Acrobat and the browsers fill them anyway.
 /// The pages' widgets are adopted as fields, after the listed tree fields.

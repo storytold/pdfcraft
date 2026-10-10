@@ -89,7 +89,7 @@
 	Double-click	Двойной щелчок
 	Select a word	Выделить слово
 	Clear selection / close find	Снять выделение / закрыть поиск
-	Zoom in / out (also pinch or ⌘-scroll)	Масштаб (также щипок или ⌘-прокрутка)
+	Zoom in / out (also pinch or {key}-scroll)	Масштаб (также щипок или {key}-прокрутка)
 	Rotate view	Повернуть вид
 	First / last page	Первая / последняя страница
 	Previous / next page	Предыдущая / следующая страница
@@ -97,16 +97,16 @@
 	Select all pages (Organize)	Выделить все страницы (Организация)
 	Home	Главная
 	Open	Открыть
-	Open a PDF (⌘O)	Открыть PDF (⌘O)
+	Open a PDF ({key})	Открыть PDF ({key})
 	Dark gray theme	Тёмно-серая тема
 	Light theme	Светлая тема
 	All tools	Все инструменты
 	Read	Чтение
 	Convert	Конвертация
 	E-Sign	Электронная подпись
-	Print (⌘P)	Печать (⌘P)
+	Print ({key})	Печать ({key})
 	Save (M4)	Сохранить (M4)
-	Document properties (⌘D)	Свойства документа (⌘D)
+	Document properties ({key})	Свойства документа ({key})
 	Find tools and commands	Найти инструменты и команды
 	Fit to height	По высоте
 	Zoom in	Увеличить
@@ -135,9 +135,9 @@
 	Compare	Сравнить
 	Page thumbnails	Миниатюры страниц
 	Form fields	Поля формы
-	Zoom out (⌘−)	Уменьшить (⌘−)
-	Zoom in (⌘+)	Увеличить (⌘+)
-	Rotate view clockwise (⇧⌘+)	Повернуть вид по часовой стрелке (⇧⌘+)
+	Zoom out ({key})	Уменьшить ({key})
+	Zoom in ({key})	Увеличить ({key})
+	Rotate view clockwise ({key})	Повернуть вид по часовой стрелке ({key})
 	Toggle fit page / fit width	Переключить по странице / по ширине
 	Next page	Следующая страница
 	Previous page	Предыдущая страница
@@ -1099,6 +1099,7 @@
 	Redacted area fill colour:	Цвет заливки скрытой области:
 	Use overlay text	Использовать текст поверх
 	Custom text:	Свой текст:
+	Redaction code:	Код сокрытия:
 	Font:	Шрифт:
 	Font size:	Размер шрифта:
 	Auto-size text to fit redaction region	Автоподбор размера текста по области сокрытия
@@ -1268,7 +1269,7 @@
 	Expand all bookmarks	Развернуть все закладки
 	Expand top-level bookmarks	Развернуть закладки верхнего уровня
 	Collapse all bookmarks	Свернуть все закладки
-	New bookmark (⌘B)	Новая закладка (⌘B)
+	New bookmark ({key})	Новая закладка ({key})
 	This document has no bookmarks.	В этом документе нет закладки.
 	This document has no layers.	В этом документе нет слоёв.
 	This document has no attachments.	В этом документе нет вложений.
@@ -1283,8 +1284,8 @@
 	No matches	Совпадений нет
 	Searching… {s}/{p}	Поиск… {s}/{p}
 	{c} of {n}{more}	{c} из {n}{more}
-	Previous (⇧⌘G)	Предыдущее (⇧⌘G)
-	Next (⌘G)	Следующее (⌘G)
+	Previous ({key})	Предыдущее ({key})
+	Next ({key})	Следующее ({key})
 	Find options	Параметры поиска
 	Whole words only	Только целые слова
 	Case-sensitive	С учётом регистра

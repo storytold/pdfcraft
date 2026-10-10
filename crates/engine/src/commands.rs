@@ -59,12 +59,19 @@ pub struct Shortcut {
 }
 
 impl Shortcut {
-    const fn cmd(key: &'static str) -> Self {
+    /// ⌘ (Ctrl elsewhere) and `key`.
+    pub const fn cmd(key: &'static str) -> Self {
         Self { command: true, shift: false, mac_ctrl: false, key }
     }
 
-    const fn cmd_shift(key: &'static str) -> Self {
+    /// ⇧⌘ (Ctrl+Shift elsewhere) and `key`.
+    pub const fn cmd_shift(key: &'static str) -> Self {
         Self { command: true, shift: true, mac_ctrl: false, key }
+    }
+
+    /// The command modifier on its own, for text such as "⌘-scroll" / "Ctrl-scroll".
+    pub fn command_name(mac: bool) -> &'static str {
+        if mac { "⌘" } else { "Ctrl" }
     }
 
     /// How the shortcut is written in menus: `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
@@ -190,7 +197,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Acrobat's view modes, a page display and a zoom at once (the rail's Page display menu).
     c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "arrow-left-right"),
     c("view.fit_one_page", "Fit one full page", None, None, Document, "maximize-2"),
-    c("view.fit_visible", "Fit visible", VIEW, Some(Shortcut::cmd("3")), Document, "scan"),
+    // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
+    // View menu (where it would show twice). The palette and ⌘3 still run it.
+    c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Document, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
@@ -412,6 +421,11 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
+        assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
+        assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
+        assert_eq!(Shortcut::command_name(true), "⌘");
+        assert_eq!(Shortcut::command_name(false), "Ctrl");
     }
 
     #[test]

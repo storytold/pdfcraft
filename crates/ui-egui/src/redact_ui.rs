@@ -4,7 +4,7 @@
 //! confirmation, as Acrobat asks) or clear them.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, RedactPattern, Rgb, Shape, Style, rect_quad};
+use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Rgb, Shape, Style, rect_quad};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -20,19 +20,41 @@ pub struct RedactPrefs {
     pub fill: Option<Rgb>,
     pub use_overlay: bool,
     pub overlay: String,
+    /// The overlay text is the picked redaction codes instead of `overlay`.
+    pub use_code: bool,
+    pub code_set: RedactionCodeSet,
+    pub codes: Vec<&'static str>,
     /// Overlay text font, size (0 = auto), colour, alignment and repetition.
     pub look: pdfcraft_engine::OverlayLook,
 }
 
 impl Default for RedactPrefs {
     fn default() -> Self {
-        Self { fill: Some([0.0, 0.0, 0.0]), use_overlay: false, overlay: String::new(), look: Default::default() }
+        Self {
+            fill: Some([0.0, 0.0, 0.0]),
+            use_overlay: false,
+            overlay: String::new(),
+            use_code: false,
+            // Infallible: a non-empty constant array.
+            code_set: REDACTION_CODE_SETS[0],
+            codes: Vec::new(),
+            look: Default::default(),
+        }
     }
 }
 
 impl RedactPrefs {
+    pub fn overlay_text(&self) -> String {
+        match (self.use_overlay, self.use_code) {
+            (false, _) => String::new(),
+            (true, false) => self.overlay.clone(),
+            // `codes` only ever holds codes of `code_set`, so this can't fail.
+            (true, true) => self.code_set.overlay(&self.codes).unwrap_or_default(),
+        }
+    }
+
     pub fn mark(&self, page: usize, quads: Vec<[f64; 8]>, author: &str) -> Edit {
-        let shape = Shape::Redact { quads, overlay: if self.use_overlay { self.overlay.clone() } else { String::new() }, look: self.look };
+        let shape = Shape::Redact { quads, overlay: self.overlay_text(), look: self.look };
         let mut style = Style::default_for(&shape);
         style.fill = self.fill;
         Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: String::new(), author: author.to_string() })
@@ -275,10 +297,45 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) ->
         ui.label("");
         ui.checkbox(&mut d.use_overlay, tl!("Use overlay text"));
         ui.end_row();
-        let l = ui.label(tl!("Custom text:"));
-        ui.add_enabled(d.use_overlay, egui::TextEdit::singleline(&mut d.overlay).desired_width(220.0)).labelled_by(l.id);
-        ui.end_row();
         let on = d.use_overlay;
+        let l = ui.add_enabled(on, egui::RadioButton::new(!d.use_code, tl!("Custom text:")));
+        if l.clicked() {
+            d.use_code = false;
+        }
+        ui.add_enabled(on && !d.use_code, egui::TextEdit::singleline(&mut d.overlay).desired_width(220.0)).labelled_by(l.id);
+        ui.end_row();
+        if ui.add_enabled(on, egui::RadioButton::new(d.use_code, tl!("Redaction code:"))).clicked() {
+            d.use_code = true;
+        }
+        let codes_on = on && d.use_code;
+        ui.add_enabled_ui(codes_on, |ui| {
+            egui::ComboBox::from_id_salt("redaction-code-set").selected_text(d.code_set.name).show_ui(ui, |ui| {
+                for set in REDACTION_CODE_SETS {
+                    if ui.selectable_label(d.code_set == set, set.name).clicked() && d.code_set != set {
+                        d.code_set = set;
+                        d.codes.clear();
+                    }
+                }
+            });
+        });
+        ui.end_row();
+        for row in d.code_set.codes.chunks(4) {
+            ui.label("");
+            ui.add_enabled_ui(codes_on, |ui| {
+                ui.horizontal(|ui| {
+                    for &code in row {
+                        let mut picked = d.codes.contains(&code);
+                        if ui.add_sized([62.0, 18.0], egui::Checkbox::new(&mut picked, code)).changed() {
+                            d.codes.retain(|c| *c != code);
+                            if picked {
+                                d.codes.push(code);
+                            }
+                        }
+                    }
+                });
+            });
+            ui.end_row();
+        }
         let look = &mut d.look;
         ui.label(tl!("Font:"));
         ui.add_enabled_ui(on, |ui| {

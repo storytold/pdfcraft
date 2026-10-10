@@ -747,6 +747,7 @@
 	Redacted area fill colour:	遮蔽內容區域填充顏色：
 	Use overlay text	使用覆蓋文字
 	Custom text:	自定義文字：
+	Redaction code:	遮蔽代碼：
 	Font:	字型：
 	Font size:	字號：
 	Auto-size text to fit redaction region	自動調整文字大小以適應遮蔽內容區域
@@ -1024,19 +1025,19 @@
 	Attachments	附件
 	Signatures	簽章
 	Accessibility Checker	無障礙偵測工具
-	Zoom out (⌘−)	縮小（⌘−）
-	Zoom in (⌘+)	放大（⌘+）
-	Rotate view clockwise (⇧⌘+)	順時針旋轉檢視（⇧⌘+）
+	Zoom out ({key})	縮小（{key}）
+	Zoom in ({key})	放大（{key}）
+	Rotate view clockwise ({key})	順時針旋轉檢視（{key}）
 	Toggle fit page / fit width	切換符合頁面／符合寬度
 	Next page	下一頁
 	Previous page	上一頁
 	Current page — type a page number or label (such as iv) and press Enter	目前頁面：輸入頁碼或頁面標籤（例如 iv），再按 Enter
-	Open a PDF (⌘O)	開啟 PDF（⌘O）
+	Open a PDF ({key})	開啟 PDF（{key}）
 	Dark gray theme	深灰色主題
 	Light theme	淺色主題
-	Print (⌘P)	列印（⌘P）
+	Print ({key})	列印（{key}）
 	Save (M4)	儲存（M4）
-	Document properties (⌘D)	文件內容（⌘D）
+	Document properties ({key})	文件內容（{key}）
 	Action Wizard…	動作精靈…
 	Add Bates numbering…	新增 Bates 編號…
 	Add a button	新增按鈕
@@ -1166,7 +1167,7 @@
 	Expand all bookmarks	展開所有書籤
 	Expand top-level bookmarks	展開頂層書籤
 	Collapse all bookmarks	摺疊所有書籤
-	New bookmark (⌘B)	新建書籤 (⌘B)
+	New bookmark ({key})	新建書籤 ({key})
 	This document has no bookmarks.	本文件沒有書籤。
 	This document has no layers.	本文件沒有圖層。
 	This document has no attachments.	本文件沒有附件。
@@ -1181,8 +1182,8 @@
 	No matches	無匹配
 	Searching… {s}/{p}	正在搜尋… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
-	Previous (⇧⌘G)	上一個 (⇧⌘G)
-	Next (⌘G)	下一個 (⌘G)
+	Previous ({key})	上一個 ({key})
+	Next ({key})	下一個 ({key})
 	Find options	尋找選項
 	Whole words only	僅全字匹配
 	Case-sensitive	區分大小寫
@@ -1253,7 +1254,7 @@
 	Copy selected text	複製所選文字
 	Select a word	選取一個詞
 	Clear selection / close find	清除選取／關閉尋找
-	Zoom in / out (also pinch or ⌘-scroll)	放大／縮小（也可用雙指縮放或 ⌘ 加捲動）
+	Zoom in / out (also pinch or {key}-scroll)	放大／縮小（也可用雙指縮放或 {key} 加捲動）
 	Rotate view	旋轉檢視
 	First / last page	第一頁／最後一頁
 	Previous / next page	上一頁／下一頁

@@ -98,6 +98,26 @@ fn new_rename_reorder_indent_delete_and_undo() {
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// The side panel's width as egui keeps it from one frame to the next.
+fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_panel")).expect("the side panel is shown").size().x
+}
+
+#[test]
+fn the_panel_keeps_its_width_while_the_pointer_moves() {
+    // The search row was 2 px wider than the panel, and a resizable panel keeps the width its
+    // content used, so every repaint (any pointer move) widened it until it reached its maximum.
+    let mut h = harness();
+    add(&mut h, "Intro");
+    h.get_by_label("Search"); // the search row shows once there are bookmarks
+    let before = panel_width(&h);
+    for i in 0..30 {
+        h.hover_at(egui::pos2(300.0 + 10.0 * i as f32, 400.0));
+        h.run_steps(1);
+    }
+    assert_eq!(panel_width(&h), before, "the Bookmarks panel drifted wider");
+}
+
 #[test]
 fn escape_cancels_a_rename() {
     let mut h = harness();

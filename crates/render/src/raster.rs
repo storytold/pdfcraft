@@ -450,11 +450,21 @@ enum BusyStage {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Busy {
     request: RenderRequest,
     since: std::time::Instant,
     stage: BusyStage,
+    cancelled: Arc<AtomicBool>,
+    valid: Arc<AtomicBool>,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct BusyPublishGate {
+    request: RenderRequest,
+    entered: std::sync::mpsc::Sender<()>,
+    release: Arc<Mutex<Receiver<()>>>,
 }
 
 /// State shared by the pool and its workers.
@@ -488,11 +498,33 @@ struct Shared {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     render_started: std::sync::atomic::AtomicUsize,
     #[cfg(all(test, not(target_arch = "wasm32")))]
+    busy_publish_gate: Mutex<Option<BusyPublishGate>>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    parser_stage_entries: Mutex<Vec<RenderRequest>>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     shared_render_delay: Mutex<Option<std::time::Duration>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn same_request(a: RenderRequest, b: RenderRequest) -> bool {
+    a.page == b.page && a.kind == b.kind && a.tile == b.tile && a.scale.to_bits() == b.scale.to_bits() && a.tag == b.tag
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Shared {
+    fn cancel_in_flight(&self, obsolete: &[RenderRequest]) {
+        let busy = lock(&self.busy);
+        for busy in busy.iter().flatten() {
+            if obsolete.iter().copied().any(|request| same_request(request, busy.request)) {
+                busy.cancelled.store(true, Ordering::Release);
+                busy.valid.store(false, Ordering::Release);
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -704,13 +736,19 @@ impl RenderPool {
     }
 
     /// Replace desired work (most urgent first), retaining matching in-flight/completed jobs.
-    /// Obsolete results are released before they reach the caller. In-flight work is not killed.
+    /// Obsolete results are released before they reach the caller, and active obsolete renders
+    /// are asked to stop at their next cancellation point.
     ///
     /// The contract: a result is delivered only while its request is in the latest queue.
     /// A caller still waiting for a page (or text, or a thumbnail) must keep listing it in
     /// every call, or the finished result is dropped to save memory.
     pub fn set_queue(&self, requests: Vec<RenderRequest>) {
-        self.shared.queue.replace(requests);
+        #[cfg(not(target_arch = "wasm32"))]
+        let obsolete = self.shared.queue.replace(requests);
+        #[cfg(target_arch = "wasm32")]
+        let _ = self.shared.queue.replace(requests);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shared.cancel_in_flight(&obsolete);
         self.wake_workers();
     }
 
@@ -765,12 +803,14 @@ impl RenderPool {
                 // Lock order: `busy`, then `stop`.
                 let stop = lock(&self.shared.stop);
                 for (id, slot) in busy.iter_mut().enumerate() {
-                    if let Some(busy) = *slot
+                    if let Some(busy) = slot.clone()
                         && busy.stage != BusyStage::Parsing
                         && busy.since.elapsed() > self.stuck_after
                     {
                         *slot = None; // the worker sees this and exits when it returns
                         // Told to stop at its next operator; its replacement retries the page.
+                        busy.cancelled.store(true, Ordering::Release);
+                        busy.valid.store(false, Ordering::Release);
                         if let Some(s) = stop.get(id) {
                             s.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
@@ -820,13 +860,18 @@ impl RenderPool {
 
 impl Drop for RenderPool {
     fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        for busy in lock(&self.shared.busy).iter().flatten() {
+            busy.cancelled.store(true, Ordering::Release);
+            busy.valid.store(false, Ordering::Release);
+        }
         for s in lock(&self.shared.stop).iter() {
             s.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
 
-/// A worker's interpreter settings: the document's, stopping once `stop` is set.
+/// A worker's interpreter settings: the document's, stopping once the request is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
 fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
     InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
@@ -843,7 +888,6 @@ fn worker(
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let warnings = Arc::new(Mutex::new(Vec::new()));
-    let settings = warning_settings(&worker_settings(&config, &stop), warnings.clone());
     // A local cell keeps Pdf borrows used by RenderCache stable. Drop both on an
     // epoch change/panic before publishing an error or taking another request.
     loop {
@@ -863,6 +907,13 @@ fn worker(
                 if shared.queue.cancel_obsolete(req) {
                     continue;
                 }
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                if let Some(gate) = lock(&shared.busy_publish_gate).clone().filter(|gate| same_request(gate.request, req)) {
+                    let _ = gate.entered.send(());
+                    let _ = lock(&gate.release).recv();
+                }
+                let request_cancelled = Arc::new(AtomicBool::new(false));
+                let request_valid = Arc::new(AtomicBool::new(true));
                 if lock(&shared.stuck).contains(&req.into()) {
                     let error = format!("page {} was skipped earlier because rendering failed or took too long", req.page + 1);
                     let page = RenderedPage {
@@ -889,32 +940,76 @@ fn worker(
                     },
                 );
                 if let Some(slot) = lock(&shared.busy).get_mut(id) {
-                    *slot = Some(Busy { request: req, since: std::time::Instant::now(), stage });
+                    *slot = Some(Busy {
+                        request: req,
+                        since: std::time::Instant::now(),
+                        stage,
+                        cancelled: request_cancelled.clone(),
+                        valid: request_valid.clone(),
+                    });
                 }
-                let (pdf, cache, shared_generation) = parsed.get_or_init(|| {
-                    let load = || {
-                        #[cfg(test)]
-                        {
-                            shared.parses.fetch_add(1, Ordering::Relaxed);
-                            let delay = *lock(&shared.slow_parse);
-                            if let Some(delay) = delay {
-                                std::thread::sleep(delay);
+                if shared.queue.cancel_obsolete(req) {
+                    if lock(&shared.busy).get_mut(id).is_none_or(|slot| slot.take().is_none()) {
+                        return;
+                    }
+                    continue;
+                }
+                #[cfg(all(test, not(target_arch = "wasm32")))]
+                lock(&shared.parser_stage_entries).push(req);
+                // A request cancelled while it waited for the parser must not leave its abort
+                // behind as this worker's parse: every later request would then fail as unparsable.
+                let aborted = || request_cancelled.load(Ordering::Acquire) || stop.load(Ordering::Acquire);
+                if parsed.get().is_none() {
+                    let init = {
+                        let load = || {
+                            #[cfg(test)]
+                            {
+                                shared.parses.fetch_add(1, Ordering::Relaxed);
+                                let delay = *lock(&shared.slow_parse);
+                                if let Some(delay) = delay {
+                                    std::thread::sleep(delay);
+                                }
+                            }
+                            shared.stats.parser_builds.fetch_add(1, Ordering::Relaxed);
+                            parse(&bytes, config.password.as_deref())
+                        };
+                        match shared.parser.acquire(load, || {
+                            request_cancelled.load(Ordering::Acquire)
+                                || stop.load(Ordering::Acquire)
+                                || matches!(wake.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected))
+                        }) {
+                            Some(pdf) => {
+                                let shared_generation = pdf.is_some();
+                                (pdf, RenderCache::new(), shared_generation)
+                            }
+                            None => {
+                                let pdf = if !request_cancelled.load(Ordering::Acquire)
+                                    && !stop.load(Ordering::Acquire)
+                                    && set_busy_stage(&shared, id, BusyStage::Parsing)
+                                {
+                                    load().map(Arc::new)
+                                } else {
+                                    None
+                                };
+                                (pdf, RenderCache::new(), false)
                             }
                         }
-                        shared.stats.parser_builds.fetch_add(1, Ordering::Relaxed);
-                        parse(&bytes, config.password.as_deref())
                     };
-                    match shared.parser.acquire(load, || matches!(wake.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected))) {
-                        Some(pdf) => {
-                            let shared_generation = pdf.is_some();
-                            (pdf, RenderCache::new(), shared_generation)
+                    if aborted() {
+                        if lock(&shared.busy).get_mut(id).is_none_or(|slot| slot.take().is_none()) {
+                            return;
                         }
-                        None => {
-                            let pdf = if set_busy_stage(&shared, id, BusyStage::Parsing) { load().map(Arc::new) } else { None };
-                            (pdf, RenderCache::new(), false)
-                        }
+                        continue;
                     }
-                });
+                    let _ = parsed.set(init);
+                }
+                // Set just above when it was empty.
+                let Some((pdf, cache, shared_generation)) = parsed.get() else {
+                    if lock(&shared.busy).get_mut(id).is_none_or(|slot| slot.take().is_none()) {
+                        return;
+                    }
+                    continue;
+                };
                 // Acquisition may have waited or parsed privately after shared
                 // fallback. Retire before any render work if the watchdog gave
                 // this request to a replacement while initialization ran.
@@ -934,7 +1029,7 @@ fn worker(
                     }
                     break Some((
                         finish(req, start, Err(("the shared parser was retired".into(), false)), Vec::new()),
-                        Some(shared.parser.valid.clone()),
+                        vec![request_valid, shared.parser.valid.clone()],
                     ));
                 }
                 #[cfg(test)]
@@ -949,9 +1044,13 @@ fn worker(
                     if let Some((page, delay)) = slow
                         && page == req.page
                     {
-                        std::thread::sleep(delay);
+                        let deadline = std::time::Instant::now() + delay;
+                        while std::time::Instant::now() < deadline && !request_cancelled.load(Ordering::Acquire) {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
                     }
                 }
+                let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
                 lock(&warnings).clear();
                 let r = catch_unwind(AssertUnwindSafe(|| {
                     #[cfg(test)]
@@ -975,19 +1074,22 @@ fn worker(
                 if panicked {
                     shared.parser.abandon();
                     lock(&shared.stuck).insert(req.into());
-                    break Some((finish(req, start, r, request_warnings), None));
+                    break Some((finish(req, start, r, request_warnings), vec![request_valid]));
                 }
-                let valid = shared_generation.then(|| shared.parser.valid.clone());
+                let mut valid = vec![request_valid];
+                if *shared_generation {
+                    valid.push(shared.parser.valid.clone());
+                }
                 if *shared_generation && !shared.parser.valid.load(Ordering::Acquire) {
                     break Some((finish(req, start, r, request_warnings), valid));
                 }
-                if out.send_valid(finish(req, start, r, request_warnings), valid).is_err() {
+                if out.send_valid_with_tokens(finish(req, start, r, request_warnings), valid).is_err() {
                     return;
                 }
             }
         }; // drop the parser and its borrowing cache before delivering reset_result
         if let Some((page, valid)) = reset_result
-            && out.send_valid(page, valid).is_err()
+            && out.send_valid_with_tokens(page, valid).is_err()
         {
             return;
         }
@@ -1621,6 +1723,7 @@ mod tests {
         }
         // What the canvas sends next: the page it is still waiting for, then another one.
         pool.set_queue(vec![req(0), req(1)]);
+        assert!(lock(&pool.shared.busy).iter().flatten().any(|busy| { busy.request == req(0) && !busy.cancelled.load(Ordering::Acquire) }));
         let mut answers = Vec::new();
         let t = std::time::Instant::now();
         while answers.len() < 2 || lock(&pool.shared.busy).iter().any(Option::is_some) {
@@ -1637,6 +1740,96 @@ mod tests {
         // Page 2 went to the idle worker instead of waiting behind a second copy of page 1.
         assert_eq!(answers, vec![1, 0]);
         assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 2, "each page rendered once");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn replacing_an_in_flight_request_does_not_delay_the_replacement() {
+        use super::*;
+        use std::time::{Duration, Instant};
+
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        let a = RenderRequest { page: 0, scale: 0.5, tag: 101, ..Default::default() };
+        let b = RenderRequest { page: 1, scale: 0.5, tag: 102, ..Default::default() };
+        *lock(&pool.shared.slow_page) = Some((a.page, Duration::from_secs(10)));
+        pool.set_queue(vec![a]);
+
+        let started = Instant::now();
+        while pool.shared.render_started.load(Ordering::Relaxed) == 0 {
+            assert!(started.elapsed() < Duration::from_secs(2), "request A never started");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        let replaced = Instant::now();
+        pool.set_queue(vec![b]);
+        assert!(lock(&pool.shared.busy).iter().flatten().any(|busy| busy.cancelled.load(Ordering::Acquire)), "request A was not cancelled");
+        let page = receive_before_deadline(&pool);
+        assert_eq!(page.request, b);
+        assert!(page.error.is_none(), "replacement request failed: {:?}", page.error);
+        assert!(replaced.elapsed() < Duration::from_secs(3), "obsolete request A delayed B");
+
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while Instant::now() < deadline {
+            assert!(pool.try_recv().is_none(), "obsolete request produced a result");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A request cancelled while its worker waited for the shared parse must not leave that
+    /// worker unable to render: the abort is not a parse result.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_request_cancelled_while_waiting_for_the_parse_leaves_its_worker_usable() {
+        use super::*;
+        use std::time::{Duration, Instant};
+
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 2, RenderConfig::default());
+        *lock(&pool.shared.slow_parse) = Some(Duration::from_millis(500));
+        let a = RenderRequest { page: 0, scale: 0.5, tag: 301, ..Default::default() };
+        let c = RenderRequest { page: 1, scale: 0.5, tag: 302, ..Default::default() };
+        pool.set_queue(vec![a, c]);
+        let started = Instant::now();
+        while lock(&pool.shared.busy).iter().flatten().count() < 2 {
+            assert!(started.elapsed() < Duration::from_secs(2), "both requests never started");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        *lock(&pool.shared.slow_parse) = None;
+        for round in 0..4u64 {
+            let x = RenderRequest { page: 0, scale: 0.5, tag: 400 + 2 * round, ..Default::default() };
+            let y = RenderRequest { page: 1, scale: 0.5, tag: 401 + 2 * round, ..Default::default() };
+            pool.set_queue(vec![x, y]);
+            for _ in 0..2 {
+                let page = receive_before_deadline(&pool);
+                assert!(page.request == x || page.request == y, "round {round}: obsolete {:?}", page.request);
+                assert!(page.error.is_none(), "round {round}: {:?}", page.error);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn request_removed_before_busy_publication_skips_parser_acquisition() {
+        use std::{sync::mpsc, time::Duration};
+
+        let pool = RenderPool::new(Arc::new(ONE_PAGE_TWICE.to_vec()), 1, RenderConfig::default());
+        let a = RenderRequest { page: 0, scale: 0.5, tag: 201, ..Default::default() };
+        let b = RenderRequest { page: 1, scale: 0.5, tag: 202, ..Default::default() };
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *lock(&pool.shared.busy_publish_gate) = Some(BusyPublishGate { request: a, entered: entered_tx, release: Arc::new(Mutex::new(release_rx)) });
+
+        pool.set_queue(vec![a]);
+        entered_rx.recv_timeout(Duration::from_secs(2)).expect("request A passed its first obsolescence check");
+        assert!(!lock(&pool.shared.busy).iter().flatten().any(|busy| same_request(busy.request, a)));
+        pool.set_queue(vec![b]);
+        release_tx.send(()).unwrap();
+
+        let page = receive_before_deadline(&pool);
+        assert_eq!(page.request, b);
+        assert!(page.error.is_none(), "replacement request failed: {:?}", page.error);
+        assert_eq!(*lock(&pool.shared.parser_stage_entries), vec![b], "obsolete A must not enter parser acquisition");
+        assert_eq!(pool.shared.render_started.load(Ordering::Relaxed), 1, "only replacement B is rasterized");
+        assert!(pool.try_recv().is_none(), "obsolete request A did not publish a stale result");
     }
 
     #[test]
@@ -1952,6 +2145,82 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn shared_form_xobject_uses_each_pages_resource_context() {
+        let form = "/CS1 cs 0.5 0.5 0.5 sc 10 10 30 30 re f";
+        let page_content = "/F Do";
+        let pdf = format!(
+            "%PDF-1.7\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 /MediaBox [0 0 50 50] >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /Resources << /XObject << /F 4 0 R >> /ColorSpace << /CS1 /DeviceRGB >> >> /Contents 5 0 R >> endobj\n\
+             4 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length {} >> stream\n{form}\nendstream endobj\n\
+             5 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
+             6 0 obj << /Type /Page /Parent 2 0 R /Resources << /XObject << /F 4 0 R >> /ColorSpace << /CS1 [/CalRGB << /WhitePoint [0.9505 1 1.089] /Gamma [2 2 2] /Matrix [1 0 0 0 1 0 0 0 1] >>] >> >> /Contents 7 0 R >> endobj\n\
+             7 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            form.len(),
+            page_content.len(),
+            page_content.len()
+        )
+        .into_bytes();
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let first = renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        let second = renderer.render(RenderRequest { page: 1, scale: 1.0, ..Default::default() });
+        assert!(first.error.is_none() && second.error.is_none(), "{:?} / {:?}", first.error, second.error);
+
+        let pixel = |page: &RenderedPage| {
+            let offset = ((20 * page.width + 20) * 4) as usize;
+            [page.rgba[offset], page.rgba[offset + 1], page.rgba[offset + 2], page.rgba[offset + 3]]
+        };
+        let first_pixel = pixel(&first);
+        let second_pixel = pixel(&second);
+        assert_ne!(first_pixel, second_pixel, "the same Form XObject must resolve /CS1 in each page's resources");
+        assert_ne!(first_pixel, [255, 255, 255, 255]);
+        assert_ne!(second_pixel, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn shared_soft_mask_uses_each_inherited_resource_context() {
+        let page_body = "/A Do /B Do";
+        let form_a = "/GS gs 1 0 0 rg 0 0 40 40 re f";
+        let form_b = "/GS gs 0 0 1 rg 60 0 40 40 re f";
+        let mask_body = "/FILL Do";
+        let white = "1 g 0 0 100 100 re f";
+        let black = "0 g 0 0 100 100 re f";
+        let pdf = format!(
+            "%PDF-1.7\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /Resources << /XObject << /A 4 0 R /B 5 0 R >> >> /Contents 6 0 R >> endobj\n\
+             4 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /ExtGState << /GS 8 0 R >> /XObject << /FILL 9 0 R >> >> /Length {} >> stream\n{form_a}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /ExtGState << /GS 8 0 R >> /XObject << /FILL 10 0 R >> >> /Length {} >> stream\n{form_b}\nendstream endobj\n\
+             6 0 obj << /Length {} >> stream\n{page_body}\nendstream endobj\n\
+             8 0 obj << /Type /ExtGState /SMask 11 0 R >> endobj\n\
+             9 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >> stream\n{white}\nendstream endobj\n\
+             10 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >> stream\n{black}\nendstream endobj\n\
+             11 0 obj << /Type /Mask /S /Luminosity /G 12 0 R >> endobj\n\
+             12 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /CS /DeviceGray >> /Length {} >> stream\n{mask_body}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            form_a.len(),
+            form_b.len(),
+            page_body.len(),
+            white.len(),
+            black.len(),
+            mask_body.len()
+        )
+        .into_bytes();
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let pixel = |x: u32, y: u32| {
+            let offset = ((y * page.width + x) * 4) as usize;
+            [page.rgba[offset], page.rgba[offset + 1], page.rgba[offset + 2], page.rgba[offset + 3]]
+        };
+        assert_eq!(pixel(20, 80), [255, 0, 0, 255], "the white inherited mask makes form A visible");
+        assert_eq!(pixel(80, 80), [255, 255, 255, 255], "the black inherited mask must not reuse form A's cached pixels");
+    }
+
+    #[test]
     fn renders_a_blue_rectangle() {
         let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
         pool.set_queue(vec![RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 7 }]);
@@ -1967,6 +2236,45 @@ trailer << /Root 1 0 R >>
         let px = |x: u32, y: u32| &page.rgba[((y * page.width + x) * 4) as usize..][..4];
         assert_eq!(px(20, 30), &[0, 0, 255, 255]);
         assert_eq!(px(80, 5), &[255, 255, 255, 255]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn page_pixels_are_invariant_to_render_worker_count() {
+        let blue = "0 0 1 rg 10 10 30 20 re f";
+        let red = "1 0 0 rg 20 5 40 35 re f";
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 100 50] >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{blue}\nendstream endobj\n\
+             5 0 obj << /Type /Page /Parent 2 0 R /Contents 6 0 R >> endobj\n\
+             6 0 obj << /Length {} >> stream\n{red}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            blue.len(),
+            red.len()
+        )
+        .into_bytes();
+        let bytes = Arc::new(pdf);
+        let mut reference = PageRenderer::new(bytes.clone(), RenderConfig::default());
+        let expected: Vec<_> = (0..2).map(|page| reference.render(RenderRequest { page, scale: 1.0, ..Default::default() })).collect();
+        assert!(expected.iter().all(|page| page.error.is_none()));
+
+        for workers in [1, 2, 4] {
+            let pool = RenderPool::new(bytes.clone(), workers, RenderConfig::default());
+            pool.set_queue((0..2).map(|page| RenderRequest { page, scale: 1.0, ..Default::default() }).collect());
+            let mut actual = [receive_before_deadline(&pool), receive_before_deadline(&pool)];
+            actual.sort_by_key(|page| page.request.page);
+            for (page, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                assert!(actual.error.is_none(), "{workers} workers, page {page}: {:?}", actual.error);
+                assert_eq!(
+                    (actual.width, actual.height, &actual.rgba),
+                    (expected.width, expected.height, &expected.rgba),
+                    "{workers} workers, page {page}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2543,6 +2851,50 @@ trailer << /Root 1 0 R >>
         let red = render(pdf("1 0 0 rg 0 0 10 10 re f"));
         assert!(red.error.is_none(), "{:?}", red.error);
         assert_eq!(&red.rgba[((20 * 40 + 20) * 4)..][..4], &[255, 0, 0, 255], "a normal tiling pattern still paints");
+    }
+
+    #[test]
+    fn tiling_pattern_form_cycles_are_bounded_and_finite_nesting_paints() {
+        let cases = [
+            ("self-cycle", "/Pattern cs /P1 scn 0 0 10 10 re f 0 0 1 rg 0 0 10 10 re f"),
+            ("pattern-form-cycle", "/F Do 0 0 1 rg 0 0 10 10 re f"),
+            ("finite-nesting", "/Pattern cs /P2 scn 0 0 10 10 re f"),
+        ];
+        let pattern_b = "0 0 1 rg 0 0 10 10 re f";
+        let form = "/Pattern cs /P1 scn 0 0 10 10 re f";
+        let page_content = "/Pattern cs /P1 scn 0 0 40 40 re f 1 0 0 rg 32 32 8 8 re f";
+        for (case, pattern_a) in cases {
+            let pdf = format!(
+                "%PDF-1.7\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 40 40] >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R /P2 6 0 R >> /XObject << /F 7 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
+                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
+                 6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_b}\nendstream endobj\n\
+                 7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >> stream\n{form}\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+                page_content.len(),
+                pattern_a.len(),
+                pattern_b.len(),
+                form.len()
+            )
+            .into_bytes();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_else(|_| panic!("{case}: render did not finish"));
+            assert!(page.error.is_none(), "{case}: {:?}", page.error);
+            assert_eq!((page.width, page.height), (40, 40), "{case}");
+            let pixel = |x: u32, y: u32| {
+                let offset = ((y * page.width + x) * 4) as usize;
+                [page.rgba[offset], page.rgba[offset + 1], page.rgba[offset + 2], page.rgba[offset + 3]]
+            };
+            assert_eq!(pixel(1, 38), [0, 0, 255, 255], "{case}: nested pattern content paints");
+            assert_eq!(pixel(35, 4), [255, 0, 0, 255], "{case}: page content after the pattern still paints");
+        }
     }
 
     /// From `cargo xtask fuzz`: a Type 3 font without /Resources inherits the page's, where its
@@ -3188,6 +3540,46 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    #[test]
+    fn form_cycles_are_bounded_and_finite_nesting_paints() {
+        let cases = [
+            ("self-cycle", "/A Do 0 0 1 rg 0 0 8 8 re f", "0 0 1 rg 0 0 8 8 re f"),
+            ("two-form-cycle", "/B Do 0 0 1 rg 0 0 8 8 re f", "/A Do 0 0 1 rg 0 0 8 8 re f"),
+            ("finite-nesting", "/B Do", "0 0 1 rg 0 0 8 8 re f"),
+        ];
+        let page_content = "/A Do 1 0 0 rg 32 32 8 8 re f";
+        for (case, form_a, form_b) in cases {
+            let pdf = format!(
+                "%PDF-1.7\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 40 40] >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /A 5 0 R /B 6 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length {} >> stream\n{form_a}\nendstream endobj\n\
+                 6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length {} >> stream\n{form_b}\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF",
+                page_content.len(),
+                form_a.len(),
+                form_b.len()
+            )
+            .into_bytes();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+                let _ = tx.send(renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() }));
+            });
+            let page = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_else(|_| panic!("{case}: render did not finish"));
+            assert!(page.error.is_none(), "{case}: {:?}", page.error);
+            assert_eq!((page.width, page.height), (40, 40), "{case}");
+            let pixel = |x: u32, y: u32| {
+                let offset = ((y * page.width + x) * 4) as usize;
+                [page.rgba[offset], page.rgba[offset + 1], page.rgba[offset + 2], page.rgba[offset + 3]]
+            };
+            assert_eq!(pixel(3, 35), [0, 0, 255, 255], "{case}: nested form content paints");
+            assert_eq!(pixel(35, 4), [255, 0, 0, 255], "{case}: page content after the form still paints");
+        }
+    }
+
     /// Review of the decompression-bomb fix: one stream stopping at `MAX_DECODED_STREAM` isn't
     /// enough when streams add up. A page's `/Contents` array can name the same bomb many times,
     /// and a form that paints itself nests fifty deep, each level keeping its content while the
@@ -3641,6 +4033,76 @@ trailer << /Root 1 0 R >>
         assert!(px.rgba[((50 * px.width + 25) * 4) as usize] < 64, "the glyph is drawn");
     }
 
+    /// A page's `/UserUnit` (the size of its unit in points) scales the page and everything on
+    /// it, after the crop box and before `/Rotate`, as Acrobat shows such pages: with
+    /// `/UserUnit 2`, scale 1 renders pixel for pixel what scale 2 renders without it. As in
+    /// Acrobat, values below 1, values that aren't numbers and a value on a parent `/Pages`
+    /// node count as 1, and values over 75,000 count as 75,000.
+    #[test]
+    fn user_unit_scales_the_page_and_everything_on_it() {
+        let content = "1 0 0 rg 20 10 30 20 re f BT /F1 18 Tf 15 50 Td (Hg) Tj ET q 16 0 0 8 60 30 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /AHx ID 0000FFFF000000FF00FFFF00> EI Q";
+        let pdf = |page: &str, parent: &str| {
+            format!(
+                "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 {parent} >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 80] /CropBox [10 6 90 76] {page} /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+6 0 obj 2 endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            )
+            .into_bytes()
+        };
+        let render = |bytes: Vec<u8>, scale: f32| {
+            let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0 });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            p
+        };
+        let glyphs = |bytes: Vec<u8>| {
+            let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+            crate::text::extract_page(&parsed, 0, &InterpreterSettings::default()).expect("text").glyphs
+        };
+        let size = |bytes: Vec<u8>| {
+            let p = &crate::inspect(Arc::new(bytes), None).expect("opens").pages[0];
+            (p.width, p.height)
+        };
+        for rotate in [0, 90, 180, 270] {
+            let turned = format!("/Rotate {rotate}");
+            let (w, h) = if rotate % 180 == 0 { (80.0, 70.0) } else { (70.0, 80.0) };
+            let plain = render(pdf(&turned, ""), 2.0);
+            let one = render(pdf(&turned, ""), 1.0);
+            let plain_glyphs = glyphs(pdf(&turned, ""));
+            for unit in ["/UserUnit 2", "/UserUnit 6 0 R"] {
+                let page = format!("{turned} {unit}");
+                assert_eq!(size(pdf(&page, "")), (w * 2.0, h * 2.0), "{page}");
+                let doubled = render(pdf(&page, ""), 1.0);
+                assert_eq!((doubled.width, doubled.height), (plain.width, plain.height), "{page}");
+                assert!(doubled.rgba == plain.rgba, "{page}: the page renders as at twice the scale");
+                let doubled_glyphs = glyphs(pdf(&page, ""));
+                assert_eq!(doubled_glyphs.len(), plain_glyphs.len(), "{page}");
+                for (d, p) in doubled_glyphs.iter().zip(&plain_glyphs) {
+                    assert_eq!(d.rect, p.rect.map(|v| v * 2.0), "{page}: text layer");
+                }
+            }
+            for unit in ["/UserUnit 1", "/UserUnit 0", "/UserUnit -1", "/UserUnit 0.5", "/UserUnit /Two", "/UserUnit (2)"] {
+                let page = format!("{turned} {unit}");
+                assert_eq!(size(pdf(&page, "")), (w, h), "{page}");
+                assert!(render(pdf(&page, ""), 1.0).rgba == one.rgba, "{page} counts as 1");
+            }
+            assert_eq!(size(pdf(&turned, "/UserUnit 2")), (w, h), "not inherited from /Pages");
+            assert!(render(pdf(&turned, "/UserUnit 2"), 1.0).rgba == one.rgba, "not inherited from /Pages");
+            for unit in ["/UserUnit 75000", "/UserUnit 100000"] {
+                assert_eq!(size(pdf(&format!("{turned} {unit}"), "")), (w * 75_000.0, h * 75_000.0), "{unit}");
+            }
+        }
+    }
+
     #[test]
     fn tiles_match_full_render() {
         let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
@@ -3655,6 +4117,54 @@ trailer << /Root 1 0 R >>
                 assert_eq!(a, b, "pixel {x},{y}");
             }
         }
+    }
+
+    // A tile seam must not change the raster when large-page work is stitched back together.
+    #[test]
+    fn stitched_render_partitions_match_a_whole_render() {
+        let content =
+            "0 0 1 rg 0 0 200 200 re f\n1 0 0 RG 2 w 0 100 m 200 100 l S\nBT /F1 18 Tf 20 150 Td (tile text) Tj ET\nq 40 0 0 40 100 100 cm /Im Do Q";
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im 6 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n\
+             6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 25 >> stream\nFF000000FF00000000FFFFFFFF>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let request = RenderRequest { scale: 6.0, ..Default::default() };
+        let whole = renderer.render(request);
+        assert!(whole.error.is_none(), "{:?}", whole.error);
+        assert_eq!((whole.width, whole.height), (1200, 1200));
+
+        let mut assert_partition = |tile_width: u32, tile_height: u32| {
+            let mut stitched = vec![0; whole.rgba.len()];
+            for y in (0..whole.height).step_by(tile_height as usize) {
+                for x in (0..whole.width).step_by(tile_width as usize) {
+                    let tile = Tile { x, y, w: tile_width.min(whole.width - x), h: tile_height.min(whole.height - y) };
+                    let part = renderer.render(RenderRequest { tile: Some(tile), ..request });
+                    assert!(part.error.is_none(), "tile {tile:?}: {:?}", part.error);
+                    assert_eq!((part.width, part.height), (tile.w, tile.h));
+                    for row in 0..tile.h {
+                        let src = (row * tile.w * 4) as usize;
+                        let dst = ((y + row) * whole.width * 4 + x * 4) as usize;
+                        let len = (tile.w * 4) as usize;
+                        stitched[dst..dst + len].copy_from_slice(&part.rgba[src..src + len]);
+                    }
+                }
+            }
+            assert_eq!(stitched.as_slice(), whole.rgba.as_ref(), "partition {tile_width}×{tile_height}");
+        };
+
+        for bands in [2, 4, 8] {
+            assert_partition(whole.width, whole.height.div_ceil(bands));
+        }
+        assert_partition(1024, 1024);
+        assert_partition(127, 131);
     }
 
     /// hayro skips drawing a path that can't paint the canvas (vendored patch (9)), so a tile no
