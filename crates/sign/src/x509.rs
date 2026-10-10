@@ -170,6 +170,9 @@ const PROCESSED_EXTENSIONS: [&str; 11] = [
 const DOCUMENT_SIGNING_EKUS: [&str; 6] =
     ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.3", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"];
 
+/// id-kp-timeStamping (RFC 3161 §2.3).
+const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
 /// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
 /// extension that does not parse leaves its field at the default instead of failing the
 /// certificate (real-world issuers use encodings with edge cases, e.g. a single-URI CRL
@@ -232,9 +235,12 @@ impl Extensions {
             }
             // ExtendedKeyUsage: a SEQUENCE OF OID.
             "2.5.29.37" => {
-                if let Ok(eku) = Tlv::parse_all(value.value) {
-                    self.extended_key_usage = eku.children().ok().map(|c| c.into_iter().filter_map(|t| t.oid().ok()).collect::<Vec<_>>());
-                }
+                // Present means restricted, even when it doesn't parse: an unreadable one allows no
+                // purpose at all, never every purpose (as for keyUsage). An entry that isn't an OID
+                // grants nothing.
+                self.extended_key_usage = Some(Vec::new());
+                let Ok(eku) = Tlv::parse_all(value.value) else { return };
+                self.extended_key_usage = Some(eku.children().unwrap_or_default().into_iter().filter_map(|t| t.oid().ok()).collect());
             }
             // Authority Information Access: OCSP and CA-issuer locations.
             "1.3.6.1.5.5.7.1.1" => {
@@ -372,6 +378,13 @@ impl Certificate {
         }
     }
 
+    /// Whether the certificate is meant for signing time-stamp tokens. Unlike a signer, a
+    /// time-stamp authority has to say so: its extended key usage contains id-kp-timeStamping
+    /// (RFC 3161 §2.3), and "any purpose" is not enough.
+    pub fn may_timestamp(&self) -> bool {
+        self.extended_key_usage.as_ref().is_some_and(|purposes| purposes.iter().any(|p| p == EKU_TIME_STAMPING))
+    }
+
     /// Issued by itself (subject = issuer and its own key verifies it).
     pub fn is_self_signed(&self) -> bool {
         self.issuer.raw == self.subject.raw && self.signed_by(&self.public_key)
@@ -475,13 +488,17 @@ pub fn subject_of(raw: &[u8]) -> Option<Name> {
 /// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
 /// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
 /// too, so an ordinary end-entity certificate must never be accepted as an issuer.
-pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> Vec<&'a Certificate> {
+pub fn build_chain<'a>(leaf: &'a Certificate, pool: impl IntoIterator<Item = &'a Certificate> + Clone, at: Option<Time>) -> Vec<&'a Certificate> {
     build_chain_noted(leaf, pool, at).0
 }
 
 /// [`build_chain`], and why it stopped where it did if a certificate that matched the issuer by
 /// name and signature was refused.
-pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<String>) {
+pub fn build_chain_noted<'a>(
+    leaf: &'a Certificate,
+    pool: impl IntoIterator<Item = &'a Certificate> + Clone,
+    at: Option<Time>,
+) -> (Vec<&'a Certificate>, Option<String>) {
     let mut chain = vec![leaf];
     let mut refused = None;
     while chain.len() < 10 {
@@ -492,7 +509,7 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         // CA certificates between `last` and the leaf: what a candidate's pathLenConstraint limits.
         let below = chain.len() - 1;
         let mut found = None;
-        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+        for c in pool.clone().into_iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
             let why = if !c.may_issue() {
                 Some("is not a CA certificate that may issue certificates")
             } else if c.path_len.is_some_and(|n| below > n as usize) {

@@ -98,6 +98,24 @@ needs a prompt to open is listed and asks at signing (issue #179).
 - **Weak algorithms still validate, and say so.** SHA-1 and RIPEMD-160 signatures are common in
   documents signed years ago, so they validate (new signatures never use SHA-1), but the signature's
   details say that the algorithm is weak and shouldn't be relied on.
+- **Trust is the user's decision.** Only the user's own list (`TrustStore::certs`) is trusted by
+  default. Two sets are off until switched on and kept apart from it (`sign_trust`):
+  `builtin_roots`, the roots of commercial CAs embedded in the crate (`trust`, pinned one by one in
+  `data/builtin-roots.toml`; `cargo xtask trust-roots` rebuilds them and fails on any difference),
+  and trust lists loaded from a file at run time (`TrustStore::lists`; `cargo xtask trust-lists`
+  writes the EU Trusted Lists' qualified CAs to `dist/trust/`, fetched over HTTPS only; nothing of
+  the kind is embedded). The details name the set that vouched.
+- **A set vouches for what it is meant for.** The sets trust a CA for everything it issues, and most
+  of those CAs issue TLS certificates. The signer is held to the same rules whatever vouches for it
+  (its certificate must allow signing documents, above); a set also vouches only for a time-stamp
+  authority that says so (id-kp-timeStamping, RFC 3161 §2.3), while the user's own certificates are
+  never second-guessed. An extended key usage that can't be read restricts, never allows. Not
+  checked yet: name constraints, and unknown critical extensions and the extended key usage of the
+  CAs in the chain.
+- **Not Adobe's list.** Adobe's AATL is not used: Adobe-authored data outside the closed list in
+  AGENTS.md §1.1 needs the owner's explicit approval, and the EU Trusted Lists (and, planned, the
+  operating system's store) cover the same ground. A signer that chains only to an AATL root stays
+  "unknown" until the user trusts that root.
 - **Validation algorithms:** digests SHA-1, SHA-224/256/384/512, SHA-512/224, SHA-512/256,
   SHA3-224/256/384/512 and RIPEMD-160. RSA PKCS #1 v1.5 and RSASSA-PSS (the hash, MGF1 hash and
   salt length the signature declares), ECDSA on P-256, P-384, P-521, brainpoolP256r1, P384r1 and
