@@ -2167,3 +2167,15 @@ certificate	Subject	صاحب الشهادة
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
 	Margins	الهوامش
 	For page sizes and margins.	لأحجام الصفحات والهوامش.
+	Fill colour	لون التعبئة
+	No fill	بلا تعبئة
+	Fill colour: none	لون التعبئة: بلا
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	مسافة

@@ -191,6 +191,11 @@ impl CommentTool {
         self.draws() || self.clicks_points()
     }
 
+    /// Whether the fill-colour control applies: shapes with an interior (#686).
+    pub fn has_fill(self) -> bool {
+        matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud)
+    }
+
     /// A placeholder shape of this kind (for per-tool default styles).
     fn sample(self) -> Shape {
         match self {
@@ -284,6 +289,13 @@ impl CommentPrefs {
     pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+        }
+    }
+
+    /// The tool's fill (`None`: no fill). Only shapes with an interior keep one.
+    pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
         }
     }
 
@@ -1359,7 +1371,23 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     picked
 }
 
-/// The comment tools' extra quick-bar controls: pin, colour, opacity and thickness.
+/// "No fill" and the colour swatches; returns the choice clicked (`Some(None)`: no fill).
+pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb>> {
+    let mut picked = None;
+    ui.push_id("fill-picker", |ui| {
+        ui.vertical(|ui| {
+            if ui.selectable_label(current.is_none(), tl!("No fill")).clicked() {
+                picked = Some(None);
+            }
+            if let Some(c) = swatch_grid(ui, current) {
+                picked = Some(Some(c));
+            }
+        });
+    });
+    picked
+}
+
+/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) {
     let style = prefs.style(tool);
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
@@ -1375,6 +1403,16 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.close();
         }
     });
+    if tool.has_fill() {
+        let resp = fill_button(ui, style.fill);
+        egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+            ui.label(egui::RichText::new(tl!("Fill colour")).font(theme::semibold(12.0)));
+            if let Some(f) = fill_picker(ui, style.fill) {
+                prefs.set_fill(tool, f);
+                ui.close();
+            }
+        });
+    }
     let resp = icons::button(ui, "blend", 32.0, false, tl!("Opacity"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(180.0);
@@ -1395,6 +1433,32 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             }
         });
     }
+}
+
+/// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline
+/// for no fill.
+fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    let edge = Stroke::new(1.0, Color32::from_black_alpha(90));
+    match fill {
+        Some(c) => {
+            ui.painter().rect_filled(sq, 2.0, color32(c));
+        }
+        None => {
+            ui.painter().line_segment([sq.left_bottom(), sq.right_top()], Stroke::new(1.5, Color32::from_rgb(0xD3, 0x2F, 0x2F)));
+        }
+    }
+    ui.painter().rect_stroke(sq, 2.0, edge, egui::StrokeKind::Inside);
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.shrink(2.0), 6.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+    }
+    let label = match fill {
+        Some(_) => tl!("Fill colour"),
+        None => tl!("Fill colour: none"),
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.on_hover_text(label)
 }
 
 /// Status badge icon and label for a review state name.

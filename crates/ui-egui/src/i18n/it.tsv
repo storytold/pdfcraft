@@ -2154,3 +2154,15 @@ signature pad	Type	Digita
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, la dimensione massima a cui si possono disegnare)
 	Margins	Margini
 	For page sizes and margins.	Per formati pagina e margini.
+	Fill colour	Colore riempimento
+	No fill	Nessun riempimento
+	Fill colour: none	Colore riempimento: nessuno
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Maiusc
+key	Delete	Canc
+key	Esc	Esc
+key	Home	Home
+key	End	Fine
+key	Space	Spazio

@@ -2325,6 +2325,46 @@ fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     assert!(!d2.dirty);
 }
 
+/// A repeating table inside an area of a positioned page (as in real Designer forms): every
+/// row is laid out, the values Adobe wrote (under the area's parent: areas are
+/// not data scopes) are read, a FormCalc total over all rows computes, and what is filled here
+/// is written back where Adobe's viewers read it, with no element for the area.
+#[test]
+fn xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them() {
+    let data = "<form><page><table><row><reason>Regular</reason><days>4</days></row><row><reason/><days/></row><row><reason/><days/></row></table><carried>5</carried></page></form>";
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::leave_template(data)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("leave.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| {
+        s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no field {n}")).value.first().cloned().unwrap_or_default()
+    };
+    let names = |s: &Session| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    // Three rows (occur min="3"), not one.
+    assert_eq!(names(&s).iter().filter(|n| n.starts_with("reason")).count(), 3, "{:?}", names(&s));
+    // Adobe's data, bound past the area.
+    assert_eq!((value(&s, "reason"), value(&s, "days"), value(&s, "carried")), ("Regular".into(), "4".into(), "5".into()));
+    // The total walks rows 0 to 2: 5 + 30 - 4.
+    assert_eq!(value(&s, "rest"), "31", "{:?}", s.take_js_output(id));
+    // A second regular row recalculates it.
+    s.apply(id, Edit::SetFieldValue { name: "reason_2".into(), value: FieldValue::Text("Regular".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "days_2".into(), value: FieldValue::Text("2".into()) }).unwrap();
+    assert_eq!(value(&s, "rest"), "29", "{:?}", s.take_js_output(id));
+    assert!(s.take_js_output(id).errors.is_empty());
+    // Written where Adobe reads it: no element for the area, the rows under the table.
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let d = pdfcraft_xfa::data_of(&cos).unwrap();
+    let path = |som: &str| pdfcraft_xfa::som_to_path(som);
+    assert_eq!(d.count(&path("form[0].page[0]"), "box"), 0, "an element for the area was written");
+    assert_eq!(d.count(&path("form[0].page[0].table[0]"), "row"), 3);
+    assert_eq!(d.text_at(&path("form[0].page[0].table[0].row[1].days[0]")), Some("2"));
+    assert_eq!(d.text_at(&path("form[0].page[0].rest[0]")), Some("29"));
+    // Reopened, the values come back from that data.
+    let mut s2 = Session::new().with_clock(|| 1_700_000_000);
+    let id2 = s2.open("again.pdf", None, s.get(id).unwrap().bytes.clone(), None).expect("reopens");
+    let v2 = |n: &str| s2.get(id2).unwrap().form.iter().find(|f| f.name == n).unwrap().value.first().cloned().unwrap_or_default();
+    assert_eq!((v2("days_2"), v2("rest")), ("2".into(), "29".into()));
+}
+
 #[test]
 fn dynamic_xfa_forms_run_formcalc_scripts() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::formcalc_template()));
