@@ -95,6 +95,52 @@ fn the_field_tree_is_read_with_inheritance() {
     assert_eq!(field(&all, "address.city").quadding, 1);
 }
 
+/// Some writers leave every field out of `/Fields` and put the widgets only in the page
+/// annotations: the tree walk alone finds nothing, and Acrobat and the browsers fill them anyway.
+/// The pages' widgets are adopted as fields, after the listed tree fields.
+#[test]
+fn fields_listed_only_on_the_pages_are_adopted() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 10 0 R 11 0 R 13 0 R 14 0 R 15 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (listed) /V (keep) /Rect [50 700 250 720] /P 3 0 R >>".into(), // 5
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(), // 6
+        "null".into(),                                                              // 7
+        "null".into(),                                                              // 8
+        "null".into(),                                                              // 9
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (alpha) /V (one) /Rect [50 600 250 620] /P 3 0 R >>".into(), // 10
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (beta) /DA (/Helv 9 Tf 0 g) /Rect [50 560 250 580] /P 3 0 R >>".into(), // 11
+        "<< /FT /Tx /T (pair) /Kids [13 0 R 14 0 R] >>".into(),                     // 12 unlisted parent field
+        "<< /Type /Annot /Subtype /Widget /Parent 12 0 R /Rect [50 500 150 520] /P 3 0 R >>".into(), // 13 its widget
+        "<< /Type /Annot /Subtype /Widget /Parent 12 0 R /Rect [50 460 150 480] /P 3 0 R >>".into(), // 14 its other widget
+        "<< /Type /Annot /Subtype /Widget /Rect [400 700 415 715] /P 3 0 R >>".into(), // 15 no /FT, /T or /Parent: not a field
+    ];
+    let mut doc = document(&objs);
+    let all = fields(&doc);
+    let names: Vec<&str> = all.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["listed", "alpha", "beta", "pair"]);
+    assert_eq!(adopted_page_fields(&doc), 3);
+    let alpha = field(&all, "alpha");
+    assert_eq!((alpha.kind, alpha.value.as_slice(), alpha.widgets[0].page), (FieldKind::Text, &["one".to_string()][..], Some(0)));
+    assert_eq!(field(&all, "beta").da, "/Helv 9 Tf 0 g");
+    assert_eq!(field(&all, "pair").widgets.len(), 2, "one field carries both widgets");
+    // They are filled and keep the value across a save.
+    set_value(&mut doc, "beta", &FieldValue::Text("typed".into())).unwrap();
+    assert!(ap(&doc, &field(&fields(&doc), "beta").widgets[0]).contains("typed"));
+    let doc = reopen(&doc);
+    assert_eq!(field(&fields(&doc), "beta").value, ["typed"]);
+    // Without a /Fields list at all, everything on the pages is adopted.
+    let mut objs = objs;
+    objs[3] = "<< /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>".into();
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let names: Vec<&str> = all.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["listed", "alpha", "beta", "pair"]);
+    assert_eq!(adopted_page_fields(&doc), 4);
+}
+
 /// pdf-lib and other writers give radio groups and check boxes an `/Opt` array and name the on
 /// states by position (`/0`, `/1`): the export values select them, as in Acrobat.
 #[test]
