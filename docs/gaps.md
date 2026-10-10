@@ -1,12 +1,14 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first full gap list; replaces ROADMAP.md §Where we're lacking) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha blockers marked) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
 features. The numbers behind it are in [target-app-parity.md](target-app-parity.md); the per-feature
 detail is in `parity/acrobat-features.toml` (`cargo xtask parity --partial` lists what each partial
 feature lacks).
+
+**Alpha blockers** (the rows that fail the [alpha gate](roadmap.md#alpha-gate)) are marked **[alpha]**. Closing them moves PdfCraft from pre-alpha to alpha. 
 
 Hours are Opus 5.5 agent wall-clock hours. "Doc" names the parity document the gap belongs to.
 When a gap closes, delete its entry, note it in the [ROADMAP.md](../ROADMAP.md) progress log and
@@ -16,14 +18,14 @@ update the numbers.
 
 | # | Gap | Kind | Hours | Doc |
 |---|---|---|---|---|
-| 1 | Encrypted files we write don't open in Acrobat | file format | 8–15 | [file-format-parity.md](file-format-parity.md) |
+| 1 | **[alpha]** Encrypted files we write don't open in Acrobat | file format | 8–15 | [file-format-parity.md](file-format-parity.md) |
 | 2 | Rendering is borrowed and its fidelity unmeasured | feature, spec | 110–190 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 3 | Editing existing text is fragile on real files | feature | 100–180 | [target-app-parity.md](target-app-parity.md) |
 | 4 | No printing on Windows or the web | feature, platform | 15–30 | [hardware-parity.md](hardware-parity.md) |
 | 5 | Chinese UI shows missing-glyph boxes in releases | localization | 6–12 | [localization-parity.md](localization-parity.md) |
 | 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
 | 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
-| 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
+| 8 | **[alpha, part]** Office export weak, Office import absent | file format | 55–100 (alpha part: 30–55) | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
@@ -43,7 +45,7 @@ update the numbers.
 
 ## The gaps
 
-### 1. Encrypted files we write don't open in Acrobat
+### 1. [alpha] Encrypted files we write don't open in Acrobat
 
 - **Missing:** interoperable encryption output. A document protected with a password in PdfCraft
   opens in PdfCraft, SumatraPDF, PDF24 and LibreOffice, but Adobe Reader, Acrobat and PDF-XChange
@@ -52,7 +54,7 @@ update the numbers.
   second user). Our encryption tests round-trip through our own reader and `qpdf --check`, which
   is more lenient than Acrobat.
 - **Impact:** blocking. Passwords are the most common reason to touch security; a file a recipient
-  can't open is data loss in practice. This alone keeps the app at alpha.
+  can't open is data loss in practice. **Alpha blocker** (convert-and-share row of the gate).
 - **Fix:** find the divergence (likely `/Encrypt` dictionary or R6 `/Perms`/`/OE`/`/UE` details, or
   a string/stream encrypted that must not be), then add an interop suite that opens every kind of
   output we write in other readers (pdf.js, MuPDF and Poppler as oracle processes; Acrobat by hand
@@ -141,7 +143,7 @@ update the numbers.
 - **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
   [file-format-parity.md](file-format-parity.md).
 
-### 8. Office export weak, Office import absent
+### 8. [alpha, part] Office export weak, Office import absent
 
 - **Missing:** Word export that keeps layout; Excel and PowerPoint export; creating PDFs from Office,
   HTML, web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export.
@@ -149,6 +151,9 @@ update the numbers.
   (an invoice converted to Word loses its layout, gains table borders and duplicates pages);
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
+- **Alpha blocker, in part:** Create PDF from Office (LibreOffice sidecar, 10–20 h) and a Word
+  export that keeps layout (20–35 h) are on the alpha gate; Excel, PowerPoint, HTML and the rest
+  are beta work.
 - **Estimate:** 55–100 h. **Doc:** [file-format-parity.md](file-format-parity.md).
 
 ### 9. No Preflight; PDF/A partial; PDF/X and PDF/UA absent
@@ -294,4 +299,5 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |
 | 2026-10-10 | major | Created. Ranked 24 gaps from the 2026-10-10 re-measure, the open GitHub issues and the former ROADMAP.md §Where we're lacking and where we're going (renderer, hardening, fidelity, editing, Pro workflows, 1.0 polish), which this file replaces |

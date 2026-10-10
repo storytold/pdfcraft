@@ -1,6 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (milestone table moved here from ROADMAP.md, duplicates merged, remaining hours re-measured) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha gate added; stage pre-alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Forward-looking: the milestones, the current focus and what comes next. The parity numbers behind
 it are in [target-app-parity.md](target-app-parity.md), the ranked work list in [gaps.md](gaps.md),
@@ -10,11 +10,30 @@ live in `plan/execution-plan.md` (local-only, gitignored).
 Keep it current: update the milestone row and the [ROADMAP.md](../ROADMAP.md) progress log at the
 end of every session; re-estimate when a milestone lands.
 
+## Alpha gate
+
+The stage standard's gate: Acrobat Pro's everyday core workflows must each work end to end on the
+main platform (macOS), with the work saved and reopened. Any `no`, or a `partial` that blocks the
+workflow, keeps PdfCraft pre-alpha; those rows are the alpha checklist. Assessed 2026-10-10.
+
+| Core workflow | Works end to end? | Evidence | Hours to pass |
+|---|---|---|---|
+| View, search and print | yes | Render, find, select, panels, tiles; 500-page scrolling test; Print with CUPS on macOS and Linux (Windows printing missing, #756, a beta item). Rendering borrowed from `hayro` | 0 |
+| Organize, combine and split pages | yes | `organize.*` P0s shipped with tests; links, fields, layers and bookmarks carried over; open fixes #817, #821 are edge cases | 0 |
+| Comment and review | yes | Every markup type with appearances, replies, status, XFDF/FDF; comments saved in the PDF reopen in other readers. XFDF fidelity bugs #809, #819 | 0 |
+| Fill and sign forms | yes | All AcroForm field types, Acrobat's AF functions, Fill & Sign, PAdES signatures validated with `pdfsig`/OpenSSL | 0 |
+| Edit text and images | partial, not blocking | Editing a paragraph of Latin text works (embedded font reused, else Helvetica substituted, rewrapped); added text and images stay editable. Fails for CJK/RTL (#766), can't move several objects (#844); a beta item (gap 3) | 0 (beta: 100–180) |
+| Convert and share (Office ↔ PDF, password protection) | **partial, blocking** | Password-protected output rejected by Acrobat and Reader (#774); no Create PDF from Office or HTML; Word export loses layout (#773); no Excel/PowerPoint export | **40–70**: #774 fix and interop suite 8–15, Create PDF from Office (LibreOffice sidecar) 10–20, Word export that keeps layout 20–35 |
+
+**Result: pre-alpha**, one row short. Ready for real work (≈ 47%) already clears the alpha bar, so
+the gate row is the whole distance: **≈ 40–70 h**.
+
 ## Current focus
 
 In order. Each item names its entry in [gaps.md](gaps.md).
 
-1. **Encrypted output that Acrobat opens** (gap 1, #774). Blocking; small.
+1. **The alpha gate:** encrypted output that Acrobat opens (gap 1, #774), Create PDF from Office and a
+   Word export that keeps layout (gap 8, #773).
 2. **Fix the crash and wrong-result reports** filed against shipped features (gap 6), starting with
    the panic in #816.
 3. **Printing on Windows** (gap 4, #756) and **a Chinese UI face in releases** (gap 5, #826).
@@ -54,13 +73,14 @@ total matches the parity estimate.
 | M12 | Accessibility, compare, measure, search, XFA | 200–380 | 30% | 90–160 | Done: new `a11y` crate with the Accessibility Checker (all 32 rules, report, Fix/Skip/Explain, options dialog and results panel, agent tools).<br>Done since: 2D distance, perimeter and area measurements with persistent viewport calibration, snapping, live information and CSV export. Missing: autotag, Tags/Order/Content panels, Reading Order tool, alt-text workflow, compare, geospatial/3D measurement, search index, XFA |
 | M13 | Automation (MCP, Action Wizard, CLI) + AI providers | 60–120 | 45% | 25–45 | Done: MCP resources (document info, text, page images); headless tool table (123 tools incl. signing, optimizing, initial view, links, stamps, data exchange, comment review, forms authoring and scripts, redaction, sanitize, print, add content), opt-in MCP server over stdio, CLI `run`/`tools` (closed stdout pipes exit cleanly), UI control channel with drag. Missing: Action Wizard, AI providers |
 | M14 | 1.0 polish: performance, localization, installers | 120–250 | 15% | 80–150 | Done: PhotoCraft's translation system (`i18n/`: TSV catalogs, `tl!`, command-id and plural entries, system-language detection, strict catalog tests); every dialog, panel and notice goes through `tl!`. Catalogs of ≈ 2,000–2,140 entries for Japanese, Simplified and Traditional Chinese, Russian, Bulgarian, German, Spanish, French, Telugu, Hungarian, Ukrainian, Italian, Brazilian Portuguese and Arabic (logical-order catalog put into display order; layout not yet mirrored); Czech covers the menus. Signed and notarized macOS builds, signed Windows installers (x64, x86, ARM64), AppImage, deb, rpm, Flatpak and FreeBSD packages. #307 (bounded large-PDF memory): shared resource indexes and parser metadata, lazy inspection, bounded caches; a 9,156-page file inspects in ≈ 1.8 s at ≈ 500 MiB instead of exceeding 10 GiB. Missing: a right-to-left layout, a Chinese UI face in releases, Hindi/Indonesian/Korean/Vietnamese, file-backed input and global memory budgets, performance budgets, keyboard-only operation |
-| | **Total** | **2,085–3,840** | **≈ 40% ready** | **≈ 770–1,400** | Area view of the same work: [target-app-parity.md](target-app-parity.md#by-feature-area) |
+| | **Total** | **2,085–3,840** | **≈ 47% ready** | **≈ 770–1,400** | Area view of the same work: [target-app-parity.md](target-app-parity.md#by-feature-area) |
 
 ## Upcoming milestones, ranked
 
 | Rank | Next milestone | Closes | Estimate (h) |
 |---|---|---|---|
-| 1 | Interop and backlog: encrypted output opens in Acrobat, crash and wrong-result reports fixed, Windows printing, Chinese UI face | gaps 1, 4, 5, 6 | 75–135 |
+| 0 | **Alpha gate**: encrypted output opens in Acrobat, Create PDF from Office, Word export keeps layout | gap 1, part of gap 8 | 40–70 |
+| 1 | Backlog and platform: crash and wrong-result reports fixed, Windows printing, Chinese UI face | gaps 4, 5, 6 | 65–120 |
 | 2 | Fidelity harness and renderer decision (M2) | gaps 2, 12 | 110–190 |
 | 3 | Editing existing content (M7) | gap 3 | 100–180 |
 | 4 | Pro conversion: OCR languages and clean-up, Office export/import (M10) | gaps 7, 8 | 95–175 |
@@ -95,4 +115,5 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Added the alpha gate (six core workflows; convert and share fails → pre-alpha, 40–70 h to alpha) and rank 0 in the upcoming milestones |
 | 2026-10-10 | major | Created from ROADMAP.md §Milestones, §Critical path, §Risks and §Where we're lacking. Merged the duplicated M1, M2, M3 and M14 rows, re-measured Done and Remaining, added Current focus and the ranked upcoming milestones |

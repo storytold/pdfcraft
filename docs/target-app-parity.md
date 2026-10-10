@@ -1,6 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (full re-measure against Acrobat Pro 26.002.21931; replaces ROADMAP.md §Honest assessment) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: cross-cutting double count removed, mainstream-practitioner number added, core-workflow gate applied → pre-alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 The authoritative assessment of how close PdfCraft is to Acrobat Pro. [ROADMAP.md](../ROADMAP.md)
 summarizes it; [gaps.md](gaps.md) lists every shortfall one by one; the deep-dive checklists are
@@ -20,8 +20,10 @@ Approved Trust List) are out of scope: 23 such features are tracked as `na` in
 | **Feature breadth**, tier-weighted | **≈ 67%** | measured (checklist; weights below) |
 | Feature breadth, unweighted | 56.9% (423 shipped + 74 partial of 808) | measured (`cargo xtask parity` arithmetic) |
 | Must-have (P0) features | 94.2% (226 + 23 partial of 252) | measured |
-| **Ready for real work** | **≈ 40%** (range 35–45%) | estimated (area table below) |
-| **Stage** | **alpha** | see [Stage](#stage) |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted: 292 + 44 partial of 497; P0 95.3%) | measured ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Ready for real work**, full Acrobat Pro | **≈ 47%** (range 44–50%) | estimated (area table below) |
+| **Ready for real work**, mainstream practitioner | **≈ 55%** (range 50–60%) | estimated ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Stage** | **pre-alpha** (one core workflow fails the alpha gate; ≈ 40–70 h from alpha) | see [Stage](#stage) |
 | Remaining to beta | ≈ 400–700 Opus 5.5 agent-hours | estimated |
 | Remaining to full parity | ≈ 780–1,400 Opus 5.5 agent-hours | estimated |
 
@@ -67,9 +69,58 @@ P1 30%, P2 15%, P3 5%** → 0.50 × 94.2 + 0.30 × 61.0 + 0.15 × 12.0 + 0.05 ×
 Ready for real work weights the areas by how often an Acrobat Pro user reaches for them (judgement:
 Adobe publishes no usage data): view 16%, comment 12%, edit 12%, organize 10%, forms 10%,
 create/export 9%, sign 7%, protect 5%, print 5%, OCR 4%, core 3%, optimize/standards 3%,
-accessibility 2%, automation/preferences 2%. The weighted area figure is ≈ 49%; cross-cutting
-shortfalls that no area owns (fidelity never measured against Acrobat, the open-issue backlog,
-missing Windows printing, Chinese UI glyphs) take it to **≈ 40%**.
+accessibility 2%, automation/preferences 2%. The weighted area figure is ≈ 49%. A small deduction
+for what no area owns (fidelity never measured against Acrobat, the open-issue backlog) gives
+**≈ 47%**. The first version of this file deducted 9 points here, for the backlog, unmeasured
+fidelity, Windows printing and Chinese UI glyphs; but Windows printing is already scored in the
+Print area, encrypted-output interop in Core/Protect, and Chinese glyphs in localization, so that
+deduction counted them twice (second look, below). AI and ecosystem carry no weight in this number;
+they appear only as hours.
+
+## Mainstream practitioner vs full Acrobat Pro
+
+The checklist covers all of Acrobat Pro, including surfaces a typical practitioner rarely opens.
+Splitting it (measured from `parity/acrobat-features.toml`):
+
+| Slice | Features | Shipped | Partial | Unweighted | Tier-weighted | P0 |
+|---|---|---|---|---|---|---|
+| Mainstream: view, comment (without measuring), edit, organize, forms (without XFA and JavaScript tooling), protect and redact, OCR, create and export, compress (Reduce File Size, Optimizer), print (without print production) | 497 | 292 | 44 | 63.2% | ≈ 70% | 95.3% (193) |
+| Specialist: core internals, digital-signature PKI, accessibility remediation, automation and preferences, Preflight and PDF/A/X/UA, print production, measuring, XFA and JavaScript tooling | 311 | 131 | 30 | 46.9% | ≈ 63% | 90.7% (59) |
+| All | 808 | 423 | 74 | 56.9% | ≈ 67% | 94.2% (252) |
+
+So the checklist is **not** dominated by niche surface (38% of rows), and the P0 tier, which is
+mostly mainstream, is at 94–95% in both slices. What holds the mainstream number down is P1 depth
+(69%) and the P2 long tail (13%: rulers, loupe, portfolios, spell check, Bates across files).
+
+**Ready for real work, mainstream practitioner ≈ 55%**, weighting the mainstream areas by use and
+scoring only their mainstream features: view 20% × 60, comment 15% × 70, edit 15% × 35,
+organize 12% × 75, fill and sign 12% × 70, convert 10% × 30, protect and redact 6% × 55,
+OCR 4% × 20, compress 3% × 60, print 3% × 50 = 55.6%. Read-only, review, form-filling and page
+workflows are close to Acrobat; editing existing content, conversion and OCR are not.
+
+### User sentiment (second look, 2026-10-10)
+
+Practitioners' praise is real and consistent with these numbers:
+
+- **Adoption:** 7,595 GitHub stars, 2,661 forks; release downloads 177,301 (v0.4.0) and 39,447
+  (v0.5.0, its first day).
+- **Praise:** 23 of 359 issues written by users carry explicit praise ("amazing bit of software"
+  #693, "ridiculously fast and awesome PDF editor" #320, "brilliant" #542, "fantastic and very useful"
+  #369, "Gigantic stuff… I love it" #449). Switching reports: #179 switched from Adobe Reader on
+  Windows ("covers nearly everything I used Reader for"); #232 replacing macOS Preview; #273
+  "open source alternative to Acrobat"; #195 would "replace Acrobat completely" once hardware-token
+  signing exists.
+- **What users hit** (issue titles, excluding 35 agent-filed `fix(...)` reports): installation,
+  launch and GPU/window problems 54, rendering and display 46, editing text and images 41, CJK and
+  other fonts and glyphs 41, signing and certificates 35, printing 23, forms 18, conversion and
+  export 16, OCR 5. Roughly two thirds are bugs (≈ 213 vs ≈ 111 feature requests), concentrated in
+  core paths rather than niche features.
+
+The praise comes overwhelmingly from Reader-class work (view, annotate, fill, sign, organize), where
+the mainstream number is highest; the requests and bugs cluster on editing, CJK, printing,
+conversion and signing tokens, which is where the gaps are. That supports raising the full number
+from 40% to 47% (the double count) and reporting the mainstream 55% beside it; it does not support
+calling PdfCraft a replacement for Acrobat Pro yet.
 
 ## By dimension
 
@@ -78,7 +129,7 @@ features total and are shown for orientation; the others add to it.
 
 | Dimension | Ready | Remaining (h) | Counted | Evidence | Doc |
 |---|---|---|---|---|---|
-| Features (14 areas) | ≈ 45% depth; 67% breadth | 610–1,100 | base | Area table below | this file |
+| Features (14 areas) | ≈ 49% depth; 67% breadth | 610–1,100 | base | Area table below | this file |
 | UI/UX fidelity | ≈ 55% | 30–60 | additional | Acrobat-style shell, All tools, Home, command palette; missing single-key accelerators, rulers/guides, multiple windows, popups; user reports #739, #744, #746, #759, #789, #844 | [ui-parity.md](ui-parity.md) |
 | File formats and conversion | ≈ 40% | 120–220 | within features | PDF read/write strong but encrypted output fails in Acrobat (#774); export Word is layout-poor (#773); no Excel/PowerPoint export, no Office/HTML/PostScript import | [file-format-parity.md](file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 150–260 | within features | ISO 32000 syntax, encryption, annotations and AcroForm strong; rendering and fonts borrowed from `hayro`; PDF 2.0 extras, linearization, public-key security absent; PDF/A partial, PDF/X/UA none | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -89,7 +140,7 @@ features total and are shown for orientation; the others add to it.
 | Platforms | ≈ 70% | 15–30 | additional | macOS (signed, notarized), Windows x64/x86/ARM64 (signed), Linux (AppImage, deb, rpm, Flatpak), FreeBSD, web (WASM). Acrobat has no Linux, FreeBSD or full web editor; we lack Windows and web printing, web OCR and web recovery | [hardware-parity.md](hardware-parity.md) |
 | Ecosystem and plug-ins | ≈ 30% | 10–20 | within features | No plug-in SDK or folder-level JavaScript; Action Wizard partial. Agent automation (CLI, MCP, UI control channel) has no Acrobat equivalent | [gaps.md](gaps.md) |
 | AI features | ≈ 0% (in scope) | 20–40 | within features | Acrobat's AI Assistant is cloud-only (out of scope). Local, opt-in provider interface (`misc.ai-provider`) not started | [gaps.md](gaps.md) |
-| **Total** | **≈ 40%** | **≈ 780–1,400** | | | |
+| **Total** | **≈ 47%** | **≈ 780–1,400** | | | |
 
 ## By feature area
 
@@ -112,7 +163,7 @@ full parity in that area.
 | L Print | 39 | 15 | 1 | 39.7% | 35% | 30–55 | Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, print-ready PDF, CUPS on macOS/Linux. Missing: **printing on Windows (#756) and the web**, print as image, PostScript, all print-production tools (output preview, separations, ink manager, printer marks, colour conversion) |
 | M Accessibility | 61 | 38 | 1 | 63.1% | 30% | 40–70 | Accessibility Checker (all 32 rules, report, fixes), alternate text, title and language. Missing: autotag, Tags/Order/Content panels, Reading Order tool, artifact marking, table editor, Read Out Loud, full keyboard operation of the app, screen-reader audit |
 | N Automation, preferences, misc | 75 | 20 | 5 | 30.0% | 35% | 25–45 | CLI, MCP, UI control channel, 141 automation tools, Action Wizard (run, create), compare (text, visual, report). Missing: most Preferences pages, side-by-side compare, Action Wizard management, custom commands, AI providers, rich media/3D, hosted web app |
-| **All** | **808** | **423** | **74** | **56.9%** | **≈ 49% → 40%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
+| **All** | **808** | **423** | **74** | **56.9%** | **≈ 49% → 47%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
 
 Shipped features rest on thin evidence: 141 of 423 cite exactly one test, and only a handful cite
 an external oracle (`pdftotext`, `pdfsig`, OpenSSL, `qpdf --check`, a corpus).
@@ -124,12 +175,26 @@ with evidence when next touched.
 
 ## Stage
 
-**alpha.** Core workflows exist end to end (view, organize, comment, fill and author forms, redact,
-sign, print on macOS/Linux) but ready-for-real-work is ≈ 40%, well inside the 35–75% band, and
-there are blocking gaps in the main file format: password-protected files PdfCraft writes are
-rejected by Acrobat and Reader (#774), and nothing yet measures rendering fidelity against Acrobat.
+**pre-alpha** (was alpha in the first version of this file the same day). Ready for real work,
+≈ 47%, is above the ~40% bar, but the stage standard's core-workflow gate fails: of Acrobat Pro's
+six everyday workflows, five work end to end on macOS, and **converting and sharing** does not
+(password-protected output is rejected by Acrobat and Reader, #774; Office files can't be made into
+PDFs; Word export loses layout, #773). The gate table, with evidence and hours, is in
+[roadmap.md](roadmap.md#alpha-gate).
 
-**To reach beta** (≈ 75% ready, no blocking gap in PDF interchange), ≈ 35 points and
+| Core workflow | Works end to end? |
+|---|---|
+| View, search and print | yes |
+| Organize, combine and split pages | yes |
+| Comment and review | yes |
+| Fill and sign forms | yes |
+| Edit text and images | partial, not blocking (Latin text with embedded or standard fonts) |
+| Convert and share (Office ↔ PDF, password protection) | **partial, blocking** |
+
+**To reach alpha:** close the convert-and-share row, ≈ **40–70 agent-hours** (gaps 1 and 8). No
+percentage needs to move: ready for real work is already past the alpha bar.
+
+**To reach beta** (≈ 75% ready, no blocking gap in PDF interchange), ≈ 28 points and
 **≈ 400–700 agent-hours**:
 
 | Beta requirement | Hours |
@@ -180,6 +245,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Second look requested by the owner after practitioners praised PdfCraft: user sentiment gathered (stars, downloads, 23 praising issues, switching reports, issue themes); checklist split into mainstream (497) and specialist (311) features; the 9-point cross-cutting deduction removed as a double count (Windows printing, interop and glyphs were already scored in their areas). Ready for real work 40% → 47%; mainstream practitioner ≈ 55% added. Core-workflow alpha gate applied: convert and share fails → stage alpha → **pre-alpha**, ≈ 40–70 h from alpha |
 | 2026-10-10 | major | Created from ROADMAP.md §Estimate summary and §Honest assessment (2026-10-05/07). Full re-measure against Acrobat Pro 26.002.21931: checklist recomputed (56.9% unweighted, ≈ 67% tier-weighted), ready for real work ≈ 40%, stage alpha, hours re-calibrated (780–1,400 h to parity, 400–700 h to beta), dimension and area tables |
 | 2026-10-07 | minor | (in ROADMAP.md) 806 tracked features, 51.0% shipped, effort-weighted ≈ 30–35%, 600–1,100 h |
 | 2026-10-05 | major | (in ROADMAP.md) First honest assessment by dimension and area |

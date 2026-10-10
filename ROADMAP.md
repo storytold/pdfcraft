@@ -1,8 +1,8 @@
 # PdfCraft roadmap
 
-**Stage: alpha** · next: beta, ~35% (ready for real work 40% → 75%) and ~400–700 h away
+**Stage: pre-alpha** · next: alpha, ~0% (ready for real work, 47%, already past the bar; one core workflow fails the gate) and ~40–70 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (full re-measure against Acrobat Pro 26.002.21931; restructured to the progress-docs standard) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (second look: ready 40% → 47%, mainstream 55% added; core-workflow gate applied → pre-alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -30,20 +30,27 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 | | Value | Kind |
 |---|---|---|
 | **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
-| **Ready for real work** | **≈ 40%** (35–45%) | estimated ([method](docs/target-app-parity.md#how-this-was-measured)) |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Ready for real work**, full Acrobat Pro | **≈ 47%** (44–50%) | estimated ([method](docs/target-app-parity.md#how-this-was-measured)) |
+| **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| Remaining to **alpha** | ≈ 40–70 Opus 5.5 agent-hours (the [alpha gate](docs/roadmap.md#alpha-gate)) | estimated |
 | Remaining to **beta** | ≈ 400–700 Opus 5.5 agent-hours | estimated |
 | Remaining to **full parity** | ≈ 780–1,400 Opus 5.5 agent-hours (≈ 300–550 h wall clock with 3–5 agents) | estimated, calibrated on this repo's history |
 
-**Why alpha:** core workflows run end to end (view, organize, comment, fill and author forms,
-redact, sign, print on macOS and Linux), but quality has never been measured against Acrobat,
-rendering is still the borrowed `hayro`, password-protected files we write don't open in Acrobat
-(#774), Windows can't print (#756), and the first public releases drew 245 open issues.
+**Why pre-alpha:** five of Acrobat Pro's six everyday workflows work end to end on macOS (view,
+search and print; organize; comment; fill and sign; editing Latin text and images), and users
+praise them (7.6k stars, ≈ 217k downloads of 0.4–0.5, switching reports such as #179). The sixth,
+**convert and share**, fails the [alpha gate](docs/roadmap.md#alpha-gate): password-protected files
+we write don't open in Acrobat or Reader (#774), Office files can't be turned into PDFs, and Word
+export loses layout (#773). Closing that row (≈ 40–70 h) makes PdfCraft alpha. Beyond it: quality
+is unmeasured against Acrobat, rendering is still the borrowed `hayro`, Windows can't print (#756),
+and 245 issues are open.
 
 ## By dimension
 
 | Dimension | Ready | Remaining (h) | Doc |
 |---|---|---|---|
-| Features (14 areas) | ≈ 45% depth · 67% breadth | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth · 67% breadth | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
@@ -54,7 +61,7 @@ rendering is still the borrowed `hayro`, password-protected files we write don't
 | Platforms | ≈ 70% | 15–30 | [hardware-parity.md](docs/hardware-parity.md#platforms) |
 | Ecosystem and plug-ins | ≈ 30% | 10–20 (within features) | [gaps.md](docs/gaps.md) |
 | AI features | ≈ 0% (in scope: local providers) | 20–40 (within features) | [gaps.md](docs/gaps.md) gap 23 |
-| **Total** | **≈ 40%** | **≈ 780–1,400** | |
+| **Total** | **≈ 47%** | **≈ 780–1,400** | |
 
 ## Features
 
@@ -106,7 +113,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 | Rank | Milestone | Estimate (h) |
 |---|---|---|
-| 1 | Interop and backlog: encrypted output opens in Acrobat (#774), crash and wrong-result reports, Windows printing (#756), Chinese UI face (#826) | 75–135 |
+| 0 | **Alpha gate**: encrypted output opens in Acrobat (#774), Create PDF from Office, Word export that keeps layout (#773) | 40–70 |
+| 1 | Backlog and platform: crash and wrong-result reports, Windows printing (#756), Chinese UI face (#826) | 65–120 |
 | 2 | Fidelity harness against Acrobat and the renderer decision (M2; owner decision on #841) | 110–190 |
 | 3 | Editing existing content (M7) | 100–180 |
 | 4 | OCR languages and Office export/import (M10) | 95–175 |
@@ -119,6 +127,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-10-10 (progress docs, second look and alpha gate):** At the owner's request, after practitioners praised PdfCraft, re-examined the numbers. User sentiment: 7,595 stars, 177k + 39k downloads of 0.4.0/0.5.0, 23 user issues with explicit praise and switching reports (#179, #232, #273), issue themes concentrated in core paths (launch/GPU, rendering, editing, CJK, signing, printing). The checklist is not niche-dominated (497 mainstream vs 311 specialist rows; P0 95% / 91%). The first pass's 9-point cross-cutting deduction double-counted Windows printing, interop and glyphs: **ready for real work 40% → 47%**, and **≈ 55% for the mainstream practitioner** (new). The new core-workflow gate (craftrules progress-docs) fails on convert and share (#774, no Office import, #773): **stage alpha → pre-alpha**, ≈ 40–70 h from alpha; beta still ≈ 400–700 h.
 - **2026-10-10 (progress docs, full re-measure):** Re-measured against Acrobat Pro 26.002.21931 (installed bundle inspected: document types, localizations, plug-in and framework names). Checklist: 423 shipped + 74 partial of 808 (56.9%; P0 94.2%), ≈ 67% tier-weighted. Ready for real work ≈ 40%; stage **alpha**; ≈ 400–700 h to beta, ≈ 780–1,400 h to full parity (up from 600–1,100 h: the first public releases surfaced Acrobat interop of encrypted output, Windows printing, Chinese UI glyphs, Word-export layout and a 245-issue backlog). This file restructured to the craftrules progress-docs standard; the honest assessment moved to `docs/target-app-parity.md`, the gap list to `docs/gaps.md`, the milestones (duplicated rows merged) to `docs/roadmap.md`; new `docs/architecture.md`, `docs/localization-parity.md`, `docs/file-format-parity.md`, `docs/pdf-spec-parity.md`, `docs/ui-parity.md`, `docs/hardware-parity.md`.
 - **2026-10-10 (M8, redact word lists):** Find text and redact gains "Multiple words or phrases": a list with one word or phrase per line, typed or imported from a `.txt` file, whose every match is marked in one undo step. Lists are trimmed, deduplicated and bounded (1,000 entries of 256 characters, files up to 1 MB). `redact_mark` takes `words` and reports how many marks each made, so an agent sees which found nothing. Tests cover the list parsing, the tool end to end (mark, undo, apply, invalid lists) and the dialog with an imported list; the new labels are translated in all 13 UI catalogs. `protect.redact-word-lists` is shipped; whole-word and case-sensitive matching and exporting the list are still missing. Estimates unchanged (about 30–35%).
 - **2026-10-10 (M4, bookmarks from structure):** Bookmark options ▸ New bookmarks from structure (command `bookmark.from_structure`, tool `bookmark_from_structure`) turns a tagged document's headings into bookmarks: H1–H6 through the role map, a plain H by its section nesting, nested by level under a new first "Untitled" bookmark as in Acrobat, each linked to its structure element (/SE). Titles come from /ActualText, the marked text on the page (decoded through the font's ToUnicode or encoding), /Alt or /T. The walk is bounded (depth, visits, heading and title caps, cycle-safe), an untagged document gets a clear error, and the edit is one undo step. Tests cover role maps, nesting, ToUnicode text, a self-referencing heading, the tool, undo and the panel. Still missing: Acrobat's element-type choice and destinations at the heading's position. The M4 row no longer lists Replace pages as missing (it shipped earlier). Overall estimate unchanged (about 30–35%).
@@ -276,6 +285,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Second look: ready 40% → 47% (cross-cutting double count removed), mainstream-practitioner numbers and user sentiment added; core-workflow alpha gate applied, stage alpha → pre-alpha |
 | 2026-10-10 | major | Restructured to the progress-docs standard (stage, two numbers, dimensions, features, languages, upcoming, log); full re-measure; assessment, gaps and milestones moved to `docs/`; log sorted newest first and a stray merged entry dated |
 | 2026-10-07 | minor | 806 tracked features, 51.0% shipped, effort-weighted ≈ 30–35%, 600–1,100 h |
 | 2026-10-05 | major | Honest assessment and "Where we're lacking" added |
