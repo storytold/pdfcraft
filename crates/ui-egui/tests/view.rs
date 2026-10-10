@@ -679,10 +679,17 @@ fn required_radio_buttons_get_a_round_red_border() {
         let p = egui::pos2(r.min.x + r.width() * (x / 300.0), r.min.y + r.height() * (1.0 - y / 400.0));
         *img.get_pixel((p.x * ppp) as u32, (p.y * ppp) as u32)
     };
-    let red = |p: image::Rgba<u8>| p[0] > 180 && p[1] < 100 && p[2] < 100;
-    // Fit width puts about 4 px in a point: 0.2 to 0.3 pt from an edge is inside a 2 px border.
-    assert!(red(at(50.2, 320.0)), "the left of the circle is red: {:?}", at(50.2, 320.0));
-    assert!(!red(at(50.3, 339.7)), "the widget's corner, outside the circle, is not: {:?}", at(50.3, 339.7));
+    // Fit width is about 4 px in a point, and the stroke is 2 px. Chrome width can shift
+    // that stroke by a fraction of a pixel, so one sample may land on its antialiased edge
+    // (still red, mixed with the field tint) instead of the solid stroke.
+    let stroke = |p: image::Rgba<u8>| p[0] > 180 && p[2] < 140 && i16::from(p[0]) - i16::from(p[2]) > 80;
+    assert!(
+        [0.05_f32, 0.2].into_iter().any(|dx| stroke(at(50.0 + dx, 320.0))),
+        "the left of the circle is red: {:?} {:?}",
+        at(50.05, 320.0),
+        at(50.2, 320.0)
+    );
+    assert!(!stroke(at(50.3, 339.7)), "the widget's corner, outside the circle, is not: {:?}", at(50.3, 339.7));
 }
 
 /// Acrobat's Highlight existing fields is a preference, not a per-document choice: turned on

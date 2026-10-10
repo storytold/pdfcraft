@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
+use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, Response, Stroke, Vec2, Visuals};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ThemeKind {
@@ -125,6 +125,52 @@ impl Tokens {
     pub fn dark(&self) -> bool {
         self.kind == ThemeKind::Dark
     }
+}
+
+/// Hover and press amounts for chrome controls. The wash eases in; holding the pointer
+/// darkens it and drops the content one pixel, so a click reads as a key settling.
+#[derive(Clone, Copy, Debug)]
+pub struct Press {
+    pub hover: f32,
+    pub down: f32,
+}
+
+impl Press {
+    pub fn track(ui: &egui::Ui, resp: &Response) -> Self {
+        let hot = resp.hovered() || resp.is_pointer_button_down_on();
+        let ease = egui::emath::easing::quadratic_out;
+        Self {
+            hover: ui.ctx().animate_bool_with_time_and_easing(resp.id.with("chrome-hover"), hot, 0.12, ease),
+            down: ui.ctx().animate_bool_with_time_and_easing(resp.id.with("chrome-down"), resp.is_pointer_button_down_on(), 0.06, ease),
+        }
+    }
+
+    pub fn fill(self, rest: Color32, hover: Color32, pressed: Color32) -> Color32 {
+        rest.lerp_to_gamma(hover, self.hover).lerp_to_gamma(pressed, self.down)
+    }
+
+    /// One pixel down at a full press.
+    pub fn offset(self) -> Vec2 {
+        Vec2::new(0.0, self.down)
+    }
+
+    /// Soft wash behind a control. `selected` keeps the accent fill.
+    pub fn wash(self, ui: &egui::Ui, rect: Rect, radius: impl Into<CornerRadius>, selected: bool) {
+        let t = Tokens::get(ui.ctx());
+        let fill = if selected {
+            self.fill(t.accent_soft, t.accent_soft.lerp_to_gamma(t.accent, 0.16), t.selected)
+        } else {
+            self.fill(Color32::TRANSPARENT, t.hover, t.pressed)
+        };
+        if fill.a() > 0 {
+            ui.painter().rect_filled(rect, radius, fill);
+        }
+    }
+}
+
+/// Pointing hand, the cursor for a control that clicks.
+pub fn hand(resp: Response) -> Response {
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 pub fn install_fonts(ctx: &egui::Context) {
@@ -256,6 +302,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.widgets.hovered.bg_stroke = Stroke::NONE;
     v.widgets.active.weak_bg_fill = t.pressed;
     v.widgets.active.bg_fill = t.pressed;
+    // Stock buttons (menus, dialogs) use the same pointing hand as the custom chrome.
+    v.interact_cursor = Some(egui::CursorIcon::PointingHand);
     v.widgets.open.weak_bg_fill = t.hover;
     // Crisper text at 100–150 % scaling (#76): glyphs sit on whole pixels instead of being
     // rendered at quarter-pixel offsets, which egui notes blurs them. In the light theme, a mild
@@ -273,6 +321,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.menu_margin = egui::Margin::same(6);
         s.spacing.scroll.bar_width = 8.0;
         s.spacing.scroll.floating = true;
+        s.spacing.scroll.floating_width = 3.0;
+        s.spacing.scroll.foreground_color = true;
         s.text_styles.insert(egui::TextStyle::Body, regular(13.0));
         s.text_styles.insert(egui::TextStyle::Button, regular(13.0));
         s.text_styles.insert(egui::TextStyle::Small, regular(11.0));
@@ -296,6 +346,19 @@ mod tests {
         };
         let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
         x.max(y) / x.min(y)
+    }
+
+    #[test]
+    fn press_darkens_then_sinks() {
+        let rest = Color32::from_rgb(0xFF, 0xFF, 0xFF);
+        let hover = Color32::from_rgb(0xF0, 0xF0, 0xF3);
+        let pressed = Color32::from_rgb(0xE4, 0xE4, 0xE9);
+        let idle = Press { hover: 0.0, down: 0.0 };
+        assert_eq!(idle.fill(rest, hover, pressed), rest);
+        assert_eq!(idle.offset(), Vec2::ZERO);
+        let held = Press { hover: 1.0, down: 1.0 };
+        assert_eq!(held.fill(rest, hover, pressed), pressed);
+        assert_eq!(held.offset(), Vec2::new(0.0, 1.0));
     }
 
     #[test]

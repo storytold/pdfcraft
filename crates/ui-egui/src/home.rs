@@ -9,6 +9,15 @@ use crate::{LeftPanel, PdfCraftApp, icons, panels::human_size, widgets};
 
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
+/// A soft shadow that rises on hover and settles when the card is pressed.
+fn card_lift(ui: &egui::Ui, t: &Tokens, rect: Rect, press: theme::Press) {
+    let lift = press.hover * (1.0 - press.down);
+    if lift > 0.04 {
+        let shadow = egui::Shadow { offset: [0, 3], blur: (14.0 * lift) as u8, spread: 0, color: t.page_shadow.gamma_multiply(0.85 * lift) };
+        ui.painter().add(shadow.as_shape(rect, CornerRadius::same(10)));
+    }
+}
+
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -56,52 +65,58 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let Some(g) = catalog::group(id) else { continue };
                             let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 104.0), Sense::click());
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(g.label)));
-                            let fill = if resp.hovered() { t.hover } else { t.card };
+                            let press = theme::Press::track(ui, &resp);
+                            card_lift(ui, &t, rect, press);
+                            let fill = press.fill(t.card, t.hover, t.pressed);
                             ui.painter().rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+                            let body = rect.translate(press.offset());
                             let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
-                            icons::paint(ui, Rect::from_min_size(rect.min + vec2(14.0, 14.0), vec2(22.0, 22.0)), g.icon, 21.0, color);
+                            icons::paint(ui, Rect::from_min_size(body.min + vec2(14.0, 14.0), vec2(22.0, 22.0)), g.icon, 21.0, color);
                             let mut title_job = egui::text::LayoutJob::simple_singleline(tl!(g.label).to_owned(), theme::semibold(13.5), t.text);
                             title_job.wrap =
-                                egui::text::TextWrapping { max_width: rect.width() - 58.0, max_rows: 1, break_anywhere: true, ..Default::default() };
+                                egui::text::TextWrapping { max_width: body.width() - 58.0, max_rows: 1, break_anywhere: true, ..Default::default() };
                             let title = ui.fonts_mut(|f| f.layout_job(title_job));
                             let title_elided = title.elided;
-                            ui.painter().galley(rect.min + vec2(44.0, 25.0 - title.size().y * 0.5), title, t.text);
+                            ui.painter().galley(body.min + vec2(44.0, 25.0 - title.size().y * 0.5), title, t.text);
                             let blurb = g
                                 .sections
                                 .first()
                                 .map(|s| s.items.iter().take(3).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · "))
                                 .unwrap_or_default();
                             // Fixed-height cards must leave room for their action in every language.
-                            let mut job = egui::text::LayoutJob::simple(blurb.clone(), theme::regular(11.5), t.text_muted, rect.width() - 28.0);
+                            let mut job = egui::text::LayoutJob::simple(blurb.clone(), theme::regular(11.5), t.text_muted, body.width() - 28.0);
                             job.wrap.max_rows = 2;
                             let galley = ui.fonts_mut(|f| f.layout_job(job));
                             let blurb_elided = galley.elided;
-                            ui.painter().galley(rect.min + vec2(14.0, 46.0), galley, t.text_muted);
+                            ui.painter().galley(body.min + vec2(14.0, 46.0), galley, t.text_muted);
                             ui.painter().text(
-                                rect.left_bottom() + vec2(14.0, -14.0),
+                                body.left_bottom() + vec2(14.0, -14.0),
                                 Align2::LEFT_CENTER,
                                 tl!("Use now"),
                                 theme::medium(12.0),
                                 t.accent_text,
                             );
                             let resp = if title_elided || blurb_elided { resp.on_hover_text(format!("{}\n{blurb}", tl!(g.label))) } else { resp };
-                            if resp.clicked() {
+                            if theme::hand(resp).clicked() {
                                 app.left = LeftPanel::Tool(g.id);
                                 app.left_open = true;
                             }
                         }
                         let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Open file")));
+                        let press = theme::Press::track(ui, &resp);
+                        card_lift(ui, &t, rect, press);
                         ui.painter().rect(
                             rect,
                             CornerRadius::same(10),
-                            if resp.hovered() { t.hover } else { t.pasteboard },
+                            press.fill(t.pasteboard, t.hover, t.pressed),
                             Stroke::new(1.0, t.divider),
                             egui::StrokeKind::Inside,
                         );
-                        icons::paint(ui, Rect::from_center_size(rect.center() - vec2(0.0, 16.0), vec2(28.0, 28.0)), "folder-open", 26.0, t.icon);
-                        ui.painter().text(rect.center() + vec2(0.0, 22.0), Align2::CENTER_CENTER, tl!("Open file"), theme::semibold(13.0), t.text);
-                        if resp.clicked() {
+                        let body = rect.translate(press.offset());
+                        icons::paint(ui, Rect::from_center_size(body.center() - vec2(0.0, 16.0), vec2(28.0, 28.0)), "folder-open", 26.0, t.icon);
+                        ui.painter().text(body.center() + vec2(0.0, 22.0), Align2::CENTER_CENTER, tl!("Open file"), theme::semibold(13.0), t.text);
+                        if theme::hand(resp).clicked() {
                             app.open_dialog();
                         }
                     });
@@ -134,10 +149,16 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             for r in &app.recent {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &r.name));
+                let press = theme::Press::track(ui, &resp);
                 // The row, not its response: the pointer stays "in" the row over its remove button.
                 let hovered = ui.rect_contains_pointer(rect);
-                if hovered {
+                if hovered && press.hover < 0.04 && press.down < 0.04 {
+                    // The remove button sits in the row, so the row response may not be hovered.
                     ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
+                } else {
+                    press.wash(ui, rect, 8, false);
+                }
+                if hovered {
                     // Remove just this file from the list (#430); the file itself is untouched.
                     let x_rect = Rect::from_center_size(rect.right_center() - vec2(26.0, 0.0), vec2(28.0, 28.0));
                     let x = ui.interact(x_rect, ui.id().with(("remove-recent", &r.path)), Sense::click());
@@ -151,26 +172,27 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         remove = Some(r.path.clone());
                     }
                 }
+                let body = rect.translate(press.offset());
                 icons::paint(
                     ui,
-                    Rect::from_min_size(rect.min + vec2(10.0, 11.0), vec2(24.0, 24.0)),
+                    Rect::from_min_size(body.min + vec2(10.0, 11.0), vec2(24.0, 24.0)),
                     "file-text",
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
                 // Room on the right for the remove button.
                 let detail = ui.painter().text(
-                    rect.right_center() - vec2(48.0, 0.0),
+                    body.right_center() - vec2(48.0, 0.0),
                     Align2::RIGHT_CENTER,
                     format!("{} {}  ·  {}", r.pages, tl!("pages"), human_size(r.size)),
                     theme::regular(12.0),
                     t.text_muted,
                 );
                 // The name and path stop short of the page count; hovering shows the whole path.
-                let width = detail.left() - 16.0 - (rect.left() + 46.0);
-                widgets::row_text(ui, rect.min + vec2(46.0, 15.0), crate::bidi::visual(&r.name), theme::medium(13.5), t.text, width);
-                widgets::row_text(ui, rect.min + vec2(46.0, 32.0), crate::bidi::visual(&r.path), theme::regular(11.0), t.text_faint, width);
-                if resp.on_hover_text(&r.path).clicked() {
+                let width = detail.left() - 16.0 - (body.left() + 46.0);
+                widgets::row_text(ui, body.min + vec2(46.0, 15.0), crate::bidi::visual(&r.name), theme::medium(13.5), t.text, width);
+                widgets::row_text(ui, body.min + vec2(46.0, 32.0), crate::bidi::visual(&r.path), theme::regular(11.0), t.text_faint, width);
+                if theme::hand(resp).on_hover_text(&r.path).clicked() {
                     open = Some(r.path.clone());
                 }
             }

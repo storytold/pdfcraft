@@ -129,18 +129,18 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.separator();
                 for (_, h) in &hits {
                     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
-                    if resp.hovered() {
-                        ui.painter().rect_filled(rect, CornerRadius::same(6), t.hover);
-                    }
-                    icons::paint(ui, Rect::from_min_size(rect.min + vec2(8.0, 9.0), vec2(18.0, 18.0)), h.icon, 17.0, t.icon);
+                    let press = theme::Press::track(ui, &resp);
+                    press.wash(ui, rect, 6, false);
+                    let body = rect.translate(press.offset());
+                    icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 9.0), vec2(18.0, 18.0)), h.icon, 17.0, t.icon);
                     // Display is translated; matching above already considered both languages.
                     let shown = crate::i18n::command_label(&h.label);
                     let shown_detail = tl!(&h.detail).to_string();
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, h.ready, &shown));
                     let fg = if h.ready { t.text } else { t.text_faint };
-                    ui.painter().text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, shown, theme::regular(13.5), fg);
-                    ui.painter().text(rect.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, shown_detail, theme::regular(12.0), t.text_faint);
-                    if resp.clicked() {
+                    ui.painter().text(body.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, shown, theme::regular(13.5), fg);
+                    ui.painter().text(body.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, shown_detail, theme::regular(12.0), t.text_faint);
+                    if theme::hand(resp).clicked() {
                         chosen = Some((h.command, h.group));
                     }
                 }
