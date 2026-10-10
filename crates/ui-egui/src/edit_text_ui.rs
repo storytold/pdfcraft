@@ -166,6 +166,14 @@ fn color32(color: [f64; 3]) -> Color32 {
     )
 }
 
+/// Choose an editor background contrasting with the text color.
+/// Standard black or dark text sits on a white field; light text on colored or dark backgrounds
+/// (e.g. white or pastel text) uses a dark background so it doesn't disappear (#913).
+fn editor_bg(color: [f64; 3]) -> Color32 {
+    let lum = 0.2126 * color[0].clamp(0.0, 1.0) + 0.7152 * color[1].clamp(0.0, 1.0) + 0.0722 * color[2].clamp(0.0, 1.0);
+    if lum > 0.65 { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE }
+}
+
 /// A selected page image, and what the pointer is doing to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageSelection {
@@ -525,7 +533,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }) + 8.0;
                 width = width.max(needed).min(ed.max_width);
             }
-            egui::Frame::NONE.fill(Color32::WHITE).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
+            let bg_color = editor_bg(ed.look.color);
+            egui::Frame::NONE.fill(bg_color).stroke(Stroke::new(1.5, ACCENT)).inner_margin(egui::Margin::symmetric(2, 0)).show(ui, |ui| {
                 let rows = ed.text.lines().count().max(1);
                 let r = ui.add(
                     egui::TextEdit::multiline(&mut ed.text)
@@ -562,5 +571,23 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             })
         }
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    #[test]
+    fn editor_background_contrasts_with_text_color() {
+        // Black / dark text uses a white background
+        assert_eq!(editor_bg([0.0, 0.0, 0.0]), Color32::WHITE);
+        assert_eq!(editor_bg([0.2, 0.2, 0.2]), Color32::WHITE);
+        assert_eq!(editor_bg([0.0, 0.0, 0.5]), Color32::WHITE);
+
+        // White / bright text (e.g. on colored headers) uses a dark background
+        assert_eq!(editor_bg([1.0, 1.0, 1.0]), Color32::from_rgb(0x22, 0x22, 0x26));
+        assert_eq!(editor_bg([0.9, 0.9, 0.9]), Color32::from_rgb(0x22, 0x22, 0x26));
+        assert_eq!(editor_bg([0.8, 0.9, 1.0]), Color32::from_rgb(0x22, 0x22, 0x26));
     }
 }
