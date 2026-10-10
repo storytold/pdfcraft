@@ -198,3 +198,40 @@ fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
         }
     }
 }
+
+/// Released macOS builds have Japanese faces but no Hans face. An installed Chinese
+/// collection must cover the Chinese catalog in all four UI families, ahead of Japanese.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_chinese_system_fallback_covers_the_catalog() {
+    if !pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        return;
+    }
+    let defs = theme::installed_font_definitions(true);
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        assert!(!defs.font_data.contains_key(theme::SYSTEM_FALLBACK));
+        return;
+    }
+    assert!(defs.font_data.contains_key(theme::SYSTEM_FALLBACK), "macOS must provide a Chinese interface face");
+    let cjk: Vec<String> = pdfcraft_fonts::ui_cjk_fonts(true).iter().map(|face| face.name()).collect();
+    for (family, stack) in &defs.families {
+        let system = stack.iter().position(|name| name == theme::SYSTEM_FALLBACK).unwrap();
+        assert_eq!(stack.iter().filter(|name| *name == theme::SYSTEM_FALLBACK).count(), 1);
+        if let Some(japanese) = stack.iter().position(|name| cjk.contains(name)) {
+            assert!(system < japanese, "{family:?}: {stack:?}");
+        }
+        assert!(system > 0, "keep the primary Latin face: {family:?}");
+    }
+    let mut chinese = String::from(CHINESE);
+    for line in include_str!("../src/i18n/zh-hans.tsv").lines().filter(|line| !line.starts_with('#')) {
+        if let Some(translation) = line.split('\t').nth(2) {
+            chinese.extend(translation.chars().filter(|c| ('\u{3400}'..='\u{9fff}').contains(c)));
+        }
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, &chinese), "{id:?} lacks Chinese catalog glyphs");
+        assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
+    }
+    assert!(layout_widths(&mut fonts, CHINESE).iter().all(|width| width.is_finite() && *width > 0.0));
+}
