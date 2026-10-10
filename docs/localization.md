@@ -46,3 +46,9 @@ PdfCraft uses the same system as PhotoCraft (`crates/ui-egui/src/i18n/`):
 3. Add an `ATTRIBUTION.toml` entry for the catalog (`kind = "translation"`), then run `cargo xtask assets --write` and `cargo xtask assets`.
 
 The Preferences dropdown, the system-language match and the catalog tests (format, duplicates, placeholders, plural forms, command ids) then pick it up.
+
+On macOS, a Simplified Chinese interface built without a bundled `Hans` face reads one installed
+Chinese collection (PingFang or STHeiti) at runtime. It is placed before the Japanese faces in all
+UI families, so shared and Simplified-only characters have the same baseline. The collection is
+never copied into a package or embedded into a PDF. `PDFCRAFT_SYSTEM_FONTS=0` disables this fallback;
+embedded-only screenshots and the web build still depend on an allowed Chinese craft-fonts face.
