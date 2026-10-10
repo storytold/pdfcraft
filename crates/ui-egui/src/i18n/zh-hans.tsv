@@ -2089,3 +2089,11 @@
 	Character limit:	字符数限制：
 	Character limit 0 means no limit. A comb of characters needs a limit.	字符数限制为 0 表示无限制。分格字符必须设置字符数限制。
 	To change locked fields, also set Locked to No.	要更改锁定的字段，还需将“锁定”设为“否”。
+	Comb of characters	字符梳
+	The document changed while you were editing field properties.	编辑字段属性时文档已更改。
+	The document is no longer open.	文档已不再打开。
+	The field properties dialog is no longer open.	字段属性对话框已不再打开。
+	The field properties could not be changed.	无法更改字段属性。
+	The selected fields could not be found. Select them again.	找不到所选字段。请重新选择。
+	The field {name} no longer exists.	字段 {name} 已不存在。
+	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。

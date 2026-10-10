@@ -2056,3 +2056,11 @@ action wizard	Start	ప్రారంభించు
 	Character limit:	అక్షరాల పరిమితి:
 	Character limit 0 means no limit. A comb of characters needs a limit.	అక్షరాల పరిమితి 0 అంటే పరిమితి లేదు. అక్షరాల గడులకు పరిమితి అవసరం.
 	To change locked fields, also set Locked to No.	లాక్ చేసిన ఫీల్డ్‌లను మార్చడానికి “లాక్ చేయబడింది” విలువను కూడా “కాదు”గా పెట్టండి.
+	Comb of characters	అక్షరాల దువ్వెన
+	The document changed while you were editing field properties.	మీరు ఫీల్డ్ లక్షణాలను సవరిస్తున్నప్పుడు పత్రం మారింది.
+	The document is no longer open.	పత్రం ఇకపై తెరిచి లేదు.
+	The field properties dialog is no longer open.	ఫీల్డ్ లక్షణాల డైలాగ్ ఇకపై తెరిచి లేదు.
+	The field properties could not be changed.	ఫీల్డ్ లక్షణాలను మార్చలేకపోయాము.
+	The selected fields could not be found. Select them again.	ఎంచుకున్న ఫీల్డ్‌లు కనుగొనబడలేదు. వాటిని మళ్ళీ ఎంచుకోండి.
+	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
+	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.

@@ -2125,3 +2125,11 @@ signature pad	Type	入力
 	Character limit:	文字数の上限:
 	Character limit 0 means no limit. A comb of characters needs a limit.	文字数の上限が 0 の場合は無制限です。文字の分割には上限が必要です。
 	To change locked fields, also set Locked to No.	ロックされたフィールドを変更するには「ロック」を「いいえ」に設定してください。
+	Comb of characters	文字のマス目
+	The document changed while you were editing field properties.	フィールドのプロパティを編集中に文書が変更されました。
+	The document is no longer open.	文書はもう開かれていません。
+	The field properties dialog is no longer open.	フィールドのプロパティのダイアログはもう開かれていません。
+	The field properties could not be changed.	フィールドのプロパティを変更できませんでした。
+	The selected fields could not be found. Select them again.	選択したフィールドが見つかりません。もう一度選択してください。
+	The field {name} no longer exists.	フィールド {name} はもう存在しません。
+	A selected field has no widget on any page, so the fields can't be edited together.	選択したフィールドの一つがどのページにもウィジェットを持たないため、まとめて編集できません。

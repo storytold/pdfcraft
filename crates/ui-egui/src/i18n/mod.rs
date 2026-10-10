@@ -673,6 +673,49 @@ mod tests {
     }
 
     /// Every `tl!("…")` literal in the UI source (test modules aside), unescaped.
+    /// Every label Shared Field Properties shows, including those it passes through a variable
+    /// (flag labels, errors, the font label), exists in each full catalog.
+    #[test]
+    fn bulk_field_properties_labels_are_in_every_full_catalog() {
+        let source = include_str!("../bulk_fields.rs");
+        // The string literal starting right after `at`, unescaped.
+        fn literal(rest: &str) -> Option<String> {
+            let mut out = String::new();
+            let mut chars = rest.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' => return Some(out),
+                    '\\' => out.push(chars.next()?),
+                    c => out.push(c),
+                }
+            }
+            None
+        }
+        let mut labels = std::collections::BTreeSet::new();
+        for marker in ["tl!(\"", "Err(\"", "ok_or(\"", "|| \"", "MISSING: &str = \"", "i18n::t(\"", "_ => \""] {
+            for (at, _) in source.match_indices(marker) {
+                labels.extend(source.get(at + marker.len()..).and_then(literal));
+            }
+        }
+        // Flag labels: `(field_flags::NAME, "Label", inverted)`.
+        for (at, _) in source.match_indices("(field_flags::") {
+            let line = source.get(at..).and_then(|s| s.lines().next()).unwrap_or_default();
+            if let Some(q) = line.find(", \"") {
+                labels.extend(line.get(q + 3..).and_then(literal));
+            }
+        }
+        labels.retain(|l| l.chars().any(char::is_alphabetic) && !l.contains("credits") && !l.starts_with("bulk"));
+        for label in ["Mixed", "Custom font", "The document is no longer open."] {
+            labels.insert(label.to_string());
+        }
+        assert!(labels.len() > 20 && labels.contains("Comb of characters"), "the scan found the dialog's labels: {labels:?}");
+        for code in ["bg", "de", "es", "fr", "hu", "it", "ja", "pt-br", "ru", "te", "uk", "zh-hans", "zh-hant"] {
+            let lang = Lang::from_code(code).expect("registered");
+            let missing: Vec<_> = labels.iter().filter(|l| !has(lang, l)).collect();
+            assert!(missing.is_empty(), "{code} lacks Shared Field Properties labels: {missing:#?}");
+        }
+    }
+
     fn ui_literals() -> std::collections::BTreeSet<String> {
         let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
         let mut literals = std::collections::BTreeSet::new();

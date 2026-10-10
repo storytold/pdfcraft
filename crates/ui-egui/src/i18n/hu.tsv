@@ -2123,3 +2123,11 @@ action wizard	Start	Indítás
 	Character limit:	Karakterkorlát:
 	Character limit 0 means no limit. A comb of characters needs a limit.	A 0 karakterkorlát korlátlan hosszt jelent. A karaktercellákhoz korlát szükséges.
 	To change locked fields, also set Locked to No.	Zárolt mezők módosításához a „Zárolt” értékét is állítsd „Nem”-re.
+	Comb of characters	Karakterfésű
+	The document changed while you were editing field properties.	A dokumentum megváltozott, miközben a mezőtulajdonságokat szerkesztetted.
+	The document is no longer open.	A dokumentum már nincs megnyitva.
+	The field properties dialog is no longer open.	A mezőtulajdonságok párbeszédablak már nincs megnyitva.
+	The field properties could not be changed.	A mezőtulajdonságokat nem sikerült módosítani.
+	The selected fields could not be found. Select them again.	A kijelölt mezők nem találhatók. Jelöld ki őket újra.
+	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
+	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.

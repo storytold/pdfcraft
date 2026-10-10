@@ -1292,7 +1292,8 @@ fn partial_appearance_keeps_custom_default_appearance_and_font_resources() {
 
     set_props(&mut doc, "name", &FieldProps { font_size: Some(18.0), ..Default::default() }).unwrap();
     let f = field(&fields(&doc), "name").clone();
-    assert!(f.da.starts_with(da), "other default-appearance operators survive: {}", f.da);
+    // The size is rewritten in place: other operators survive and the string doesn't grow.
+    assert_eq!(f.da, "/ProjectFont 18 Tf 0.15 g 2 Tc", "other default-appearance operators survive");
     assert_eq!(appearance::parse_da(&f.da).font, "ProjectFont");
     assert_eq!(appearance::parse_da(&f.da).size, 18.0);
 
@@ -1304,12 +1305,56 @@ fn partial_appearance_keeps_custom_default_appearance_and_font_resources() {
     .unwrap();
     let doc = reopen(&doc);
     let f = field(&fields(&doc), "name").clone();
-    assert!(f.da.starts_with(da));
+    assert_eq!(f.da, "/ProjectFont 18 Tf 0 0 1 rg 2 Tc", "the colour is replaced where it was");
     assert_eq!(appearance::parse_da(&f.da).font, "ProjectFont");
     assert_eq!(appearance::parse_da(&f.da).color, "0 0 1 rg");
     let dr = doc.get(af).as_dict().unwrap().get(b"DR").map(|v| doc.resolve(v)).unwrap();
     let fonts = dr.as_dict().unwrap().get(b"Font").map(|v| doc.resolve(v)).unwrap();
     assert_eq!(fonts.as_dict().unwrap().get(b"ProjectFont"), Some(&resource));
+}
+
+#[test]
+fn repeated_partial_appearance_edits_keep_the_default_appearance_one_operator_each() {
+    let mut doc = fixture();
+    for size in [9.0, 11.0, 14.0, 250.0, 400.0] {
+        let props = FieldProps {
+            appearance: Some(LookPatch { text: Some([0.0, 0.5, 0.0]), ..Default::default() }),
+            font_size: Some(size),
+            ..Default::default()
+        };
+        set_props(&mut doc, "name", &props).unwrap();
+    }
+    let da = field(&fields(&doc), "name").da.clone();
+    assert_eq!(da.matches("Tf").count(), 1, "{da}");
+    assert_eq!(da.matches(" rg").count() + da.matches(" g").count(), 1, "{da}");
+    // Sizes up to the 300 points `parse_da` reads are kept, not cut to 100.
+    assert_eq!(appearance::parse_da(&da).size, 300.0, "{da}");
+}
+
+#[test]
+fn a_font_only_edit_leaves_the_widget_and_a_shared_indirect_border_untouched() {
+    let mut doc = fixture();
+    let widgets = field(&fields(&doc), "size").widgets.clone();
+    let mut mk = pdfcraft_cos::Dict::new();
+    mk.set(b"BC".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into()]));
+    let shared = doc.add(Object::Dict(mk));
+    for w in &widgets {
+        doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Ref(shared))).unwrap();
+    }
+    let border = |doc: &Document| -> Vec<_> {
+        widgets.iter().map(|w| doc.get(w.obj).as_dict().map(|d| (d.get(b"MK").cloned(), d.get(b"BS").cloned()))).collect()
+    };
+    let before = border(&doc);
+    set_props(&mut doc, "size", &FieldProps { font_size: Some(12.0), ..Default::default() }).unwrap();
+    assert_eq!(border(&doc), before, "a size-only edit leaves each widget's /MK and /BS alone");
+    // A border edit updates the shared /MK where it lives instead of copying it into each widget.
+    let patch = LookPatch { border: Some(Some([1.0, 0.0, 0.0])), ..Default::default() };
+    set_props(&mut doc, "size", &FieldProps { appearance: Some(patch), ..Default::default() }).unwrap();
+    for w in &widgets {
+        assert_eq!(doc.get(w.obj).as_dict().unwrap().get(b"MK"), Some(&Object::Ref(shared)), "the widget still points at the shared /MK");
+    }
+    let shared_mk = doc.get(shared).as_dict().cloned().unwrap();
+    assert_eq!(shared_mk.get(b"BC"), Some(&Object::Array(vec![Object::Real(1.0), Object::Real(0.0), Object::Real(0.0)])));
 }
 
 #[test]

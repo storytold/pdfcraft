@@ -68,12 +68,27 @@ pub struct Draft {
 }
 
 impl Draft {
-    pub fn new(doc: &pdfcraft_engine::Document, names: Vec<String>) -> Option<Self> {
-        let fields = names.iter().map(|name| doc.form.iter().find(|f| &f.name == name)).collect::<Option<Vec<_>>>()?;
-        let looks = names.iter().map(|name| doc.field_look(name)).collect::<Option<Vec<_>>>()?;
+    /// The draft for editing `names` together, or why they can't be (a message for `tl!`).
+    pub fn new(doc: &pdfcraft_engine::Document, names: Vec<String>) -> Result<Self, &'static str> {
+        const MISSING: &str = "The selected fields could not be found. Select them again.";
+        let fields = names.iter().map(|name| doc.form.iter().find(|f| &f.name == name)).collect::<Option<Vec<_>>>().ok_or(MISSING)?;
+        let looks = names
+            .iter()
+            .map(|name| doc.field_look(name))
+            .collect::<Option<Vec<_>>>()
+            .ok_or("A selected field has no widget on any page, so the fields can't be edited together.")?;
         if fields.len() < 2 {
-            return None;
+            return Err(MISSING);
         }
+        Self::build(doc, names, &fields, &looks).ok_or(MISSING)
+    }
+
+    fn build(
+        doc: &pdfcraft_engine::Document,
+        names: Vec<String>,
+        fields: &[&pdfcraft_engine::FormField],
+        looks: &[pdfcraft_engine::FieldLook],
+    ) -> Option<Self> {
         let text_fields = fields.iter().all(|f| f.kind == FormFieldKind::Text);
         let choice_fields = fields.iter().all(|f| matches!(f.kind, FormFieldKind::Combo | FormFieldKind::List));
         let check_fields = fields.iter().all(|f| matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio));
@@ -148,7 +163,11 @@ impl Draft {
         }
         let mut edits = Vec::new();
         for name in &self.names {
-            let f = doc.form.iter().find(|f| &f.name == name).ok_or_else(|| format!("The field {name} no longer exists."))?;
+            let f = doc
+                .form
+                .iter()
+                .find(|f| &f.name == name)
+                .ok_or_else(|| crate::i18n::fmt(crate::i18n::t("The field {name} no longer exists."), &[("name", name)]))?;
             let patch = FieldLookPatch {
                 border: self.border.apply.then_some(self.border.value),
                 fill: self.fill.apply.then_some(self.fill.value),

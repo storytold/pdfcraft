@@ -2087,3 +2087,11 @@ action wizard	Start	Старт
 	Character limit:	Ограничение на знаците:
 	Character limit 0 means no limit. A comb of characters needs a limit.	Ограничение 0 означава без ограничение. Клетките за знаци изискват ограничение.
 	To change locked fields, also set Locked to No.	За да промените заключени полета, задайте и „Заключено“ на „Не“.
+	Comb of characters	Гребен от знаци
+	The document changed while you were editing field properties.	Документът се промени, докато редактирахте свойствата на полетата.
+	The document is no longer open.	Документът вече не е отворен.
+	The field properties dialog is no longer open.	Прозорецът със свойства на полетата вече не е отворен.
+	The field properties could not be changed.	Свойствата на полетата не можаха да бъдат променени.
+	The selected fields could not be found. Select them again.	Избраните полета не бяха намерени. Изберете ги отново.
+	The field {name} no longer exists.	Полето {name} вече не съществува.
+	A selected field has no widget on any page, so the fields can't be edited together.	Едно от избраните полета няма елемент на нито една страница, затова полетата не могат да се редактират заедно.

@@ -2041,3 +2041,11 @@
 	Character limit:	Límite de caracteres:
 	Character limit 0 means no limit. A comb of characters needs a limit.	El límite de caracteres 0 significa sin límite. Las casillas de caracteres necesitan un límite.
 	To change locked fields, also set Locked to No.	Para cambiar campos bloqueados, establece también «Bloqueado» en «No».
+	Comb of characters	Peine de caracteres
+	The document changed while you were editing field properties.	El documento cambió mientras editabas las propiedades de los campos.
+	The document is no longer open.	El documento ya no está abierto.
+	The field properties dialog is no longer open.	El cuadro de propiedades de los campos ya no está abierto.
+	The field properties could not be changed.	No se pudieron cambiar las propiedades de los campos.
+	The selected fields could not be found. Select them again.	No se encontraron los campos seleccionados. Vuelve a seleccionarlos.
+	The field {name} no longer exists.	El campo {name} ya no existe.
+	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.

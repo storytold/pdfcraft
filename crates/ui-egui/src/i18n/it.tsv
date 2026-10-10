@@ -2134,3 +2134,11 @@ signature pad	Type	Digita
 	Character limit:	Limite di caratteri:
 	Character limit 0 means no limit. A comb of characters needs a limit.	Un limite di caratteri pari a 0 significa nessun limite. I caratteri in caselle separate richiedono un limite.
 	To change locked fields, also set Locked to No.	Per modificare i campi bloccati, imposta anche “Bloccato” su “No”.
+	Comb of characters	Pettine di caratteri
+	The document changed while you were editing field properties.	Il documento è cambiato mentre modificavi le proprietà dei campi.
+	The document is no longer open.	Il documento non è più aperto.
+	The field properties dialog is no longer open.	La finestra delle proprietà dei campi non è più aperta.
+	The field properties could not be changed.	Impossibile modificare le proprietà dei campi.
+	The selected fields could not be found. Select them again.	I campi selezionati non sono stati trovati. Selezionali di nuovo.
+	The field {name} no longer exists.	Il campo {name} non esiste più.
+	A selected field has no widget on any page, so the fields can't be edited together.	Un campo selezionato non ha widget in nessuna pagina, quindi i campi non possono essere modificati insieme.

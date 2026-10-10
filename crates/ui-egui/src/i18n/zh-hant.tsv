@@ -2011,3 +2011,11 @@
 	Character limit:	字元數限制：
 	Character limit 0 means no limit. A comb of characters needs a limit.	字元數限制為 0 表示無限制。分格字元必須設定字元數限制。
 	To change locked fields, also set Locked to No.	若要變更鎖定的欄位，也須將「鎖定」設為「否」。
+	Comb of characters	字元梳
+	The document changed while you were editing field properties.	編輯欄位屬性時文件已變更。
+	The document is no longer open.	文件已不再開啟。
+	The field properties dialog is no longer open.	欄位屬性對話方塊已不再開啟。
+	The field properties could not be changed.	無法變更欄位屬性。
+	The selected fields could not be found. Select them again.	找不到所選欄位。請重新選取。
+	The field {name} no longer exists.	欄位 {name} 已不存在。
+	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。

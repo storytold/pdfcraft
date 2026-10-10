@@ -190,52 +190,100 @@ impl LookPatch {
     }
 }
 
-/// Append only the selected operators. Keeping the original string preserves its custom
-/// font resource, colour space and other graphics state; the last Tf/colour wins in PDF.
+/// Rewrite only the selected operators in place: the last `Tf` (font and size) and the last
+/// fill colour (`g`, `rg` or `k`), appending one when the string has none. Everything else (a
+/// custom font resource, colour space or other graphics state) is kept, and repeated edits don't
+/// grow the string.
 fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String {
-    let mut out = da.to_string();
+    if patch.font.is_none() && size.is_none() && patch.text.is_none() {
+        return da.to_string();
+    }
+    let mut toks: Vec<String> = da.split_whitespace().map(str::to_string).collect();
+    let numeric = |s: &str| s.parse::<f64>().is_ok();
     if patch.font.is_some() || size.is_some() {
         let old = appearance::parse_da(da);
-        let font = patch.font.map(|f| f.resource()).unwrap_or(&old.font);
-        out.push_str(&format!("\n/{font} {} Tf", appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 100.0))));
+        let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource().to_string());
+        // `parse_da` reads sizes up to 300 points; keep the same bound when writing.
+        let size = appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 300.0));
+        let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
+        match at {
+            Some(i) => {
+                if let Some(slot) = toks.get_mut(i - 2) {
+                    *slot = format!("/{font}");
+                }
+                if let Some(slot) = toks.get_mut(i - 1) {
+                    *slot = size;
+                }
+            }
+            None => toks.extend([format!("/{font}"), size, "Tf".into()]),
+        }
     }
     if let Some(c) = patch.text {
-        out.push_str(&format!("\n{} {} {} rg", appearance::fmt(c[0]), appearance::fmt(c[1]), appearance::fmt(c[2])));
+        let rgb = [appearance::fmt(c[0]), appearance::fmt(c[1]), appearance::fmt(c[2]), "rg".into()];
+        let at = toks.iter().enumerate().rev().find_map(|(i, t)| {
+            let n = match t.as_str() {
+                "g" => 1,
+                "rg" => 3,
+                "k" => 4,
+                _ => return None,
+            };
+            let start = i.checked_sub(n)?;
+            toks.get(start..i).is_some_and(|ops| ops.iter().all(|o| numeric(o))).then_some((start, i))
+        });
+        match at {
+            Some((start, end)) => {
+                toks.splice(start..=end, rgb);
+            }
+            None => toks.extend(rgb),
+        }
     }
-    out
+    toks.join(" ")
 }
 
 fn patch_widget_look(doc: &mut Document, w: &Widget, patch: &LookPatch) -> Result<(), FormError> {
+    let touches_mk = patch.border.is_some() || patch.fill.is_some();
+    let touches_bs = patch.width.is_some() || patch.style.is_some();
+    // A size- or font-only edit changes /DA, not the widget: leave it out of the save.
+    if !touches_mk && !touches_bs {
+        return Ok(());
+    }
     let wd = doc.get(w.obj).as_dict().cloned().ok_or_else(|| FormError::Invalid("the widget is not a dictionary".into()))?;
-    let mut mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
-    let mut bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned()).unwrap_or_default();
-    for (key, change) in [(b"BC".as_slice(), patch.border), (b"BG".as_slice(), patch.fill)] {
-        if let Some(change) = change {
-            match change {
-                Some(c) => mk.set(key.to_vec(), rgb(c)),
-                None => {
-                    mk.remove(key);
+    if touches_mk {
+        let indirect = wd.get(b"MK").and_then(Object::as_ref);
+        let mut mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
+        for (key, change) in [(b"BC".as_slice(), patch.border), (b"BG".as_slice(), patch.fill)] {
+            if let Some(change) = change {
+                match change {
+                    Some(c) => mk.set(key.to_vec(), rgb(c)),
+                    None => {
+                        mk.remove(key);
+                    }
                 }
             }
         }
-    }
-    if let Some(width) = patch.width {
-        bs.set(b"W".to_vec(), Object::Real(width));
-    }
-    if let Some(style) = patch.style {
-        bs.set(b"S".to_vec(), Object::name(style.code()));
-        if style == BorderStyle::Dashed && !bs.contains(b"D") {
-            bs.set(b"D".to_vec(), Object::Array(vec![Object::Int(3)]));
+        // A shared indirect /MK is updated where it lives, not copied into each widget.
+        match indirect {
+            Some(r) => doc.set(r, Object::Dict(mk)),
+            None => doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?,
         }
     }
-    doc.update_dict(w.obj, |d| {
-        if patch.border.is_some() || patch.fill.is_some() {
-            d.set(b"MK".to_vec(), Object::Dict(mk));
+    if touches_bs {
+        let indirect = wd.get(b"BS").and_then(Object::as_ref);
+        let mut bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned()).unwrap_or_default();
+        if let Some(width) = patch.width {
+            bs.set(b"W".to_vec(), Object::Real(width));
         }
-        if patch.width.is_some() || patch.style.is_some() {
-            d.set(b"BS".to_vec(), Object::Dict(bs));
+        if let Some(style) = patch.style {
+            bs.set(b"S".to_vec(), Object::name(style.code()));
+            if style == BorderStyle::Dashed && !bs.contains(b"D") {
+                bs.set(b"D".to_vec(), Object::Array(vec![Object::Int(3)]));
+            }
         }
-    })?;
+        match indirect {
+            Some(r) => doc.set(r, Object::Dict(bs)),
+            None => doc.update_dict(w.obj, |d| d.set(b"BS".to_vec(), Object::Dict(bs)))?,
+        }
+    }
     Ok(())
 }
 

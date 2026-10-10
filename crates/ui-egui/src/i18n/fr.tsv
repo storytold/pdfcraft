@@ -2125,3 +2125,11 @@ signature pad	Type	Saisir
 	Character limit:	Limite de caractères :
 	Character limit 0 means no limit. A comb of characters needs a limit.	Une limite de caractères de 0 signifie aucune limite. Les cases de caractères nécessitent une limite.
 	To change locked fields, also set Locked to No.	Pour modifier les champs verrouillés, réglez aussi « Verrouillé » sur « Non ».
+	Comb of characters	Peigne de caractères
+	The document changed while you were editing field properties.	Le document a changé pendant que vous modifiiez les propriétés des champs.
+	The document is no longer open.	Le document n'est plus ouvert.
+	The field properties dialog is no longer open.	La boîte de dialogue des propriétés des champs n'est plus ouverte.
+	The field properties could not be changed.	Les propriétés des champs n'ont pas pu être modifiées.
+	The selected fields could not be found. Select them again.	Les champs sélectionnés sont introuvables. Sélectionnez-les de nouveau.
+	The field {name} no longer exists.	Le champ {name} n'existe plus.
+	A selected field has no widget on any page, so the fields can't be edited together.	Un champ sélectionné n'a de widget sur aucune page : les champs ne peuvent pas être modifiés ensemble.

@@ -639,13 +639,14 @@ impl crate::PdfCraftApp {
         let Some((index, id)) = self.active_ids() else { return };
         let names = self.views[index].prepare.names();
         if names.len() > 1 && names.iter().any(|n| n == name) {
-            let draft = self.session.get(id).and_then(|doc| crate::bulk_fields::Draft::new(doc, names));
-            if let Some(draft) = draft {
-                self.field_props = None;
-                self.bulk_field_props = Some(draft);
-                self.dialog = Some(crate::Dialog::BulkFieldProps);
-            } else {
-                self.notify_tr("The selected fields could not be found. Select them again.");
+            let draft = self.session.get(id).map_or(Err("The document is no longer open."), |doc| crate::bulk_fields::Draft::new(doc, names));
+            match draft {
+                Ok(draft) => {
+                    self.field_props = None;
+                    self.bulk_field_props = Some(draft);
+                    self.dialog = Some(crate::Dialog::BulkFieldProps);
+                }
+                Err(why) => self.notify_tr(why),
             }
             return;
         }

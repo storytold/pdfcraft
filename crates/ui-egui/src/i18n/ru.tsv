@@ -2038,3 +2038,11 @@
 	Character limit:	Ограничение символов:
 	Character limit 0 means no limit. A comb of characters needs a limit.	Ограничение 0 означает отсутствие ограничения. Для посимвольных ячеек нужно задать ограничение.
 	To change locked fields, also set Locked to No.	Чтобы изменить заблокированные поля, также установите «Заблокировано» в «Нет».
+	Comb of characters	Гребёнка символов
+	The document changed while you were editing field properties.	Документ изменился, пока вы редактировали свойства полей.
+	The document is no longer open.	Документ больше не открыт.
+	The field properties dialog is no longer open.	Окно свойств полей больше не открыто.
+	The field properties could not be changed.	Не удалось изменить свойства полей.
+	The selected fields could not be found. Select them again.	Выбранные поля не найдены. Выберите их снова.
+	The field {name} no longer exists.	Поле {name} больше не существует.
+	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
