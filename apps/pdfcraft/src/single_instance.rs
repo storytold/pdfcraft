@@ -155,10 +155,37 @@ fn socket_name(session: Option<&str>) -> String {
     if session.is_empty() { "instance.sock".to_string() } else { format!("instance-{session}.sock") }
 }
 
+/// Held while a launch finds out whether it is the first, so launches that start together (several
+/// files selected in Explorer and opened at once) take turns: the first one is listening before
+/// the next one looks. Without it a launch could find the socket bound but not yet listening,
+/// fail to clear it ("Access is denied") and open a window of its own. The lock is on a file
+/// beside the socket, which is never deleted; Windows releases it when the process ends, however
+/// it ends. Best effort: without the lock the launch goes on as before.
+#[cfg(windows)]
+fn election(socket: &std::path::Path) -> Option<std::fs::File> {
+    if let Some(dir) = socket.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(socket.with_extension("lock")).ok()?;
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Err(e) => {
+                log::info!("single instance: no election lock ({e})");
+                return None;
+            }
+        }
+    }
+}
+
 /// [`claim`] with the socket at `path`.
 #[cfg(windows)]
 fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Claim {
     use uds_windows::{UnixListener, UnixStream};
+    // Released when this function returns: by then this launch listens, or has handed over.
+    let _election = election(path);
     // Two launches can start together: the one that loses the race to bind hands over to the
     // one that won. A third round is for a socket that vanishes in between.
     for _ in 0..3 {
@@ -182,6 +209,11 @@ fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Cla
             Err(_) => match std::fs::remove_file(path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                // Another launch has bound the socket and is about to listen: try it again.
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
                 Err(e) => {
                     log::info!("single instance off: can't clear {} ({e})", path.display());
                     return Claim::Alone;
@@ -329,6 +361,27 @@ mod tests {
         // A launch with options keeps its own window and doesn't take over the socket.
         assert!(matches!(claim_at(&path, &["C:\\b.pdf".into()], false), Claim::Alone));
         assert!(poll().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launches_started_together_share_one_window() {
+        // Several files selected in Explorer and opened with Enter: one process per file, all at once.
+        let path = socket("together");
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let launches: Vec<_> = (0..8)
+            .map(|i| {
+                let (path, barrier) = (path.clone(), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_at(&path, &[format!("C:\\{i}.pdf")], true)
+                })
+            })
+            .collect();
+        // The first launch's listener lives until every other launch has handed over.
+        let claims: Vec<Claim> = launches.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(claims.iter().filter(|c| matches!(c, Claim::Primary(_))).count(), 1, "one window");
+        assert_eq!(claims.iter().filter(|c| matches!(c, Claim::HandedOff)).count(), 7, "the rest hand over");
     }
 
     #[cfg(windows)]
