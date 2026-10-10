@@ -97,6 +97,25 @@ fn header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content() 
 }
 
 #[test]
+fn header_start_number_that_would_wrap_is_refused_without_drawing() {
+    // u32::MAX is a valid start_number on its own, but there is no room for a second page
+    // number after it. The old code wrapped the second page to zero; now the whole run is
+    // refused and the document keeps no header at all.
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: [String::new(), String::new(), "<<1>>".into(), String::new(), String::new(), String::new()],
+        start_number: u32::MAX,
+        ..HeaderFooter::default()
+    };
+    let err = add_header_footer(&mut doc, &[0, 1], &hf, false, &cx()).unwrap_err();
+    assert!(err.to_string().contains("leaves no room"), "{err}");
+    assert!(marks_present(&doc).is_empty(), "nothing is drawn when the run is refused");
+    // A single page still fits the start number itself.
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    assert_eq!(marks_present(&doc).len(), 1);
+}
+
+#[test]
 fn replace_and_remove_restore_the_original_content() {
     let mut doc = fixture();
     let original = streams(&doc, 0);
@@ -173,6 +192,26 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
     assert!(xo.as_dict().unwrap().contains(b"PCFl1"));
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
+}
+
+/// #805: a supported note with no stored appearance is still drawn by viewers. Flattening must
+/// generate that appearance and bake it into the page, not delete a comment that shows an icon.
+#[test]
+fn flattening_keeps_a_note_whose_appearance_is_missing() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (Synthetic note) /Name /Comment /Open false /F 0 >>",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "the note icon is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the note is gone once its icon is baked in");
+    let flat = streams(&doc, 0).pop().unwrap();
+    assert!(flat.contains("q 1 0 0 1 10 10 cm /PCFl0 Do Q"), "{flat}");
 }
 
 /// Display space is in points, so on a `/UserUnit 2` page an item's box maps to half as many

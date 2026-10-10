@@ -1612,7 +1612,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
         view.fit = Fit::Width;
         view.goto = Some((view.current, 0.0));
     }
-    if pressed(cmd(Key::G)) {
+    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
+        view.find_step(false);
+    } else if pressed(cmd(Key::G)) {
         view.find_step(true);
     }
     if pressed(cmd(Key::OpenBracket)) {
@@ -1620,9 +1622,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
     if pressed(cmd(Key::CloseBracket)) {
         view.view_history(true);
-    }
-    if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::G)) {
-        view.find_step(false);
     }
     // ⌘C arrives as a Copy event on most platforms.
     let copy = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));

@@ -578,6 +578,19 @@ fn autosave_snapshots_only_changed_documents() {
 }
 
 #[test]
+fn autosave_snapshots_a_new_unsaved_document_once() {
+    let (mut s, clean) = session_with(1);
+    let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1, "the new document is unsaved work");
+    assert_eq!(snaps[0].doc, id);
+    assert!(snaps.iter().all(|x| x.doc != clean), "the clean document stays out");
+    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(s.autosave_snapshots().len(), 1, "a later edit is snapshotted again");
+}
+
+#[test]
 fn recovered_documents_reopen_unsaved_at_their_original_path() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
@@ -1540,6 +1553,19 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
 }
 
+/// #820: the generated summary includes replies to replies, indented one level deeper.
+#[test]
+fn comment_summary_includes_replies_to_replies() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, rect_comment(0, [40.0, 40.0, 90.0, 90.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "FIRST_REPLY".into(), author: "A".into() }).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "NESTED_REPLY".into(), author: "B".into() }).unwrap();
+    let text = comment_summary("doc.pdf", &s.get(id).unwrap().info.annotations, SummarySort::Page);
+    assert!(text.contains("FIRST_REPLY"), "{text}");
+    assert!(text.contains("NESTED_REPLY"), "replies to replies are summarized: {text}");
+    assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
+}
+
 #[test]
 fn signing_saving_trusting_and_commenting_afterwards() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -1684,6 +1710,24 @@ fn backgrounds_and_watermarks_from_files() {
 
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
+#[test]
+fn recognize_text_reads_the_euro_sign() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Total amount due: €250 by Friday").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = page_texts(&s, id)[0].clone();
+    // The model was trained with € where the ocrs crate's alphabet has a second E.
+    assert!(text.contains("€250"), "{text}");
+}
+
 #[test]
 fn recognize_text_makes_a_scanned_page_searchable() {
     if !ocr::available() {
