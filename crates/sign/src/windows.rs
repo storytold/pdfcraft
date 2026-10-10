@@ -31,7 +31,8 @@ impl ExternalKey for WindowsKey {
             PublicKey::P384(_) => p384::ecdsa::Signature::from_slice(&raw)
                 .map(|s| s.to_der().as_bytes().to_vec())
                 .map_err(|e| SignError::Crypto(format!("CNG returned an invalid P-384 signature: {e}"))),
-            _ => Err(SignError::Crypto("Unsupported key type".into())),
+            // `identities` lists only RSA, P-256 and P-384 store keys; anything else can't sign here.
+            _ => Err(SignError::Unsupported("signing with this key type through the Windows certificate store".into())),
         }
     }
 }
