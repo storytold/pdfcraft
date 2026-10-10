@@ -273,11 +273,20 @@ fn import_pages_mapped(dst: &mut Document, src: &Document, src_pages: &[usize], 
                         let r = dst.add(Object::Null);
                         let c = copier.copy_value(dst, &resolved, Some(r));
                         dst.set(r, c);
-                        dst.update_dict(copied, |f| {
-                            let mut kids = f.get(b"Kids").and_then(|k| k.as_array()).cloned().unwrap_or_default();
-                            kids.push(Object::Ref(r));
-                            f.set(b"Kids".to_vec(), Object::Array(kids));
-                        })?;
+                        // `/Kids` may be an array object of its own: add to it there, so the
+                        // field keeps its other widgets.
+                        match dst.get(copied).as_dict().and_then(|f| f.get(b"Kids").cloned()) {
+                            Some(Object::Ref(list)) => {
+                                let mut kids = dst.get(list).as_array().cloned().unwrap_or_default();
+                                kids.push(Object::Ref(r));
+                                dst.set(list, Object::Array(kids));
+                            }
+                            _ => dst.update_dict(copied, |f| {
+                                let mut kids = f.get(b"Kids").and_then(|k| k.as_array()).cloned().unwrap_or_default();
+                                kids.push(Object::Ref(r));
+                                f.set(b"Kids".to_vec(), Object::Array(kids));
+                            })?,
+                        }
                         annot_pages.insert(r, new);
                         out.push(Object::Ref(r));
                         continue;

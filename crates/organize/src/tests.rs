@@ -1487,3 +1487,27 @@ fn extract_keeps_images_type3_glyphs_may_draw() {
     let names = xobject_names(&part, 0);
     assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "pruning must not run through Type 3 resources");
 }
+
+/// A page listed twice whose widget's field keeps `/Kids` as an array object of its own: the
+/// second widget joins that array, and the field keeps every widget it had.
+#[test]
+fn a_repeated_widget_joins_an_indirect_kids_array() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                   // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R] >>".into(),                   // 4
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 10 90 30] /P 3 0 R >>".into(), // 5
+        "<< /FT /Tx /T (name) /V (Ada) /Kids 7 0 R >>".into(),                      // 6
+        "[5 0 R 8 0 R]".into(),                                                     // 7
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [10 40 90 60] /P 4 0 R >>".into(), // 8
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let out = full_roundtrip(&extract_pages(&src, &[0, 0, 1]).unwrap());
+    let form = out.resolve(catalog(&out).get(b"AcroForm").unwrap());
+    let fields = form.as_dict().unwrap().get(b"Fields").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(fields.len(), 1, "one field");
+    let field = out.resolve(&fields[0]).as_dict().cloned().unwrap();
+    let kids = out.resolve(field.get(b"Kids").unwrap()).as_array().cloned().unwrap();
+    assert_eq!(kids.len(), 3, "both original widgets and the repeat's own: {kids:?}");
+}
