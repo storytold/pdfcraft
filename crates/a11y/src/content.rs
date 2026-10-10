@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
-use crate::structure::Tree;
 use crate::{Finding, Rule};
 
 /// What the page content holds, per checked page.
@@ -212,9 +211,8 @@ fn subtype_name(d: &Dict) -> String {
     String::from_utf8_lossy(d.name(b"Subtype").unwrap_or(b"Unknown")).into_owned()
 }
 
-pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tree: &Tree) -> Vec<Finding> {
+pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> Vec<Finding> {
     let mut out = Vec::new();
-    let tagged = tree.exists;
     let annots = |p: &Page| -> Vec<(ObjRef, Dict)> {
         let a = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         a.iter()

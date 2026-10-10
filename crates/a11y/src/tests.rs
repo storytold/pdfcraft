@@ -157,6 +157,135 @@ fn row_and_column_spans_keep_a_table_regular() {
     assert_eq!(status(&r, Rule::TableRegularity), Status::Passed, "{:?}", r.result(Rule::TableRegularity));
 }
 
+/// A tagged document whose structure tree is the Document element `document` (object 3).
+fn structure_doc(objects: &[String]) -> Document {
+    let mut objs = vec!["<< /Type /Catalog /StructTreeRoot 2 0 R >>".to_string(), "<< /Type /StructTreeRoot /K 3 0 R >>".to_string()];
+    objs.extend_from_slice(objects);
+    pdf(&objs, "")
+}
+
+fn checked(doc: &Document, rules: &[Rule]) -> Report {
+    check(doc, &Options { rules: rules.iter().copied().collect(), pages: None })
+}
+
+#[test]
+fn figures_and_tables_past_the_old_element_cut_off_are_checked() {
+    // Five thousand paragraphs, then a figure without alternate text and a table whose second row
+    // is narrower than its first.
+    let mut kids = vec!["<< /S /P >>".to_string(); 5_000];
+    kids.push("<< /S /Figure >>".into());
+    kids.push(
+        "<< /S /Table /A << /O /Table /Summary (s) >> /K [ << /S /TR /K [ << /S /TD >> << /S /TD >> ] >> << /S /TR /K [ << /S /TD >> ] >> ] >>"
+            .into(),
+    );
+    let doc = structure_doc(&[format!("<< /S /Document /K [{}] >>", kids.join(" "))]);
+    let r = checked(&doc, &[Rule::FiguresAltText, Rule::TableRegularity]);
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+    assert!(r.result(Rule::TableRegularity).unwrap().findings[0].message.contains("between 1 and 2"));
+}
+
+#[test]
+fn findings_are_listed_in_document_order_not_in_the_order_they_close() {
+    // Each element has alternate text but no content. The outer ones close last.
+    let doc = structure_doc(&["<< /S /Document /K [ << /S /Sect /Alt (a) /K [ << /S /P /Alt (b) /K [ << /S /Div /Alt (c) >> ] >> ] >> ] >>".into()]);
+    let r = checked(&doc, &[Rule::AltTextAssociated]);
+    let kinds: Vec<&str> = r.result(Rule::AltTextAssociated).unwrap().findings.iter().map(|f| f.message.split(' ').next().unwrap_or("")).collect();
+    assert_eq!(kinds, ["Sect", "P", "Div"]);
+}
+
+#[test]
+fn a_rule_lists_its_first_findings_and_counts_the_rest() {
+    let figures = vec!["<< /S /Figure >>".to_string(); 300].join(" ");
+    let doc = structure_doc(&[format!("<< /S /Document /K [{figures}] >>")]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let found = &r.result(Rule::FiguresAltText).unwrap().findings;
+    assert_eq!(found.len(), 201);
+    assert_eq!(found[200].message, "… and 100 more");
+    assert!(found[..200].iter().all(|f| f.message == "Figure element: no alternate text"));
+}
+
+#[test]
+fn cycles_shared_kids_and_missing_kids_are_read_once() {
+    // Object 4 holds itself, a figure twice, and a missing object is listed too.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [4 0 R 4 0 R 99 0 R] >>".into(),
+        "<< /S /Sect /K [4 0 R 5 0 R 5 0 R] >>".into(),
+        "<< /S /Figure >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert_eq!(r.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+}
+
+#[test]
+fn nesting_is_read_to_the_depth_limit_and_no_further() {
+    // Sections, each the kid of the one before, ending in a figure without alternate text. The
+    // figure is at depth `sections`; the walk reads depths up to 256.
+    let figure_within = |sections: usize| {
+        let mut objs: Vec<String> = (0..sections).map(|i| format!("<< /S /Sect /K {} 0 R >>", 4 + i)).collect();
+        objs.push("<< /S /Figure >>".into());
+        let r = checked(&structure_doc(&objs), &[Rule::FiguresAltText]);
+        r.result(Rule::FiguresAltText).unwrap().findings.len()
+    };
+    assert_eq!(figure_within(250), 1, "within the depth limit");
+    assert_eq!(figure_within(300), 0, "past the depth limit");
+}
+
+#[test]
+fn arrays_nested_deeper_than_the_limit_are_not_read() {
+    let nested = |n: usize| format!("<< /S /Document /K {}<< /S /Figure >>{} >>", "[".repeat(n), "]".repeat(n));
+    let shallow = checked(&structure_doc(&[nested(100)]), &[Rule::FiguresAltText]);
+    assert_eq!(shallow.result(Rule::FiguresAltText).unwrap().findings.len(), 1);
+    let deep = checked(&structure_doc(&[nested(300)]), &[Rule::FiguresAltText]);
+    assert_eq!(deep.result(Rule::FiguresAltText).unwrap().findings.len(), 0);
+}
+
+#[test]
+fn a_long_list_of_marked_content_counts_as_content() {
+    // The first paragraph holds 20,000 marked-content items, so its alternate text has content.
+    let items = (0..20_000).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+    let doc = structure_doc(&[format!("<< /S /Document /K [ << /S /P /Alt (a) /K [{items}] >> << /S /P /Alt (b) >> ] >>")]);
+    let r = checked(&doc, &[Rule::AltTextAssociated]);
+    assert_eq!(r.result(Rule::AltTextAssociated).unwrap().findings.len(), 1);
+}
+
+#[test]
+fn huge_spans_do_not_size_the_table() {
+    // A row of 2,000 cells, each spanning 10,000 columns, then a row of one cell.
+    let wide = vec!["<< /S /TD /A << /O /Table /ColSpan 10000 >> >>".to_string(); 2_000].join(" ");
+    let doc = structure_doc(&[format!(
+        "<< /S /Document /K [ << /S /Table /A << /O /Table /Summary (s) >> /K [ << /S /TR /K [{wide}] >> << /S /TR /K [ << /S /TD >> ] >> ] >> ] >>"
+    )]);
+    let r = checked(&doc, &[Rule::TableRegularity]);
+    let found = &r.result(Rule::TableRegularity).unwrap().findings;
+    assert_eq!(found[0].message, "Table element: rows have between 1 and 20000000 columns");
+}
+
+#[test]
+fn row_spans_carry_past_their_row() {
+    // Row 1: 3,000 cells, each spanning 10,000 rows. Row 2: 3,000 cells, which start after them.
+    let row1 = vec!["<< /S /TD /A << /O /Table /RowSpan 10000 >> >>".to_string(); 3_000].join(" ");
+    let row2 = vec!["<< /S /TD >>".to_string(); 3_000].join(" ");
+    let doc = structure_doc(&[format!(
+        "<< /S /Document /K [ << /S /Table /A << /O /Table /Summary (s) >> /K [ << /S /TR /K [{row1}] >> << /S /TR /K [{row2}] >> ] >> ] >>"
+    )]);
+    let r = checked(&doc, &[Rule::TableRegularity]);
+    let found = &r.result(Rule::TableRegularity).unwrap().findings;
+    assert_eq!(found[0].message, "Table element: rows have between 3000 and 6000 columns");
+}
+
+#[test]
+fn spans_that_are_not_positive_integers_read_as_one() {
+    // ColSpan -3 and 0 read as 1, and 2.0 reads as 2; the first row is 4 columns wide, the second 5.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Table /A << /O /Table /Summary (s) >> /K [ \
+         << /S /TR /K [ << /S /TD /A << /O /Table /ColSpan -3 >> >> << /S /TD /A << /O /Table /ColSpan 0 >> >> << /S /TD /A << /O /Table /ColSpan 2.0 >> >> ] >> \
+         << /S /TR /K [ << /S /TD >> << /S /TD >> << /S /TD >> << /S /TD >> << /S /TD >> ] >> ] >> ] >>"
+            .into(),
+    ]);
+    let r = checked(&doc, &[Rule::TableRegularity]);
+    assert_eq!(r.result(Rule::TableRegularity).unwrap().findings[0].message, "Table element: rows have between 4 and 5 columns");
+}
+
 #[test]
 fn page_content_and_annotation_problems_are_found() {
     let mut objs = good();

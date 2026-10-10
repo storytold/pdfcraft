@@ -465,8 +465,9 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         Some(p) => p.iter().copied().filter(|p| *p < pages.len()).collect(),
         None => (0..pages.len()).collect(),
     };
-    let tree = structure::Tree::read(doc, &pages);
+    let tagged = structure::has_struct_tree(doc);
     let scan = content::Scan::run(doc, &pages, &page_list);
+    let mut tree_rules = structure::run(doc, &pages, &options.rules);
     let mut results = Vec::with_capacity(32);
     for rule in Rule::ALL {
         if !options.rules.contains(&rule) {
@@ -477,13 +478,22 @@ pub fn check(doc: &Document, options: &Options) -> Report {
             results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
             continue;
         }
-        let mut findings = match rule.category() {
-            Category::Document => content::document_rule(doc, rule, &pages, &scan),
-            Category::PageContent | Category::Forms => content::page_rule(doc, rule, &pages, &page_list, &scan, &tree),
-            _ => tree.rule(rule),
+        // `total` counts every finding; `findings` holds the first MAX_FINDINGS of them.
+        let (mut findings, total) = match rule.category() {
+            Category::Document => {
+                let found = content::document_rule(doc, rule, &pages, &scan);
+                let n = found.len();
+                (found, n)
+            }
+            Category::PageContent | Category::Forms => {
+                let found = content::page_rule(doc, rule, &pages, &page_list, &scan, tagged);
+                let n = found.len();
+                (found, n)
+            }
+            _ => tree_rules.remove(&rule).unwrap_or_default(),
         };
-        if findings.len() > MAX_FINDINGS {
-            let more = findings.len() - MAX_FINDINGS;
+        if total > MAX_FINDINGS {
+            let more = total - MAX_FINDINGS;
             findings.truncate(MAX_FINDINGS);
             findings.push(Finding { page: None, message: format!("… and {more} more") });
         }
