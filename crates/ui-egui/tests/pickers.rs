@@ -213,6 +213,67 @@ fn extract_and_delete_deletes_the_pages_only_after_their_files_are_written() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #737: Extract pages names the files after the name typed in the dialog, which starts out
+/// as the document's name.
+#[test]
+fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
+    let dir = scratch("extract-named");
+    let mut h = harness(&[3]);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(2);
+    assert_eq!(h.state().extract_draft.name, "doc0", "the dialog starts with the document's name");
+    // Several pages as separate files: each is "<name> (page N).pdf".
+    h.state_mut().views[0].select_pages(&[0, 2]);
+    h.state_mut().extract_draft.name = "Invoices.pdf".into();
+    h.state_mut().extract_draft.separate = true;
+    h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    assert!(dir.join("Invoices (page 1).pdf").exists() && dir.join("Invoices (page 3).pdf").exists());
+    // One renamed page as a separate file is saved under exactly that name; characters a file
+    // name can't hold become "_".
+    h.state_mut().views[0].select_pages(&[1]);
+    h.state_mut().extract_draft.name = " March: 2026/receipt ".into();
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    assert!(dir.join("March_ 2026_receipt.pdf").exists());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "nothing written outside those names");
+    // Into a new tab: the tab, and so Save As, has the typed name.
+    h.state_mut().extract_draft.separate = false;
+    h.state_mut().extract_draft.name = "Chapter 2".into();
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    let s = h.state();
+    let tab = s.active.and_then(|i| s.views.get(i)).and_then(|v| s.session.get(v.id)).map(|d| d.name.clone());
+    assert_eq!(tab.as_deref(), Some("Chapter 2.pdf"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Left as the document's name (or emptied), the names are the ones Extract always used.
+#[test]
+fn extract_pages_keeps_the_usual_names_when_the_file_name_is_unchanged() {
+    let dir = scratch("extract-default-name");
+    let mut h = harness(&[3]);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.separate = true;
+    h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    assert!(dir.join("doc0 (page 1).pdf").exists());
+    h.state_mut().extract_draft.name = "  ..  ".into();
+    h.state_mut().views[0].select_pages(&[1]);
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    assert!(dir.join("doc0 (page 2).pdf").exists(), "a name with nothing usable falls back to the document's");
+    h.state_mut().extract_draft.separate = false;
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    let s = h.state();
+    let tab = s.active.and_then(|i| s.views.get(i)).and_then(|v| s.session.get(v.id)).map(|d| d.name.clone());
+    assert_eq!(tab.as_deref(), Some("doc0 (extract).pdf"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_cancelled_folder_pick_extracts_and_deletes_nothing() {
     let mut h = harness(&[3]);

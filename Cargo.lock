@@ -3553,6 +3553,7 @@ dependencies = [
  "pollster 1.0.1",
  "rustls-native-certs",
  "serde_json",
+ "uds_windows",
  "ureq",
  "winresource",
  "winsafe",
@@ -3564,6 +3565,7 @@ version = "0.5.0"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-fonts",
  "pdfcraft-model",
  "thiserror 2.0.21",
 ]

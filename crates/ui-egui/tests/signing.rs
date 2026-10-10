@@ -297,3 +297,40 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     assert_eq!(h.state().dialog, Some(Dialog::Sign));
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }
+
+/// Certificate names are as long as their owners made them: the picker cuts both lines of a
+/// row with "…" instead of painting them past the dialog's edge.
+#[test]
+fn long_digital_id_names_stay_inside_the_picker() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    let long = "a certificate subject much longer than the picker is wide ".repeat(4);
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "windows:No Such Signer".into(),
+        name: long.clone(),
+        issuer: long,
+        email: String::new(),
+        expires: "2030.01.01".into(),
+    });
+    h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
+    h.run_steps(3);
+    let right = h.get_by_label("Continue").rect().right();
+    let lines: Vec<_> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text.contains("much longer") => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines.len(), 2, "the name and the details line");
+    for line in lines {
+        assert!(line.galley.elided, "{}", line.galley.job.text);
+        assert!(
+            line.pos.x + line.galley.size().x <= right,
+            "the line ends at {} but the dialog's buttons end at {right}",
+            line.pos.x + line.galley.size().x
+        );
+    }
+}

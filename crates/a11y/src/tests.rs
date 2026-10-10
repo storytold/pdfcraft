@@ -279,3 +279,59 @@ fn setting_alt_text_and_marking_decorative() {
     let text = String::from_utf8(c.decoded().unwrap()).unwrap();
     assert!(text.contains("/Artifact BMC") && !text.contains("/MCID 0"), "{text}");
 }
+
+fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
+    Some(pdfcraft_cos::ObjRef::new(n, 0))
+}
+
+/// Two tagged pages: role-mapped and nested headings, actual text, a ToUnicode font, a heading
+/// without text and a heading that lists itself among its kids.
+fn headings_doc() -> Vec<String> {
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R /Resources << /Font << /F1 7 0 R /F2 9 0 R >> >> >>".into(),
+        stream(
+            "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 20 180 Td (Chapter) Tj ( One) Tj ET EMC \
+             /P << /MCID 1 >> BDC BT (Body) Tj ET EMC \
+             /H << /MCID 2 >> BDC BT /F1 10 Tf [(Sec) -500 (A)] TJ ET EMC",
+        ),
+        stream("/H2 << /MCID 0 >> BDC BT /F1 12 Tf (Ignored) Tj ET EMC /H3 << /MCID 1 >> BDC BT /F2 12 Tf <0102> Tj ET EMC"),
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 10 0 R /RoleMap << /Chapter /H1 >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Custom /ToUnicode 11 0 R >>".into(),
+        "<< /S /Document /K [12 0 R << /S /P /Pg 3 0 R /K 1 >> << /S /Sect /K << /S /Sect /K 13 0 R >> >> 14 0 R 15 0 R 16 0 R] >>".into(),
+        stream(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange \
+             2 beginbfchar <01> <0041> <02> <0042> endbfchar endcmap end end",
+        ),
+        "<< /S /Chapter /Pg 3 0 R /K 0 >>".into(),
+        "<< /S /H /Pg 3 0 R /K << /Type /MCR /MCID 2 >> >>".into(),
+        "<< /S /H2 /Pg 4 0 R /ActualText (Override) /K 0 >>".into(),
+        "<< /S /H3 /Pg 4 0 R /K [1 15 0 R] >>".into(),
+        "<< /S /H1 /Pg 4 0 R /K 9 >>".into(),
+    ]
+}
+
+#[test]
+fn headings_are_found_with_their_levels_titles_and_pages() {
+    let doc = pdf(&headings_doc(), "");
+    let found: Vec<_> = headings(&doc).into_iter().map(|h| (h.title, h.level, h.page, h.obj)).collect();
+    assert_eq!(
+        found,
+        [
+            ("Chapter One".to_string(), 1, 0, ref_(12)),
+            ("Sec A".to_string(), 2, 0, ref_(13)),
+            ("Override".to_string(), 2, 1, ref_(14)),
+            ("AB".to_string(), 3, 1, ref_(15)),
+        ]
+    );
+}
+
+#[test]
+fn an_untagged_document_has_no_headings() {
+    let mut objs = headings_doc();
+    objs[0] = "<< /Type /Catalog /Pages 2 0 R >>".into();
+    assert!(headings(&pdf(&objs, "")).is_empty());
+}

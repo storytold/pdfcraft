@@ -736,6 +736,30 @@ fn bookmarks_add_rename_move_delete() {
 }
 
 #[test]
+fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element };
+    let se = ObjRef::new(4242, 0);
+    let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
+    assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Untitled[One[Deep,Two],Next]", "Existing"]);
+
+    let b = crate::bookmarks(&d);
+    let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    assert_eq!((count_of(&d, root), count_of(&d, b[0].obj), count_of(&d, b[0].children[0].obj)), (Some(6), Some(4), Some(2)));
+    let one = d.get(b[0].children[0].obj).as_dict().cloned().unwrap();
+    assert_eq!(one.get(b"SE"), Some(&Object::Ref(se)));
+    let pages = crate::walk(&d).unwrap();
+    let next = d.get(b[0].children[1].obj).as_dict().cloned().unwrap();
+    assert_eq!(next.get(b"Dest").and_then(|x| x.as_array()).map(|a| a[0].clone()), Some(Object::Ref(pages[2].0)));
+
+    assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &[]), Err(crate::OutlineError::NoEntries));
+    assert!(crate::add_bookmark_tree(&mut d, "Untitled", &[e(1, "Nowhere", 9, None)]).is_err());
+    assert_eq!(titles(&crate::bookmarks(&full_roundtrip(&d))), ["Untitled[One[Deep,Two],Next]", "Existing"]);
+}
+
+#[test]
 fn bookmark_edits_keep_unknown_keys_and_touch_few_objects() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "One", 0).unwrap();

@@ -66,7 +66,7 @@
 	Double-click	Dupla kattintás
 	Select a word	Szó kijelölése
 	Clear selection / close find	Kijelölés törlése / keresés bezárása
-	Zoom in / out (also pinch or ⌘-scroll)	Nagyítás / kicsinyítés (csípéssel vagy ⌘-görgetéssel is)
+	Zoom in / out (also pinch or {key}-scroll)	Nagyítás / kicsinyítés (csípéssel vagy {key}-görgetéssel is)
 	Rotate view	Nézet forgatása
 	First / last page	Első / utolsó oldal
 	Previous / next page	Előző / következő oldal
@@ -74,16 +74,16 @@
 	Select all pages (Organize)	Összes oldal kijelölése (Rendezés)
 	Home	Kezdőlap
 	Open	Megnyitás
-	Open a PDF (⌘O)	PDF megnyitása (⌘O)
+	Open a PDF ({key})	PDF megnyitása ({key})
 	Dark gray theme	Sötétszürke téma
 	Light theme	Világos téma
 	All tools	Minden eszköz
 	Read	Olvasás
 	Convert	Konvertálás
 	E-Sign	E-aláírás
-	Print (⌘P)	Nyomtatás (⌘P)
+	Print ({key})	Nyomtatás ({key})
 	Save (M4)	Mentés (M4)
-	Document properties (⌘D)	Dokumentum tulajdonságai (⌘D)
+	Document properties ({key})	Dokumentum tulajdonságai ({key})
 	Find tools and commands	Eszközök és parancsok keresése
 	Fit to height	Magassághoz igazítás
 	Zoom in	Nagyítás
@@ -112,9 +112,9 @@
 	Compare	Összehasonlítás
 	Page thumbnails	Oldalbélyegképek
 	Form fields	Űrlapmezők
-	Zoom out (⌘−)	Kicsinyítés (⌘−)
-	Zoom in (⌘+)	Nagyítás (⌘+)
-	Rotate view clockwise (⇧⌘+)	Nézet forgatása az óramutató járásával megegyezően (⇧⌘+)
+	Zoom out ({key})	Kicsinyítés ({key})
+	Zoom in ({key})	Nagyítás ({key})
+	Rotate view clockwise ({key})	Nézet forgatása az óramutató járásával megegyezően ({key})
 	Toggle fit page / fit width	Teljes oldal / szélesség váltása
 	Next page	Következő oldal
 	Previous page	Előző oldal
@@ -248,6 +248,7 @@
 	Security properties…	Biztonság tulajdonságai…
 	Organize pages	Oldalak rendezése
 	New bookmark	Új könyvjelző
+	New bookmarks from structure	Új könyvjelzők a szerkezetből
 	Rotate pages clockwise	Oldalak forgatása az óramutató járásával megegyezően
 	Rotate pages counterclockwise	Oldalak forgatása az óramutató járásával ellentétesen
 	Delete pages	Oldalak törlése
@@ -1064,10 +1065,16 @@
 	Text in images isn't found; recognise text (OCR) first.	A képekben lévő szöveg nem található meg; előbb futtass szövegfelismerést (OCR).
 	No matches.	Nincs találat.
 	{n} match(es) marked for redaction.	{n} találat megjelölve kitakarásra.
+	Multiple words or phrases	Több szó vagy kifejezés
+	One word or phrase per line	Soronként egy szó vagy kifejezés
+	Import list…	Lista importálása…
+	{n} word(s) or phrase(s)	{n} szó vagy kifejezés
+	{name} is too large for a word list (at most 1 MB).	A(z) {name} túl nagy egy szólistához (legfeljebb 1 MB).
 	Redaction Tool Properties	Kitakaróeszköz tulajdonságai
 	Redacted area fill colour:	Kitakart terület kitöltőszíne:
 	Use overlay text	Fedőszöveg használata
 	Custom text:	Saját szöveg:
+	Redaction code:	Kitakarási kód:
 	Font:	Betűtípus:
 	Font size:	Betűméret:
 	Auto-size text to fit redaction region	A szöveg automatikus méretezése a kitakarási területhez
@@ -1237,7 +1244,7 @@
 	Expand all bookmarks	Összes könyvjelző kibontása
 	Expand top-level bookmarks	A legfelső szintű könyvjelzők kibontása
 	Collapse all bookmarks	Összes könyvjelző összecsukása
-	New bookmark (⌘B)	Új könyvjelző (⌘B)
+	New bookmark ({key})	Új könyvjelző ({key})
 	This document has no bookmarks.	Ebben a dokumentumban nincs könyvjelző.
 	This document has no layers.	Ebben a dokumentumban nincs réteg.
 	This document has no attachments.	Ebben a dokumentumban nincs melléklet.
@@ -1251,8 +1258,8 @@
 	No matches	Nincs találat
 	Searching… {s}/{p}	Keresés… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
-	Previous (⇧⌘G)	Előző (⇧⌘G)
-	Next (⌘G)	Következő (⌘G)
+	Previous ({key})	Előző ({key})
+	Next ({key})	Következő ({key})
 	Find options	Keresés beállításai
 	Whole words only	Csak egész szavak
 	Case-sensitive	Kis- és nagybetű

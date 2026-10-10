@@ -478,7 +478,14 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             };
             ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
             icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
-            ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
+            // Certificate names can be any length: cut both lines with "…" at the row's edge
+            // and show them whole on hover.
+            let line = |text: &str, font: egui::FontId, color: Color32| {
+                let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 50.0).max(0.0));
+                ui.painter().layout_job(job)
+            };
+            let name = line(&e.name, theme::semibold(13.0), t.text);
             let sub = format!(
                 "{keychain}{email}{issued}{issuer}{expires}{date}",
                 keychain = if e.path.starts_with("keychain:") {
@@ -494,7 +501,11 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 expires = tl!(", Expires: "),
                 date = e.expires,
             );
-            ui.painter().text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, sub, theme::regular(11.5), t.text_muted);
+            let details = line(&sub, theme::regular(11.5), t.text_muted);
+            let elided = name.elided || details.elided;
+            ui.painter().galley(rect.min + vec2(40.0, 9.0), name, t.text);
+            ui.painter().galley(rect.min + vec2(40.0, 28.0), details, t.text_muted);
+            let resp = if elided { resp.on_hover_text(format!("{}\n{sub}", e.name)) } else { resp };
             if resp.clicked() {
                 d.selected = Some(i);
             }

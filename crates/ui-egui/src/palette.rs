@@ -25,12 +25,21 @@ fn score(hay: &str, needle: &str) -> Option<usize> {
     if let Some(p) = h.find(needle) {
         return Some(p);
     }
+    // A right-to-left language's labels are in display order (their words run the other way)
+    // while the query is in typing order, so several words match one by one.
+    if crate::i18n::current().rtl() && needle.contains(char::is_whitespace) {
+        let first = needle.split_whitespace().map(|word| h.find(word)).try_fold(usize::MAX, |first, p| p.map(|p| first.min(p)));
+        if let Some(first) = first {
+            return Some(first);
+        }
+    }
     // Subsequence match as a fallback.
     let mut it = h.chars();
     needle.chars().all(|c| it.any(|x| x == c)).then_some(100)
 }
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let palette_rect_id = egui::Id::new("palette_rect");
     if !app.palette_open {
         return;
     }
@@ -99,8 +108,21 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     hits.truncate(12);
 
     let screen = ctx.content_rect();
+
+    let previous_rect = ctx.data(|data| data.get_temp::<Rect>(palette_rect_id));
+
+    let outside_click = ctx.input(|input| {
+        input.pointer.button_pressed(egui::PointerButton::Primary)
+            && input.pointer.interact_pos().is_some_and(|pos| previous_rect.is_some_and(|rect| !rect.contains(pos)))
+    });
+
+    if outside_click {
+        app.palette_open = false;
+        app.palette_query.clear();
+        return;
+    }
     let mut chosen: Option<(Option<&'static str>, Option<&'static str>)> = None;
-    egui::Area::new(egui::Id::new("palette"))
+    let area_response = egui::Area::new(egui::Id::new("palette"))
         .order(egui::Order::Foreground)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(egui::pos2(screen.center().x, screen.top() + 96.0))
@@ -151,6 +173,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let _ = Stroke::NONE;
             });
         });
+
+    ctx.data_mut(|data| {
+        data.insert_temp(palette_rect_id, area_response.response.rect);
+    });
+
     if let Some((command, group)) = chosen {
         app.palette_open = false;
         app.palette_query.clear();

@@ -80,6 +80,7 @@
 	Signatures panel	Panel podpisů
 	Organize pages	Uspořádat stránky
 	New bookmark	Nová záložka
+	New bookmarks from structure	Nové záložky ze struktury
 	Rotate pages clockwise	Otočit stránky po směru hodinových ručiček
 	Rotate pages counterclockwise	Otočit stránky proti směru hodinových ručiček
 	Delete pages	Odstranit stránky
@@ -143,3 +144,8 @@
 	Professional PDF tools for everyday document work.	Profesionální nástroje PDF pro každodenní práci s dokumenty.
 	Professional PDF document tools by Linkco.	Profesionální nástroje pro dokumenty PDF od společnosti Linkco.
 	View all tools →	Zobrazit všechny nástroje →
+	Multiple words or phrases	Více slov nebo frází
+	One word or phrase per line	Jedno slovo nebo fráze na řádek
+	Import list…	Importovat seznam…
+	{n} word(s) or phrase(s)	Slova nebo fráze: {n}
+	{name} is too large for a word list (at most 1 MB).	{name} je pro seznam slov příliš velký (nejvýše 1 MB).

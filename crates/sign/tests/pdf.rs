@@ -1090,31 +1090,40 @@ fn windows_store_enumeration_and_missing_identity() {
     assert!(pdfcraft_sign::windows::find("windows:no such signer").is_err());
 }
 
+#[cfg(windows)]
+fn powershell(script: &str) -> std::process::Output {
+    // Load the certificate provider explicitly in a profile-free Windows PowerShell child.
+    let script = format!(
+        r#"$ErrorActionPreference='Stop'; Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"; {script}"#
+    );
+    std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().unwrap()
+}
+
+/// Thumbprints of temporary Current User Personal certificates, removed with their keys on drop.
+#[cfg(windows)]
+struct Certificates(Vec<String>);
+
+#[cfg(windows)]
+impl Drop for Certificates {
+    fn drop(&mut self) {
+        for thumbprint in &self.0 {
+            // New-SelfSignedCertificate also leaves a public copy of a self-signed or CA
+            // certificate in Intermediate Certification Authorities (CA).
+            let out = powershell(&format!(
+                "Remove-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey; $copy='Cert:\\CurrentUser\\CA\\{thumbprint}'; if (Test-Path -LiteralPath $copy) {{ Remove-Item -LiteralPath $copy }}"
+            ));
+            if !out.status.success() {
+                eprintln!("test certificate cleanup failed: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        }
+    }
+}
+
 /// Uses only newly created software-backed CNG keys, removed even when signing fails.
 #[cfg(windows)]
 #[test]
 #[ignore = "creates temporary certificates in the Windows Current User Personal store"]
 fn signing_with_windows_store_identities() {
-    use std::process::Command;
-    fn powershell(script: &str) -> std::process::Output {
-        // Load the certificate provider explicitly in a profile-free Windows PowerShell child.
-        let script = format!(
-            r#"$ErrorActionPreference='Stop'; Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"; {script}"#
-        );
-        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().unwrap()
-    }
-    struct Certificates(Vec<String>);
-    impl Drop for Certificates {
-        fn drop(&mut self) {
-            for thumbprint in &self.0 {
-                let out =
-                    powershell(&format!("$ErrorActionPreference='Stop'; Remove-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}' -DeleteKey"));
-                if !out.status.success() {
-                    eprintln!("test certificate cleanup failed: {}", String::from_utf8_lossy(&out.stderr));
-                }
-            }
-        }
-    }
     let mut created = Certificates(Vec::new());
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).unwrap();
@@ -1150,9 +1159,57 @@ fn signing_with_windows_store_identities() {
     let thumbprints = created.0.clone();
     drop(created);
     for thumbprint in thumbprints {
-        let out = powershell(&format!("if (Test-Path -LiteralPath 'Cert:\\CurrentUser\\My\\{thumbprint}') {{ exit 1 }}"));
-        assert!(out.status.success(), "test certificate remains: {thumbprint}");
+        for store in ["My", "CA"] {
+            let out = powershell(&format!("if (Test-Path -LiteralPath 'Cert:\\CurrentUser\\{store}\\{thumbprint}') {{ exit 1 }}"));
+            assert!(out.status.success(), "test certificate remains in {store}: {thumbprint}");
+        }
     }
+}
+
+/// An identity found for signing brings the issuers Windows chains it to (not the root), so the
+/// signature validates against the root alone. Uses only temporary software-backed CNG keys.
+#[cfg(windows)]
+#[test]
+#[ignore = "creates temporary certificates in the Windows Current User Personal store"]
+fn a_windows_store_identity_signs_with_its_issuers() {
+    let mut created = Certificates(Vec::new());
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).unwrap();
+    let unique: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let [root, issuer, signer] = ["Root", "Issuer", "Signer"].map(|role| format!("PdfCraft Test {unique} {role}"));
+    let mut create = |name: &str, signed_by: Option<&str>, extra: &str| {
+        let by = signed_by.map(|t| format!("-Signer (Get-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{t}')")).unwrap_or_default();
+        let out = powershell(&format!(
+            "$c=New-SelfSignedCertificate -Subject 'CN={name}' -CertStoreLocation 'Cert:\\CurrentUser\\My' -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable {by} {extra}; $c.Thumbprint"
+        ));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let thumbprint = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert_eq!(thumbprint.len(), 40);
+        created.0.push(thumbprint.clone());
+        thumbprint
+    };
+    let ca = "-KeyUsage CertSign -TextExtension @('2.5.29.19={text}CA=true')";
+    let root_thumbprint = create(&root, None, ca);
+    let issuer_thumbprint = create(&issuer, Some(&root_thumbprint), ca);
+    create(&signer, Some(&issuer_thumbprint), "-KeyUsage DigitalSignature");
+
+    let listed = pdfcraft_sign::windows::identities().unwrap();
+    let anchor = listed.iter().find(|id| id.certificate.subject.common_name() == Some(root.as_str())).expect("root listed").certificate.clone();
+    // Listing builds no chains; finding the identity to sign with does.
+    assert!(listed.iter().all(|id| id.chain.is_empty()));
+    let id = pdfcraft_sign::windows::find(&format!("windows:{signer}")).unwrap();
+    let chain: Vec<_> = id.chain.iter().map(|c| c.subject.common_name()).collect();
+    assert_eq!(chain, [Some(issuer.as_str())], "the issuer, without the signer's own certificate or the root");
+
+    let mut options = opts();
+    let now = powershell("(Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')");
+    assert!(now.status.success());
+    options.date = format!("D:{}Z", String::from_utf8(now.stdout).unwrap().trim());
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+    let validated = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] });
+    let signature = validated.iter().find(|s| s.signed).unwrap();
+    assert_eq!(signature.status, Status::Valid, "{:?}", signature.details);
+    assert_eq!(signature.signer.as_deref(), Some(signer.as_str()));
 }
 
 /// Documenso-style: an AcroForm signature field `Timestamp_1` whose `/V` is the document
@@ -1298,4 +1355,139 @@ fn validates_the_legacy_adbe_x509_rsa_sha1_format() {
     bad[i] = b'l';
     let s = signatures(&open(&bad), &bad, &trusted).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+}
+
+/// `fixture()` protected with an empty user password (opens without asking, like most
+/// "secured" forms) and an owner password, then saved.
+fn protected(alg: pdfcraft_cos::Algorithm, permissions: i32) -> Vec<u8> {
+    let mut doc = open(&fixture());
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: alg,
+        user_password: "",
+        owner_password: "owner",
+        permissions,
+        encrypt_metadata: true,
+        seed: [17; 32],
+    })
+    .unwrap();
+    pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+fn open_pw(b: &[u8], pw: Option<&str>) -> Document {
+    Document::open_with_password(Arc::new(b.to_vec()), pw).unwrap()
+}
+
+/// Filling in forms and signing existing fields only (bits 3, 7–10): what Acrobat's "Filling
+/// in form fields, and signing existing signature fields" writes.
+const FILL_AND_SIGN_ONLY: i32 = -3132;
+
+const ALL_ALGORITHMS: [pdfcraft_cos::Algorithm; 4] =
+    [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256];
+
+#[test]
+fn encrypted_documents_are_signed_with_an_unencrypted_contents() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let id2 = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone(), id2.certificate.clone()] };
+    for alg in ALL_ALGORITHMS {
+        let base = protected(alg, -1);
+        let doc = open_pw(&base, None);
+        assert_eq!(doc.security().unwrap().auth(), pdfcraft_cos::Auth::User);
+        let signed = pdfcraft_sign::sign(&doc, &id, &opts()).unwrap();
+        assert!(signed.starts_with(&base), "{alg:?}: an incremental update");
+        let added = String::from_utf8_lossy(&signed[base.len()..]);
+        assert!(added.contains("/Encrypt") && added.contains("/ID"), "{alg:?}: the update keeps the file's security");
+        assert!(!added.contains("I approve") && !added.contains("London"), "{alg:?}: the new strings are encrypted");
+        assert!(added.contains("/Contents <30"), "{alg:?}: the CMS is written in the clear");
+        let reopened = open_pw(&signed, None);
+        assert!(reopened.security().is_some());
+        let sigs = signatures(&reopened, &signed, &trust);
+        let s = sigs.iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Valid, "{alg:?}: {:?}", s.details);
+        assert_eq!(s.modification, Modification::None);
+        assert_eq!((s.reason.as_deref(), s.location.as_deref()), (Some("I approve this document"), Some("London")), "{alg:?}");
+        assert!(s.visible && s.revision == 2 && s.signed_len == signed.len());
+        // The parsed /Contents is the CMS itself, not "decrypted" noise.
+        let cms = reopened
+            .scan_objects()
+            .filter_map(|(_, o)| o.as_dict().filter(|d| d.name(b"Type") == Some(b"Sig")).and_then(|d| d.get(b"Contents").cloned()))
+            .next()
+            .unwrap();
+        assert_eq!(cms.as_string().unwrap().bytes.first(), Some(&0x30), "{alg:?}");
+        // Counter-signing the existing field keeps the first signature valid.
+        let both = pdfcraft_sign::sign(&reopened, &id2, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        let sigs = signatures(&open_pw(&both, None), &both, &trust);
+        let first = sigs.iter().find(|s| s.field == "Signature1").unwrap();
+        assert_eq!(first.status, Status::Valid, "{alg:?}: {:?}", first.details);
+        assert_eq!(first.modification, Modification::Allowed(vec!["signature".into()]), "{alg:?}: {:?}", first.details);
+        let second = sigs.iter().find(|s| s.field == "Approval").unwrap();
+        assert_eq!((second.status, second.revision), (Status::Valid, 3), "{alg:?}: {:?}", second.details);
+        // The page text is still encrypted, and tampering with its ciphertext breaks both.
+        assert!(!String::from_utf8_lossy(&both).contains("Contract text"));
+        let mut tampered = both.clone();
+        let at = base.len() / 2;
+        tampered[at] ^= 1;
+        let tampered_sigs = signatures(&open_pw(&tampered, None), &tampered, &trust);
+        assert!(tampered_sigs.iter().filter(|s| s.signed).all(|s| s.status == Status::Invalid), "{alg:?}");
+    }
+}
+
+#[test]
+fn encrypted_documents_are_signed_only_as_their_permissions_allow() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let base = protected(pdfcraft_cos::Algorithm::Aes256, FILL_AND_SIGN_ONLY);
+    let user = open_pw(&base, None);
+    let refused = |r: Result<Vec<u8>, SignError>, what: &str| match r {
+        Err(SignError::Pdf(m)) => assert!(m.contains(what) && m.contains("permissions password"), "{m}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|b| b.len())),
+    };
+    // A new field is a form change the settings don't allow.
+    refused(pdfcraft_sign::sign(&user, &id, &opts()), "adding new signature fields");
+    // So is certifying, even in an existing field.
+    refused(pdfcraft_sign::sign(&user, &id, &SignOptions { field: Some("Approval".into()), certify: Some(2), ..opts() }), "certifying");
+    // Signing the existing field is allowed.
+    let signed = pdfcraft_sign::sign(&user, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let s = signatures(&open_pw(&signed, None), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.field.as_str(), s.status), ("Approval", Status::Valid), "{:?}", s.details);
+    // Settings that allow no form filling refuse even that (print only).
+    let print_only = open_pw(&protected(pdfcraft_cos::Algorithm::Aes256, -3900), None);
+    refused(pdfcraft_sign::sign(&print_only, &id, &SignOptions { field: Some("Approval".into()), ..opts() }), "signing");
+    // The owner may do anything: a new, certifying signature.
+    let owner = open_pw(&base, Some("owner"));
+    let certified = pdfcraft_sign::sign(&owner, &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let s = signatures(&open_pw(&certified, None), &certified, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.certify, Some(2), "{:?}", s.details);
+}
+
+/// A security change that hasn't been saved would turn the signing save into a full rewrite that
+/// applies or removes protection: signing refuses until it is saved.
+#[test]
+fn signing_waits_for_a_pending_security_change_to_be_saved() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let mut owner = open_pw(&protected(pdfcraft_cos::Algorithm::Aes256, FILL_AND_SIGN_ONLY), Some("owner"));
+    owner.remove_encryption();
+    match pdfcraft_sign::sign(&owner, &id, &opts()) {
+        Err(SignError::Pdf(m)) => assert!(m.contains("save the document's new security settings"), "{m}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|b| b.len())),
+    }
+}
+
+#[test]
+fn encrypted_documents_take_a_document_timestamp() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let base = protected(pdfcraft_cos::Algorithm::Aes128, FILL_AND_SIGN_ONLY);
+    let stamped = pdfcraft_sign::timestamp_document(&open_pw(&base, None), &tsa, "D:20261006120000Z").unwrap();
+    assert!(stamped.starts_with(&base));
+    let s = signatures(&open_pw(&stamped, None), &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] })
+        .into_iter()
+        .find(|s| s.doc_timestamp)
+        .unwrap();
+    assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(tsa.time)), "{:?}", s.details);
+    let print_only = open_pw(&protected(pdfcraft_cos::Algorithm::Aes128, -3900), None);
+    assert!(matches!(pdfcraft_sign::timestamp_document(&print_only, &tsa, "D:20261006120000Z"), Err(SignError::Pdf(_))));
 }

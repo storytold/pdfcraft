@@ -9,14 +9,22 @@ Automatically checks for and installs any missing build dependencies first:
      `https://win.rustup.rs` (or `https://sh.rustup.rs`) if missing, and added to PATH
      for the current session.
 
-Then compiles the Linkco PDF Editor desktop application (`LinkcoPDFEditor.exe` / `pdfcraft.exe`)
-and command-line tool (`pdfcraft-cli.exe`) and copies them into `dist/release/`.
+Then fetches the craft-fonts build input (Japanese fonts and Noto Sans Arabic) at the commit
+official releases pin in `.github/workflows/release.yml`, compiles the Linkco PDF Editor desktop
+application (`LinkcoPDFEditor.exe` / `pdfcraft.exe`) and command-line tool (`pdfcraft-cli.exe`)
+with it, and copies them into `dist/release/` together with the fonts' OFL licences.
+Without craft-fonts the app still runs, but cannot write Arabic or Japanese text into PDFs.
 
 Usage:
     python build.py                  # Auto-install dependencies + release build
     python build.py --debug          # Debug build
     python build.py --arch x64       # Explicit target architecture (x64, x86, arm64)
     python build.py --run            # Launch Linkco PDF Editor after building
+    python build.py --no-craft-fonts # Build without the craft-fonts input (no download)
+
+Environment:
+    CRAFT_FONTS_DIR=<checkout>       Use this craft-fonts checkout instead of fetching one
+    LINKCO_NO_CRAFT_FONTS=1          Same as --no-craft-fonts
 """
 
 from __future__ import annotations
@@ -106,6 +114,92 @@ def _find_windows_csc() -> Path | None:
 
 
 PREVIEW_HANDLER_SRC = ROOT / "packaging" / "windows" / "PreviewHandler.cs"
+
+# The craft-fonts build input (https://github.com/storytold/craft-fonts): the Japanese fonts and
+# Noto Sans Arabic that official releases embed (`crates/fonts/build.rs`, AGENTS.md §1.4). The
+# commit is read from the release workflow, so a local build embeds exactly what releases do.
+CRAFT_FONTS_REPO = "https://github.com/storytold/craft-fonts.git"
+CRAFT_FONTS_CHECKOUT = ROOT / "craft-fonts"  # git-ignored; the place CI checks it out too
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+
+
+def craft_fonts_rev(workflow: Path = RELEASE_WORKFLOW) -> str | None:
+    """The craft-fonts commit pinned in the release workflow (None if it can't be read)."""
+    try:
+        text = workflow.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    revs = set(re.findall(r"repository:\s*storytold/craft-fonts\s*\n\s*ref:\s*([0-9a-f]{40})\b", text))
+    if len(revs) != 1:
+        # None, or jobs disagree: refuse to guess which one releases use.
+        return None
+    return revs.pop()
+
+
+def _git_out(args: list[str], cwd: Path) -> str | None:
+    try:
+        return subprocess.check_output(["git", *args], cwd=str(cwd), text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def ensure_craft_fonts(enabled: bool = True) -> Path | None:
+    """
+    The craft-fonts checkout to build with: `CRAFT_FONTS_DIR` when set, otherwise `craft-fonts/`
+    fetched at the pinned commit (only that commit, shallow). None when turned off or when it
+    can't be fetched (offline): the build then goes on without it and says what is missing.
+    """
+    given = os.environ.get("CRAFT_FONTS_DIR")
+    if given:
+        path = Path(given)
+        if not (path / "fonts").is_dir():
+            raise FileNotFoundError(f"CRAFT_FONTS_DIR={given} is not a craft-fonts checkout (no fonts/ folder)")
+        print(f"==> Using craft-fonts from CRAFT_FONTS_DIR: {path}")
+        return path
+    if not enabled or os.environ.get("LINKCO_NO_CRAFT_FONTS") == "1":
+        print("==> Building without craft-fonts: Arabic and Japanese text can't be written into PDFs.")
+        return None
+    rev = craft_fonts_rev()
+    if rev is None:
+        print(f"==> Warning: no single craft-fonts commit pinned in {RELEASE_WORKFLOW}; building without craft-fonts.")
+        return None
+    dest = CRAFT_FONTS_CHECKOUT
+    if (dest / ".git").exists() and _git_out(["rev-parse", "HEAD"], dest) == rev:
+        print(f"==> craft-fonts {rev[:12]} already checked out: {dest}")
+        return dest
+    if shutil.which("git") is None:
+        print("==> Warning: git not found; building without craft-fonts (Arabic/Japanese PDF text unavailable).")
+        return None
+    print(f"==> Fetching craft-fonts {rev[:12]} (Japanese fonts, Noto Sans Arabic) into {dest}")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        if not (dest / ".git").exists():
+            subprocess.run(["git", "init", "-q"], cwd=str(dest), check=True)
+        subprocess.run(["git", "fetch", "-q", "--depth", "1", CRAFT_FONTS_REPO, rev], cwd=str(dest), check=True)
+        subprocess.run(["git", "checkout", "-q", "--force", "FETCH_HEAD"], cwd=str(dest), check=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        print(f"==> Warning: couldn't fetch craft-fonts ({e}); building without it (Arabic/Japanese PDF text unavailable).")
+        return None
+    if _git_out(["rev-parse", "HEAD"], dest) != rev or not (dest / "fonts").is_dir():
+        print("==> Warning: the craft-fonts checkout is not the pinned commit; building without it.")
+        return None
+    return dest
+
+
+def copy_craft_font_licences(craft_fonts: Path, out_dir: Path) -> list[Path]:
+    """Ship the OFL text of every embedded font family: fonts/<family>/OFL.txt -> OFL-<family>.txt
+    (as packaging/windows/package.ps1 does for release ZIPs)."""
+    copied: list[Path] = []
+    fonts = craft_fonts / "fonts"
+    if not fonts.is_dir():
+        return copied
+    for family in sorted(p for p in fonts.iterdir() if p.is_dir()):
+        ofl = family / "OFL.txt"
+        if ofl.is_file():
+            dst = out_dir / f"OFL-{family.name}.txt"
+            shutil.copy2(ofl, dst)
+            copied.append(dst)
+    return copied
 PREVIEW_HANDLER_CLSID = "{D4E7B6A2-4C91-4E3A-9B12-7A8F5C3E1D20}"
 
 
@@ -552,6 +646,7 @@ def build_app(
     static_crt: bool = True,
     locked: bool = False,
     dist_dir: Path | None = None,
+    craft_fonts: bool = True,
 ) -> dict[str, Path]:
     """
     Ensure all build dependencies are installed, compile Linkco PDF Editor (`pdfcraft` and
@@ -567,7 +662,13 @@ def build_app(
 
     cargo = ensure_dependencies(arch=resolved_arch, target=target, windows=is_windows_build)
 
+    craft_fonts_dir = ensure_craft_fonts(craft_fonts)
+
     env = os.environ.copy()
+    if craft_fonts_dir is not None:
+        env["CRAFT_FONTS_DIR"] = str(craft_fonts_dir)
+        # Fail the build rather than silently ship without the fonts once they were asked for.
+        env["CRAFT_FONTS_REQUIRED"] = "1"
     env.setdefault("PDFCRAFT_BUILD_SHA", git_head_sha(ROOT))
     env.setdefault("PDFCRAFT_BUILD_DATE", dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"))
 
@@ -624,6 +725,13 @@ def build_app(
     bin_linkco_gui = bin_dir / linkco_gui_name
     shutil.copy2(gui_bin, bin_linkco_gui)
 
+    # Licences of the fonts this build embeds, and none left over from an earlier build.
+    for stale in out_dir.glob("OFL-*.txt"):
+        stale.unlink()
+    font_licences = copy_craft_font_licences(craft_fonts_dir, out_dir) if craft_fonts_dir is not None else []
+    if font_licences:
+        print(f"==> Copied {len(font_licences)} craft-fonts licence(s) (OFL-*.txt) to {out_dir}")
+
     dist_preview_dll = out_dir / "LinkcoPdfPreviewHandler.dll"
     if os.name == "nt" and PREVIEW_HANDLER_SRC.is_file():
         csc = _find_windows_csc()
@@ -656,6 +764,7 @@ def build_app(
         "cli": dist_cli,
         "bin_dir": bin_dir,
         "dist_dir": out_dir,
+        **({"craft_fonts": craft_fonts_dir} if craft_fonts_dir is not None else {}),
     }
 
 
@@ -701,6 +810,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Output directory for built binaries (default: dist/release).",
     )
     parser.add_argument(
+        "--no-craft-fonts",
+        action="store_true",
+        help="Build without the craft-fonts input (no download; Arabic/Japanese text can't be written into PDFs).",
+    )
+    parser.add_argument(
         "--run",
         action="store_true",
         help="Launch Linkco PDF Editor after the build succeeds.",
@@ -716,6 +830,7 @@ def main(argv: list[str] | None = None) -> int:
             static_crt=not args.no_static_crt,
             locked=args.locked,
             dist_dir=args.dist,
+            craft_fonts=not args.no_craft_fonts,
         )
         if args.run:
             exe = artifacts["linkco_gui"]

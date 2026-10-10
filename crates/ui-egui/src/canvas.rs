@@ -385,6 +385,16 @@ fn sharp_enough(have: u32, want: f32) -> bool {
     want > 0.0 && GRID_SHARP.contains(&(have as f32 / want))
 }
 
+/// Thumbnail device-pixel density when `demand` pages share the thumbnail allowance.
+fn thumbnail_density(demand: usize, ppp: f32) -> f32 {
+    let per_thumb = THUMB_BYTES / demand.max(1).next_power_of_two();
+    ppp.clamp(0.25, 4.0).min((per_thumb as f32 / (4.0 * THUMB_W * THUMB_H)).sqrt() * 0.98)
+}
+
+fn thumbnail_scale(width: f32, height: f32, density: f32) -> f32 {
+    (THUMB_W / width.max(1.0)).min(THUMB_H / height.max(1.0)) * density
+}
+
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewAction {
@@ -1126,13 +1136,12 @@ impl DocView {
         // byte allowance. Both dimensions are capped, including tall/wide page boxes.
         // The count is rounded up to a power of two: the scale is part of each request's tag,
         // so a density that followed every row scrolling in or out would re-render them all.
-        let per_thumb = THUMB_BYTES / pages.len().max(1).next_power_of_two();
-        let density = ppp.clamp(0.25, 4.0).min((per_thumb as f32 / (4.0 * THUMB_W * THUMB_H)).sqrt() * 0.98);
+        let density = thumbnail_density(pages.len(), ppp);
         pages
             .into_iter()
             .filter_map(|(page, _)| {
                 let p = info.pages.get(page)?;
-                let scale = (THUMB_W / p.width.max(1.0)).min(THUMB_H / p.height.max(1.0)) * density;
+                let scale = thumbnail_scale(p.width, p.height, density);
                 Some(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: THUMB_TAG | u64::from(scale.to_bits()) })
             })
             .collect()
@@ -2831,10 +2840,12 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                             )
                         };
                         ui.label(egui::RichText::new(status).font(theme::regular(12.0)).color(t.text_muted));
-                        if icons::button(ui, "chevron-up", 26.0, false, tl!("Previous (⇧⌘G)")).clicked() {
+                        let tip = crate::commands::key_tip(ui.ctx(), tl!("Previous ({key})"), crate::commands::FIND_PREV);
+                        if icons::button(ui, "chevron-up", 26.0, false, &tip).clicked() {
                             step = Some(false);
                         }
-                        if icons::button(ui, "chevron-down", 26.0, false, tl!("Next (⌘G)")).clicked() {
+                        let tip = crate::commands::key_tip(ui.ctx(), tl!("Next ({key})"), crate::commands::FIND_NEXT);
+                        if icons::button(ui, "chevron-down", 26.0, false, &tip).clicked() {
                             step = Some(true);
                         }
                         let opts = icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words, tl!("Find options"));
@@ -3311,8 +3322,8 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
     let middle_gesture = view.auto_scroll.blocks_input();
     let mut cells: Vec<(usize, Rect)> = Vec::new();
     // The pages in view that are drawn larger than their thumbnails, and those of them that
-    // need a sharper render than they have.
-    let (mut in_view, mut sharper): (Vec<usize>, Vec<RenderRequest>) = (Vec::new(), Vec::new());
+    // need a sharper render than they have. The width is the size drawn, in device pixels.
+    let (mut in_view, mut sharper): (Vec<(usize, f32)>, Vec<RenderRequest>) = (Vec::new(), Vec::new());
     // The source cell can scroll out of the virtualized rows during a drag.
     let mut drop = view.org_drag.is_some() && ui.input(|i| i.pointer.primary_released());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, clip| {
@@ -3375,7 +3386,7 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
                 let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);
                 if !thumb_ok && ui.is_rect_visible(c) {
-                    in_view.push(i);
+                    in_view.push((i, want));
                     if !sharp.is_some_and(|(w, _)| sharp_enough(*w, want)) && !view.errors.contains_key(&i) {
                         sharper.push(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: want / p.width.max(1.0), tag: GRID_TAG });
                     }
@@ -3506,9 +3517,14 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
             ui.ctx().request_repaint();
         }
     }
-    // Sharp renders are kept only for the pages in view, so their memory stays small however
-    // long the document is. They come first; the thumbnails of the other pages follow.
-    view.grid_pages.retain(|page, _| in_view.contains(page));
+    // When this frame's thumbnail will cover the cell, drop the sharp render without waiting
+    // for that texture to arrive.
+    let density = thumbnail_density(view.thumb_demand.len(), ppp);
+    in_view.retain(|&(page, want)| {
+        info.pages.get(page).is_none_or(|p| (device_pixels(p.width, thumbnail_scale(p.width, p.height, density)) as f32) < want * GRID_SHARP.start())
+    });
+    sharper.retain(|req| in_view.iter().any(|(page, _)| *page == req.page));
+    view.grid_pages.retain(|page, _| in_view.iter().any(|(kept, _)| kept == page));
     // Sharp renders of the pages in view join this frame's demand ahead of the thumbnails.
     view.frame_queue.extend(sharper);
     if let Some(p) = open_page {
@@ -3812,19 +3828,59 @@ trailer << /Root 1 0 R >>
         let ctx = egui::Context::default();
         let mut app = PdfCraftApp::new();
         let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+        let mut expected = Vec::new();
         for index in 0..6 {
             app.open_bytes(&format!("synthetic-{index}.pdf"), None, bytes.as_ref().clone()).unwrap();
+            let info = app.session.get(app.views.last().unwrap().id).unwrap().info.clone();
             let view = app.views.last_mut().unwrap();
-            let request = RenderRequest { tag: THUMB_TAG, ..Default::default() };
-            view.last_queue = vec![request];
-            view.receive_result(&ctx, solid_result(request, 132, 171));
+            view.begin_render_frame();
             view.need_thumbnail(0, true);
+            let request = view.thumbnail_requests(&info, ctx.pixels_per_point()).into_iter().next().unwrap();
+            let page = info.pages.get(request.page).unwrap();
+            let dimensions = (device_pixels(page.width, request.scale), device_pixels(page.height, request.scale));
+            view.last_queue = vec![request];
+            assert_eq!(
+                view.receive_result(&ctx, solid_result(request, dimensions.0, dimensions.1)),
+                rgba_bytes(dimensions.0 as usize, dimensions.1 as usize)
+            );
+            assert_eq!(view.thumbs.get(&0).unwrap().tag, request.tag);
+            assert_eq!(view.thumbs.get(&0).unwrap().tex.size(), [dimensions.0 as usize, dimensions.1 as usize]);
+
+            view.begin_render_frame();
+            view.need_thumbnail(0, true);
+            let queue = view.prepare_render_queue(&info, ctx.pixels_per_point());
+            assert!(queue.is_empty(), "the synthetic thumbnail satisfies current demand");
+            view.last_queue = queue;
+            expected.push((request, dimensions));
         }
+        assert_eq!(app.views.len(), 6, "all six documents were opened");
+        assert_eq!(app.active_ids().map(|(index, _)| index), Some(5));
+        assert!(app.views.iter().zip(&expected).all(|(view, (request, dimensions))| {
+            view.thumbs.len() == 1
+                && view
+                    .thumbs
+                    .get(&0)
+                    .is_some_and(|thumb| thumb.tag == request.tag && thumb.tex.size() == [dimensions.0 as usize, dimensions.1 as usize])
+        }));
+
         app.finish_render_frame(&ctx);
         let total: usize = app.views.iter().map(|v| v.thumbs.values().map(|p| texture_bytes(&p.tex)).sum::<usize>()).sum();
-        assert!(total <= 132 * 171 * 4);
+        let (active_request, active_dimensions) = expected.last().unwrap();
+        let active_bytes = rgba_bytes(active_dimensions.0 as usize, active_dimensions.1 as usize);
+        assert_eq!(total, active_bytes, "only the active view retains a thumbnail");
+        assert!(total <= THUMB_BYTES, "retained thumbnails stay within the existing allowance");
         assert!(app.views.iter().take(5).all(|v| v.thumbs.is_empty() && v.last_queue.is_empty()));
+        let active = app.views.last().unwrap();
+        assert_eq!(active.thumbs.len(), 1);
+        assert_eq!(active.thumbs.get(&0).unwrap().tag, active_request.tag);
+        assert!(active.last_queue.is_empty(), "the current thumbnail is already cached");
+        for view in &app.views {
+            let doc = app.session.get(view.id).unwrap();
+            assert_eq!(doc.renderer.stats().render_requests, 0, "the fixture must not launch a native render");
+        }
+
         app.close_tab(5);
+        assert_eq!(app.views.len(), 5, "closing the active tab drops its owning view");
         assert!(app.views.iter().all(|v| v.thumbs.is_empty()));
     }
 
@@ -3856,6 +3912,38 @@ trailer << /Root 1 0 R >>
         assert_eq!(doc.edit_generation(), generation);
         assert_eq!(doc.can_undo(), Some("Add signature"));
         assert!(doc.dirty);
+    }
+
+    #[test]
+    fn suspending_a_view_releases_owned_raster_textures_and_queue_state() {
+        let ctx = egui::Context::default();
+        let mut view = view(2, PageLayout::Continuous);
+        let texture = |name| ctx.load_texture(name, egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+        let request = RenderRequest { page: 0, scale: 1.0, tag: 1, ..Default::default() };
+        view.pages.insert(0, PageTex { tag: request.tag, tex: texture("suspended-page") });
+        view.thumbs.insert(1, PageTex { tag: THUMB_TAG, tex: texture("suspended-thumbnail") });
+        view.tiles.insert((0, request.tag, 0, 0), texture("suspended-tile"));
+        view.grid_pages.insert(1, (1, texture("suspended-grid-page")));
+        view.print_pages.insert(1, (PRINT_TAG, texture("suspended-print-page")));
+        view.stale_thumbs.insert(1);
+        view.waiting_since.insert(0, 1.0);
+        view.last_queue = vec![request];
+        view.frame_queue = vec![request];
+        view.frame_visible.insert(0);
+        view.need_thumbnail(1, true);
+
+        let pool = RenderPool::new_inline(Arc::new(Vec::new()), Default::default());
+        view.suspend_rendering(&pool);
+
+        assert!(view.pages.is_empty(), "page handles are released");
+        assert!(view.thumbs.is_empty(), "thumbnail handles are released");
+        assert!(view.tiles.is_empty(), "tile handles are released");
+        assert!(view.grid_pages.is_empty(), "organize-grid handles are released");
+        assert!(view.print_pages.is_empty(), "print-preview handles are released");
+        assert!(view.stale_thumbs.is_empty(), "stale thumbnail bookkeeping is cleared");
+        assert!(view.waiting_since.is_empty(), "waiting bookkeeping is cleared");
+        assert!(view.last_queue.is_empty() && !view.render_pending(), "queued demand is retired");
+        assert!(view.frame_queue.is_empty() && view.frame_visible.is_empty() && view.thumb_demand.is_empty());
     }
 
     #[test]

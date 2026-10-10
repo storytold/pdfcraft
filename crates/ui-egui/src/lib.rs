@@ -84,7 +84,7 @@ mod print_ui;
 mod signature_drag;
 pub use print_ui::{Handling as PrintHandling, PrintDraft, Which as PrintWhich};
 mod redact_ui;
-pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft};
+pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 
 /// [`PdfCraftApp::date_text`] for callers that already borrow other parts of the app.

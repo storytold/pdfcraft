@@ -1109,6 +1109,7 @@ def build_windows_installer(
     arch: str = "x64",
     skip_build: bool = False,
     dist_dir: Path | None = None,
+    craft_fonts: bool = True,
 ) -> list[Path]:
     """
     Build the Windows application binaries and package the Windows installer(s) and portable ZIP.
@@ -1133,6 +1134,7 @@ def build_windows_installer(
             windows=True,
             static_crt=True,
             dist_dir=out_dir,
+            craft_fonts=craft_fonts,
         )
 
     bin_dir = target_root / target / "release"
@@ -1303,6 +1305,9 @@ def build_windows_installer(
             doc_path = ROOT / doc_name
             if doc_path.is_file():
                 zf.write(doc_path, arcname=doc_name)
+        # OFL texts of the craft-fonts families compiled into the exe (written by build.build_app).
+        for ofl in sorted(out_dir.glob("OFL-*.txt")):
+            zf.write(ofl, arcname=ofl.name)
     generated.append(portable_zip)
 
     # 4. Stage release notes, licensing notices, and SHA256SUMS.txt in dist/release/
@@ -1353,6 +1358,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Output directory for generated installers (default: dist/release).",
     )
+    parser.add_argument(
+        "--no-craft-fonts",
+        action="store_true",
+        help="Build without the craft-fonts input (no download; Arabic/Japanese text can't be written into PDFs).",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1360,6 +1370,7 @@ def main(argv: list[str] | None = None) -> int:
             arch=args.arch,
             skip_build=args.skip_build,
             dist_dir=args.dist,
+            craft_fonts=not args.no_craft_fonts,
         )
         return 0
     except Exception as exc:

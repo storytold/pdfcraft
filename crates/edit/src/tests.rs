@@ -175,6 +175,39 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
 }
 
+/// Display space is in points, so on a `/UserUnit 2` page an item's box maps to half as many
+/// user-space units. Items record the `/UserUnit` they were written for; one without it was
+/// written when display space was in user-space units, and reads back scaled to points.
+#[test]
+fn added_items_follow_the_page_user_unit() {
+    let mut doc = fixture();
+    let page = pdfcraft_model::pages(&doc)[2].obj;
+    doc.update_dict(page, |d| d.set(b"UserUnit".to_vec(), Object::Int(2))).unwrap();
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Scaled".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 2, &Content::Text(text.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let all = list_added(&doc);
+    let on = |page: usize| all.iter().find(|a| a.page == page).unwrap();
+    let Content::Text(t) = &on(2).content else { panic!() };
+    assert_eq!((t.rect[0], t.rect[2], t.rect[3], t.size), (72.0, 300.0, 700.0, 14.0), "read back as written");
+    assert!(streams(&doc, 2).iter().any(|s| s.starts_with("q 0.5 0 0 0.5 0 0 cm")), "display points to user space");
+    let recorded = |doc: &Document, a: &Added| {
+        doc.get(a.obj).as_dict().and_then(|d| d.get(b"PCAdded").cloned()).and_then(|p| p.as_dict().and_then(|p| p.get(b"UserUnit").cloned()))
+    };
+    assert!(recorded(&doc, on(0)).is_none(), "a page without /UserUnit records nothing");
+    assert_eq!(recorded(&doc, on(2)).and_then(|u| u.as_f64()), Some(2.0));
+    // The same item as an earlier version wrote it: no record, box and size in user-space units.
+    let mut legacy = doc.clone();
+    let Object::Stream(mut s) = (*legacy.get(on(2).obj)).clone() else { panic!() };
+    let mut params = s.dict.get(b"PCAdded").and_then(|p| p.as_dict().cloned()).unwrap();
+    params.remove(b"UserUnit");
+    s.dict.set(b"PCAdded".to_vec(), Object::Dict(params));
+    legacy.set(on(2).obj, Object::Stream(s));
+    let Content::Text(old) = &list_added(&legacy).into_iter().find(|a| a.page == 2).unwrap().content else { panic!() };
+    assert_eq!((old.rect[0], old.rect[2], old.rect[3], old.size), (144.0, 600.0, 1400.0, 28.0), "scaled to points");
+}
+
 #[test]
 fn added_text_and_images_are_page_content_that_stays_editable() {
     let mut doc = fixture();

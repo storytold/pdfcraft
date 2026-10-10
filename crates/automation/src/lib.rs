@@ -268,6 +268,11 @@ impl Automation {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
             }
+            "bookmark_from_structure" => {
+                let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
+                out["bookmarks"] = json!(bookmark_tree(&self.doc(&a)?.info.outline, &[]));
+                out
+            }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
                 let pages = self.pages(&a, "pages")?;

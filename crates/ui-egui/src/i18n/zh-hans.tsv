@@ -794,10 +794,16 @@
 	Text in images isn't found; recognise text (OCR) first.	图像中的文本无法找到；请先识别文本（OCR）。
 	No matches.	无匹配。
 	{n} match(es) marked for redaction.	已标记 {n} 个匹配以待密文。
+	Multiple words or phrases	多个单词或短语
+	One word or phrase per line	每行一个单词或短语
+	Import list…	导入列表…
+	{n} word(s) or phrase(s)	{n} 个单词或短语
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，无法用作单词列表（最大 1 MB）。
 	Redaction Tool Properties	密文工具属性
 	Redacted area fill colour:	密文区域填充颜色：
 	Use overlay text	使用覆盖文本
 	Custom text:	自定义文本：
+	Redaction code:	密文代码：
 	Font:	字体：
 	Font size:	字号：
 	Auto-size text to fit redaction region	自动调整文本大小以适应密文区域
@@ -1075,19 +1081,19 @@
 	Attachments	附件
 	Signatures	签名
 	Accessibility Checker	无障碍检查器
-	Zoom out (⌘−)	缩小 (⌘−)
-	Zoom in (⌘+)	放大 (⌘+)
-	Rotate view clockwise (⇧⌘+)	顺时针旋转视图 (⇧⌘+)
+	Zoom out ({key})	缩小 ({key})
+	Zoom in ({key})	放大 ({key})
+	Rotate view clockwise ({key})	顺时针旋转视图 ({key})
 	Toggle fit page / fit width	切换适合页面/适合宽度
 	Next page	下一页
 	Previous page	上一页
 	Current page — type a page number or label (such as iv) and press Enter	当前页 — 输入页码或标签（如 iv）后按 Enter
-	Open a PDF (⌘O)	打开 PDF (⌘O)
+	Open a PDF ({key})	打开 PDF ({key})
 	Dark gray theme	深灰色主题
 	Light theme	浅色主题
-	Print (⌘P)	打印 (⌘P)
+	Print ({key})	打印 ({key})
 	Save (M4)	保存 (M4)
-	Document properties (⌘D)	文档属性 (⌘D)
+	Document properties ({key})	文档属性 ({key})
 	Action Wizard…	操作向导…
 	Add Bates numbering…	添加贝茨编号…
 	Add a button	添加按钮
@@ -1217,7 +1223,7 @@
 	Expand all bookmarks	展开所有书签
 	Expand top-level bookmarks	展开顶层书签
 	Collapse all bookmarks	折叠所有书签
-	New bookmark (⌘B)	新建书签 (⌘B)
+	New bookmark ({key})	新建书签 ({key})
 	This document has no bookmarks.	本文档没有书签。
 	This document has no layers.	本文档没有图层。
 	This document has no attachments.	本文档没有附件。
@@ -1232,8 +1238,8 @@
 	No matches	无匹配
 	Searching… {s}/{p}	正在搜索… {s}/{p}
 	{c} of {n}{more}	{c} / {n}{more}
-	Previous (⇧⌘G)	上一个 (⇧⌘G)
-	Next (⌘G)	下一个 (⌘G)
+	Previous ({key})	上一个 ({key})
+	Next ({key})	下一个 ({key})
 	Find options	查找选项
 	Whole words only	仅全字匹配
 	Case-sensitive	区分大小写
@@ -1304,7 +1310,7 @@
 	Copy selected text	复制所选文本
 	Select a word	选择一个词
 	Clear selection / close find	清除选择/关闭查找
-	Zoom in / out (also pinch or ⌘-scroll)	放大/缩小（也可用捏合或 ⌘+滚轮）
+	Zoom in / out (also pinch or {key}-scroll)	放大/缩小（也可用捏合或 {key}+滚轮）
 	Rotate view	旋转视图
 	First / last page	首页/末页
 	Previous / next page	上一页/下一页
@@ -1745,6 +1751,7 @@
 	Security properties…	安全性属性…
 	Organize pages	组织页面
 	New bookmark	新建书签
+	New bookmarks from structure	从结构新建书签
 	Rotate pages clockwise	顺时针旋转页面
 	Rotate pages counterclockwise	逆时针旋转页面
 	Delete pages	删除页面

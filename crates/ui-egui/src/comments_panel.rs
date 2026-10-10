@@ -353,20 +353,23 @@ fn card(
             if selected && allowed {
                 ui.add_space(8.0);
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let r = ui.add(
-                            egui::TextEdit::singleline(&mut view.comments.reply)
-                                .hint_text(tl!("Add a reply"))
-                                .desired_width(ui.available_width() - 56.0)
-                                .id_salt(("comment-reply", key)),
-                        );
-                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        let ok = !view.comments.reply.trim().is_empty();
-                        if (ui.add_enabled(ok, egui::Button::new(tl!("Post")).corner_radius(12)).clicked() || enter) && ok {
-                            let text = std::mem::take(&mut view.comments.reply).trim().to_string();
-                            edit = Some(Edit::ReplyToAnnotation { page: a.page, index: a.index, text, author: prefs.author.clone() });
-                        }
-                    });
+                    // The field fills its line and Post sits right-aligned under it: a field sized
+                    // around the button can't fit every language's "Post" exactly, and any overflow
+                    // would widen the resizable panel again on every repaint.
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut view.comments.reply)
+                            .hint_text(tl!("Add a reply"))
+                            .desired_width(f32::INFINITY)
+                            .id_salt(("comment-reply", key)),
+                    );
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let ok = !view.comments.reply.trim().is_empty();
+                    let post =
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| ui.add_enabled(ok, egui::Button::new(tl!("Post")).corner_radius(12)));
+                    if (post.inner.clicked() || enter) && ok {
+                        let text = std::mem::take(&mut view.comments.reply).trim().to_string();
+                        edit = Some(Edit::ReplyToAnnotation { page: a.page, index: a.index, text, author: prefs.author.clone() });
+                    }
                 });
             }
             // The header selects the card, except where its buttons are.
