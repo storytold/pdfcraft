@@ -1023,6 +1023,29 @@ fn comments_through_tools() {
     assert_eq!(ok(&mut b, "comment_list", json!({ "doc": re }))["count"], 5);
 }
 
+/// #806: a reply to another reply stays in the listing, at any depth.
+#[test]
+fn nested_replies_stay_in_the_listing() {
+    let dir = workdir("nested-replies");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let root = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [40, 40], "contents": "ROOT_NOTE", "author": "A" }));
+    let root_id = root["comment"]["id"].as_str().unwrap().to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": root_id, "text": "DIRECT_REPLY", "author": "B" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let root_comment = listed["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "ROOT_NOTE").unwrap().clone();
+    let direct_id =
+        root_comment["replies"].as_array().unwrap().iter().find(|r| r["contents"] == "DIRECT_REPLY").unwrap()["id"].as_str().unwrap().to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": direct_id, "text": "NESTED_REPLY", "author": "C" }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [120, 120], "contents": "CONTROL_NOTE", "author": "D" }));
+
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 2, "the two notes stay roots: {list}");
+    let root = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "ROOT_NOTE").unwrap().clone();
+    let replies: Vec<&str> = root["replies"].as_array().unwrap().iter().filter_map(|r| r["contents"].as_str()).collect();
+    assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
+}
+
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");
