@@ -205,6 +205,9 @@ pub enum QuickTool {
     MarqueeZoom,
     /// Edit ▸ Take a Snapshot.
     Snapshot,
+    /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
+    /// Select tool does the same while Alt/Option is held at the start of a drag.
+    ColumnSelect,
 }
 
 /// Files dropped on a document's page grid.
@@ -1621,6 +1624,7 @@ impl PdfCraftApp {
                     "sign" => QuickTool::SignArea { certify: false },
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
+                    "column-select" => QuickTool::ColumnSelect,
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;

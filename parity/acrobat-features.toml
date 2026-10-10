@@ -1482,6 +1482,18 @@ evidence = ["crates/ui-egui/tests/ui.rs::drag_selects_text_and_copy_returns_it",
 notes = "Drag to select; ⇧-click extends the selection to the click, keeping its anchor (same page only); with the Select tool, quick clicks select a word (two), the line (three) or all the text on the page (four). The markup and Redact tools mark a double-clicked word and stop there. Missing: selection across pages (dragging or ⇧-clicking onto another page), paragraph selection, and ⌘A across the whole document (it selects the current page)."
 
 [[feature]]
+id = "view.column-select"
+title = "Column select (Alt/Option-drag a rectangle of text)"
+area = "B"
+tier = "P2"
+milestone = "M3"
+status = "shipped"
+commands = ["edit.column_select"]
+tools = ["text_extract"]
+evidence = ["crates/render/src/text.rs::a_column_selection_takes_one_table_column", "crates/render/src/text.rs::a_column_selection_across_columns_reads_row_by_row", "crates/render/src/text.rs::right_to_left_rows_read_right_to_left", "crates/render/src/text.rs::vertical_lines_keep_reading_order", "crates/ui-egui/tests/column_select.rs::alt_drag_selects_only_the_text_inside_the_rectangle", "crates/ui-egui/tests/column_select.rs::the_column_select_tool_needs_no_modifier", "crates/ui-egui/tests/column_select.rs::alt_drag_with_the_highlighter_marks_only_the_column", "crates/automation/tests/automation.rs::text_extract_with_a_rect_takes_one_column"]
+notes = "Issue #740. Holding Alt (Option on macOS) when a drag starts selects only the text inside the rectangle drawn, with the Select tool, the text markup tools and Redact (with Highlight and Redact the drag must start on text, since off text they draw an area box). Edit ▸ Column select does the same with a plain drag. A glyph counts when its centre is inside. Copy gives one row per visual line, top to bottom; pieces side by side (table cells) are separated by a tab, right to left in right-to-left rows; vertical text keeps reading order. text_extract takes the same rectangle as rect. Platforms: on Linux desktops whose window manager moves windows with Alt-drag (Xfce, Cinnamon and MATE by default; KDE Plasma 5 and other setups with Alt as the window modifier; GNOME and Plasma 6 use Super) the drag never reaches PdfCraft, so use Edit ▸ Column select or change that setting. On Windows, releasing Alt does not open a system menu (the window has no native menu). The web build has the same Linux caveat in the browser. Checked by hand on Linux (Fedora) with the Column select tool; Alt/Option-drag, and macOS and Windows generally, rest on the kittest tests. Missing: selection across pages, ⇧-click extending a column, a default shortcut, and a check of Acrobat's own copied-text format (not observed)."
+
+[[feature]]
 id = "view.copy-text"
 title = "Copy selected text"
 area = "B"

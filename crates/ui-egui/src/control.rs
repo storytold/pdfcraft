@@ -579,6 +579,7 @@ impl Host for crate::PdfCraftApp {
                 crate::QuickTool::SignArea { certify: true } => "certify".to_string(),
                 crate::QuickTool::MarqueeZoom => "marquee-zoom".to_string(),
                 crate::QuickTool::Snapshot => "snapshot".to_string(),
+                crate::QuickTool::ColumnSelect => "column-select".to_string(),
                 crate::QuickTool::Stamp(k) => format!("stamp-{}", k.name().trim_start_matches("PC").to_ascii_lowercase()),
                 crate::QuickTool::CustomStamp(i) => format!("custom-stamp-{i}"),
                 crate::QuickTool::Fill(f) => format!("fill-{}", f.command().trim_start_matches("sign.fill.")),
