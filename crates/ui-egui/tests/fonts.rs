@@ -8,6 +8,7 @@ const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
+const THAI: &str = "ชื่อไฟล์ภาษาไทย";
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -124,27 +125,67 @@ fn telugu_ui_text_uses_craft_fonts() {
     }
 }
 
-/// On a machine with a suitable installed font, the installed definitions end every family
-/// with it and Arabic text has glyphs; the embedded-only definitions never name it.
+/// On a machine with suitable installed fonts, the installed definitions end every family with
+/// them, one per probed script in order, and Arabic and Thai text has glyphs; the embedded-only
+/// definitions never name them.
 #[test]
 fn system_fallback_fills_missing_scripts() {
-    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_FALLBACK));
+    let embedded = theme::font_definitions();
+    for name in [theme::SYSTEM_FALLBACK, theme::SYSTEM_FALLBACK_THAI] {
+        assert!(!embedded.font_data.contains_key(name), "{name}");
+    }
     let defs = theme::installed_font_definitions(false);
-    if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
+    let installed: Vec<&str> =
+        [theme::SYSTEM_FALLBACK, theme::SYSTEM_FALLBACK_THAI].into_iter().filter(|name| defs.font_data.contains_key(*name)).collect();
+    if installed.is_empty() {
         eprintln!("skipping system_fallback_fills_missing_scripts: no installed fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
-        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_FALLBACK)));
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_FALLBACK || n == theme::SYSTEM_FALLBACK_THAI)));
         return;
     }
     for (family, stack) in &defs.families {
-        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
-        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
+        let tail: Vec<&str> = stack.iter().skip(stack.len().saturating_sub(installed.len())).map(String::as_str).collect();
+        assert_eq!(tail, installed, "{family:?}: {stack:?}");
+        for name in &installed {
+            assert_eq!(stack.iter().filter(|n| n.as_str() == *name).count(), 1, "{family:?}");
+        }
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
-        assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
         assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
+        if installed.contains(&theme::SYSTEM_FALLBACK) {
+            assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+        }
     }
     assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// A Thai file name has real glyphs when the machine has a Thai-capable font: the installed
+/// definitions add a Thai face after the embedded ones, and it draws every Thai character.
+/// Without such a font (or with `PDFCRAFT_SYSTEM_FONTS=0`) the test skips. Segoe UI, the face
+/// Windows picks for the Arabic probe, has no Thai — Thai needs a probe of its own.
+#[test]
+fn thai_ui_text_uses_the_installed_face() {
+    let defs = theme::installed_font_definitions(false);
+    if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK_THAI) {
+        eprintln!("skipping thai_ui_text_uses_the_installed_face: no installed Thai face (or PDFCRAFT_SYSTEM_FONTS=0)");
+        return;
+    }
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK_THAI), "{family:?}: {stack:?}");
+    }
+    // The face itself maps every Thai character of a file name: no replacement boxes.
+    use skrifa::MetadataProvider as _;
+    let data = &defs.font_data[theme::SYSTEM_FALLBACK_THAI];
+    let font = skrifa::FontRef::from_index(&data.font, data.index).unwrap();
+    let charmap = font.charmap();
+    let missing: Vec<char> = THAI.chars().filter(|c| charmap.map(*c).is_none()).collect();
+    assert!(missing.is_empty(), "{} lacks {missing:?}", theme::SYSTEM_FALLBACK_THAI);
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, THAI), "{id:?} lacks {THAI}");
+    }
+    assert!(layout_widths(&mut fonts, THAI).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls
