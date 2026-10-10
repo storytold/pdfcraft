@@ -1819,6 +1819,8 @@ pub struct Summary {
     pub quads: Vec<[f32; 8]>,
     pub locked: bool,
     pub intent: Option<String>,
+    /// A Fill & Sign mark ([`is_fill_sign`]).
+    pub fill_sign: bool,
 }
 
 fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -1889,6 +1891,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
+                fill_sign: is_fill_sign(doc, d),
             });
         }
     }

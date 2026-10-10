@@ -1389,6 +1389,8 @@
 	Right Edge	Borda direita
 	Language	Idioma
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Salvo {place}: {before} → {after} ({pct}% menor){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Este arquivo já está o menor possível ({size}). Nenhuma cópia foi salva.
+	Saved {place}: {before} → {after} (not smaller){detail}	Salvo {place}: {before} → {after} (não ficou menor){detail}
 	Couldn't save the image: {e}	Não foi possível salvar a imagem: {e}
 	Adding images arrives on the web with file pickers for images	A adição de imagens chegará à Web com seletores de arquivo para imagens
 	Replacing images on page {p} arrives on the web with image pickers ({i})	A substituição de imagens na página {p} chegará à Web com seletores de imagem ({i})
