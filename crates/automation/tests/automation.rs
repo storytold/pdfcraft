@@ -1022,6 +1022,45 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// A form secured with "fill-sign" changes and no open password (how secured forms are usually
+/// distributed): its existing signature field can be signed without the permissions password,
+/// the update keeps the encryption, and the signature validates after reopening. A new field
+/// needs the permissions password.
+#[test]
+fn signing_an_encrypted_form_through_tools() {
+    let dir = workdir("sign-encrypted");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret1", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let field = ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "signature", "rect": [20, 200, 180, 250] }))["field"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "permissions_password": "boss", "changes": "fill-sign" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "form.pdf" }));
+    let mut b = auto(&dir);
+    let form = ok(&mut b, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": form }))["security"]["protected"], true);
+    match b.call(
+        "sign_document",
+        &json!({ "doc": form, "id": "ada.p12", "password": "secret1", "page": 1, "rect": [200, 200, 380, 250], "out": "new.pdf" }),
+    ) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("adding new signature fields"), "{m}"),
+        other => panic!("a new field needs the permissions password: {other:?}"),
+    }
+    let r = ok(&mut b, "sign_document", json!({ "doc": form, "id": "ada.p12", "password": "secret1", "field": field, "out": "signed.pdf" }));
+    assert_eq!((r["signature"]["signer"].as_str(), r["signature"]["status"].as_str()), (Some("Ada Lovelace"), Some("unknown")));
+    let original = std::fs::read(dir.join("form.pdf")).unwrap();
+    let signed = std::fs::read(dir.join("signed.pdf")).unwrap();
+    assert!(signed.starts_with(&original), "an incremental update");
+    let mut c = auto(&dir);
+    let re = ok(&mut c, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut c, "doc_info", json!({ "doc": re }))["security"]["protected"], true, "still encrypted");
+    ok(&mut c, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret1" }));
+    let list = ok(&mut c, "sign_list", json!({ "doc": re }));
+    assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")), "{list}");
+}
+
 #[test]
 fn combine_opens_protected_files_with_their_passwords() {
     let dir = workdir("combine-passwords");

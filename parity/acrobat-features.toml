@@ -4302,10 +4302,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["form.fields"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect.rs::fields_listed_only_on_the_pages_are_listed"]
-notes = "read-only list with jump-to-field; filling and editing are separate features (M6); fields a file lists only as page widgets (empty /Fields) are adopted too"
-evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/ui-egui/tests/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
-notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties"
+evidence = ["crates/ui-egui/tests/view.rs::field_list_jumps_to_a_fields_page", "crates/render/src/inspect.rs::fields_listed_only_on_the_pages_are_listed", "crates/ui-egui/tests/bulk_fields.rs::fields_panel_selects_multiple_fields_and_opens_their_shared_properties", "crates/ui-egui/tests/bulk_fields.rs::double_clicking_a_field_in_the_panel_opens_its_individual_properties"]
+notes = "list with jump-to-field; in Prepare a form, Shift/Ctrl/Command-click selects several fields and Properties edits their shared properties; double-click opens field properties; fields a file lists only as page widgets (empty /Fields) are adopted too"
 
 [[feature]]
 id = "form.highlight-fields"
@@ -5826,6 +5824,18 @@ commands = ["sign.digital", "sign.certify"]
 tools = ["sign_windows_ids", "sign_document"]
 evidence = ["crates/sign/tests/pdf.rs::signing_with_windows_store_identities", "crates/sign/tests/pdf.rs::windows_store_enumeration_and_missing_identity", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/signing.rs::windows_store_identity_does_not_ask_for_a_file_password"]
 notes = "Current User Personal (My) CNG identities: RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384. Keys never leave Windows; windows:<fingerprint|common name> for agents and Windows store labels in the desktop ID picker. Tested with throwaway software-backed RSA-2048, P-256 and P-384 certificates (run with --ignored); smart cards and PKCS #11 still planned."
+
+[[feature]]
+id = "sign.encrypted-documents"
+title = "Sign and timestamp password-protected (encrypted) documents"
+area = "H"
+tier = "P0"
+milestone = "M9"
+status = "shipped"
+commands = ["sign.digital", "sign.certify"]
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::encrypted_documents_are_signed_with_an_unencrypted_contents", "crates/sign/tests/pdf.rs::encrypted_documents_are_signed_only_as_their_permissions_allow", "crates/sign/tests/pdf.rs::encrypted_documents_take_a_document_timestamp", "crates/cos/tests/encryption.rs::signature_contents_stay_unencrypted", "crates/automation/tests/automation.rs::signing_an_encrypted_form_through_tools"]
+notes = "RC4-40/128, AES-128 and AES-256 Standard security; the incremental update keeps /Encrypt and /ID, encrypts the new strings and streams, and leaves the signature /Contents unencrypted (§7.6.2), which reading also honours. Opened with the user password, permissions (Table 22) apply: existing signature fields need fill-forms, new fields need annotate + modify, certifying needs modify, a document timestamp needs fill-forms; the owner may do anything. Not yet: certificate (public-key) security, which PdfCraft can't open; checked only against PdfCraft's own validator, not yet against an external one (pyHanko) or Acrobat"
 
 [[feature]]
 id = "sign.pkcs11"
