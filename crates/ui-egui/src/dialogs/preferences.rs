@@ -125,7 +125,8 @@ impl PrefsDraft {
             ask_to_lock_signatures: app.ask_to_lock_signatures,
             date_format: app.session.date_format().to_string(),
             date_language: app.session.date_language().map(str::to_string),
-            javascript: app.session.javascript(),
+            // The person's own choice: an administrator's policy overrides it without replacing it.
+            javascript: app.session.javascript_preference(),
         }
     }
 
@@ -229,6 +230,9 @@ struct Texts {
     unwritable: String,
     date_help: String,
     date_custom_id: &'static str,
+    /// While an administrator's policy keeps JavaScript off: why, where the policy is, and the
+    /// usual help, shown under the locked check box.
+    javascript_locked: Option<String>,
 }
 
 impl Texts {
@@ -264,6 +268,13 @@ impl Texts {
                 &[("escape", "\\")],
             ),
             date_custom_id: "custom",
+            javascript_locked: app.session.javascript_lock().map(|lock| {
+                let (note, detail) = match &lock.unreadable {
+                    None => (tl!("Turned off by your administrator."), lock.source.clone()),
+                    Some(why) => (tl!("Turned off because your administrator's policy couldn't be read."), format!("{}: {why}", lock.source)),
+                };
+                format!("{note}\n{detail}\n{}", javascript_help())
+            }),
         }
     }
 }
@@ -475,7 +486,9 @@ impl PreferencesModel for Prefs<'_> {
                 }
             }
             ("fill.date_language", PrefValue::Choice(id)) => d.date_language = (id != FOLLOW_ID).then_some(id),
-            ("javascript.enable", PrefValue::Bool(v)) => d.javascript = v,
+            // Locked by an administrator's policy: the check box is disabled, and nothing else may
+            // change the choice behind it either.
+            ("javascript.enable", PrefValue::Bool(v)) if self.texts.javascript_locked.is_none() => d.javascript = v,
             _ => {}
         }
     }
@@ -815,13 +828,21 @@ impl Prefs<'_> {
     }
 
     fn javascript_page(&self) -> PageSpec<'_> {
-        let rows = vec![
-            RowSpec::new("javascript.enable", tl!("Enable Acrobat JavaScript"), RowKind::Bool(self.draft.javascript)).help(tl!(
-                "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."
-            )),
-        ];
-        PageSpec::new("javascript", "JavaScript", rows)
+        let row = match &self.texts.javascript_locked {
+            // An administrator's policy: shown off and locked, with why and where it comes from.
+            // The person's own choice is kept for when the policy goes away.
+            Some(locked) => RowSpec::new("javascript.enable", tl!("Enable Acrobat JavaScript"), RowKind::Bool(false)).enabled(false).help(locked),
+            None => RowSpec::new("javascript.enable", tl!("Enable Acrobat JavaScript"), RowKind::Bool(self.draft.javascript)).help(javascript_help()),
+        };
+        PageSpec::new("javascript", "JavaScript", vec![row])
     }
+}
+
+/// The help under Enable Acrobat JavaScript.
+fn javascript_help() -> &'static str {
+    tl!(
+        "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."
+    )
 }
 
 #[derive(Clone, Copy, Default)]

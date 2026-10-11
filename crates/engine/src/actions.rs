@@ -211,9 +211,9 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
     Ok(None)
 }
 
-/// Run `action` on one file. `javascript` is the caller's [`Session::javascript`] preference:
-/// when off, neither open-time scripts nor "Run a JavaScript" steps run. `progress(step, steps)`
-/// is called before each step.
+/// Run `action` on one file. `javascript` is the caller's [`Session::javascript`] (the user's
+/// choice, or off under an administrator's policy): when off, neither open-time scripts nor
+/// "Run a JavaScript" steps run. `progress(step, steps)` is called before each step.
 pub fn run_on(
     action: &Action,
     name: &str,

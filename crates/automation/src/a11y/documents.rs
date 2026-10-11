@@ -141,7 +141,8 @@ impl Automation {
         };
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
-        // Each file runs in its own session; it keeps this one's JavaScript preference.
+        // Each file runs in its own session; it keeps this one's JavaScript setting, an
+        // administrator's policy included.
         let javascript = self.session.javascript();
         let mut out = Vec::new();
         for p in a.strs("paths")? {

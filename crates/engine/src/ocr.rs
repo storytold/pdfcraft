@@ -1204,7 +1204,8 @@ pub fn low_confidence_pages(pages: &[OcrPage], threshold: f32) -> Option<(usize,
 }
 
 /// Recognize text in multiple files: one PDF's bytes in, the searchable PDF out. `javascript` is
-/// the caller's [`Session::javascript`] preference (when off, no open-time script runs).
+/// the caller's [`Session::javascript`], the user's choice or off under an administrator's
+/// policy (when off, no open-time script runs).
 /// `progress` works as for [`OcrJob::run`]. A file that the skip-files option passes over comes
 /// back with [`FileResult::file_skipped`] set and its original bytes; the caller decides what to
 /// do with it, but it is never an OCR success.

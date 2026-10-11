@@ -39,8 +39,14 @@ pub struct Session {
     pub(crate) trust: Arc<TrustStore>,
     /// The words signature status layers are drawn with, in the interface language.
     pub(crate) captions: Arc<StatusCaptions>,
-    /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
+    /// Whether scripts are off: the user's choice or an administrator's policy. Every script path
+    /// reads this; only [`Session::set_javascript`] and [`Session::set_javascript_lock`] set it.
     pub(crate) js_off: bool,
+    /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default): the user's
+    /// own choice, kept while a policy overrides it.
+    pub(crate) js_preference_off: bool,
+    /// An administrator's policy that keeps JavaScript off.
+    pub(crate) js_lock: Option<js::JavaScriptLock>,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).
     pub(crate) date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.

@@ -4,7 +4,8 @@
 //! printing, navigation, links) is kept for the front end in [`JsOutput`].
 //!
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
-//! off, scripts don't run and AF calls keep working natively.
+//! off, scripts don't run and AF calls keep working natively. An administrator's policy
+//! ([`Session::set_javascript_lock`]) keeps it off whatever the preference says.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
@@ -875,20 +876,57 @@ fn unasked_requests(requests: &mut Vec<Request>) {
         .retain(|r| matches!(r, Request::Highlight(_) | Request::Zoom(_) | Request::Focus(_) | Request::FocusField { .. } | Request::GoToPage(_)));
 }
 
+/// An administrator's policy that keeps JavaScript off (the front end reads it from the
+/// operating system; see `pdfcraft_platform::policy`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JavaScriptLock {
+    /// Where the policy was found, e.g. `HKLM\SOFTWARE\Policies\PdfCraft\DisableJavaScript`.
+    pub source: String,
+    /// Set when a policy is there but could not be read: JavaScript stays off until an
+    /// administrator fixes it, and this says what was wrong.
+    pub unreadable: Option<String>,
+}
+
 impl Session {
-    /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
+    /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default). While an
+    /// administrator's policy keeps JavaScript off ([`Session::set_javascript_lock`]) the choice
+    /// is still remembered, and applies again once the policy is gone.
     pub fn set_javascript(&mut self, on: bool) {
-        self.js_off = !on;
-        if !on {
+        self.js_preference_off = !on;
+        self.apply_javascript_setting();
+    }
+
+    /// Whether scripts run: the user's choice, unless an administrator's policy keeps
+    /// JavaScript off.
+    pub fn javascript(&self) -> bool {
+        !self.js_off
+    }
+
+    /// The user's own choice, whatever a policy says (what Preferences saves).
+    pub fn javascript_preference(&self) -> bool {
+        !self.js_preference_off
+    }
+
+    /// An administrator's policy keeps JavaScript off (`Some`), or doesn't (`None`).
+    pub fn set_javascript_lock(&mut self, lock: Option<JavaScriptLock>) {
+        self.js_lock = lock;
+        self.apply_javascript_setting();
+    }
+
+    /// Work out `js_off`, the switch every script path reads, from the user's choice and the
+    /// policy. Turning scripts off drops the documents' script runtimes, so nothing a script set
+    /// up keeps running.
+    fn apply_javascript_setting(&mut self) {
+        self.js_off = self.js_preference_off || self.js_lock.is_some();
+        if self.js_off {
             for doc in &mut self.docs {
                 replace_runtime(&mut doc.js_runtime);
             }
         }
     }
 
-    /// Whether JavaScript is on (Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript).
-    pub fn javascript(&self) -> bool {
-        !self.js_off
+    pub fn javascript_lock(&self) -> Option<&JavaScriptLock> {
+        self.js_lock.as_ref()
     }
 
     /// Whether the viewer highlights form fields (Highlight fields), which forms' scripts read as
@@ -1187,6 +1225,9 @@ impl Session {
         event_name: Option<&'static str>,
         opening: bool,
     ) -> Result<Outcome, EditError> {
+        if self.js_lock.is_some() {
+            return Err(EditError::Invalid("JavaScript is turned off by your administrator's policy".into()));
+        }
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }

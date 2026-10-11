@@ -65,6 +65,8 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
+        // `js_off` is the effective setting, so an administrator's policy holds on the background
+        // open path too.
         OpenContext {
             now: self.now(),
             js_off: self.js_off,
