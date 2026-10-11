@@ -1230,6 +1230,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	ปิดทับตามเครื่องหมายแล้ว {n} จุด บันทึกเพื่อเอาเนื้อหาออกจากไฟล์
 	JavaScript Console	คอนโซล JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript ปิดอยู่ (การตั้งค่า ▸ JavaScript)
+	JavaScript is turned off by your administrator.	ผู้ดูแลระบบของคุณปิด JavaScript ไว้
+	Turned off by your administrator.	ผู้ดูแลระบบของคุณปิดไว้
+	Turned off because your administrator's policy couldn't be read.	ปิดอยู่ เพราะอ่านนโยบายของผู้ดูแลระบบไม่ได้
 	Output appears here.	ผลลัพธ์จะแสดงที่นี่
 	Script Name:	ชื่อสคริปต์:
 	This document has no document-level scripts.	เอกสารนี้ไม่มีสคริปต์ระดับเอกสาร

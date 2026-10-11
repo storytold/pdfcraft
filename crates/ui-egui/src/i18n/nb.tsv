@@ -663,6 +663,9 @@
 	Its security settings don't allow copying pages	Sikkerhetsinnstillingene tillater ikke kopiering av sider
 	JavaScript Console	JavaScript-konsoll
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript er slått av (Innstillinger > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript er slått av av administratoren din.
+	Turned off by your administrator.	Slått av av administratoren din.
+	Turned off because your administrator's policy couldn't be read.	Slått av fordi policyen fra administratoren din ikke kunne leses.
 	JavaScript, e.g. getField("total").value	JavaScript, f.eks. getField("total").value
 	Join our Discord	Bli med på Discord-serveren vår
 	Join the ArtCraft community	Bli med i ArtCraft-fellesskapet

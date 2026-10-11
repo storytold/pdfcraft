@@ -906,6 +906,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	已套用 {n} 個遮蔽內容標記。儲存以從檔案中刪除內容。
 	JavaScript Console	JavaScript 主控台
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript 已關閉（偏好設定 → JavaScript）。
+	JavaScript is turned off by your administrator.	JavaScript 已被系統管理員關閉。
+	Turned off by your administrator.	已被系統管理員關閉。
+	Turned off because your administrator's policy couldn't be read.	無法讀取系統管理員的原則，因此已關閉。
 	Output appears here.	輸出顯示在此處。
 	Document JavaScripts	文件 JavaScript
 	Script Name:	指令碼名稱：

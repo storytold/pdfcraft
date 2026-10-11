@@ -1281,6 +1281,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Se han aplicado {n} marcas de censura. Guarda para eliminar el contenido del archivo.
 	JavaScript Console	Consola de JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript está desactivado (Preferencias > JavaScript).
+	JavaScript is turned off by your administrator.	Su administrador ha desactivado JavaScript.
+	Turned off by your administrator.	Desactivado por su administrador.
+	Turned off because your administrator's policy couldn't be read.	Desactivado porque no se pudo leer la directiva de su administrador.
 	Output appears here.	La salida aparece aquí.
 	Script Name:	Nombre del script:
 	This document has no document-level scripts.	Este documento no tiene scripts de nivel de documento.

@@ -1284,6 +1284,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Застосовано позначок вилучення: {n}. Збережіть, щоб видалити вміст із файлу.
 	JavaScript Console	Консоль JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript вимкнено («Налаштування > JavaScript»).
+	JavaScript is turned off by your administrator.	JavaScript вимкнено вашим адміністратором.
+	Turned off by your administrator.	Вимкнено вашим адміністратором.
+	Turned off because your administrator's policy couldn't be read.	Вимкнено, оскільки не вдалося прочитати політику вашого адміністратора.
 	Output appears here.	Тут з’являється вивід.
 	Script Name:	Назва сценарію:
 	This document has no document-level scripts.	Цей документ не має сценаріїв рівня документа.

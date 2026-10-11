@@ -989,6 +989,9 @@
 	JavaScript Console	Konzola JavaScript
 	JavaScript console…	Konzola JavaScript…
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript je izklopljen (Nastavitve > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript je izklopil vaš skrbnik.
+	Turned off by your administrator.	Izklopil vaš skrbnik.
+	Turned off because your administrator's policy couldn't be read.	Izklopljeno, ker pravilnika vašega skrbnika ni bilo mogoče prebrati.
 	JavaScript, e.g. getField("total").value	JavaScript, npr. getField("total").value
 	Join our Discord	Discord kanal
 	Join the ArtCraft Discord	Pridružite se Discordu ArtCraft

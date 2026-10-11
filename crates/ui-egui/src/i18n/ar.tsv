@@ -1286,6 +1286,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	طُبِّقت {n} علامات حجب. احفظ لإزالة المحتوى من الملف.
 	JavaScript Console	وحدة تحكم JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript متوقف (التفضيلات > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript متوقف من قِبل المسؤول.
+	Turned off by your administrator.	أوقفه المسؤول.
+	Turned off because your administrator's policy couldn't be read.	متوقف لأنه تعذّرت قراءة سياسة المسؤول.
 	Output appears here.	يظهر الناتج هنا.
 	Script Name:	اسم السكربت:
 	This document has no document-level scripts.	هذا المستند لا يحتوي على سكربتات على مستوى المستند.

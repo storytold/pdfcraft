@@ -1238,6 +1238,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	S'han aplicat {n} marques de censura. Desa per eliminar el contingut del fitxer.
 	JavaScript Console	Consola de JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript està desactivat (Preferències > JavaScript).
+	JavaScript is turned off by your administrator.	L'administrador ha desactivat JavaScript.
+	Turned off by your administrator.	Desactivat per l'administrador.
+	Turned off because your administrator's policy couldn't be read.	Desactivat perquè no s'ha pogut llegir la política de l'administrador.
 	Output appears here.	La sortida apareix aquí.
 	Script Name:	Nom de l'script:
 	This document has no document-level scripts.	Aquest document no té scripts a nivell de document.

@@ -5234,7 +5234,7 @@ fn actions_run_their_steps_on_files() {
     let src = s.create_from_text("t", "Quarterly numbers").unwrap();
     let built = actions::builtin();
     let numbers = built.iter().find(|a| a.name == "Add Page Numbers").unwrap();
-    let r = actions::run_on(numbers, "q.pdf", src.clone(), |_, _| {}).unwrap();
+    let r = actions::run_on(numbers, "q.pdf", src.clone(), &js::Scripting::default(), |_, _| {}).unwrap();
     let mut s2 = Session::new();
     let id = s2.open("out.pdf", None, r.bytes, None).unwrap();
     assert!(page_texts(&s2, id)[0].contains("Page 1 of 1"), "{:?}", page_texts(&s2, id));
@@ -5252,14 +5252,14 @@ fn actions_run_their_steps_on_files() {
         builtin: false,
     };
     let mut steps = Vec::new();
-    let r = actions::run_on(&custom, "q.pdf", src, |i, n| steps.push((i, n))).unwrap();
+    let r = actions::run_on(&custom, "q.pdf", src, &js::Scripting::default(), |i, n| steps.push((i, n))).unwrap();
     assert_eq!(steps, [(0, 4), (1, 4), (2, 4), (3, 4)]);
     assert_eq!(r.log.len(), 4, "{:?}", r.log);
     let id = s2.open("out2.pdf", None, r.bytes, None).unwrap();
     let d = s2.get(id).unwrap();
     assert_eq!(d.info.title.as_deref(), Some("Q3"));
     assert!(page_texts(&s2, id)[0].contains("DRAFT"));
-    assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), |_, _| {}).is_err());
+    assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), &js::Scripting::default(), |_, _| {}).is_err());
 }
 
 /// A removal step that fails (here: a signed file can't be rewritten without its hidden data)
@@ -5276,7 +5276,7 @@ fn actions_fail_when_hidden_information_could_not_be_removed() {
     let signed = s.sign(id, &digital_id, SignOptions { page: 1, ..SignOptions::default() }).unwrap();
     let built = actions::builtin();
     let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
-    let e = actions::run_on(sanitize, "signed.pdf", signed, |_, _| {}).map(|r| r.log).unwrap_err();
+    let e = actions::run_on(sanitize, "signed.pdf", signed, &js::Scripting::default(), |_, _| {}).map(|r| r.log).unwrap_err();
     assert!(e.starts_with("Sanitize document:"), "{e}");
 }
 
@@ -6612,6 +6612,103 @@ fn xfa_scripts_stay_off_with_javascript_off() {
     assert!(qty.is_empty(), "no initialize script ran");
     assert!(s.run_javascript(id, "", Some("addRow")).is_err());
     assert!(!s.get(id).unwrap().xfa_scripts_off(), "the preference, not a script that ran away");
+}
+
+fn admin_lock() -> Option<js::JavaScriptLock> {
+    Some(js::JavaScriptLock { source: "HKLM\\SOFTWARE\\Policies\\PdfCraft\\DisableJavaScript".into(), unreadable: None })
+}
+
+#[test]
+fn an_administrators_lock_keeps_scripts_off_whatever_the_preference() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    s.set_javascript_lock(admin_lock());
+    assert!(!s.javascript());
+    assert!(s.javascript_preference(), "the user's own choice is untouched");
+    // Turning it on in Preferences doesn't get past the policy.
+    s.set_javascript(true);
+    assert!(!s.javascript());
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert!(value(&s, "total").iter().all(|v| v.is_empty()), "no calculate script ran: {:?}", value(&s, "total"));
+    let err = s.run_javascript(id, "getField('qty').value = 9", Some("go")).unwrap_err();
+    assert!(err.to_string().contains("administrator"), "{err}");
+    assert_eq!(value(&s, "qty"), ["4"]);
+    assert!(s.take_js_output(id).is_empty());
+
+    // Without the policy, the remembered choice applies again.
+    s.set_javascript_lock(None);
+    assert!(s.javascript());
+    s.set_javascript(false);
+    s.set_javascript_lock(admin_lock());
+    s.set_javascript_lock(None);
+    assert!(!s.javascript(), "a policy coming and going doesn't change the preference");
+}
+
+#[test]
+fn an_administrators_lock_keeps_xfa_scripts_off() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    s.set_javascript_lock(Some(js::JavaScriptLock { source: "policy.json".into(), unreadable: Some("not JSON".into()) }));
+    let id = s.open("scripted.pdf", None, bytes, None).expect("opens");
+    let qty = s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.clone();
+    assert!(qty.is_empty(), "no initialize script ran");
+    assert!(s.run_javascript(id, "", Some("addRow")).is_err());
+}
+
+#[test]
+fn the_action_wizard_follows_the_callers_javascript_setting() {
+    // `run_on` opens each file in a session of its own; the caller's setting must reach it.
+    let action = actions::Action {
+        name: "Mine".into(),
+        description: String::new(),
+        steps: vec![actions::Step::RunJavaScript("getField('qty').value = 9".into())],
+        builtin: false,
+    };
+    let src = Arc::new(scripted_form());
+    let qty = |bytes: Arc<Vec<u8>>| {
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("out.pdf", None, bytes, None).unwrap();
+        s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.clone()
+    };
+    // Control: with JavaScript on, the step runs and the file comes out with qty 9.
+    let on = actions::run_on(&action, "q.pdf", src.clone(), &js::Scripting::default(), |_, _| {}).unwrap();
+    assert_eq!(qty(on.bytes), ["9"], "{:?}", on.log);
+
+    let mut locked = Session::new();
+    locked.set_javascript_lock(admin_lock());
+    let mut off = Session::new();
+    off.set_javascript(false);
+    for (who, caller) in [("an administrator's policy", locked), ("the preference", off)] {
+        let err = actions::run_on(&action, "q.pdf", src.clone(), &caller.scripting(), |_, _| {}).unwrap_err();
+        assert!(err.starts_with("Run a JavaScript: JavaScript is turned off"), "{who}: {err}");
+    }
+}
+
+#[test]
+fn an_administrators_lock_holds_on_the_background_open_path() {
+    // The app prepares documents on a worker from an `OpenContext` snapshot (#1493). The
+    // snapshot must carry the effective setting, so a policy holds even while the person's own
+    // preference says JavaScript is on.
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let open_on_a_worker = |s: &mut Session| {
+        let context = s.open_context();
+        let bytes = Arc::clone(&bytes);
+        let prepared = std::thread::spawn(move || context.prepare_open("scripted.pdf", None, bytes, None)).join().unwrap().expect("prepares");
+        s.commit_open(prepared)
+    };
+    let qty = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.clone();
+    // Control: with no policy the form's initialize script fills in qty on open.
+    let id = open_on_a_worker(&mut s);
+    assert_eq!(qty(&s, id), ["2"], "the initialize script runs without a policy");
+
+    s.set_javascript_lock(admin_lock());
+    assert!(s.javascript_preference(), "the person's own choice is still on");
+    let id = open_on_a_worker(&mut s);
+    assert!(qty(&s, id).iter().all(|v| v.is_empty()), "no initialize script ran under the policy: {:?}", qty(&s, id));
+    assert!(s.run_javascript(id, "", Some("addRow")).is_err());
 }
 
 #[test]

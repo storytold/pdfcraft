@@ -1253,6 +1253,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	ນຳໃຊ້ເຄື່ອງໝາຍປິດບັງ {n} ລາຍການແລ້ວ. ບັນທຶກເພື່ອລຶບເນື້ອໃນອອກຈາກໄຟລ໌.
 	JavaScript Console	ຄອນໂຊລ JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript ຖືກປິດຢູ່ (ການຕັ້ງຄ່າ ▸ JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript ຖືກປິດໂດຍຜູ້ເບິ່ງແຍງລະບົບຂອງທ່ານ.
+	Turned off by your administrator.	ຖືກປິດໂດຍຜູ້ເບິ່ງແຍງລະບົບຂອງທ່ານ.
+	Turned off because your administrator's policy couldn't be read.	ຖືກປິດ ເພາະບໍ່ສາມາດອ່ານນະໂຍບາຍຂອງຜູ້ເບິ່ງແຍງລະບົບໄດ້.
 	Output appears here.	ຜົນອອກຈະສະແດງຢູ່ນີ້.
 	Script Name:	ຊື່ສະຄຣິບ:
 	This document has no document-level scripts.	ເອກະສານນີ້ບໍ່ມີສະຄຣິບລະດັບເອກະສານ.

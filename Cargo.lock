@@ -4380,7 +4380,10 @@ version = "0.14.0"
 dependencies = [
  "async-channel",
  "futures-lite",
+ "objc2-core-foundation",
  "rustix 1.1.5",
+ "serde_json",
+ "winsafe",
  "zbus",
 ]
 

@@ -668,6 +668,9 @@ theme	Appearance	Giao diện
 	Its security settings don't allow copying pages	Cài đặt bảo mật của nó không cho phép sao chép trang
 	JavaScript Console	Bảng điều khiển JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript đã bị tắt (Tùy chọn > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript đã bị quản trị viên của bạn tắt.
+	Turned off by your administrator.	Đã bị quản trị viên của bạn tắt.
+	Turned off because your administrator's policy couldn't be read.	Đã tắt vì không đọc được chính sách của quản trị viên.
 	JavaScript, e.g. getField("total").value	JavaScript, ví dụ getField("total").value
 	Join our Discord	Tham gia Discord của chúng tôi
 	Join the ArtCraft community	Tham gia cộng đồng ArtCraft

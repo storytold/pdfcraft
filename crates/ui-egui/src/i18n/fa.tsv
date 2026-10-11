@@ -1282,6 +1282,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} نشانه سیاه‌کردن اعمال شد. برای حذف محتوا از فایل ذخیره کنید.
 	JavaScript Console	کنسول JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript خاموش است (ترجیحات ▸ JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript توسط سرپرست شما خاموش شده است.
+	Turned off by your administrator.	توسط سرپرست شما خاموش شده است.
+	Turned off because your administrator's policy couldn't be read.	خاموش است، چون خط‌مشی سرپرست شما خوانده نشد.
 	Output appears here.	خروجی اینجا نمایش داده می‌شود.
 	Script Name:	نام اسکریپت:
 	This document has no document-level scripts.	این سند اسکریپت سطح سند ندارد.

@@ -1257,6 +1257,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} kitakarásjelölést alkalmaztunk. Ments, hogy a tartalom kikerüljön a fájlból.
 	JavaScript Console	JavaScript-konzol
 	JavaScript is turned off (Preferences ▸ JavaScript).	A JavaScript ki van kapcsolva (Beállítások > JavaScript).
+	JavaScript is turned off by your administrator.	A JavaScriptet a rendszergazda kikapcsolta.
+	Turned off by your administrator.	A rendszergazda kikapcsolta.
+	Turned off because your administrator's policy couldn't be read.	Kikapcsolva, mert a rendszergazdai házirend nem olvasható.
 	Output appears here.	A kimenet itt jelenik meg.
 	Script Name:	Szkript neve:
 	This document has no document-level scripts.	Ebben a dokumentumban nincs dokumentumszintű szkript.

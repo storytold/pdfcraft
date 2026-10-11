@@ -1257,6 +1257,9 @@ comment menu	Edit	సవరించు
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} రెడాక్షన్ గుర్తులు వర్తింపజేయబడ్డాయి. కంటెంట్‌ను ఫైల్ నుండి తీసివేయడానికి సేవ్ చేయండి.
 	JavaScript Console	JavaScript కన్సోల్
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript ఆఫ్ చేయబడింది (ప్రాధాన్యతలు > JavaScript).
+	JavaScript is turned off by your administrator.	మీ నిర్వాహకుడు JavaScriptను ఆఫ్ చేశారు.
+	Turned off by your administrator.	మీ నిర్వాహకుడు ఆఫ్ చేశారు.
+	Turned off because your administrator's policy couldn't be read.	మీ నిర్వాహకుని విధానాన్ని చదవలేకపోయినందున ఆఫ్ చేయబడింది.
 	Output appears here.	అవుట్‌పుట్ ఇక్కడ కనిపిస్తుంది.
 	Script Name:	స్క్రిప్ట్ పేరు:
 	This document has no document-level scripts.	ఈ పత్రంలో పత్రం-స్థాయి స్క్రిప్ట్‌లు ఏవీ లేవు.

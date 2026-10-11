@@ -1244,6 +1244,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} karartma işareti uygulandı. İçeriği dosyadan kaldırmak için kaydedin.
 	JavaScript Console	JavaScript Konsolu
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript kapalı (Tercihler > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript yöneticiniz tarafından kapatıldı.
+	Turned off by your administrator.	Yöneticiniz tarafından kapatıldı.
+	Turned off because your administrator's policy couldn't be read.	Yöneticinizin ilkesi okunamadığı için kapatıldı.
 	Output appears here.	Çıktı burada görünür.
 	Script Name:	Komut Dosyası Adı:
 	This document has no document-level scripts.	Bu belgede belge düzeyinde komut dosyası yok.

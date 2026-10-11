@@ -654,6 +654,9 @@
 	Its security settings don't allow copying pages	Pengaturan keamanannya tidak mengizinkan penyalinan halaman
 	JavaScript Console	Konsol JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript dimatikan (Preferensi > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript dimatikan oleh administrator Anda.
+	Turned off by your administrator.	Dimatikan oleh administrator Anda.
+	Turned off because your administrator's policy couldn't be read.	Dimatikan karena kebijakan administrator Anda tidak dapat dibaca.
 	JavaScript, e.g. getField("total").value	JavaScript, misalnya getField("total").value
 	Join our Discord	Gabung ke Discord kami
 	Join the ArtCraft community	Gabung ke komunitas ArtCraft

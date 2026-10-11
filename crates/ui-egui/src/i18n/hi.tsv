@@ -1219,6 +1219,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} रेडैक्शन चिह्न लागू किए गए। सामग्री फ़ाइल से हटाने के लिए सहेजें।
 	JavaScript Console	JavaScript कंसोल
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript बंद है (प्राथमिकताएँ ▸ JavaScript)।
+	JavaScript is turned off by your administrator.	आपके व्यवस्थापक ने JavaScript बंद किया है।
+	Turned off by your administrator.	आपके व्यवस्थापक ने बंद किया है।
+	Turned off because your administrator's policy couldn't be read.	बंद है, क्योंकि आपके व्यवस्थापक की नीति पढ़ी नहीं जा सकी।
 	Output appears here.	आउटपुट यहाँ दिखता है।
 	Script Name:	स्क्रिप्ट का नाम:
 	This document has no document-level scripts.	इस दस्तावेज़ में दस्तावेज़-स्तर की कोई स्क्रिप्ट नहीं है।

@@ -814,6 +814,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Εφαρμόστηκαν {n} επισημάνσεις απόκρυψης. Αποθηκεύστε για να αφαιρεθεί το περιεχόμενο από το αρχείο.
 	JavaScript Console	Κονσόλα JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	Η JavaScript είναι απενεργοποιημένη (Προτιμήσεις > JavaScript).
+	JavaScript is turned off by your administrator.	Η JavaScript έχει απενεργοποιηθεί από τον διαχειριστή σας.
+	Turned off by your administrator.	Απενεργοποιήθηκε από τον διαχειριστή σας.
+	Turned off because your administrator's policy couldn't be read.	Απενεργοποιήθηκε επειδή δεν ήταν δυνατή η ανάγνωση της πολιτικής του διαχειριστή σας.
 	Output appears here.	Η έξοδος εμφανίζεται εδώ.
 	Script Name:	Όνομα σεναρίου:
 	This document has no document-level scripts.	Αυτό το έγγραφο δεν περιέχει σενάρια σε επίπεδο εγγράφου.

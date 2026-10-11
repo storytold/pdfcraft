@@ -672,6 +672,9 @@
 	Its security settings don't allow copying pages	Saugos nuostatos neleidžia kopijuoti puslapių
 	JavaScript Console	JavaScript konsolė
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript išjungtas (Nuostatos > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript išjungė jūsų administratorius.
+	Turned off by your administrator.	Išjungė jūsų administratorius.
+	Turned off because your administrator's policy couldn't be read.	Išjungta, nes nepavyko perskaityti jūsų administratoriaus strategijos.
 	JavaScript, e.g. getField("total").value	JavaScript, pvz., getField("total").value
 	Join our Discord	Prisijunkite prie mūsų „Discord“ serverio
 	Join the ArtCraft community	Prisijunkite prie „ArtCraft“ bendruomenės

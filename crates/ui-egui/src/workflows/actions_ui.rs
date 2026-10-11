@@ -94,6 +94,8 @@ impl PdfCraftApp {
         }
         let progress = Arc::new(Mutex::new(RunProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
+        // Each file runs in a session of its own: it takes this session's JavaScript setting.
+        let scripting = self.session.scripting();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
         let work = move || {
@@ -103,7 +105,7 @@ impl PdfCraftApp {
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
-                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
+                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), &scripting, |_, _| {}).and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
                     write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]

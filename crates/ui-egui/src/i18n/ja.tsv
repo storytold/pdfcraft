@@ -1287,6 +1287,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	墨消しマークを {n} 件適用しました。ファイルから内容を除去するには保存してください。
 	JavaScript Console	JavaScript コンソール
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript は無効です（環境設定 → JavaScript）。
+	JavaScript is turned off by your administrator.	JavaScript は管理者によって無効にされています。
+	Turned off by your administrator.	管理者によって無効にされています。
+	Turned off because your administrator's policy couldn't be read.	管理者のポリシーを読み取れなかったため、無効になっています。
 	Output appears here.	出力はここに表示されます。
 	Script Name:	スクリプト名:
 	This document has no document-level scripts.	この文書に文書レベルのスクリプトはありません。

@@ -29,6 +29,21 @@ pub(crate) fn scripts_off_notice() -> String {
 }
 
 impl PdfCraftApp {
+    /// Apply the machine's administrator policies (`pdfcraft_platform::policy`): read once, at
+    /// launch, after saved preferences are restored. Not in tests, which set the lock
+    /// themselves, and not on the web, which has no machine policy.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_admin_policy(&mut self) {
+        let lock = pdfcraft_platform::policy::Policy::load().javascript_lock();
+        if let Some((source, unreadable)) = &lock {
+            match unreadable {
+                Some(why) => log::warn!("JavaScript is off: the policy at {source} couldn't be read ({why})"),
+                None => log::info!("JavaScript is off: turned off by the policy at {source}"),
+            }
+        }
+        self.session.set_javascript_lock(lock.map(|(source, unreadable)| pdfcraft_engine::js::JavaScriptLock { source, unreadable }));
+    }
+
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
@@ -180,7 +195,9 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
 pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    if !app.session.javascript() {
+    if app.session.javascript_lock().is_some() {
+        ui.label(egui::RichText::new(tl!("JavaScript is turned off by your administrator.")).small().color(t.text_muted));
+    } else if !app.session.javascript() {
         ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).small().color(t.text_muted));
     }
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
@@ -561,9 +578,26 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let mut on = app.session.javascript();
-        if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
-            app.session.set_javascript(on);
+        if let Some(lock) = app.session.javascript_lock().cloned() {
+            // An administrator's policy: shown off and locked, with where it comes from. The
+            // person's own choice is kept for when the policy goes away.
+            let mut off = false;
+            ui.add_enabled(false, widgets::checkbox(&mut off, tl!("Enable Acrobat JavaScript")));
+            let note = match lock.unreadable {
+                None => tl!("Turned off by your administrator.").to_string(),
+                Some(_) => tl!("Turned off because your administrator's policy couldn't be read.").to_string(),
+            };
+            ui.label(egui::RichText::new(note).small());
+            let detail = match &lock.unreadable {
+                Some(why) => format!("{}: {why}", lock.source),
+                None => lock.source.clone(),
+            };
+            ui.label(egui::RichText::new(detail).small().monospace().color(t.text_muted));
+        } else {
+            let mut on = app.session.javascript();
+            if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
+                app.session.set_javascript(on);
+            }
         }
         ui.label(
             egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))

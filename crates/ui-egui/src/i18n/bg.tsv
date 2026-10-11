@@ -955,6 +955,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Приложени са {n} маркировки за заличаване. Запишете, за да премахнете съдържанието от файла.
 	JavaScript Console	Конзола за JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript е изключен (Настройки > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript е изключен от вашия администратор.
+	Turned off by your administrator.	Изключено от вашия администратор.
+	Turned off because your administrator's policy couldn't be read.	Изключено, защото правилата на вашия администратор не могат да бъдат прочетени.
 	Output appears here.	Резултатът се показва тук.
 	Document JavaScripts	JavaScript скриптове на документа
 	Script Name:	Име на скрипта:
