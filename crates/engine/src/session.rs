@@ -38,6 +38,9 @@ pub struct Session {
     pub(crate) trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     pub(crate) js_off: bool,
+    /// An administrator's policy that keeps JavaScript off, whatever `js_off` says. Read
+    /// [`Session::javascript`], never `js_off` alone, to decide whether scripts run.
+    pub(crate) js_lock: Option<js::JavaScriptLock>,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).
     pub(crate) date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.

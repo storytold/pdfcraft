@@ -17,6 +17,55 @@ fn pdf() -> Vec<u8> {
     PDF.get_or_init(|| Session::new().create_from_text("Original", "Original text").unwrap().as_ref().clone()).clone()
 }
 
+/// `pdf` with an unreferenced, compressible object added in an incremental update. A full
+/// rewrite drops it, so the optimize step's output is smaller and is kept, and it shows what the
+/// form's scripts changed on opening (the plain fixture is already as small as it gets).
+fn padded(mut pdf: Vec<u8>) -> Vec<u8> {
+    let text = String::from_utf8_lossy(&pdf).into_owned();
+    let prev: usize = text.rsplit("startxref").next().unwrap().trim().trim_end_matches("%%EOF").trim().parse().unwrap();
+    let at = pdf.len();
+    let pad = "0".repeat(100_000);
+    pdf.extend_from_slice(format!("6 0 obj\n<< /Length {} >>\nstream\n{pad}\nendstream\nendobj\n", pad.len()).as_bytes());
+    let xref = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n6 1\n{at:010} 00000 n \ntrailer\n<< /Size 7 /Root 1 0 R /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    pdf
+}
+
+#[test]
+fn batch_files_follow_the_sessions_javascript_setting() {
+    // Each file is processed in a session of its own; opening this XFA form there runs its
+    // initialize script (qty = 2) only where the calling session would.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("form.pdf"), padded(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()))).unwrap();
+    let qty = |out: &str| {
+        let bytes = std::fs::read(dir.path().join(out).join("form.pdf")).unwrap();
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("form.pdf", None, std::sync::Arc::new(bytes), None).unwrap();
+        s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.clone()
+    };
+    let run = |auto: &mut Automation, out: &str| {
+        let report = result(auto, json!({"paths":["form.pdf"],"steps":["optimize"],"out_dir":out}));
+        assert_eq!(report["completed"], 1, "{report}");
+    };
+    // Control: with no policy the script runs, and its change is in the output.
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    run(&mut auto, "on");
+    assert_eq!(qty("on"), ["2"]);
+
+    let lock = pdfcraft_engine::js::JavaScriptLock { source: "policy".into(), unreadable: None };
+    let mut auto = Automation::new().with_root(dir.path()).unwrap().with_javascript_lock(Some(lock));
+    run(&mut auto, "locked");
+    assert!(qty("locked").iter().all(|v| v.is_empty()), "an administrator's policy: {:?}", qty("locked"));
+
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    auto.call("js_enabled", &json!({ "enabled": false })).unwrap();
+    run(&mut auto, "off");
+    assert!(qty("off").iter().all(|v| v.is_empty()), "the preference: {:?}", qty("off"));
+}
+
 #[test]
 fn pdf_fixture_remains_identical_across_metadata_clock_tick() {
     let before = pdf();
