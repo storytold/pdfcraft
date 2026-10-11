@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, MarkSource, Repeat, Watermark, watermark_centres};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
@@ -290,6 +290,15 @@ fn preview(
     }
     painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
     draw(&painter, page, s);
+}
+
+/// The pixel centres of the watermark's copies in the preview: `r` is the page, `s` pixels per
+/// point. A layout that was refused (too many copies) draws none.
+fn spots<E>(layout: &Option<Result<Vec<(f64, f64)>, E>>, r: Rect, s: f32) -> Vec<egui::Pos2> {
+    match layout {
+        Some(Ok(centres)) => centres.iter().map(|&(x, y)| pos2(r.left() + x as f32 * s, r.bottom() - y as f32 * s)).collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn rgb32(c: [f64; 3]) -> Color32 {
@@ -600,6 +609,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         ui.label(tl!("Vertical"));
                         ui.add(egui::DragValue::new(&mut d.wm.offset[1]).range(-MAX_OFFSET..=MAX_OFFSET).suffix(" pt"));
                     });
+                    ui.horizontal(|ui| {
+                        let mut on = d.wm.repeat.is_some();
+                        if ui.add(widgets::checkbox(&mut on, tl!("Repeat"))).changed() {
+                            d.wm.repeat = on.then(Repeat::default);
+                        }
+                        if let Some(rep) = d.wm.repeat.as_mut() {
+                            ui.label(tl!("Spacing between copies"));
+                            ui.label(tl!("Horizontal"));
+                            ui.add(egui::DragValue::new(&mut rep.spacing[0]).range(0.0..=MAX_OFFSET).suffix(" pt"));
+                            ui.label(tl!("Vertical"));
+                            ui.add(egui::DragValue::new(&mut rep.spacing[1]).range(0.0..=MAX_OFFSET).suffix(" pt"));
+                            ui.add(widgets::checkbox(&mut rep.stagger, tl!("Stagger rows")));
+                        }
+                    });
                 });
             });
         }
@@ -648,6 +671,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let size_h = page.1.max(1.0);
     let (wm, fit) = (d.wm.clone(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
+    // Where the copies of the watermark go: the engine's own layout, so the preview and the result
+    // agree. A file that isn't imported yet stands in as a square, as the preview always drew it.
+    let layout = (kind == MarkKind::Watermark).then(|| {
+        let mut probe = wm.clone();
+        if file_name.is_some() {
+            probe.source = Some(MarkSource::placeholder());
+        } else if probe.text.trim().is_empty() {
+            probe.text = "CONFIDENTIAL".into();
+        }
+        if fit {
+            probe.font_size = 0.0;
+        }
+        watermark_centres(&probe, page)
+    });
+    let too_many = matches!(layout, Some(Err(_)));
     ui.horizontal(|ui| {
         preview(ui, t, page, picture, tint, |p, r, s| match kind {
             MarkKind::HeaderFooter => {
@@ -678,14 +716,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             }
             MarkKind::Watermark if file_name.is_some() => {
                 let side = r.width().min(r.height()) * wm.scale as f32;
-                let centre = r.center() + vec2(wm.offset[0] as f32 * s, -wm.offset[1] as f32 * s);
-                p.rect_stroke(
-                    Rect::from_center_size(centre, vec2(side, side)),
-                    CornerRadius::ZERO,
-                    egui::Stroke::new(1.0, Color32::GRAY),
-                    egui::StrokeKind::Inside,
-                );
-                p.text(centre, egui::Align2::CENTER_CENTER, file_name.clone().unwrap_or_default(), egui::FontId::proportional(10.0), Color32::GRAY);
+                for centre in spots(&layout, r, s) {
+                    p.rect_stroke(
+                        Rect::from_center_size(centre, vec2(side, side)),
+                        CornerRadius::ZERO,
+                        egui::Stroke::new(1.0, Color32::GRAY),
+                        egui::StrokeKind::Inside,
+                    );
+                    p.text(
+                        centre,
+                        egui::Align2::CENTER_CENTER,
+                        file_name.clone().unwrap_or_default(),
+                        egui::FontId::proportional(10.0),
+                        Color32::GRAY,
+                    );
+                }
             }
             MarkKind::Watermark => {
                 let text = if wm.text.trim().is_empty() { "CONFIDENTIAL" } else { wm.text.trim() };
@@ -699,8 +744,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 let half = galley.size() / 2.0;
                 let (sn, cs) = angle.sin_cos();
                 let offset = vec2(half.x * cs - half.y * sn, half.x * sn + half.y * cs);
-                let centre = r.center() + vec2(wm.offset[0] as f32 * s, -wm.offset[1] as f32 * s);
-                p.add(egui::epaint::TextShape::new(centre - offset, galley, Color32::BLACK).with_angle(angle));
+                for centre in spots(&layout, r, s) {
+                    p.add(egui::epaint::TextShape::new(centre - offset, galley.clone(), Color32::BLACK).with_angle(angle));
+                }
             }
             MarkKind::Background if file_name.is_some() => {
                 p.rect_stroke(r.shrink(6.0), CornerRadius::ZERO, egui::Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Inside);
@@ -741,6 +787,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             if d.replace {
                 ui.label(egui::RichText::new(tl!("Replaces the existing one on those pages.")).small().color(t.text_faint));
             }
+            if too_many {
+                ui.label(egui::RichText::new(tl!("Too many copies: increase the spacing or the size.")).small().color(ui.visuals().error_fg_color));
+            }
         });
     });
     // Text the standard fonts can't draw is refused on apply (#125), so it's refused here, with the
@@ -765,7 +814,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
                 MarkKind::Background => !d.use_file || d.file.is_some(),
             }
-            && !d.range.pages(count).is_empty();
+            && !d.range.pages(count).is_empty()
+            && !too_many;
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
@@ -992,6 +1042,19 @@ mod tests {
         d.bg.replace_backdrop = false;
         assert_eq!(background_tint(&d, Some(Backdrop::Fill)), Color32::WHITE, "its white backdrop stays and hides it");
         assert_eq!(background_tint(&d, None), colour, "unticked changes nothing without a backdrop");
+    }
+
+    #[test]
+    fn the_watermark_edit_carries_the_repeat() {
+        let mut d = MarksDraft::default();
+        d.wm.text = "DRAFT".into();
+        d.wm.repeat = Some(Repeat { spacing: [20.0, 30.0], stagger: true });
+        match edit(&d, MarkKind::Watermark, 3) {
+            Edit::AddWatermark { settings, .. } => assert_eq!(settings.repeat, Some(Repeat { spacing: [20.0, 30.0], stagger: true })),
+            other => panic!("expected AddWatermark, got {other:?}"),
+        }
+        // Off by default: a watermark is drawn once.
+        assert_eq!(MarksDraft::default().wm.repeat, None);
     }
 
     #[test]

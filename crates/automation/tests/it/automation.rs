@@ -2972,6 +2972,50 @@ fn watermarks_move_from_the_page_centre_through_tools() {
 }
 
 #[test]
+fn watermarks_repeat_as_a_grid_through_tools() {
+    let dir = workdir("wm-repeat");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Saved and reopened, so the search reads the file as another program would.
+    let mut saved = 0;
+    let mut copies = |a: &mut Automation| -> u64 {
+        saved += 1;
+        let path = format!("repeated{saved}.pdf");
+        ok(a, "doc_save", json!({ "doc": doc, "path": path }));
+        let copy = ok(a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        ok(a, "text_find", json!({ "doc": copy, "query": "DRAFT" }))["matches"].as_array().unwrap().iter().filter(|m| m["page"] == 1).count() as u64
+    };
+    // On the 200 × 300 page, "DRAFT" at 10 pt is about 33 × 12 points. With gaps of 40 and 100
+    // that is a 73 × 112 step: three columns (x = 27, 100, 173) in two rows (y = 98 and 210),
+    // clear of the page's own "Page 1" line.
+    let args = json!({ "doc": doc, "pages": [1], "text": "DRAFT", "rotation": 0, "font_size": 10, "offset_y": 60,
+        "repeat": true, "repeat_spacing_x": 40, "repeat_spacing_y": 100 });
+    ok(&mut a, "doc_watermark", args);
+    assert_eq!(copies(&mut a), 6, "3 columns × 2 rows");
+    // Replacing with a staggered grid is accepted (the exact positions are covered in the edit crate).
+    ok(
+        &mut a,
+        "doc_watermark",
+        json!({ "doc": doc, "pages": [1], "text": "DRAFT", "rotation": 0, "font_size": 10, "offset_y": 60,
+        "repeat": true, "repeat_spacing_x": 40, "repeat_spacing_y": 100, "stagger": true, "replace": true }),
+    );
+    // Settings of the repeat without `repeat: true` are a mistake, not a silent no-op.
+    for extra in [json!({ "stagger": true }), json!({ "repeat_spacing_x": 10 }), json!({ "repeat": false, "repeat_spacing_y": 10 })] {
+        let mut args = json!({ "doc": doc, "text": "X" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(matches!(a.call("doc_watermark", &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+    // A repeat that needs thousands of copies is refused, and the watermark in place stays.
+    let before = copies(&mut a);
+    let refused =
+        json!({ "doc": doc, "text": "DRAFT", "font_size": 1, "repeat": true, "repeat_spacing_x": 0, "repeat_spacing_y": 0, "replace": true });
+    assert!(matches!(a.call("doc_watermark", &refused), Err(ToolError::Failed(_))));
+    assert_eq!(copies(&mut a), before, "nothing changed");
+    // Negative spacing is refused too.
+    assert!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "repeat": true, "repeat_spacing_x": -5 })).is_err());
+}
+
+#[test]
 fn exporting_images_and_text_through_tools() {
     let dir = workdir("export");
     let mut a = auto(&dir);

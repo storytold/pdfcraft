@@ -466,6 +466,106 @@ fn a_watermark_offset_that_is_not_finite_is_refused() {
 }
 
 #[test]
+fn tiles_are_a_grid_that_covers_the_page() {
+    // A 100 × 100 page, a copy 20 × 10 with a 10-point gap: a 30 × 20 step, so the rows
+    // -2..=2 and, in each, the columns -2..=2 touch the page.
+    let rep = Repeat { spacing: [10.0, 10.0], stagger: false };
+    let tiles = tile_centres((100.0, 100.0), (50.0, 50.0), (20.0, 10.0), rep).unwrap();
+    assert_eq!(tiles.len(), 25);
+    assert!(tiles.contains(&(50.0, 50.0)), "one copy sits on the anchor");
+    assert!(tiles.contains(&(20.0, 50.0)) && tiles.contains(&(50.0, 30.0)), "a step left and a step down");
+    // The outermost copies' boxes just touch the page edge; none is further away than that.
+    assert!(tiles.iter().all(|&(x, y)| (-10.0..=110.0).contains(&x) && (-5.0..=105.0).contains(&y)), "none is wholly off the page: {tiles:?}");
+}
+
+#[test]
+fn staggered_rows_move_by_half_a_step() {
+    let rep = Repeat { spacing: [10.0, 10.0], stagger: true };
+    let tiles = tile_centres((100.0, 100.0), (50.0, 50.0), (20.0, 10.0), rep).unwrap();
+    // Row 0 is as before; row -1 (odd) is shifted right by half of the 30-point step.
+    assert!(tiles.contains(&(50.0, 50.0)) && tiles.contains(&(20.0, 50.0)));
+    assert!(tiles.contains(&(35.0, 30.0)) && tiles.contains(&(65.0, 30.0)), "{tiles:?}");
+    assert!(!tiles.contains(&(20.0, 30.0)), "the odd row no longer lines up with the even one");
+}
+
+#[test]
+fn too_many_copies_or_bad_numbers_are_refused() {
+    let rep = Repeat { spacing: [0.0, 0.0], stagger: false };
+    assert!(
+        matches!(tile_centres((600.0, 800.0), (300.0, 400.0), (1.0, 1.0), rep), Err(EditError::Invalid(_))),
+        "a 1-point copy would need hundreds of thousands"
+    );
+    // A zero-size box is treated as a tiny one, not as endless copies or a division by zero.
+    assert!(tile_centres((600.0, 800.0), (300.0, 400.0), (0.0, 0.0), rep).is_err());
+    for spacing in [[f64::NAN, 0.0], [0.0, f64::INFINITY], [-1.0, 0.0], [0.0, 2.0e6]] {
+        let rep = Repeat { spacing, stagger: false };
+        assert!(matches!(tile_centres((600.0, 800.0), (300.0, 400.0), (50.0, 50.0), rep), Err(EditError::Invalid(_))), "{spacing:?}");
+    }
+    assert!(tile_centres((600.0, 800.0), (f64::NAN, 400.0), (50.0, 50.0), Repeat::default()).is_err());
+    assert!(tile_centres((600.0, 800.0), (1.0e12, 400.0), (50.0, 50.0), Repeat::default()).is_err());
+    // A copy that is far larger than the page is a single copy, not a refusal.
+    assert_eq!(tile_centres((600.0, 800.0), (300.0, 400.0), (5000.0, 5000.0), Repeat::default()).unwrap(), vec![(300.0, 400.0)]);
+}
+
+#[test]
+fn a_repeated_text_watermark_draws_each_copy_once() {
+    let mut doc = fixture();
+    // "AB" at 40 pt is about 53 × 46 points; with a 100-point gap that is a 153 × 146 step on a
+    // 600 × 800 page: 5 rows of 5 copies.
+    let wm = Watermark {
+        text: "AB".into(),
+        font_size: 40.0,
+        rotation: 0.0,
+        repeat: Some(Repeat { spacing: [100.0, 100.0], stagger: false }),
+        ..Watermark::default()
+    };
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    let s = streams(&doc, 0);
+    let mark = s.iter().find(|c| c.contains("/PCMark /Watermark")).expect("the watermark stream");
+    assert_eq!(mark.matches("BT\n").count(), 25, "{mark}");
+    assert_eq!(mark.matches("/PCGS50 gs").count(), 1, "the opacity is set once, not per copy");
+    assert!(mark.contains("1 0 0 1 300 400 cm"), "one copy at the page centre");
+    assert_eq!(mark.matches("\nq\n").count() + 1, mark.matches("Q\n").count(), "each copy in its own q ... Q (plus the mark's own pair)");
+    let doc = reopen(&doc);
+    assert_eq!(streams(&doc, 0).iter().filter(|c| c.contains("/PCMark /Watermark")).count(), 1, "the file still opens and has the mark");
+}
+
+#[test]
+fn a_repeated_picture_watermark_places_the_picture_in_every_cell() {
+    let mut doc = fixture();
+    let src = MarkSource { xobject: pdfcraft_cos::ObjRef::new(50, 0), size: (100.0, 50.0), image: true };
+    // At a tenth of the page the picture is 60 × 30 points: a 100 × 100 step, so 9 rows of 7.
+    let wm = Watermark {
+        source: Some(src),
+        scale: 0.1,
+        rotation: 0.0,
+        repeat: Some(Repeat { spacing: [40.0, 70.0], stagger: false }),
+        ..Watermark::default()
+    };
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    let s = streams(&doc, 0);
+    let mark = s.iter().find(|c| c.contains("/PCMark /Watermark")).expect("the watermark stream");
+    assert_eq!(mark.matches("/PCPic50 Do").count(), 63, "{mark}");
+}
+
+#[test]
+fn a_refused_repeat_changes_nothing_not_even_the_watermark_it_would_replace() {
+    let mut doc = fixture();
+    add_watermark(&mut doc, &[0, 1], &Watermark { text: "KEEP".into(), ..Watermark::default() }, false).unwrap();
+    let before = [streams(&doc, 0), streams(&doc, 1)];
+    // 6-point text needs thousands of copies, and the second page is checked too.
+    let too_many =
+        Watermark { text: "AB".into(), font_size: 6.0, repeat: Some(Repeat { spacing: [0.0, 0.0], stagger: false }), ..Watermark::default() };
+    assert!(matches!(add_watermark(&mut doc, &[0, 1], &too_many, true), Err(EditError::Invalid(_))));
+    assert_eq!([streams(&doc, 0), streams(&doc, 1)], before, "the old watermark is still there and nothing was added");
+    for spacing in [[f64::NAN, 0.0], [-5.0, 0.0]] {
+        let bad = Watermark { text: "AB".into(), repeat: Some(Repeat { spacing, stagger: false }), ..Watermark::default() };
+        assert!(matches!(add_watermark(&mut doc, &[0], &bad, true), Err(EditError::Invalid(_))), "{spacing:?}");
+    }
+    assert_eq!([streams(&doc, 0), streams(&doc, 1)], before);
+}
+
+#[test]
 fn invalid_requests_change_nothing() {
     let mut doc = fixture();
     assert!(matches!(add_header_footer(&mut doc, &[0], &HeaderFooter::default(), false, &cx()), Err(EditError::Invalid(_))));

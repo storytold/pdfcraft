@@ -1,4 +1,4 @@
-use super::{Document, EditError, Object, Rgb, added};
+use super::{Document, EditError, Object, Rgb, added, helvetica_width};
 
 /// The kinds of page marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +118,15 @@ pub struct MarkSource {
     pub image: bool,
 }
 
+impl MarkSource {
+    /// A stand-in for a picture that isn't in the document yet: a one-point square, which fills
+    /// the same share of the page as any picture does. For laying out previews with
+    /// [`watermark_centres`].
+    pub fn placeholder() -> Self {
+        Self { xobject: pdfcraft_cos::ObjRef::new(0, 0), size: (1.0, 1.0), image: true }
+    }
+}
+
 /// A watermark: text, or a picture from a file (`source`; the text is then ignored).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Watermark {
@@ -136,6 +145,8 @@ pub struct Watermark {
     pub behind: bool,
     /// Offset of the centre from the page centre, in points (right, up).
     pub offset: [f64; 2],
+    /// Draw the watermark again and again across the page (`None`: once).
+    pub repeat: Option<Repeat>,
 }
 
 impl Watermark {
@@ -149,6 +160,27 @@ impl Watermark {
     }
 }
 
+/// A watermark drawn as a grid of copies. One copy sits at the watermark's centre (the page
+/// centre plus its `offset`); the others follow at its size plus `spacing` in each direction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Repeat {
+    /// Gap between neighbouring copies, in points (horizontal, vertical).
+    pub spacing: [f64; 2],
+    /// Shift every other row by half a step, like bricks.
+    pub stagger: bool,
+}
+
+impl Default for Repeat {
+    fn default() -> Self {
+        Self { spacing: [36.0, 36.0], stagger: false }
+    }
+}
+
+/// The most copies of a repeated watermark on one page. More is refused, not cut short.
+pub const MAX_REPEATS: usize = 1000;
+/// The largest spacing or offset a repeated watermark accepts, in points.
+const MAX_REPEAT_EXTENT: f64 = 1.0e6;
+
 impl Default for Watermark {
     fn default() -> Self {
         Self {
@@ -161,8 +193,112 @@ impl Default for Watermark {
             rotation: 45.0,
             behind: false,
             offset: [0.0; 2],
+            repeat: None,
         }
     }
+}
+
+/// Where the copies of a watermark go on one page.
+pub(crate) struct Layout {
+    /// The font size of a text watermark (0 for a picture).
+    pub(crate) font_size: f64,
+    /// The centre of every copy, in page points.
+    pub(crate) centres: Vec<(f64, f64)>,
+}
+
+/// Where every copy of `wm` goes on a page of `page` points (width, height): the centre of each,
+/// in points with y up. It is what `add_watermark` draws, so a dialog can preview it, and it
+/// fails the same way (a repeat that needs too many copies).
+pub fn watermark_centres(wm: &Watermark, page: (f64, f64)) -> Result<Vec<(f64, f64)>, EditError> {
+    let lines: Vec<&str> = wm.text.trim().lines().collect();
+    layout_for(wm, &lines, page).map(|l| l.centres)
+}
+
+/// The font size and the copies of the watermark on one page.
+pub(crate) fn layout_for(wm: &Watermark, lines: &[&str], page: (f64, f64)) -> Result<Layout, EditError> {
+    let (copy, font_size) = mark_box(wm, lines, page);
+    let anchor = (page.0 / 2.0 + wm.offset[0], page.1 / 2.0 + wm.offset[1]);
+    let centres = match wm.repeat {
+        Some(rep) => tile_centres(page, anchor, copy, rep)?,
+        None => vec![anchor],
+    };
+    Ok(Layout { font_size, centres })
+}
+
+/// One copy of the watermark on a page of `page` points: the box it fills once turned by the
+/// rotation, and the font size of a text watermark (0 for a picture).
+fn mark_box(wm: &Watermark, lines: &[&str], page: (f64, f64)) -> ((f64, f64), f64) {
+    if let Some(src) = &wm.source {
+        let (dw, dh, _) = picture_size(src, page, wm.scale);
+        return (rotated_box((dw, dh), wm.rotation), 0.0);
+    }
+    let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
+    let (w, h) = page;
+    let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
+    let block = (widest * size, size * 1.15 * lines.len() as f64);
+    (rotated_box(block, wm.rotation), size)
+}
+
+/// The size of the box that turning a `size` rectangle by `degrees` fills.
+fn rotated_box(size: (f64, f64), degrees: f64) -> (f64, f64) {
+    let (s, c) = degrees.to_radians().sin_cos();
+    (size.0 * c.abs() + size.1 * s.abs(), size.0 * s.abs() + size.1 * c.abs())
+}
+
+/// Where the copies of a repeated mark go: the centres, in page points (y up), of the copies
+/// whose `size` box touches the page. One copy is centred on `anchor`; the others are `size` plus
+/// the spacing away, with every other row shifted by half a step when `rep.stagger` is set.
+/// More than [`MAX_REPEATS`] copies is an error, because dropping some would change what the
+/// user asked for.
+pub(crate) fn tile_centres(page: (f64, f64), anchor: (f64, f64), size: (f64, f64), rep: Repeat) -> Result<Vec<(f64, f64)>, EditError> {
+    let bad = || EditError::Invalid("invalid repeat settings".into());
+    let finite = |v: f64, max: f64| v.is_finite() && v.abs() <= max;
+    if !(rep.spacing.iter().all(|s| finite(*s, MAX_REPEAT_EXTENT) && *s >= 0.0)
+        && finite(anchor.0, MAX_REPEAT_EXTENT)
+        && finite(anchor.1, MAX_REPEAT_EXTENT)
+        && size.0.is_finite()
+        && size.1.is_finite())
+    {
+        return Err(bad());
+    }
+    // A box of nothing would need endless copies; the cap below catches the small ones too.
+    let (bw, bh) = (size.0.max(0.01), size.1.max(0.01));
+    let (px, py) = (bw + rep.spacing[0], bh + rep.spacing[1]);
+    let too_many = || {
+        EditError::Invalid(format!("the repeated watermark would need more than {MAX_REPEATS} copies on a page; increase the spacing or the size"))
+    };
+    // The rows (and, for each, the columns) whose copies touch the page.
+    let first_row = ((-bh / 2.0 - anchor.1) / py).ceil();
+    let last_row = ((page.1 + bh / 2.0 - anchor.1) / py).floor();
+    let rows = last_row - first_row + 1.0;
+    if rows > MAX_REPEATS as f64 {
+        return Err(too_many());
+    }
+    // Both ends are within a few million after the checks above, so they fit an i64.
+    let (first_row, last_row) = (first_row as i64, last_row as i64);
+    let columns = |row: i64| -> (i64, i64) {
+        let shift = if rep.stagger && row.rem_euclid(2) == 1 { px / 2.0 } else { 0.0 };
+        let first = ((-bw / 2.0 - anchor.0 - shift) / px).ceil();
+        let last = ((page.0 + bw / 2.0 - anchor.0 - shift) / px).floor();
+        (first as i64, last as i64)
+    };
+    let mut total = 0usize;
+    for row in first_row..=last_row {
+        let (a, b) = columns(row);
+        total = total.saturating_add(usize::try_from((b - a + 1).max(0)).unwrap_or(usize::MAX));
+        if total > MAX_REPEATS {
+            return Err(too_many());
+        }
+    }
+    let mut centres = Vec::with_capacity(total);
+    for row in first_row..=last_row {
+        let shift = if rep.stagger && row.rem_euclid(2) == 1 { px / 2.0 } else { 0.0 };
+        let (a, b) = columns(row);
+        for col in a..=b {
+            centres.push((anchor.0 + shift + col as f64 * px, anchor.1 + row as f64 * py));
+        }
+    }
+    Ok(centres)
 }
 
 /// A background behind the page content: a solid colour, or a picture from a file.
@@ -187,13 +323,19 @@ impl Default for Background {
     }
 }
 
+/// The size a picture mark is drawn at, in points: fitted to the page at `scale`. Returns its
+/// width, height and the factor from its natural size.
+pub(crate) fn picture_size(src: &MarkSource, page: (f64, f64), scale: f64) -> (f64, f64, f64) {
+    let (sw, sh) = (src.size.0.max(0.01), src.size.1.max(0.01));
+    let k = (page.0 / sw).min(page.1 / sh) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    (sw * k, sh * k, k)
+}
+
 /// Drawing a picture mark: fitted to the page at `scale`, centred (plus `offset`), turned by
 /// `rotation` degrees. Returns the content and the resource name it uses.
 pub(crate) fn picture(src: &MarkSource, page: (f64, f64), scale: f64, rotation: f64, offset: [f64; 2]) -> String {
     let (w, h) = page;
-    let (sw, sh) = (src.size.0.max(0.01), src.size.1.max(0.01));
-    let k = (w / sw).min(h / sh) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-    let (dw, dh) = (sw * k, sh * k);
+    let (dw, dh, k) = picture_size(src, page, scale);
     let (s, c) = rotation.to_radians().sin_cos();
     let (cx, cy) = (w / 2.0 + offset[0], h / 2.0 + offset[1]);
     // Centre, rotate, then place the picture's box (unit square for images).

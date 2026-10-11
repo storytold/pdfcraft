@@ -1019,7 +1019,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
-        t("doc_watermark", "Add watermark", "Add a watermark to pages: text, or a picture from `file` (an image, or page `file_page` of a PDF) at `scale` of the page (default 0.5); rotated (degrees counter-clockwise, default 45), semi-transparent (opacity 0–1, default 0.5), text fitted to the page unless font_size is given, on top unless behind: true; moved from the page centre by `offset_x` (right) and `offset_y` (up) points (default 0). replace: true swaps out existing ones. Undoable.")
+        t("doc_watermark", "Add watermark", "Add a watermark to pages: text, or a picture from `file` (an image, or page `file_page` of a PDF) at `scale` of the page (default 0.5); rotated (degrees counter-clockwise, default 45), semi-transparent (opacity 0–1, default 0.5), text fitted to the page unless font_size is given, on top unless behind: true; moved from the page centre by `offset_x` (right) and `offset_y` (up) points (default 0); repeat: true draws it again and again as a grid across the page, `repeat_spacing_x` and `repeat_spacing_y` points apart (default 36; the gap between copies, not between their centres), every other row shifted by half a step with stagger: true (refused if that needs more than 1000 copies on a page). replace: true swaps out existing ones. Undoable.")
             .cmd("edit.watermark")
             .with(schema(
                 json!({
@@ -1036,6 +1036,10 @@ pub fn tools() -> Vec<ToolDef> {
                     "behind": { "type": "boolean" },
                     "offset_x": { "type": "number", "description": "Points right of the page centre (negative: left)." },
                     "offset_y": { "type": "number", "description": "Points above the page centre (negative: below)." },
+                    "repeat": { "type": "boolean", "description": "Draw the watermark as a grid of copies across the page." },
+                    "repeat_spacing_x": { "type": "number", "minimum": 0, "description": "Gap between copies side by side, in points (needs repeat)." },
+                    "repeat_spacing_y": { "type": "number", "minimum": 0, "description": "Gap between rows of copies, in points (needs repeat)." },
+                    "stagger": { "type": "boolean", "description": "Shift every other row by half a step (needs repeat)." },
                     "replace": { "type": "boolean" },
                 }),
                 &["doc"],
