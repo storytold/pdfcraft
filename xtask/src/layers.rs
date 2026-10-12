@@ -81,6 +81,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
+    ("thumbnails", Class::Layer(7)),
     // test support
     ("testkit", Class::Testkit),
     ("oracle", Class::Testkit),
