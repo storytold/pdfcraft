@@ -5,7 +5,10 @@
 //! never appears. Non-finite values have no PostScript operand at all — callers replace them
 //! with `0` and record a fidelity note.
 
-// Foundation for the later Layer A emitter tasks; until they call these, only the tests do.
+// Foundation for the Layer A emitter; the chain (`num` ← `Emitter::coord` ← `PsDevice`'s
+// `Device` impl) only goes live once Task 7's `export()` constructs the device. Until then only
+// the tests do, and rustc's dead-code analysis does not count trait-impl methods of a
+// never-constructed struct as live.
 #![allow(dead_code)]
 
 /// Format `v` as a PostScript number operand, or `None` if it has no operand form.

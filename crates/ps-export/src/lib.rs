@@ -2,12 +2,14 @@
 //!
 //! The crate implements hayro-interpret's `Device` trait as a PostScript emitter and drives it
 //! through the same page-drive entry the raster renderer uses, so export semantics match
-//! `page_render` by construction. This skeleton holds the public interface plus the reachability
-//! canaries for the vendored hayro stack; the emitter itself arrives with the later Layer A
-//! tasks.
+//! `page_render` by construction. This skeleton holds the public interface plus the
+//! reachability canaries for the vendored hayro stack and the emitter's device core
+//! (geometry, colour, clip); text, images, shadings and the `export()` assembly arrive with
+//! the later Layer A tasks.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod device;
 mod dsc;
 mod psnum;
 
