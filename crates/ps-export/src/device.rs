@@ -155,17 +155,34 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
     emit.coord(f64::from(props.line_width).max(0.0));
     emit.op("setlinewidth");
 
-    let mut line = String::from("[");
-    for (i, d) in props.dash_array.iter().enumerate() {
-        if i > 0 {
-            line.push(' ');
+    // PLRM `setdash` requires nonnegative elements with a positive sum (a violating pattern is
+    // a rangecheck, which could truncate the page on a conforming interpreter); PDF calls
+    // negative elements invalid and an all-zero pattern a solid line. Normalize rather than
+    // pass PDF data through: negative elements clamp to 0 (noted), an empty or all-zero
+    // pattern emits a solid line (the phase is meaningless then), and a negative phase is
+    // reduced modulo the pattern length — visually identical, never negative.
+    let clamped_sum: f64 = props.dash_array.iter().map(|d| f64::from(*d).max(0.0)).sum();
+    if clamped_sum > 0.0 {
+        let mut line = String::from("[");
+        for (i, d) in props.dash_array.iter().enumerate() {
+            let d = f64::from(*d);
+            if d < 0.0 {
+                emit.note("negative dash element replaced with 0");
+            }
+            if i > 0 {
+                line.push(' ');
+            }
+            line.push_str(&emit.number(if d < 0.0 { 0.0 } else { d }));
         }
-        line.push_str(&emit.number(f64::from(*d)));
+        line.push_str("] ");
+        let phase = f64::from(props.dash_offset);
+        let phase = if phase < 0.0 { phase.rem_euclid(clamped_sum) } else { phase };
+        line.push_str(&emit.number(phase));
+        line.push_str(" setdash");
+        emit.op(&line);
+    } else {
+        emit.op("[] 0 setdash");
     }
-    line.push_str("] ");
-    line.push_str(&emit.number(f64::from(props.dash_offset)));
-    line.push_str(" setdash");
-    emit.op(&line);
 
     let join = match props.line_join {
         Join::Miter => "0",
@@ -522,6 +539,47 @@ mod tests {
         let mut dev = device();
         dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(StrokeProps::default()));
         assert!(output(&dev).contains("[] 0 setdash\n"), "solid line as empty dash: {}", output(&dev));
+    }
+
+    /// An all-zero dash array means a solid line in PDF, and a zero-sum pattern is a
+    /// rangecheck on conforming PostScript interpreters: it must normalize to `[] 0 setdash`.
+    #[test]
+    fn all_zero_dash_array_is_solid() {
+        let props = StrokeProps { dash_array: [0.0f32, 0.0].into_iter().collect(), ..Default::default() };
+        let mut dev = device();
+        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
+        let out = output(&dev);
+        assert!(out.contains("[] 0 setdash\n"), "solid, phase meaningless: {out}");
+        assert!(!out.contains("[0 0]"), "zero-sum pattern is a rangecheck: {out}");
+    }
+
+    /// Negative dash elements are invalid PDF and rangecheck in PostScript; they clamp to 0
+    /// (recorded), keeping the pattern's alternating shape valid.
+    #[test]
+    fn negative_dash_element_clamps_with_note() {
+        let props = StrokeProps { dash_array: [-3.0f32, 2.0].into_iter().collect(), dash_offset: 1.0, ..Default::default() };
+        let mut dev = device();
+        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
+        assert!(output(&dev).contains("[0 2] 1 setdash\n"), "negative element clamped, pattern kept: {}", output(&dev));
+        assert_eq!(dev.emit.notes, vec![FidelityNote { page: None, text: "negative dash element replaced with 0".into() }]);
+    }
+
+    /// A negative dash phase is reduced modulo the pattern length (visually identical) so the
+    /// program never carries a negative phase; a solid line ignores the phase entirely.
+    #[test]
+    fn negative_dash_phase_reduces_modulo_pattern() {
+        let props = StrokeProps { dash_array: [3.0f32, 2.0].into_iter().collect(), dash_offset: -1.0, ..Default::default() };
+        let mut dev = device();
+        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
+        // -1 mod (3+2) = 4.
+        assert!(output(&dev).contains("[3 2] 4 setdash\n"), "phase reduced: {}", output(&dev));
+
+        let props = StrokeProps { dash_array: [3.0f32, 2.0].into_iter().collect(), dash_offset: -6.0, ..Default::default() };
+        let mut dev = device();
+        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
+        // -6 mod 5 = 4.
+        assert!(output(&dev).contains("[3 2] 4 setdash\n"), "phase reduced twice: {}", output(&dev));
+        assert!(!output(&dev).contains("-6 setdash"), "no negative phase: {}", output(&dev));
     }
 
     /// Marked content becomes DSC-style comment lines (printable ASCII only), not operators.
