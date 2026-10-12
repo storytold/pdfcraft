@@ -9,6 +9,8 @@ pub(super) mod export_ui;
 pub(super) mod files;
 pub(super) mod js_ui;
 pub(super) mod ocr_ui;
+#[cfg(target_arch = "wasm32")]
+pub(super) mod ocr_web;
 pub(super) mod optimize_ui;
 pub(super) mod print_ui;
 pub(super) mod web_print;

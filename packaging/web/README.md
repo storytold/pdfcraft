@@ -8,6 +8,7 @@ static site in `pdfcraft-web-<version>/`:
 | `index.html` | The page. It loads everything through relative URLs. |
 | `pdfcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `pdfcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
+| `pdfcraft-ocr-worker-<hash>.js`, `_bg.wasm`, `_loader.js` | The text recognition worker (about 3 MB), started only when OCR runs |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 | `models/` | The text recognition (OCR) models, about 12 MB, with their licences (CC-BY-SA-4.0) |
 
@@ -62,8 +63,14 @@ Scan & OCR ▸ Recognize Text downloads `models/text-detection.rten` and
 `models/text-recognition.rten`, relative to the page, the first time it is opened in a visit.
 Keep `models/` beside `index.html`. Its file names carry no content hash, so serve them with a
 short cache lifetime or revalidation. Without them, everything else works and the Recognize Text
-dialog says the download failed. Recognition runs on the page's own thread, so the app doesn't
-respond while it reads a page.
+dialog says the download failed.
+
+Pages are read in Web Workers (`pdfcraft-ocr-worker-<hash>_loader.js`, a module worker), so the
+app keeps responding, and two pages are read at once on a machine with three or more cores. Each
+worker needs about 600 MB while it reads; idle workers close after a minute. The workers need no
+special headers, but a `Content-Security-Policy` must allow them (`worker-src 'self'`, or
+`script-src 'self'`). Where they can't start, the app reads the pages itself, a page at a time,
+and doesn't respond while each page is read.
 
 From a source build, `trunk build --release` doesn't fetch the models. Add them with
 `cargo xtask models dist/web/models` (after the build, which replaces `dist/web`).

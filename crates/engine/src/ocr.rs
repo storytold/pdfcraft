@@ -7,9 +7,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_render::{PageInfo, PageRenderer, Pixels, RenderConfig, RenderRequest, RequestKind};
 
-pub use pdfcraft_ocr::{DETECTION_MODEL, LANGUAGES, Models, Ocr, OcrError, PlacedWord, RECOGNITION_MODEL};
+pub use pdfcraft_ocr::{DETECTION_MODEL, LANGUAGES, Line, Models, Ocr, OcrError, PlacedWord, RECOGNITION_MODEL, Word, lines_from_json};
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -72,6 +72,10 @@ pub struct OcrPage {
 }
 
 impl OcrPage {
+    fn skipped(page: usize, why: &str) -> OcrPage {
+        OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()) }
+    }
+
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -120,52 +124,27 @@ impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
-        let config =
-            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
-        let mut r = PageRenderer::new(self.bytes.clone(), config);
-        let mut out = Vec::new();
         let total = self.pages.len();
-        for (done, &page) in self.pages.iter().enumerate() {
-            if !progress(done, total) {
-                break;
+        let mut steps = self.steps();
+        let mut out = Vec::new();
+        while progress(steps.done(), total) {
+            match steps.next_page() {
+                None => break,
+                Some(Err(skipped)) => out.push(skipped),
+                Some(Ok(shot)) => out.push(shot.place(ocr.recognize(&shot.rgba, shot.width, shot.height).map_err(|e| e.to_string()))),
             }
-            let Some(info) = self.infos.get(page) else { continue };
-            let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()) };
-            // The boxes of the page's own text (an earlier OCR layer's included), in view space.
-            let existing: Vec<[f32; 4]> = r
-                .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
-                .text
-                .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
-                .unwrap_or_default();
-            if self.settings.skip_text_pages && !existing.is_empty() {
-                out.push(skip("the page already contains text"));
-                continue;
-            }
-            let shot = r.render(RenderRequest { page, scale: self.scale(page, info), ..Default::default() });
-            if let Some(e) = shot.error {
-                out.push(skip(&e));
-                continue;
-            }
-            let lines = match ocr.recognize(&shot.rgba, shot.width, shot.height) {
-                Ok(l) => l,
-                Err(e) => {
-                    out.push(skip(&e.to_string()));
-                    continue;
-                }
-            };
-            let scale = shot.width as f32 / info.width.max(1e-3);
-            let to_user = |x: f32, y: f32| {
-                let [u, v] = info.view_to_user(x / scale, y / scale);
-                [u as f64, v as f64]
-            };
-            // Words the page's own text already has are not added a second time.
-            let (fresh, already): (Vec<_>, Vec<_>) =
-                lines.iter().flat_map(|l| &l.words).partition(|w| covered(w.rect.map(|v| v / scale), &existing) < ALREADY_ON_PAGE);
-            let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect();
-            out.push(OcrPage { page, words, already_on_page: already.len(), skipped: None });
         }
         progress(total, total);
         out
+    }
+
+    /// Read the pages one at a time, rendering and recognising separately: the web build renders
+    /// on the page and recognises in Web Workers.
+    pub fn steps(self) -> OcrSteps {
+        let config =
+            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
+        let renderer = PageRenderer::new(self.bytes.clone(), config);
+        OcrSteps { job: self, renderer, next: 0 }
     }
 
     /// The render scale (pixels per point) `page` is read at. A scan is read at its own
@@ -178,6 +157,84 @@ impl OcrJob {
         // image, and no "Downsample to" choice could ask for less.
         let fit = (SHEET / info.width.max(info.height).max(1e-3)).min(1.0);
         native.clamp(fit, wanted * fit)
+    }
+}
+
+/// [`OcrJob`] a page at a time: [`OcrSteps::next_page`] renders the next page, something
+/// recognises its pixels and [`OcrShot::place`] puts the words found on the page.
+pub struct OcrSteps {
+    job: OcrJob,
+    renderer: PageRenderer,
+    next: usize,
+}
+
+impl OcrSteps {
+    /// The number of pages to read.
+    pub fn total(&self) -> usize {
+        self.job.pages.len()
+    }
+
+    /// The number of pages rendered (or skipped) so far.
+    pub fn done(&self) -> usize {
+        self.next
+    }
+
+    /// Render the next page for recognition. `Err` is a page that isn't read (it already has
+    /// text, or couldn't be rendered); `None` once every page is done.
+    pub fn next_page(&mut self) -> Option<Result<OcrShot, OcrPage>> {
+        loop {
+            let page = *self.job.pages.get(self.next)?;
+            self.next += 1;
+            let Some(info) = self.job.infos.get(page) else { continue };
+            let r = &mut self.renderer;
+            // The boxes of the page's own text (an earlier OCR layer's included), in view space.
+            let existing: Vec<[f32; 4]> = r
+                .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
+                .text
+                .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
+                .unwrap_or_default();
+            if self.job.settings.skip_text_pages && !existing.is_empty() {
+                return Some(Err(OcrPage::skipped(page, "the page already contains text")));
+            }
+            let shot = r.render(RenderRequest { page, scale: self.job.scale(page, info), ..Default::default() });
+            if let Some(e) = shot.error {
+                return Some(Err(OcrPage::skipped(page, &e)));
+            }
+            return Some(Ok(OcrShot { page, width: shot.width, height: shot.height, rgba: shot.rgba, info: info.clone(), existing }));
+        }
+    }
+}
+
+/// A page rendered for recognition: its pixels, and what placing the words found in them needs.
+pub struct OcrShot {
+    pub page: usize,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA, `width` × `height` (read it as bytes).
+    pub rgba: Pixels,
+    info: PageInfo,
+    /// The boxes of the page's own text, in view space.
+    existing: Vec<[f32; 4]>,
+}
+
+impl OcrShot {
+    /// Put the lines recognised in the pixels on the page (or skip the page with the error).
+    pub fn place(&self, lines: Result<Vec<Line>, String>) -> OcrPage {
+        let lines = match lines {
+            Ok(l) => l,
+            Err(e) => return OcrPage::skipped(self.page, &e),
+        };
+        let info = &self.info;
+        let scale = self.width as f32 / info.width.max(1e-3);
+        let to_user = |x: f32, y: f32| {
+            let [u, v] = info.view_to_user(x / scale, y / scale);
+            [u as f64, v as f64]
+        };
+        // Words the page's own text already has are not added a second time.
+        let (fresh, already): (Vec<_>, Vec<_>) =
+            lines.iter().flat_map(|l| &l.words).partition(|w| covered(w.rect.map(|v| v / scale), &self.existing) < ALREADY_ON_PAGE);
+        let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect();
+        OcrPage { page: self.page, words, already_on_page: already.len(), skipped: None }
     }
 }
 
@@ -254,20 +311,43 @@ pub fn recognize_file(
     ocr: &Ocr,
     progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<FileResult, String> {
-    let mut s = Session::new();
-    let id = s.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
-    if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
-        return Err(why);
-    }
-    let job = s.ocr_job(id, &[], settings).ok_or("the document could not be read")?;
+    let mut file = FileJob::open(name, bytes, password, settings)?;
+    let job = file.job.take().ok_or("the document could not be read")?;
     let pages = job.run(ocr, progress);
-    if s.apply_ocr(id, &pages).map_err(|e| e.to_string())? == 0 {
-        return Ok(FileResult { bytes, pages });
+    file.finish(pages)
+}
+
+/// [`recognize_file`] in two halves, for callers that read the pages themselves (the web build
+/// reads them in Web Workers): [`FileJob::open`], read `job`, then [`FileJob::finish`].
+pub struct FileJob {
+    session: Session,
+    id: DocId,
+    bytes: Arc<Vec<u8>>,
+    /// The pages to read (taken by the caller).
+    pub job: Option<OcrJob>,
+}
+
+impl FileJob {
+    pub fn open(name: &str, bytes: Arc<Vec<u8>>, password: Option<&str>, settings: OcrSettings) -> Result<FileJob, String> {
+        let mut session = Session::new();
+        let id = session.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
+        if let Some(why) = session.get(id).and_then(|d| d.read_only_reason.clone()) {
+            return Err(why);
+        }
+        let job = session.ocr_job(id, &[], settings).ok_or("the document could not be read")?;
+        Ok(FileJob { session, id, bytes, job: Some(job) })
     }
-    // Checked like a save before the caller writes it (#2166).
-    let bytes = s.save_bytes(id).map_err(|e| e.to_string())?;
-    s.check_save(id, &bytes).map_err(|e| e.to_string())?;
-    Ok(FileResult { bytes, pages })
+
+    /// Add the words found and save: the searchable file, or the original when nothing was found.
+    pub fn finish(mut self, pages: Vec<OcrPage>) -> Result<FileResult, String> {
+        if self.session.apply_ocr(self.id, &pages).map_err(|e| e.to_string())? == 0 {
+            return Ok(FileResult { bytes: self.bytes, pages });
+        }
+        // Checked like a save before the caller writes it (#2166).
+        let bytes = self.session.save_bytes(self.id).map_err(|e| e.to_string())?;
+        self.session.check_save(self.id, &bytes).map_err(|e| e.to_string())?;
+        Ok(FileResult { bytes, pages })
+    }
 }
 
 #[cfg(test)]

@@ -145,8 +145,14 @@ impl Ocr {
         if width == 0 || height == 0 || pixels.is_empty() {
             return Err(OcrError::EmptyImage);
         }
+        // ocrs multiplies the sides in 32 bits and trusts the byte count: check both here.
+        let area = u64::from(width) * u64::from(height);
+        let channels = [1u64, 3, 4].into_iter().find(|c| area.checked_mul(*c) == Some(pixels.len() as u64));
+        if area > u64::from(u32::MAX) || channels.is_none() {
+            return Err(OcrError::Recognize(format!("{} bytes of pixels don't make a {width}×{height} image", pixels.len())));
+        }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let rgb: std::borrow::Cow<[u8]> = if channels == Some(4) {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
         } else {
             pixels.into()
@@ -254,6 +260,46 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
     }
     out.extend_from_slice(b"ET\nQ\nEMC\n");
     out
+}
+
+/// The recognised lines as JSON, `[[["word", left, top, right, bottom], …], …]`: how the web
+/// build's OCR workers send what they found back to the page.
+pub fn lines_to_json(lines: &[Line]) -> String {
+    let words = |l: &Line| l.words.iter().map(|w| serde_json::json!([w.text, w.rect[0], w.rect[1], w.rect[2], w.rect[3]])).collect::<Vec<_>>();
+    serde_json::Value::Array(lines.iter().map(|l| serde_json::Value::Array(words(l))).collect()).to_string()
+}
+
+/// At most this many words come back for one page (a dense page has a few thousand).
+const MAX_WORDS: usize = 100_000;
+
+/// [`lines_to_json`] read back. Anything else (a word without its box, a box that isn't finite,
+/// too many words) is an error rather than a guess.
+pub fn lines_from_json(json: &str) -> Result<Vec<Line>, OcrError> {
+    let bad = |why: &str| OcrError::Recognize(format!("unreadable result: {why}"));
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(&e.to_string()))?;
+    let lines = value.as_array().ok_or_else(|| bad("not a list of lines"))?;
+    let mut count = 0usize;
+    let mut out = Vec::with_capacity(lines.len().min(MAX_WORDS));
+    for line in lines {
+        let mut words = Vec::new();
+        for word in line.as_array().ok_or_else(|| bad("a line is not a list of words"))? {
+            count += 1;
+            if count > MAX_WORDS {
+                return Err(bad("too many words"));
+            }
+            let (text, rect) = match word.as_array().map(Vec::as_slice) {
+                Some([serde_json::Value::String(text), rest @ ..]) if rest.len() == 4 => (text.clone(), rest),
+                _ => return Err(bad("a word is not [text, left, top, right, bottom]")),
+            };
+            let mut r = [0f32; 4];
+            for (slot, v) in r.iter_mut().zip(rect) {
+                *slot = v.as_f64().map(|v| v as f32).filter(|v| v.is_finite()).ok_or_else(|| bad("a word's box is not finite numbers"))?;
+            }
+            words.push(Word { text, rect: r });
+        }
+        out.push(Line { words });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -465,6 +511,59 @@ mod tests {
         let (w, h, px) = test_image::hello();
         let text: Vec<String> = ocr.recognize(&px, w, h).unwrap().iter().map(Line::text).collect();
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+    }
+
+    /// A page size whose byte count overflows 32 bits is a mismatch, not an arithmetic panic.
+    #[test]
+    fn huge_page_sizes_are_an_error() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        for (w, h) in [(65_536, 65_536), (u32::MAX, u32::MAX), (u32::MAX, 1)] {
+            assert!(ocr.recognize(&[255; 16], w, h).is_err(), "{w}×{h}");
+        }
+    }
+
+    /// The web build's workers send lines back as JSON; they arrive unchanged.
+    #[test]
+    fn lines_survive_json() {
+        let lines = vec![
+            Line {
+                words: vec![
+                    Word { text: "Total \"€250\"".into(), rect: [1.5, 2.0, 30.25, 12.0] },
+                    Word { text: "due".into(), rect: [32.0, 2.0, 50.0, 12.0] },
+                ],
+            },
+            Line::default(),
+            Line { words: vec![Word { text: "日本語".into(), rect: [0.0, 20.0, 9.0, 30.0] }] },
+        ];
+        assert_eq!(lines_from_json(&lines_to_json(&lines)).unwrap(), lines);
+        assert_eq!(lines_from_json(&lines_to_json(&[])).unwrap(), Vec::<Line>::new());
+    }
+
+    /// A result that isn't what a worker sends is an error, not a crash or a guess.
+    #[test]
+    fn malformed_json_lines_are_an_error() {
+        for json in [
+            "",
+            "{}",
+            "[1]",
+            "[[1]]",
+            "[[[\"a\", 1, 2, 3]]]",
+            "[[[\"a\", 1, 2, 3, 4, 5]]]",
+            "[[[1, 1, 2, 3, 4]]]",
+            "[[[\"a\", \"1\", 2, 3, 4]]]",
+            "[[[\"a\", 1e999, 2, 3, 4]]]",
+            "[[[\"a\", null, 2, 3, 4]]]",
+        ] {
+            assert!(matches!(lines_from_json(json), Err(OcrError::Recognize(_))), "{json}");
+        }
+        let many = format!("[[{}]]", vec!["[\"a\",0,0,1,1]"; MAX_WORDS + 1].join(","));
+        assert!(lines_from_json(&many).is_err());
+        let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        assert!(lines_from_json(&deep).is_err());
     }
 
     /// A download that isn't a model (an HTML error page, a truncated file) is an error, not a crash.

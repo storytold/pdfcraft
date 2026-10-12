@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PdfCraft</title>
     <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- Recognises text off the page's thread (crates/ui-egui/src/ocr_web.rs). -->
+    <link data-trunk rel="rust" href="../pdfcraft-ocr-worker/Cargo.toml" data-type="worker" data-loader-shim data-bindgen-target="web" data-wasm-opt="3" />
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #f1f1f3; }
       canvas { width: 100%; height: 100%; display: block; outline: none; }
