@@ -20,17 +20,18 @@ use hayro::hayro_interpret::{BlendMode, ClipPath, Device, FillRule, GlyphDrawMod
 use kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Rect};
 
 use crate::FidelityNote;
+use crate::images;
 use crate::psnum;
 
 /// The shared output collector: operator bytes, fidelity notes, and the page the notes refer to.
 #[derive(Default)]
 pub(crate) struct Emitter {
     /// The PostScript program emitted so far.
-    pub out: Vec<u8>,
+    pub(crate) out: Vec<u8>,
     /// Every degradation recorded so far.
-    pub notes: Vec<FidelityNote>,
+    pub(crate) notes: Vec<FidelityNote>,
     /// The 1-based page the emitter is currently inside, used to tag notes.
-    pub page: Option<usize>,
+    pub(crate) page: Option<usize>,
 }
 
 impl Emitter {
@@ -67,7 +68,7 @@ impl Emitter {
 
 /// The PostScript `Device` implementation.
 pub(crate) struct PsDevice<'a> {
-    emit: Emitter,
+    pub(crate) emit: Emitter,
     /// Later tasks consume `&'a` PDF data (font programs, image streams); nothing is stored yet.
     _marker: PhantomData<&'a ()>,
 }
@@ -79,12 +80,18 @@ impl PsDevice<'_> {
     }
 }
 
-/// Bake a draw transform in as a `concat` with its six coefficients.
+/// Bake a draw transform in as a `concat`. PostScript's `concat` takes a *matrix object*,
+/// so the six coefficients ride inside `[a b c d e f]` (six bare operands are a typecheck
+/// on every conforming interpreter, verified against the Ghostscript oracle).
 fn concat(emit: &mut Emitter, transform: Affine) {
+    let mut line = String::from("[");
     for c in transform.as_coeffs() {
-        emit.coord(c);
+        line.push_str(&emit.number(c));
+        line.push(' ');
     }
-    emit.op("concat");
+    line.pop();
+    line.push_str("] concat");
+    emit.op(&line);
 }
 
 /// Emit `newpath` plus the path's elements as `moveto`/`lineto`/`curveto`/`closepath`.
@@ -206,7 +213,8 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
 /// the raster renderer shows — so a flat colour is emitted as `setgray` when the triple is equal
 /// and `setrgbcolor` otherwise; alpha is drawn opaque and the drop recorded. Pattern/shading
 /// paints are Task 6's; until then they record a note and emit no colour operator.
-fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
+/// (`images.rs` reuses this for stencil masks, which paint with the current colour.)
+pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
     match paint {
         Paint::Color(color) => {
             let [r, g, b, a] = Color::to_rgba(color).components();
@@ -290,9 +298,15 @@ impl<'a> Device<'a> for PsDevice<'a> {
         self.emit.note("glyph skipped (text not implemented yet)");
     }
 
-    fn draw_image(&mut self, _image: Image<'a, '_>, _transform: Affine) {
-        // Task 4 replaces this with filter passthrough and re-encoding.
-        self.emit.note("image skipped (not implemented yet)");
+    fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+        // Images keep the Task 3 discipline: `gsave`, the total CTM baked in via `concat`,
+        // the image machinery, `grestore`. The interpreter's `transform` already maps
+        // image pixel space (row 0 first, y-flipped) onto the page, which is why the
+        // PostScript ImageMatrix inside `images.rs` is the identity.
+        self.emit.op("gsave");
+        concat(&mut self.emit, transform);
+        images::image_ops(&image, &mut self.emit);
+        self.emit.op("grestore");
     }
 
     fn pop_clip_path(&mut self) {
@@ -367,7 +381,7 @@ mod tests {
         assert_eq!(
             output(&dev),
             "gsave\n\
-             1 0 0 1 0 0 concat\n\
+             [1 0 0 1 0 0] concat\n\
              1 0 0 setrgbcolor\n\
              newpath\n\
              10 20 moveto\n\
@@ -401,13 +415,13 @@ mod tests {
         let mut dev = device();
         dev.draw_path(&line_path(), Affine::translate((5.0, 7.0)), &red(), &PathDrawMode::Fill(FillRule::NonZero));
         let out = output(&dev);
-        assert!(out.contains("1 0 0 1 5 7 concat\n"), "translate as concat: {out}");
+        assert!(out.contains("[1 0 0 1 5 7] concat\n"), "translate as concat: {out}");
         assert!(out.contains("10 20 moveto\n") && out.contains("30 40 lineto\n"), "raw coords: {out}");
 
         let mut dev = device();
         let general = Affine::new([2.0, 1.0, 0.0, 3.0, 4.0, 5.0]);
         dev.draw_path(&line_path(), general, &red(), &PathDrawMode::Fill(FillRule::NonZero));
-        assert!(output(&dev).contains("2 1 0 3 4 5 concat\n"), "all six coefficients: {}", output(&dev));
+        assert!(output(&dev).contains("[2 1 0 3 4 5] concat\n"), "all six coefficients: {}", output(&dev));
     }
 
     /// Pushing a clip is `gsave` + the (already transformed) path + `clip`; popping restores.
@@ -450,7 +464,7 @@ mod tests {
         assert_eq!(
             output(&dev),
             "gsave\n\
-             1 0 0 1 0 0 concat\n\
+             [1 0 0 1 0 0] concat\n\
              1 0 0 setrgbcolor\n\
              newpath\n\
              10 20 moveto\n\

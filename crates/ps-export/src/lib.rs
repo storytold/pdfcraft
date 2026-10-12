@@ -11,6 +11,7 @@
 
 mod device;
 mod dsc;
+mod images;
 mod psnum;
 
 use std::sync::Arc;
