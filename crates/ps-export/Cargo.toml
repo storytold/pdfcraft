@@ -1,0 +1,13 @@
+[package]
+name = "pdfcraft-ps-export"
+description = "PostScript and EPS export for PdfCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hayro = { workspace = true }
+kurbo = { workspace = true }
