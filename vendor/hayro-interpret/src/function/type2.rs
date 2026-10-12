@@ -40,6 +40,17 @@ impl Type2 {
 
         out
     }
+
+    /// PdfCraft patch (ps-export): snapshot for re-emission (see `Function::parsed`).
+    pub(crate) fn parsed(&self) -> super::ParsedFunction {
+        super::ParsedFunction::Exponential {
+            domain: self.clamper.domain.iter().copied().collect(),
+            range: self.clamper.range.clone().map(|r| r.iter().copied().collect()),
+            c0: self.c0.iter().copied().collect(),
+            c1: self.c1.iter().copied().collect(),
+            exponent: self.n,
+        }
+    }
 }
 
 #[cfg(test)]

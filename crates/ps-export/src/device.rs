@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 use hayro::hayro_interpret::color::Color;
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::page::Resources;
+use hayro::hayro_interpret::pattern::Pattern;
 use hayro::hayro_interpret::{BlendMode, ClipPath, Device, FillRule, GlyphDrawMode, Image, Paint, PathDrawMode, SoftMask, StrokeProps};
 use kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Rect};
 
@@ -24,6 +25,7 @@ use crate::FidelityNote;
 use crate::fonts::{self, FontTable, TextStrategy};
 use crate::images;
 use crate::psnum;
+use crate::shading;
 
 /// The shared output collector: operator bytes, fidelity notes, and the page the notes refer to.
 #[derive(Default)]
@@ -52,7 +54,7 @@ impl Emitter {
     }
 
     /// [`psnum::num`] with the non-finite repair applied and recorded.
-    fn number(&mut self, v: f64) -> String {
+    pub(crate) fn number(&mut self, v: f64) -> String {
         match psnum::num(v) {
             Some(s) => s,
             None => {
@@ -230,7 +232,7 @@ fn concat(emit: &mut Emitter, transform: Affine) {
 /// Emit `newpath` plus the path's elements as `moveto`/`lineto`/`curveto`/`closepath`.
 /// Quadratic Béziers have no PostScript operator and are elevated exactly to the equivalent
 /// cubic (degree elevation is lossless, so it is not a degradation).
-fn path_ops(emit: &mut Emitter, path: &BezPath) {
+pub(crate) fn path_ops(emit: &mut Emitter, path: &BezPath) {
     emit.op("newpath");
     let mut current = Point::ORIGIN;
     for el in path.elements() {
@@ -344,8 +346,9 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
 
 /// Emit the paint's colour operators. `Color` exposes only its 8-bit RGBA view — the same values
 /// the raster renderer shows — so a flat colour is emitted as `setgray` when the triple is equal
-/// and `setrgbcolor` otherwise; alpha is drawn opaque and the drop recorded. Pattern/shading
-/// paints are Task 6's; until then they record a note and emit no colour operator.
+/// and `setrgbcolor` otherwise; alpha is drawn opaque and the drop recorded. Pattern paints
+/// degrade to their flat stand-in (`shading.rs` owns that policy; here there is no path or
+/// clip to shade through — this is the text-run and stencil-mask position).
 /// (`images.rs` reuses this for stencil masks, which paint with the current colour.)
 pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
     match paint {
@@ -364,7 +367,68 @@ pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
                 emit.note("transparency ignored (paint alpha)");
             }
         }
-        Paint::Pattern(_) => emit.note("paint not yet emitted (pattern/shading)"),
+        Paint::Pattern(_) => shading::pattern_approx(paint, emit),
+    }
+}
+
+/// A paint that renders nothing (PDF alpha 0 — Separation "None" is invisible). The
+/// draw is skipped rather than degraded, because skipping is exactly what the raster
+/// renderer shows.
+fn paint_invisible(paint: &Paint<'_>) -> bool {
+    match paint {
+        Paint::Color(c) => Color::to_rgba(c).components()[3] <= 0.0,
+        Paint::Pattern(p) => match &**p {
+            Pattern::Shading(sp) => sp.opacity <= 0.0,
+            // A tiling pattern approximates to a flat gray, which is visible even
+            // when the pattern was meant to be transparent; `opacity` is not carried.
+            Pattern::Tiling(_) => false,
+        },
+    }
+}
+
+/// The paint + path + painting-operator tail of a draw, routing pattern paints through
+/// the Task 6 shading machinery. `build` emits the path operators. Flat colours keep the
+/// Task 3 flow (colour, path, paint operator). A shading *fill* becomes the path plus
+/// the fill-rule clip and `shfill`; a shading *stroke* cannot clip-to-path and degrades
+/// to its flat colour; a tiling pattern degrades everywhere (the recorded decision).
+fn paint_draw(emit: &mut Emitter, transform: Affine, paint: &Paint<'_>, draw_mode: &PathDrawMode, build: impl FnOnce(&mut Emitter)) {
+    match paint {
+        Paint::Color(_) => {
+            paint_ops(emit, paint);
+            build(emit);
+            paint_op(emit, draw_mode);
+        }
+        Paint::Pattern(p) => match (&**p, draw_mode) {
+            (Pattern::Shading(_), PathDrawMode::Fill(rule)) => {
+                build(emit);
+                match rule {
+                    FillRule::NonZero => emit.op("clip"),
+                    FillRule::EvenOdd => emit.op("eoclip"),
+                }
+                // Back to page space: the shading's own matrix and BBox clip arrive
+                // there (the interpreter pre-concats the root transform into them).
+                concat_unless_identity(emit, transform.inverse());
+                shading::shading_paint(paint, emit);
+            }
+            (Pattern::Shading(_), PathDrawMode::Stroke(_)) => {
+                shading::shading_stroke_approx(paint, emit);
+                build(emit);
+                paint_op(emit, draw_mode);
+            }
+            (Pattern::Tiling(_), _) => {
+                shading::shading_paint(paint, emit);
+                build(emit);
+                paint_op(emit, draw_mode);
+            }
+        },
+    }
+}
+
+/// `concat` the matrix unless it is the identity, keeping the program free of no-op
+/// lines (the draw `concat` itself always emits, per the Task 3 tests).
+fn concat_unless_identity(emit: &mut Emitter, transform: Affine) {
+    if transform != Affine::IDENTITY {
+        concat(emit, transform);
     }
 }
 
@@ -400,14 +464,15 @@ impl<'a> Device<'a> for PsDevice<'a> {
             return;
         }
         self.flush_text();
+        if paint_invisible(paint) {
+            return;
+        }
         self.emit.op("gsave");
         concat(&mut self.emit, transform);
         if let PathDrawMode::Stroke(props) = draw_mode {
             stroke_ops(&mut self.emit, props);
         }
-        paint_ops(&mut self.emit, paint);
-        path_ops(&mut self.emit, path);
-        paint_op(&mut self.emit, draw_mode);
+        paint_draw(&mut self.emit, transform, paint, draw_mode, |emit| path_ops(emit, path));
         self.emit.op("grestore");
     }
 
@@ -429,6 +494,10 @@ impl<'a> Device<'a> for PsDevice<'a> {
     }
 
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &Paint<'a>, draw_mode: &GlyphDrawMode) {
+        // Invisible in either sense (render mode 3, or an alpha-0 paint) draws nothing.
+        if paint_invisible(paint) {
+            return;
+        }
         // The total map from 1000-unit glyph space to the page, the same product
         // the raster renderer draws with (findings (b)).
         let total = transform * glyph_transform;
@@ -494,14 +563,15 @@ impl<'a> Device<'a> for PsDevice<'a> {
 
     fn draw_rect(&mut self, rect: &Rect, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
         self.flush_text();
+        if paint_invisible(paint) {
+            return;
+        }
         self.emit.op("gsave");
         concat(&mut self.emit, transform);
         if let PathDrawMode::Stroke(props) = draw_mode {
             stroke_ops(&mut self.emit, props);
         }
-        paint_ops(&mut self.emit, paint);
-        rect_ops(&mut self.emit, rect);
-        paint_op(&mut self.emit, draw_mode);
+        paint_draw(&mut self.emit, transform, paint, draw_mode, |emit| rect_ops(emit, rect));
         self.emit.op("grestore");
     }
 
@@ -774,6 +844,25 @@ mod tests {
         // -6 mod 5 = 4.
         assert!(output(&dev).contains("[3 2] 4 setdash\n"), "phase reduced twice: {}", output(&dev));
         assert!(!output(&dev).contains("-6 setdash"), "no negative phase: {}", output(&dev));
+    }
+
+    /// Alpha-0 flat paint is invisible (PDF Separation "None" paints nothing): the draw
+    /// is skipped entirely — no operators, no transparency note (skipping is exactly
+    /// what the raster renderer shows, not a degradation). Alpha between 0 and 1 keeps
+    /// the Task 3 behaviour (emitted opaque + note).
+    #[test]
+    fn alpha_zero_paint_skips_draw() {
+        let mut dev = device();
+        let invisible = Paint::Color(Color::from_rgba(AlphaColor::new([1.0, 0.0, 0.0, 0.0])));
+        dev.draw_path(&line_path(), Affine::IDENTITY, &invisible, &PathDrawMode::Fill(FillRule::NonZero));
+        dev.draw_rect(&Rect::new(0.0, 0.0, 10.0, 10.0), Affine::IDENTITY, &invisible, &PathDrawMode::Stroke(StrokeProps::default()));
+        assert_eq!(output(&dev), "", "invisible paints draw nothing: {}", output(&dev));
+        assert_eq!(dev.emit.notes, vec![], "and note nothing: {:?}", dev.emit.notes);
+
+        let mut dev = device();
+        let half = Paint::Color(Color::from_rgba(AlphaColor::new([1.0, 0.0, 0.0, 0.5])));
+        dev.draw_path(&line_path(), Affine::IDENTITY, &half, &PathDrawMode::Fill(FillRule::NonZero));
+        assert!(output(&dev).contains("1 0 0 setrgbcolor\n"), "partial alpha still emits: {}", output(&dev));
     }
 
     /// Marked content becomes DSC-style comment lines (printable ASCII only), not operators.

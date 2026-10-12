@@ -1,3 +1,4 @@
+use crate::function::ParsedFunction;
 use crate::function::{Clamper, TupleVec, Values, interpolate};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
@@ -149,6 +150,56 @@ impl Type0 {
         self.clamper.clamp_output(&mut out);
 
         Some(out)
+    }
+
+    /// PdfCraft patch (ps-export): snapshot for re-emission (see `Function::parsed`).
+    /// The sample table is walked in stream order — the same first-dimension-fastest
+    /// odometer `build_table` filled it with.
+    pub(crate) fn parsed(&self) -> ParsedFunction {
+        ParsedFunction::Sampled {
+            domain: self.clamper.domain.iter().copied().collect(),
+            range: self.range.iter().copied().collect(),
+            sizes: self.sizes.iter().copied().collect(),
+            bits_per_sample: self.bits_per_sample,
+            encode: self.encode.iter().copied().collect(),
+            decode: self.decode.iter().copied().collect(),
+            samples: self.ordered_samples(),
+        }
+    }
+
+    /// Every sample value in stream order; entries missing from a truncated stream
+    /// read as 0. Sizes of 0 yield no samples at all.
+    fn ordered_samples(&self) -> Vec<u32> {
+        let total = self
+            .sizes
+            .iter()
+            .try_fold(1usize, |acc, &s| acc.checked_mul(s as usize))
+            .unwrap_or(0);
+        let comps = self.range.len();
+        let mut samples = Vec::with_capacity(total.saturating_mul(comps).min(1 << 23));
+        let mut parts: IntVec = smallvec![0; self.sizes.len()];
+
+        for _ in 0..total {
+            let key = Key::from_raw(&self.sizes, &parts);
+            let entry = self.table.get(&key);
+            for c in 0..comps {
+                samples.push(entry.and_then(|e| e.get(c).copied()).unwrap_or(0));
+            }
+
+            // Advance the odometer: dimension 0 varies fastest.
+            for i in 0..parts.len() {
+                let size = self.sizes.get(i).copied().unwrap_or(1).max(1) as usize;
+                if let Some(part) = parts.get_mut(i) {
+                    *part += 1;
+                    if (*part as usize) < size {
+                        break;
+                    }
+                    *part = 0;
+                }
+            }
+        }
+
+        samples
     }
 }
 

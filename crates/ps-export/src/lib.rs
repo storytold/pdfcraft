@@ -14,6 +14,7 @@ mod dsc;
 mod fonts;
 mod images;
 mod psnum;
+mod shading;
 
 use std::sync::Arc;
 

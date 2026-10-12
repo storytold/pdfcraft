@@ -111,6 +111,172 @@ impl Function {
             _ => SmallVec::new(),
         }
     }
+
+    /// PdfCraft patch (ps-export): snapshot the parsed function as plain data, so
+    /// exporters can re-emit it in another function format (the PostScript exporter
+    /// builds Level 3 function dictionaries and calculator procedures from it).
+    /// Evaluation semantics stay in [`Function::eval`]; this only reads data out.
+    pub fn parsed(&self) -> ParsedFunction {
+        match self.0.as_ref() {
+            FunctionType::Type0(t0) => t0.parsed(),
+            FunctionType::Type2(t2) => t2.parsed(),
+            FunctionType::Type3(t3) => t3.parsed(),
+            FunctionType::Type4(t4) => t4.parsed(),
+        }
+    }
+}
+
+/// PdfCraft patch (ps-export): a read-only snapshot of a parsed function, mirroring the
+/// PDF function dictionary it came from. Produced by [`Function::parsed`].
+#[derive(Debug, Clone)]
+pub enum ParsedFunction {
+    /// Type 0 (sampled).
+    Sampled {
+        /// Input domain, one pair per input.
+        domain: Vec<(f32, f32)>,
+        /// Output range, one pair per output.
+        range: Vec<(f32, f32)>,
+        /// The number of grid points per input.
+        sizes: Vec<u32>,
+        /// Bits per sample value (one of 1, 2, 4, 8, 16, 24, 32).
+        bits_per_sample: u8,
+        /// Input encoding, one pair per input.
+        encode: Vec<(f32, f32)>,
+        /// Output decoding, one pair per output.
+        decode: Vec<(f32, f32)>,
+        /// Every sample value in stream order (the first dimension varies fastest);
+        /// samples missing from a truncated stream read as 0.
+        samples: Vec<u32>,
+    },
+    /// Type 2 (exponential interpolation).
+    Exponential {
+        /// Input domain, one pair per input.
+        domain: Vec<(f32, f32)>,
+        /// Output range, one pair per output, if the dictionary had one.
+        range: Option<Vec<(f32, f32)>>,
+        /// The output values at the domain start.
+        c0: Vec<f32>,
+        /// The output values at the domain end.
+        c1: Vec<f32>,
+        /// The interpolation exponent.
+        exponent: f32,
+    },
+    /// Type 3 (stitching).
+    Stitching {
+        /// Input domain, one pair per input.
+        domain: Vec<(f32, f32)>,
+        /// Output range, one pair per output, if the dictionary had one.
+        range: Option<Vec<(f32, f32)>>,
+        /// The interior breakpoints between the stitched sub-functions.
+        bounds: Vec<f32>,
+        /// Input encoding per sub-function.
+        encode: Vec<(f32, f32)>,
+        /// The sub-functions, in interval order.
+        functions: Vec<ParsedFunction>,
+    },
+    /// Type 4 (PostScript calculator).
+    Calculator {
+        /// Input domain, one pair per input.
+        domain: Vec<(f32, f32)>,
+        /// Output range, one pair per output, if the dictionary had one.
+        range: Option<Vec<(f32, f32)>>,
+        /// The parsed program (see [`CalcOp`]).
+        program: Vec<CalcOp>,
+    },
+}
+
+/// PdfCraft patch (ps-export): one parsed calculator operator. This mirrors the PDF
+/// calculator subset (ISO 32000-2, "Type 4 functions") — arithmetic, boolean and stack
+/// operators plus literal number, boolean and procedure operands — so an exporter can
+/// re-emit the program in another syntax.
+#[derive(Debug, Clone)]
+pub enum CalcOp {
+    /// A literal number operand.
+    Number(f64),
+    /// `abs`
+    Abs,
+    /// `add`
+    Add,
+    /// `atan`
+    Atan,
+    /// `ceiling`
+    Ceiling,
+    /// `cos`
+    Cos,
+    /// `cvi`
+    Cvi,
+    /// `cvr`
+    Cvr,
+    /// `div`
+    Div,
+    /// `exp`
+    Exp,
+    /// `floor`
+    Floor,
+    /// `idiv`
+    Idiv,
+    /// `ln`
+    Ln,
+    /// `log`
+    Log,
+    /// `mod`
+    Mod,
+    /// `mul`
+    Mul,
+    /// `neg`
+    Neg,
+    /// `round`
+    Round,
+    /// `sin`
+    Sin,
+    /// `sqrt`
+    Sqrt,
+    /// `sub`
+    Sub,
+    /// `truncate`
+    Truncate,
+    /// `and`
+    And,
+    /// `bitshift`
+    Bitshift,
+    /// `eq`
+    Eq,
+    /// `false`
+    False,
+    /// `ge`
+    Ge,
+    /// `gt`
+    Gt,
+    /// `le`
+    Le,
+    /// `lt`
+    Lt,
+    /// `ne`
+    Ne,
+    /// `not`
+    Not,
+    /// `or`
+    Or,
+    /// `true`
+    True,
+    /// `xor`
+    Xor,
+    /// The procedure, executed when the condition holds (`if`).
+    If(Vec<CalcOp>),
+    /// The procedures selected by the condition (`ifelse`).
+    IfElse(Vec<CalcOp>, Vec<CalcOp>),
+    /// `copy`
+    Copy,
+    /// `dup`
+    Dup,
+    /// `exch`
+    Exch,
+    /// `index`
+    Index,
+    /// `pop`
+    Pop,
+    /// `roll`
+    Roll,
 }
 
 #[derive(Debug, Clone)]
