@@ -8,6 +8,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod dsc;
+mod psnum;
+
 use std::sync::Arc;
 
 /// The output flavour: a whole-document PostScript program or a single-page EPS file.
