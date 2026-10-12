@@ -15379,3 +15379,26 @@ fn pdf_watermark_uses_visible_source_crop_through_tools() {
         assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
     }
 }
+
+#[test]
+fn copying_a_field_through_tools() {
+    let dir = workdir("copy-field");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "combo", "rect": [20, 60, 180, 82], "options": ["Red", "Green"] }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Dropdown1": "Green" } }));
+    let r = ok(&mut a, "form_copy_field", json!({ "doc": doc, "field": "Dropdown1", "page": 2, "dx": 10, "dy": 30 }));
+    assert_eq!(r["field"], "Dropdown2");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Dropdown2": "Red" } }));
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let f = fields["fields"].as_array().unwrap();
+    assert_eq!(
+        f.iter().map(|f| (f["name"].as_str().unwrap(), f["page"].as_u64().unwrap())).collect::<Vec<_>>(),
+        [("Dropdown1", 1), ("Dropdown2", 2)]
+    );
+    assert_eq!((f[0]["value"].clone(), f[1]["value"].clone()), (json!("Green"), json!("Red")), "two fields, two values");
+    assert_eq!(f[1]["options"], f[0]["options"]);
+    assert_eq!(f[1]["rect"], json!([30.0, 90.0, 190.0, 112.0]), "moved right and down");
+    assert!(matches!(a.call("form_copy_field", &json!({ "doc": doc, "field": "nope", "page": 1 })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("form_copy_field", &json!({ "doc": doc, "field": "Dropdown1", "page": 9 })), Err(ToolError::InvalidArgs(_))));
+}

@@ -153,7 +153,7 @@ pub(super) fn add_to_page(doc: &mut Document, page: ObjRef, widget: ObjRef) -> R
     Ok(())
 }
 
-fn add_to_fields(doc: &mut Document, af: ObjRef, field: ObjRef) -> Result<(), FormError> {
+pub(super) fn add_to_fields(doc: &mut Document, af: ObjRef, field: ObjRef) -> Result<(), FormError> {
     let mut d = doc.get(af).as_dict().cloned().unwrap_or_default();
     let mut list = d.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.push(Object::Ref(field));

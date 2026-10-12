@@ -7767,3 +7767,42 @@ fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
     assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
     assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
 }
+
+#[test]
+fn copying_a_field_makes_an_independent_field() {
+    let mut doc = fixture();
+    // address.city takes its value and read-only flag from its parent.
+    let address = ObjRef::new(15, 0);
+    doc.update_dict(address, |d| {
+        d.set(b"V".to_vec(), PdfString::text("Paris"));
+        d.set(b"Ff".to_vec(), Object::Int(flags::READ_ONLY as i64));
+    })
+    .unwrap();
+    let city = copy_field(&mut doc, "address.city", &[], 0, [0.0, -40.0]).unwrap();
+    assert_eq!(city, "city1", "a top-level field named after the original's own name");
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))).unwrap();
+    // One button of a radio group: the selected one stays behind, so the copy has no choice.
+    let small = copy_field(&mut doc, "size", &[0], 0, [0.0, -40.0]).unwrap();
+    let both = copy_field(&mut doc, "size", &[], 0, [0.0, -80.0]).unwrap();
+    assert_eq!((small.as_str(), both.as_str()), ("size1", "size2"));
+    set_value(&mut doc, &both, &FieldValue::Radio(Some("S".into()))).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let copy = field(&all, "city1");
+    assert_eq!((copy.kind, copy.value.as_slice(), copy.quadding), (FieldKind::Text, &["Paris".to_string()][..], 1));
+    assert!(copy.read_only(), "inherited flags come along");
+    assert_eq!(copy.widgets[0].rect, [50.0, 430.0, 250.0, 450.0]);
+    let small = field(&all, "size1");
+    assert_eq!(small.widgets.iter().map(|w| w.on_state.clone().unwrap()).collect::<Vec<_>>(), ["S"]);
+    assert!(small.value.is_empty(), "{:?}", small.value);
+    let both = field(&all, "size2");
+    assert_eq!(both.widgets.iter().map(|w| (w.on_state.clone().unwrap(), w.rect[1])).collect::<Vec<_>>(), [("S".into(), 570.0), ("L".into(), 570.0)]);
+    assert_eq!(
+        (both.value.as_slice(), field(&all, "size").value.as_slice()),
+        (&["S".to_string()][..], &["L".to_string()][..]),
+        "values are separate"
+    );
+    assert_eq!(field(&all, "size").widgets.len(), 2, "the original keeps its buttons");
+    assert!(copy_field(&mut doc.clone(), "size", &[2], 0, [0.0, 0.0]).is_err());
+    assert!(copy_field(&mut doc.clone(), "size", &[], 3, [0.0, 0.0]).is_err());
+}

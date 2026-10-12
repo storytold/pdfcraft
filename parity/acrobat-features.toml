@@ -5248,6 +5248,18 @@ evidence = ["crates/forms/src/tests.rs::duplicating_a_field_across_pages_shares_
 notes = "right-click a field ▸ Duplicate: all pages or a range; one field, shared value"
 
 [[feature]]
+id = "form.copy-paste-fields"
+title = "Copy and paste fields"
+area = "F"
+tier = "P1"
+milestone = "M6"
+status = "shipped"
+commands = ["form.prepare"]
+tools = ["form_copy_field"]
+evidence = ["crates/forms/src/tests.rs::copying_a_field_makes_an_independent_field", "crates/automation/tests/it/automation.rs::copying_a_field_through_tools"]
+notes = "Prepare a form: ⌘C copies the selected fields, ⌘V pastes them on the current page as fields of their own (next free name, own value), one step right and down on their own page (#1571). Copies are taken at paste time, by name, and only within the same document; no Edit menu items yet, and pasting into another PDF is not supported"
+
+[[feature]]
 id = "form.multiple-copies"
 title = "Create multiple copies of a field in a grid"
 area = "F"

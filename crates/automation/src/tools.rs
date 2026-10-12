@@ -697,6 +697,11 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
         t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable. The result lists in `import_repairs` what this import left out (values the form refused, comments taken without their appearance); the import fails instead only when the form refuses every value and no comment is taken.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
+        t("form_copy_field", "Copy and paste a field", "Prepare form ▸ copy and paste: a new field of its own (its own name and value) with the field's type, flags, options, value, appearance and actions, on page, moved by dx and dy (points right and down on the displayed page, default 0). Every widget of the field is copied; a signature's value is not. Returns the new field's name (the next free one: Check Box1 → Check Box2). Undoable.")
+            .with(schema(
+                json!({ "doc": doc(), "field": { "type": "string" }, "page": { "type": "integer", "minimum": 1 }, "dx": { "type": "number" }, "dy": { "type": "number" } }),
+                &["doc", "field", "page"],
+            )),
         t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or with widget only that one: one radio button of a group (widget n is the nth of the radio group's options in form_fields), or one copy of a duplicated field. A field's last widget takes the field with it. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "widget": { "type": "integer", "minimum": 1, "description": "Delete only this widget (1-based)." } }), &["doc", "field"])),
