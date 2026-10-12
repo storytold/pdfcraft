@@ -146,12 +146,37 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
     });
+    #[cfg(not(target_arch = "wasm32"))]
     if !available {
         ui.label(
             egui::RichText::new(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."))
                 .small()
                 .color(t.text_muted),
         );
+        ui.add_space(6.0);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if !available {
+        match web_models::state() {
+            web_models::State::Failed(e) => {
+                ui.horizontal_wrapped(|ui| {
+                    let msg = crate::i18n::fmt(tl!("Couldn't download the text recognition models: {e}"), &[("e", &e)]);
+                    ui.label(egui::RichText::new(msg).small().color(t.text_muted));
+                    if widgets::pill_button(ui, tl!("Download"), false).clicked() {
+                        web_models::start(ui.ctx().clone());
+                    }
+                });
+            }
+            state => {
+                if state == web_models::State::NotStarted {
+                    web_models::start(ui.ctx().clone());
+                }
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(tl!("Downloading the text recognition models…")).small().color(t.text_muted));
+                });
+            }
+        }
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
@@ -179,6 +204,10 @@ impl PdfCraftApp {
         }
         if let Some(why) = self.session.get(id).and_then(|d| d.read_only_reason.clone()) {
             self.notify(why);
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.web_models_missing() {
             return;
         }
         let d = &self.ocr_draft;
@@ -328,6 +357,10 @@ impl PdfCraftApp {
             self.notify_tr("Text recognition is already running");
             return;
         }
+        #[cfg(target_arch = "wasm32")]
+        if self.web_models_missing() {
+            return;
+        }
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
@@ -411,6 +444,22 @@ impl PdfCraftApp {
         {
             s.cancel = true;
         }
+    }
+
+    /// The web build downloads the models the first time they're needed: while they aren't
+    /// loaded, start (or retry) the download, say so and return `true`.
+    #[cfg(target_arch = "wasm32")]
+    fn web_models_missing(&mut self) -> bool {
+        if pdfcraft_engine::ocr::available() {
+            return false;
+        }
+        if web_models::state() != web_models::State::Loading
+            && let Some(ctx) = self.ctx.clone()
+        {
+            web_models::start(ctx);
+        }
+        self.notify(tl!("Downloading the text recognition models…"));
+        true
     }
 
     /// Show progress; apply the result once the worker is done.
@@ -529,6 +578,80 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_error(e),
         }
+    }
+}
+
+/// The web build has no model files to find: it downloads them from `models/` beside its page
+/// (packaging/web/package.sh puts them there) and installs the recogniser they load.
+#[cfg(target_arch = "wasm32")]
+mod web_models {
+    use std::sync::Mutex;
+
+    use pdfcraft_engine::ocr::{DETECTION_MODEL, Ocr, RECOGNITION_MODEL};
+
+    /// The models are about 12 MB together; a response far larger isn't one of them.
+    const MAX_MODEL_BYTES: u32 = 64 << 20;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum State {
+        NotStarted,
+        Loading,
+        /// Why the last download failed; [`start`] tries again.
+        Failed(String),
+    }
+
+    static STATE: Mutex<State> = Mutex::new(State::NotStarted);
+
+    pub fn state() -> State {
+        STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Download and load the models unless that is already happening; repaint when it's done.
+    pub fn start(ctx: egui::Context) {
+        {
+            let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
+            if *s == State::Loading {
+                return;
+            }
+            *s = State::Loading;
+        }
+        wasm_bindgen_futures::spawn_local(async move {
+            let next = match load().await {
+                Ok(ocr) => {
+                    pdfcraft_engine::ocr::install(ocr);
+                    State::NotStarted
+                }
+                Err(e) => State::Failed(e),
+            };
+            *STATE.lock().unwrap_or_else(|e| e.into_inner()) = next;
+            ctx.request_repaint();
+        });
+    }
+
+    async fn load() -> Result<Ocr, String> {
+        let detection = fetch(DETECTION_MODEL).await?;
+        let recognition = fetch(RECOGNITION_MODEL).await?;
+        Ocr::from_bytes(detection, recognition).map_err(|e| e.to_string())
+    }
+
+    /// `models/<name>`, relative to the page, so the site works under any path.
+    async fn fetch(name: &str) -> Result<Vec<u8>, String> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::JsFuture;
+        let url = format!("models/{name}");
+        let failed = |e: wasm_bindgen::JsValue| format!("{url}: {}", e.as_string().unwrap_or_else(|| format!("{e:?}")));
+        let window = web_sys::window().ok_or("no window")?;
+        let resp = JsFuture::from(window.fetch_with_str(&url)).await.map_err(failed)?;
+        let resp: web_sys::Response = resp.dyn_into().map_err(failed)?;
+        if !resp.ok() {
+            return Err(format!("{url}: HTTP {}", resp.status()));
+        }
+        let buf = JsFuture::from(resp.array_buffer().map_err(failed)?).await.map_err(failed)?;
+        let bytes = js_sys::Uint8Array::new(&buf);
+        if bytes.length() > MAX_MODEL_BYTES {
+            return Err(format!("{url}: {} bytes is too large for a model", bytes.length()));
+        }
+        Ok(bytes.to_vec())
     }
 }
 

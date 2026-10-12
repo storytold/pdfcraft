@@ -2530,6 +2530,8 @@ animation effects	Off	关
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
 @plural	{n} reply|{n} replies	{n} 条回复
+	Downloading the text recognition models…	正在下载文本识别模型…
+	Couldn't download the text recognition models: {e}	无法下载文本识别模型：{e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	页面工具

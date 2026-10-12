@@ -2662,6 +2662,8 @@ animation effects	Off	Wyłączone
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj
 @plural	{n} reply|{n} replies	{n} odpowiedź|{n} odpowiedzi|{n} odpowiedzi
+	Downloading the text recognition models…	Pobieranie modeli rozpoznawania tekstu…
+	Couldn't download the text recognition models: {e}	Nie można pobrać modeli rozpoznawania tekstu: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Narzędzia stron

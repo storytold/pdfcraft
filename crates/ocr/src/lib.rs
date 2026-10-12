@@ -114,9 +114,20 @@ pub struct Ocr {
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        Self::with_models(load(&models.detection)?, load(&models.recognition)?)
+    }
+
+    /// Load the models from the contents of their files, where there is no file system (the web
+    /// build downloads them).
+    pub fn from_bytes(detection: Vec<u8>, recognition: Vec<u8>) -> Result<Ocr, OcrError> {
+        let load = |name: &str, data: Vec<u8>| rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()));
+        Self::with_models(load(DETECTION_MODEL, detection)?, load(RECOGNITION_MODEL, recognition)?)
+    }
+
+    fn with_models(detection: rten::Model, recognition: rten::Model) -> Result<Ocr, OcrError> {
         let params = ocrs::OcrEngineParams {
-            detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            detection_model: Some(detection),
+            recognition_model: Some(recognition),
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
@@ -441,6 +452,27 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+    }
+
+    /// The web build loads the models from downloaded bytes; they read the same text.
+    #[test]
+    fn reads_rendered_text_with_models_from_bytes() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::from_bytes(std::fs::read(&models.detection).unwrap(), std::fs::read(&models.recognition).unwrap()).unwrap();
+        let (w, h, px) = test_image::hello();
+        let text: Vec<String> = ocr.recognize(&px, w, h).unwrap().iter().map(Line::text).collect();
+        assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+    }
+
+    /// A download that isn't a model (an HTML error page, a truncated file) is an error, not a crash.
+    #[test]
+    fn models_from_bad_bytes_are_an_error() {
+        for (detection, recognition) in [(Vec::new(), Vec::new()), (b"<!doctype html>".to_vec(), b"RTEN".to_vec()), (vec![0xff; 64], vec![0; 64])] {
+            assert!(matches!(Ocr::from_bytes(detection, recognition), Err(OcrError::Load(..))));
+        }
     }
 
     mod test_image {

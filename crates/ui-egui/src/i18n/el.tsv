@@ -2572,6 +2572,8 @@ animation effects	Off	Ανενεργά
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
 @plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
+	Downloading the text recognition models…	Γίνεται λήψη των μοντέλων αναγνώρισης κειμένου…
+	Couldn't download the text recognition models: {e}	Δεν ήταν δυνατή η λήψη των μοντέλων αναγνώρισης κειμένου: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Εργαλεία σελίδων

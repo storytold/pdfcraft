@@ -2873,6 +2873,8 @@ certificate	Version	Verze
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes
 @plural	{n} reply|{n} replies	{n} odpověď|{n} odpovědi|{n} odpovědí
+	Downloading the text recognition models…	Stahují se modely pro rozpoznávání textu…
+	Couldn't download the text recognition models: {e}	Modely pro rozpoznávání textu nelze stáhnout: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Nástroje stránek

@@ -9,6 +9,7 @@ static site in `pdfcraft-web-<version>/`:
 | `pdfcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `pdfcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
+| `models/` | The text recognition (OCR) models, about 12 MB, with their licences (CC-BY-SA-4.0) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
@@ -54,6 +55,18 @@ location /pdfcraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+## Text recognition (OCR)
+
+Scan & OCR ▸ Recognize Text downloads `models/text-detection.rten` and
+`models/text-recognition.rten`, relative to the page, the first time it is opened in a visit.
+Keep `models/` beside `index.html`. Its file names carry no content hash, so serve them with a
+short cache lifetime or revalidation. Without them, everything else works and the Recognize Text
+dialog says the download failed. Recognition runs on the page's own thread, so the app doesn't
+respond while it reads a page.
+
+From a source build, `trunk build --release` doesn't fetch the models. Add them with
+`cargo xtask models dist/web/models` (after the build, which replaces `dist/web`).
 
 ## Embedding in a page (iframe)
 

@@ -5040,6 +5040,20 @@ fn backgrounds_and_watermarks_from_files() {
     assert!(s.apply(id, Edit::AddBackground { pages: vec![0], settings: Background::default(), replace: true, file: Some(junk) }).is_err());
 }
 
+/// The web build installs a recogniser loaded from downloaded model bytes; recognition then uses
+/// it rather than looking for model files.
+#[test]
+fn an_installed_recogniser_is_the_one_used() {
+    let Some(models) = ocr::Models::find() else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let loaded = ocr::Ocr::from_bytes(std::fs::read(&models.detection).unwrap(), std::fs::read(&models.recognition).unwrap()).unwrap();
+    let installed = ocr::install(loaded);
+    assert!(ocr::available());
+    assert!(Arc::ptr_eq(&ocr::engine().unwrap(), &installed));
+}
+
 /// Scan & OCR ▸ Recognize text on a page that is only a picture of text (needs the models:
 /// `cargo xtask models`; skipped without them).
 #[test]

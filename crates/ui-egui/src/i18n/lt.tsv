@@ -2827,6 +2827,8 @@ theme	Appearance	Išvaizda
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
 @plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų
+	Downloading the text recognition models…	Atsisiunčiami teksto atpažinimo modeliai…
+	Couldn't download the text recognition models: {e}	Nepavyko atsisiųsti teksto atpažinimo modelių: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Puslapių įrankiai

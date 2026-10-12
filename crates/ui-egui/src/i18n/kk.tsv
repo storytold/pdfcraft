@@ -2564,6 +2564,8 @@ animation effects	Off	Өшірулі
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
 @plural	{n} reply|{n} replies	{n} жауап|{n} жауап
+	Downloading the text recognition models…	Мәтінді тану модельдері жүктеп алынуда…
+	Couldn't download the text recognition models: {e}	Мәтінді тану модельдері жүктеп алынбады: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Бет құралдары
