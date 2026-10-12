@@ -12,3 +12,6 @@ workspace = true
 hayro = { workspace = true }
 kurbo = { workspace = true }
 pdfcraft-filters = { workspace = true }
+# Parses embedded Type 1 font programs for their glyph-name table; the same skrifa
+# hayro-interpret uses (same version, so glyph ids match by construction).
+skrifa = "0.47"

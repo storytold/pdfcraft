@@ -16,10 +16,12 @@ use std::marker::PhantomData;
 
 use hayro::hayro_interpret::color::Color;
 use hayro::hayro_interpret::font::Glyph;
+use hayro::hayro_interpret::hayro_syntax::page::Resources;
 use hayro::hayro_interpret::{BlendMode, ClipPath, Device, FillRule, GlyphDrawMode, Image, Paint, PathDrawMode, SoftMask, StrokeProps};
 use kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Rect};
 
 use crate::FidelityNote;
+use crate::fonts::{self, FontTable, TextStrategy};
 use crate::images;
 use crate::psnum;
 
@@ -69,14 +71,145 @@ impl Emitter {
 /// The PostScript `Device` implementation.
 pub(crate) struct PsDevice<'a> {
     pub(crate) emit: Emitter,
+    /// Per-font text strategies, built from the page's font resources.
+    pub(crate) fonts: FontTable,
+    /// A text run waiting for its `show`: glyphs batch here until a font,
+    /// strategy, transform-basis or paint change flushes them.
+    run: Option<TextRun<'a>>,
     /// Later tasks consume `&'a` PDF data (font programs, image streams); nothing is stored yet.
     _marker: PhantomData<&'a ()>,
 }
 
-impl PsDevice<'_> {
+/// One pending `show`: consecutive glyphs of one font, one linear transform
+/// basis and one paint, positioned by their observed glyph transforms.
+struct TextRun<'a> {
+    font_key: u128,
+    /// Which 256-code slice of the font the codes live in (its PostScript name).
+    slice: usize,
+    /// The run's linear part `[a b c d]`: the CTM every glyph of the run shares
+    /// exactly (text-matrix advances are translations, which compose exactly).
+    basis: [f64; 4],
+    /// The paint the run was started with, re-emitted at flush time.
+    paint: Paint<'a>,
+    /// The first glyph's origin, in the run's user space (1000-unit glyph space).
+    origin: Point,
+    /// The assigned codes, in draw order.
+    codes: Vec<u8>,
+    /// Displacement from each glyph's origin to the next, in user space —
+    /// exactly what `xyshow` consumes.
+    offsets: Vec<(f64, f64)>,
+    /// The last glyph's origin, for the next offset.
+    last: Point,
+}
+
+impl<'a> PsDevice<'a> {
     /// A device emitting into a fresh buffer, tagging notes with `page` (1-based, if known).
     pub(crate) fn new(page: Option<usize>) -> Self {
-        Self { emit: Emitter { out: Vec::new(), notes: Vec::new(), page }, _marker: PhantomData }
+        Self { emit: Emitter { out: Vec::new(), notes: Vec::new(), page }, fonts: FontTable::default(), run: None, _marker: PhantomData }
+    }
+
+    /// A device whose text strategies come from `resources` (the page's own —
+    /// the same dicts the interpreter resolves fonts through, so the glyph font
+    /// cache keys index the table).
+    pub(crate) fn with_fonts(page: Option<usize>, resources: &Resources<'_>) -> Self {
+        Self {
+            emit: Emitter { out: Vec::new(), notes: Vec::new(), page },
+            fonts: FontTable::from_resources(resources),
+            run: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Emit any pending text run. Called before every other operator (program
+    /// order), and once when the page is done; safe to call again.
+    pub(crate) fn finish(&mut self) {
+        self.flush_text();
+    }
+
+    /// Emit the pending run as one `show`/`xyshow` inside the usual
+    /// `gsave`…`grestore` wrap.
+    fn flush_text(&mut self) {
+        let Some(run) = self.run.take() else {
+            return;
+        };
+        let Some(name) = self.fonts.slice_names(run.font_key).get(run.slice).cloned() else {
+            self.emit.note("text skipped (font entry missing)");
+            return;
+        };
+        self.emit.op("gsave");
+        concat(&mut self.emit, Affine::new([run.basis[0], run.basis[1], run.basis[2], run.basis[3], 0.0, 0.0]));
+        // The prolog font's natural matrix is 1/1000 (Type 1 programs) or
+        // 1/upem (our Type 42 dicts); scaling by 1000 makes the effective glyph
+        // matrix the identity on 1000-unit glyph space, which is exactly the
+        // space the run basis maps. (`scalefont` takes the font itself, not its
+        // key — verified against the Ghostscript oracle.)
+        self.emit.op(&format!("/{name} findfont 1000 scalefont setfont"));
+        paint_ops(&mut self.emit, &run.paint);
+        self.emit.coord(run.origin.x);
+        self.emit.coord(run.origin.y);
+        self.emit.op("moveto");
+        let string = fonts::ps_string(&run.codes);
+        if run.codes.len() == 1 {
+            self.emit.op(&format!("{string} show"));
+        } else {
+            // `xyshow` takes one displacement pair per glyph, each replacing
+            // that glyph's font advance (verified against the Ghostscript
+            // oracle); the final pair is never used, so it is zero. The array
+            // wraps to stay near the DSC line-length convention.
+            let mut array = String::from("[");
+            let mut line_len = 1usize;
+            for (dx, dy) in &run.offsets {
+                let pair = format!("{} {} ", self.emit.number(*dx), self.emit.number(*dy));
+                if line_len + pair.len() > 200 {
+                    array.push('\n');
+                    line_len = 0;
+                }
+                array.push_str(&pair);
+                line_len += pair.len();
+            }
+            array.push_str("0 0]");
+            self.emit.op(&format!("{string} {array} xyshow"));
+        }
+        self.emit.op("grestore");
+    }
+
+    /// Add one glyph to the pending run, or start a new one (flushing the old).
+    fn push_run_glyph(&mut self, font_key: u128, slice: usize, code: u8, total: Affine, paint: &Paint<'a>) {
+        let [a, b, c, d, e, f] = total.as_coeffs();
+        let basis = [a, b, c, d];
+        // The glyph origin in the run's user space: the inverse basis applied to
+        // the transform's translation. A singular basis inverts to non-finite
+        // coordinates, which `psnum` repairs (with a note) at emission time.
+        let user = Affine::new([a, b, c, d, 0.0, 0.0]).inverse() * Point::new(e, f);
+        if let Some(run) = self.run.as_mut()
+            && run.font_key == font_key
+            && run.slice == slice
+            && run.basis == basis
+            && same_paint(&run.paint, paint)
+        {
+            run.offsets.push((user.x - run.last.x, user.y - run.last.y));
+            run.last = user;
+            run.codes.push(code);
+            return;
+        }
+        self.flush_text();
+        self.run = Some(TextRun { font_key, slice, basis, paint: paint.clone(), origin: user, codes: vec![code], offsets: Vec::new(), last: user });
+    }
+}
+
+/// Whether two paints render identically (the run batching test). Patterns
+/// never compare equal: their equality is not observable through the public API.
+fn same_paint(a: &Paint<'_>, b: &Paint<'_>) -> bool {
+    match (a, b) {
+        (Paint::Color(x), Paint::Color(y)) => Color::to_rgba(x).components() == Color::to_rgba(y).components(),
+        _ => false,
+    }
+}
+
+impl Drop for PsDevice<'_> {
+    fn drop(&mut self) {
+        // A pending run must reach the program even if nobody called `finish`.
+        self.flush_text();
     }
 }
 
@@ -266,6 +399,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
         if path.is_empty() {
             return;
         }
+        self.flush_text();
         self.emit.op("gsave");
         concat(&mut self.emit, transform);
         if let PathDrawMode::Stroke(props) = draw_mode {
@@ -279,6 +413,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         // The interpreter delivers clip paths already transformed; emit them raw.
+        self.flush_text();
         self.emit.op("gsave");
         path_ops(&mut self.emit, &clip_path.path);
         match clip_path.fill {
@@ -293,9 +428,49 @@ impl<'a> Device<'a> for PsDevice<'a> {
         }
     }
 
-    fn draw_glyph(&mut self, _glyph: &Glyph<'a>, _transform: Affine, _glyph_transform: Affine, _paint: &Paint<'a>, _draw_mode: &GlyphDrawMode) {
-        // Task 5 replaces this with Type 1/Type 42 text and vectorized fallbacks.
-        self.emit.note("glyph skipped (text not implemented yet)");
+    fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &Paint<'a>, draw_mode: &GlyphDrawMode) {
+        // The total map from 1000-unit glyph space to the page, the same product
+        // the raster renderer draws with (findings (b)).
+        let total = transform * glyph_transform;
+        match glyph {
+            // Type 3 glyphs re-interpret their PDF drawing instructions through
+            // this device as ordinary path calls — faithful, no font machinery.
+            Glyph::Type3(g) => {
+                self.flush_text();
+                g.interpret(self, transform, glyph_transform, paint);
+            }
+            Glyph::Outline(outline) => match draw_mode {
+                // Invisible text renders nothing (as in the raster renderer).
+                GlyphDrawMode::Invisible => {}
+                GlyphDrawMode::Fill => {
+                    let strategy = self.fonts.strategy(glyph);
+                    for note in self.fonts.drain_notes() {
+                        self.emit.note(&note);
+                    }
+                    if matches!(strategy, TextStrategy::Type1Passthrough | TextStrategy::Type42) {
+                        let key = outline.font_cache_key();
+                        let gid = outline.glyph_id().to_u32();
+                        // A Type 1 code whose glyph is not in the parsed program
+                        // would show the wrong glyph; that glyph vectorizes.
+                        if strategy == TextStrategy::Type1Passthrough && self.fonts.type1_glyph_name(key, gid).is_none() {
+                            self.emit.note("text vectorized (glyph missing from font program)");
+                            self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
+                            return;
+                        }
+                        let code = self.fonts.char_code(key, gid);
+                        let slice = self.fonts.slice_index(key, gid).unwrap_or(0);
+                        self.push_run_glyph(key, slice, code, total, paint);
+                    } else {
+                        self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
+                    }
+                }
+                // Stroked (and fill-then-stroke) text becomes outline paths:
+                // `show` fills, so text-as-text cannot express these modes.
+                GlyphDrawMode::Stroke(props) => {
+                    self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Stroke(props.clone()));
+                }
+            },
+        }
     }
 
     fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
@@ -303,6 +478,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
         // the image machinery, `grestore`. The interpreter's `transform` already maps
         // image pixel space (row 0 first, y-flipped) onto the page, which is why the
         // PostScript ImageMatrix inside `images.rs` is the identity.
+        self.flush_text();
         self.emit.op("gsave");
         concat(&mut self.emit, transform);
         images::image_ops(&image, &mut self.emit);
@@ -310,12 +486,14 @@ impl<'a> Device<'a> for PsDevice<'a> {
     }
 
     fn pop_clip_path(&mut self) {
+        self.flush_text();
         self.emit.op("grestore");
     }
 
     fn pop_transparency_group(&mut self) {}
 
     fn draw_rect(&mut self, rect: &Rect, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
+        self.flush_text();
         self.emit.op("gsave");
         concat(&mut self.emit, transform);
         if let PathDrawMode::Stroke(props) = draw_mode {
@@ -328,6 +506,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
     }
 
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
+        self.flush_text();
         let mut line = format!("%%BeginMarkedContent: {}", ascii_safe(tag));
         if let Some(mcid) = mcid {
             line.push_str(&format!(" mcid {mcid}"));
@@ -336,6 +515,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
     }
 
     fn end_marked_content(&mut self) {
+        self.flush_text();
         self.emit.op("%%EndMarkedContent");
     }
 }

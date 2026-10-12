@@ -11,6 +11,7 @@
 
 mod device;
 mod dsc;
+mod fonts;
 mod images;
 mod psnum;
 
