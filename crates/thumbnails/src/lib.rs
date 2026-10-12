@@ -59,7 +59,7 @@ fn render(bytes: Vec<u8>, side: u32) -> Result<Thumbnail, String> {
     }
     // Premultiplied RGBA over white: each channel gains the paper showing through, 255 - alpha.
     let mut bgra = Vec::with_capacity(rgba.len());
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         let paper = 255 - p[3];
         bgra.extend_from_slice(&[p[2].saturating_add(paper), p[1].saturating_add(paper), p[0].saturating_add(paper), 255]);
     }
