@@ -1,0 +1,29 @@
+[package]
+name = "pdfcraft-thumbnails"
+description = "First-page thumbnails of PDF files for the operating system's file manager (Windows File Explorer)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# The cdylib is pdfcraft_thumbnails.dll, the thumbnail handler File Explorer loads (packaging/windows).
+crate-type = ["cdylib", "rlib"]
+
+# Not `workspace = true`: the workspace forbids `unsafe`, and File Explorer's thumbnail interface (an
+# in-process COM server: exported functions taking raw pointers, and a bitmap written through one)
+# can't be implemented without it. The same lints otherwise; `unsafe` stays denied everywhere except
+# the Windows COM glue in src/windows.rs, which allows it explicitly.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+pdfcraft-render = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# The version already in the dependency graph (through winit and others).
+windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
+windows-core = "0.62"
