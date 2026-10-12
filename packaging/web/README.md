@@ -105,3 +105,7 @@ PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls
 For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
+times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
+later). Older browsers can't load the app.
