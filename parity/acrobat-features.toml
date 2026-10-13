@@ -7315,8 +7315,8 @@ milestone = "M10"
 status = "partial"
 commands = ["export.ps"]
 tools = ["doc_export_postscript"]
-evidence = ["crates/ps-export/src/lib.rs::export_two_pages_has_pages_trailer_and_page_comments", "crates/ps-export/src/lib.rs::blend_mode_produces_note_not_ops", "crates/automation/tests/it/automation.rs::exporting_to_postscript_and_eps", "crates/automation/tests/it/automation.rs::postscript_warnings_surface", "crates/ps-export/tests/oracle.rs::geometry_page_matches_ghostscript", "crates/ps-export/tests/oracle.rs::image_page_matches_ghostscript", "crates/ps-export/tests/oracle.rs::text_page_matches_ghostscript", "crates/ps-export/tests/oracle.rs::real_truetype_page_matches_ghostscript", "crates/ps-export/tests/oracle.rs::shading_page_matches_ghostscript", "crates/ps-export/tests/oracle.rs::transparency_page_exports_with_note"]
-notes = "Layer A, measured by a Ghostscript oracle (tests/oracle.rs; skips where gs is absent; #1561): the exported program rasterizes within a mean per-channel delta of 2/255 of PdfCraft's own render on geometry (pixel-exact under matched gs policy), JPEG images (≈0.003), text (Type 1 passthrough, vectorized TrueType incl. the real Inter asset, substitute outlines), axial/radial shadings and EPS output; geometry export equals gs's render of the source PDF to delta 0.000. Degradations recorded as warnings and %%PdfCraftNote comments: transparency unflattened (D2, Layer C), embedded TrueType vectorized because gs maps Type 42 codes through the font's own cmap (D1, pending cmap synthesis), tiling patterns flat gray. Headless doc_export_postscript tool + export dialog in the UI. Not yet: flattened transparency, Type 42 embedded fonts as text."
+evidence = ["crates/ps-export/src/lib.rs::export_two_pages_has_pages_trailer_and_page_comments", "crates/ps-export/src/lib.rs::blend_mode_produces_note_not_ops", "crates/automation/tests/automation.rs::exporting_to_postscript_and_eps", "crates/automation/tests/automation.rs::postscript_warnings_surface"]
+notes = "Headless (doc_export_postscript tool): pages redrawn as a DSC-structured PostScript program via the same interpreter drive as page_render; text as vector outlines (Type 42 pending cmap synthesis), images, shadings and annotations; degradations reported as warnings and %%PdfCraftNote comments. Not yet: the export dialog in the UI, Type 42 embedded fonts."
 
 [[feature]]
 id = "create.export-eps"
@@ -7327,8 +7327,8 @@ milestone = "M10"
 status = "partial"
 commands = ["export.ps"]
 tools = ["doc_export_postscript"]
-evidence = ["crates/ps-export/src/lib.rs::eps_requires_exactly_one_page", "crates/automation/tests/it/automation.rs::exporting_to_postscript_and_eps", "crates/ps-export/tests/oracle.rs::eps_output_raster_matches_ghostscript"]
-notes = "Layer A (doc_export_postscript tool, .eps path, and the UI flow): EPSF-3.0 header, no showpage, %%BoundingBox approximated from the CropBox (disclosed as a warning); more than one page is refused with the rule. The gs oracle rasterizes the EPS output (a trailing showpage ejects the page) within the same 2/255 mean delta as the .ps arm. Same Layer A degradations as PostScript: transparency unflattened, embedded TrueType vectorized."
+evidence = ["crates/ps-export/src/lib.rs::eps_requires_exactly_one_page", "crates/automation/tests/automation.rs::exporting_to_postscript_and_eps"]
+notes = "Headless (doc_export_postscript tool, .eps path): EPSF-3.0 header, no showpage, %%BoundingBox approximated from the CropBox (disclosed as a warning); more than one page is refused with the rule. Not yet: the export dialog in the UI."
 
 [[feature]]
 id = "create.export-ocr"
