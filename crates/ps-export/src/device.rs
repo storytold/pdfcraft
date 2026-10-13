@@ -5,7 +5,8 @@
 //! Every draw is self-contained: `gsave`, the total CTM baked in via `concat`, the path
 //! coordinates raw, the paint operator, `grestore`. Clip paths arrive from the interpreter
 //! already transformed into that space, so they are emitted raw inside their own `gsave` and
-//! released by the matching `grestore`. Shadings/patterns go through `shading.rs`; text and
+//! released by the matching `grestore`. Shadings go through `shading.rs`, tiling patterns
+//! through `pattern.rs` (as `makepattern` pattern resources); text and
 //! images through `fonts.rs`/`images.rs`. Transparency has no Level 3-agnostic operator form,
 //! so it degrades to fidelity notes (Task 7 policy: one note per page, first occurrence
 //! only — normal pages stay note-free).
@@ -24,6 +25,7 @@ use crate::FidelityNote;
 use crate::color;
 use crate::fonts::{self, FontTable, TextStrategy};
 use crate::images;
+use crate::pattern;
 use crate::psnum;
 use crate::shading;
 
@@ -41,6 +43,16 @@ pub(crate) struct Emitter {
     /// The document's `/Separation` colorspace resources (`color.rs`): seeded
     /// per page by `export()` so names stay stable and repeats stay single.
     pub(crate) colorspaces: crate::color::Colorspaces,
+    /// The document's tiling-pattern resources (`pattern.rs`): seeded per page
+    /// by `export()` the same way, and shared with the cell collector so a
+    /// pattern nested inside a cell defines its resource in the same prolog.
+    pub(crate) patterns: crate::pattern::Patterns,
+}
+
+/// A fresh emitter for a device constructor: empty buffers and tables, `page`
+/// tagging the notes (`new`, `from_table` and the `pattern.rs` cell collector).
+fn fresh_emit(page: Option<usize>) -> Emitter {
+    Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new(), colorspaces: Default::default(), patterns: Default::default() }
 }
 
 impl Emitter {
@@ -89,6 +101,11 @@ pub(crate) struct PsDevice<'a> {
     pub(crate) emit: Emitter,
     /// Per-font text strategies, built from the page's font resources.
     pub(crate) fonts: FontTable,
+    /// Whether this device has seen real transparency: a mask, sub-unit
+    /// opacity or non-Normal blend. The tiling-pattern collector reads it
+    /// (`pattern.rs`): a transparent cell cannot ride a PostScript pattern
+    /// colour, so the draw declines to the flat stand-in instead.
+    pub(crate) saw_transparency: bool,
     /// A text run waiting for its `show`: glyphs batch here until a font,
     /// strategy, transform-basis or paint change flushes them.
     run: Option<TextRun<'a>>,
@@ -129,12 +146,7 @@ impl<'a> PsDevice<'a> {
     /// (and the document's running font table) via [`Self::from_table`].
     #[cfg(test)]
     pub(crate) fn new(page: Option<usize>) -> Self {
-        Self {
-            emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new(), colorspaces: Default::default() },
-            fonts: FontTable::default(),
-            run: None,
-            _marker: PhantomData,
-        }
+        Self { emit: fresh_emit(page), fonts: FontTable::default(), saw_transparency: false, run: None, _marker: PhantomData }
     }
 
     /// A device whose text strategies come from `resources` (the page's own —
@@ -144,12 +156,17 @@ impl<'a> PsDevice<'a> {
     pub(crate) fn from_table(page: Option<usize>, resources: &Resources<'_>, fonts: FontTable) -> Self {
         let mut fonts = fonts;
         fonts.add_resources(resources);
-        Self {
-            emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new(), colorspaces: Default::default() },
-            fonts,
-            run: None,
-            _marker: PhantomData,
-        }
+        Self { emit: fresh_emit(page), fonts, saw_transparency: false, run: None, _marker: PhantomData }
+    }
+
+    /// A device collecting one tiling-pattern cell (`pattern.rs`): a fresh
+    /// emitter (the page tag kept, so the cell's notes tag the page) over the
+    /// document's font table, which the caller takes out of the parent device
+    /// and takes back afterwards — the cells' own font resources never join
+    /// the table, so their text vectorizes (unknown font keys, faithful
+    /// outlines). A runtime constructor, not test-only.
+    pub(crate) fn cell(page: Option<usize>, fonts: FontTable) -> Self {
+        Self { emit: fresh_emit(page), fonts, saw_transparency: false, run: None, _marker: PhantomData }
     }
 
     /// Emit any pending text run. Called before every other operator (program
@@ -503,15 +520,24 @@ fn paint_invisible(paint: &Paint<'_>) -> bool {
 }
 
 /// The paint + path + painting-operator tail of a draw, routing pattern paints through
-/// the Task 6 shading machinery. `build` emits the path operators. Flat colours keep the
-/// Task 3 flow (colour, path, paint operator). A shading *fill* hands `build`, the fill
-/// rule and the draw transform to [`shading::shading_fill`]: the `shfill` route clips to
-/// the built path, while the degraded route *fills* it with the flat mid-tone — and
-/// `clip` consumes the current path in PostScript, so the build cannot precede that
-/// decision (the fallback would fill no path at all). A shading *stroke* cannot
-/// clip-to-path and degrades to its flat colour; a tiling pattern degrades everywhere
-/// (the recorded decision).
-fn paint_draw(emit: &mut Emitter, transform: Affine, paint: &Paint<'_>, draw_mode: &PathDrawMode, build: impl FnOnce(&mut Emitter)) {
+/// the shading machinery (`shading.rs`) and tiling patterns through their own resource
+/// machinery (`pattern.rs`, which threads the device's font table into the cell collector).
+/// `build` emits the path operators. Flat colours keep the Task 3 flow (colour, path,
+/// paint operator). A shading *fill* hands `build`, the fill rule and the draw transform
+/// to [`shading::shading_fill`]: the `shfill` route clips to the built path, while the
+/// degraded route *fills* it with the flat mid-tone — and `clip` consumes the current
+/// path in PostScript, so the build cannot precede that decision (the fallback would
+/// fill no path at all). A shading *stroke* cannot clip-to-path and degrades to its flat
+/// colour; a tiling pattern fill or stroke becomes `makepattern`/`setpattern` (declining
+/// to the flat gray exactly where `pattern.rs` cannot express the cell).
+fn paint_draw(
+    emit: &mut Emitter,
+    fonts: &mut FontTable,
+    transform: Affine,
+    paint: &Paint<'_>,
+    draw_mode: &PathDrawMode,
+    build: impl FnOnce(&mut Emitter),
+) {
     match paint {
         Paint::Color(_) => {
             paint_ops(emit, paint);
@@ -522,22 +548,22 @@ fn paint_draw(emit: &mut Emitter, transform: Affine, paint: &Paint<'_>, draw_mod
             (Pattern::Shading(sp), PathDrawMode::Fill(rule)) => {
                 shading::shading_fill(sp, emit, *rule, transform, build);
             }
-            (Pattern::Shading(_), PathDrawMode::Stroke(_)) => {
-                shading::shading_stroke_approx(paint, emit);
+            (Pattern::Shading(sp), PathDrawMode::Stroke(_)) => {
+                shading::shading_stroke_approx(sp, emit);
                 build(emit);
                 paint_op(emit, draw_mode);
             }
-            (Pattern::Tiling(_), _) => {
-                shading::tiling_approx(emit);
-                build(emit);
-                paint_op(emit, draw_mode);
+            (Pattern::Tiling(t), _) => {
+                let is_stroke = matches!(draw_mode, PathDrawMode::Stroke(_));
+                pattern::tiling_paint(emit, fonts, t, transform, is_stroke, draw_mode, build);
             }
         },
     }
 }
 
 /// The painting operator for a draw mode: `fill`/`eofill` for fills, `stroke` for strokes.
-fn paint_op(emit: &mut Emitter, draw_mode: &PathDrawMode) {
+/// (`pattern.rs` reuses this for both the makepattern route and its declines.)
+pub(crate) fn paint_op(emit: &mut Emitter, draw_mode: &PathDrawMode) {
     match draw_mode {
         PathDrawMode::Fill(FillRule::NonZero) => emit.op("fill"),
         PathDrawMode::Fill(FillRule::EvenOdd) => emit.op("eofill"),
@@ -554,6 +580,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
     /// No PostScript operator form: a soft mask degrades to one note per page.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
         if mask.is_some() {
+            self.saw_transparency = true;
             self.emit.note_once("transparency ignored (soft mask)");
         }
     }
@@ -562,6 +589,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
     /// note per page naming the mode.
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
         if !matches!(blend_mode, BlendMode::Normal) {
+            self.saw_transparency = true;
             self.emit.note_once(&format!("transparency ignored (blend {blend_mode:?})"));
         }
     }
@@ -579,7 +607,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
         if let PathDrawMode::Stroke(props) = draw_mode {
             stroke_ops(&mut self.emit, props);
         }
-        paint_draw(&mut self.emit, transform, paint, draw_mode, |emit| path_ops(emit, path));
+        paint_draw(&mut self.emit, &mut self.fonts, transform, paint, draw_mode, |emit| path_ops(emit, path));
         self.emit.op("grestore");
     }
 
@@ -599,6 +627,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
     /// actually carried opacity, a mask or a non-Normal blend.
     fn push_transparency_group(&mut self, opacity: f32, mask: Option<SoftMask<'a>>, blend_mode: BlendMode) {
         if opacity < 1.0 || mask.is_some() || !matches!(blend_mode, BlendMode::Normal) {
+            self.saw_transparency = true;
             self.emit.note_once("transparency ignored (transparency group)");
         }
     }
@@ -710,7 +739,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
         if let PathDrawMode::Stroke(props) = draw_mode {
             stroke_ops(&mut self.emit, props);
         }
-        paint_draw(&mut self.emit, transform, paint, draw_mode, |emit| rect_ops(emit, rect));
+        paint_draw(&mut self.emit, &mut self.fonts, transform, paint, draw_mode, |emit| rect_ops(emit, rect));
         self.emit.op("grestore");
     }
 

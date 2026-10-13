@@ -18,6 +18,7 @@ mod device;
 mod dsc;
 mod fonts;
 mod images;
+mod pattern;
 mod psnum;
 mod sfnt;
 mod shading;
@@ -131,12 +132,14 @@ pub fn export_with_config(
     order.dedup();
 
     // Drive every requested page into its own buffer. One `FontTable` and one
-    // `Colorspaces` table run across the whole document (font decisions, slice
-    // names and separation resource names carry between pages), one device per
-    // page (notes tag with the page's 1-based output position).
+    // `Colorspaces`/`Patterns` resource table run across the whole document
+    // (font decisions, slice names, separation and pattern resource names
+    // carry between pages), one device per page (notes tag with the page's
+    // 1-based output position).
     let cache = InterpreterCache::new();
     let mut fonts = FontTable::default();
     let mut colorspaces = crate::color::Colorspaces::default();
+    let mut patterns = crate::pattern::Patterns::default();
     let mut driven: Vec<(Vec<u8>, Vec<FidelityNote>, [f64; 4])> = Vec::new();
     for &index in &order {
         let Some(page) = pdf.pages().get(index) else {
@@ -168,10 +171,11 @@ pub fn export_with_config(
             interpreter_settings(config),
         );
         let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts));
-        // Seed the page's emitter with the document's colorspace table (the
-        // same carry the fonts take): resource names stay stable and repeats
-        // stay single across pages.
+        // Seed the page's emitter with the document's colorspace and pattern
+        // tables (the same carry the fonts take): resource names stay stable
+        // and repeats stay single across pages.
         device.emit.colorspaces = std::mem::take(&mut colorspaces);
+        device.emit.patterns = std::mem::take(&mut patterns);
         // Mirror `render_into`: clip to the page box, wrap the page in a transparency
         // group (full opacity, no mask — not a degradation), interpret, unwrap, unclip.
         let mut clip_path = crop.to_path(0.1);
@@ -192,6 +196,7 @@ pub fn export_with_config(
         let notes = std::mem::take(&mut device.emit.notes);
         fonts = std::mem::take(&mut device.fonts);
         colorspaces = std::mem::take(&mut device.emit.colorspaces);
+        patterns = std::mem::take(&mut device.emit.patterns);
         driven.push((body, notes, bbox));
     }
 
@@ -208,12 +213,15 @@ pub fn export_with_config(
         warnings.push(note);
     }
     let preamble = fonts.preamble();
-    // The separation resources ride in the same prolog block, after the fonts.
+    // The separation and pattern resources ride in the same prolog block, after
+    // the fonts.
     let colorspaces = colorspaces.prolog();
-    if !preamble.is_empty() || !colorspaces.is_empty() {
+    let patterns = patterns.prolog();
+    if !preamble.is_empty() || !colorspaces.is_empty() || !patterns.is_empty() {
         out.extend_from_slice(b"%%BeginProlog\n");
         out.extend_from_slice(&preamble);
         out.extend_from_slice(&colorspaces);
+        out.extend_from_slice(&patterns);
         out.extend_from_slice(b"%%EndProlog\n");
     }
     for (no, (body, notes, bbox)) in driven.iter().enumerate() {

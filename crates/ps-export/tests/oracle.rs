@@ -1049,6 +1049,46 @@ fn eps_output_raster_matches_ghostscript() {
     assert!(delta < TOLERANCE, "EPS: gs and PdfCraft rasters diverge ({delta:.3} ≥ {TOLERANCE})");
 }
 
+/// A page of tiling patterns: one blue square per 14.4 pt cell across the whole page box —
+/// the Task 4 `makepattern`/`setpattern` emission surface. The pattern's dict and use-site
+/// shapes are measured against gs, not assumed: the resource name is *evaluated* and the
+/// dictionary is the first `makepattern` operand (gs 10.08.0 typechecks `/Name makepattern`
+/// and `matrix dict makepattern`). The geometry sits on the oracle's 1.44 pt pixel grid, so
+/// both rasterizers step the tiles pixel-aligned.
+fn tiling_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        stream_obj("", b"/Pattern cs /P1 scn 0 0 288 360 re f"),
+        b"<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Resources << /Pattern << /P1 5 0 R >> >> >>".to_vec(),
+        stream_obj(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 14.4 14.4] /XStep 14.4 /YStep 14.4 /Resources << >>",
+            b"0 0 1 rg 2.88 2.88 8.64 8.64 re f",
+        ),
+    ])
+}
+
+/// Tiling patterns: gs must accept the exported pattern resource (its PaintProc, the
+/// `makepattern`/`setpattern` use site) and step the tiles where PdfCraft's own tiling of
+/// the same source steps them. Repeated tiles must be visible in gs's raster — ink present
+/// but well under half the page (the blue square covers 36% of each cell), which a flat
+/// wash or a blank pattern would each violate. Skips its gs half when gs is not installed.
+#[test]
+fn tiling_page_matches_ghostscript() {
+    let out = export(Arc::new(tiling_pdf()), &[0], PsFormat::Ps).expect("the tiling page exports");
+    assert!(out.warnings.is_empty(), "a tiling fill degrades nothing: {:?}", out.warnings);
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("makepattern setpattern\n"), "the pattern use site: {s}");
+    let Some((_, _, rgb)) = gs_raster(&out.bytes, "tiling") else {
+        return;
+    };
+    let inked = rgb.as_chunks::<3>().0.iter().filter(|c| c[2] > 150 && c[0] < 100).count();
+    // Measured ≈ 18000 inked pixels (36% of the 200×250 canvas); the bounds keep headroom
+    // either side while separating a repeating pattern from a wash or a blank.
+    assert!(inked > 5000 && inked < (PX.0 * PX.1 / 2) as usize, "the tiles repeat in gs's raster: {inked} inked pixels");
+    assert_matches_oracle("tiling", &tiling_pdf(), TOLERANCE);
+}
+
 /// Transparency degrades to a note (Layer A policy; flattening is Layer C): the export
 /// completes, both draws emit and the degradation is recorded — never raster-compared.
 #[test]
