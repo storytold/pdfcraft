@@ -23,12 +23,15 @@
 //!   fallback), because this build resolves a shown code through
 //!   Encoding → name → CharStrings → gid — the PLRM route — and its txtwrite
 //!   maps those names back to Unicode through the Adobe Glyph List, which is
-//!   what makes the drawn text extractable; and the definition ends
-//!   `currentdict end definefont pop` with exactly the name and the dict as
-//!   `definefont`'s two operands (the earlier `dup begin … currentdict end
-//!   definefont` left three operands, so the dict became the FontDirectory
-//!   key — invisible to `findfont`, Courier substitution: the Task 2 "gs
-//!   finding", an emission bug, not an environmental one). The synthesized
+//!   what makes the drawn text extractable. A glyph with no real name falls
+//!   back to `/gNNNN` (renders identically; extraction for that glyph
+//!   degrades honestly), and a name the font duplicates across gids goes to
+//!   its lowest gid, so the emission is byte-reproducible. The definition
+//!   ends `currentdict end definefont pop` with exactly the name and the
+//!   dict as `definefont`'s two operands (the earlier `dup begin …
+//!   currentdict end definefont` left three operands, so the dict became the
+//!   FontDirectory key — invisible to `findfont`, Courier substitution: the
+//!   Task 2 "gs finding", an emission bug, not an environmental one). The synthesized
 //!   cmap stays in the sfnts for consumers that resolve Type 42 codes through
 //!   the cmap per the Type 42 convention; under this gs it is inert but
 //!   harmless (the same bytes render and extract with it present). gs still
@@ -429,7 +432,15 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
         }
         _ => glyph_fallback_name(gid),
     };
-    let assigned: Vec<(u32, u8, String)> = slice.codes.iter().map(|(gid, code)| (*gid, *code, name_of(*gid, &mut used))).collect();
+    // Duplicate real names resolve deterministically: the pairs are sorted by
+    // gid before names are assigned, so when the font's `post` table gives two
+    // used gids the same name (legal in post 2.0) the lower gid keeps it and
+    // the higher falls back — `HashMap` iteration order is random per process
+    // and must not pick the winner, or the same input PDF would export to
+    // different bytes across runs.
+    let mut pairs: Vec<(u32, u8)> = slice.codes.iter().map(|(gid, code)| (*gid, *code)).collect();
+    pairs.sort_unstable_by_key(|&(gid, _)| gid);
+    let assigned: Vec<(u32, u8, String)> = pairs.into_iter().map(|(gid, code)| (gid, code, name_of(gid, &mut used))).collect();
     out.extend_from_slice(format!("%%BeginResource: font {}\n", slice.name).as_bytes());
     out.extend_from_slice(format!("/{} 11 dict begin\n", slice.name).as_bytes());
     out.extend_from_slice(format!("/FontName /{} def\n", slice.name).as_bytes());
@@ -442,11 +453,10 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
     out.extend_from_slice(b"/Encoding [");
     encoding_names(out, &assigned.iter().map(|(_, code, name)| (*code, name.clone())).collect::<Vec<_>>());
     out.extend_from_slice(b"] def\n");
-    // The gs-required name → gid table, over the same names the Encoding carries.
-    let mut named = assigned.clone();
-    named.sort_unstable_by_key(|(gid, _, _)| *gid);
+    // The gs-required name → gid table, over the same names the Encoding
+    // carries (`assigned` is already in gid order).
     out.extend_from_slice(b"/CharStrings 256 dict dup begin\n/.notdef 0 def\n");
-    for (gid, _, name) in &named {
+    for (gid, _, name) in &assigned {
         out.extend_from_slice(format!("/{name} {gid} def\n").as_bytes());
     }
     out.extend_from_slice(b"end def\n");
@@ -800,6 +810,19 @@ mod tests {
     /// holds two boxes — these fixtures exercise tables and text emission,
     /// not outlines).
     fn ttf_program_with_glyphs(num_glyphs: u16) -> Vec<u8> {
+        let mut post = Vec::new();
+        post.extend_from_slice(&[0x00, 0x03, 0x00, 0x00]); // version 3.0
+        post.extend_from_slice(&[0; 4]); // italicAngle
+        post.extend_from_slice(&(-100i16).to_be_bytes()); // underlinePosition
+        post.extend_from_slice(&50u16.to_be_bytes()); // underlineThickness
+        post.extend_from_slice(&[0; 20]); // isFixedPitch + memory limits
+        ttf_program_with_post(num_glyphs, post)
+    }
+
+    /// [`ttf_program_with_glyphs`] with a caller-supplied `post` table: the
+    /// duplicate-name regression installs a version-2.0 post whose gids 1 and
+    /// 2 both point at one pool name.
+    fn ttf_program_with_post(num_glyphs: u16, post: Vec<u8>) -> Vec<u8> {
         fn be16(v: u16) -> [u8; 2] {
             v.to_be_bytes()
         }
@@ -850,13 +873,6 @@ mod tests {
         cmap.extend_from_slice(&be16(2)); // entryCount
         cmap.extend_from_slice(&be16(1)); // 'A' → gid 1
         cmap.extend_from_slice(&be16(2)); // 'B' → gid 2
-        let mut post = Vec::new();
-        post.extend_from_slice(&be32(0x0003_0000)); // version 3.0
-        post.extend_from_slice(&be32(0)); // italicAngle
-        post.extend_from_slice(&be16(0xFF9C)); // underlinePosition (-100)
-        post.extend_from_slice(&be16(50)); // underlineThickness
-        post.extend_from_slice(&be32(0)); // isFixedPitch
-        post.extend_from_slice(&[0; 16]); // memory limits
         // Two identical simple glyphs (a 300×400 box at x=100), 34 bytes each;
         // glyph 0 (.notdef) is empty. Short `loca` holds byte offsets ÷ 2.
         fn box_glyph() -> Vec<u8> {
@@ -1322,6 +1338,50 @@ mod tests {
         // Slice 1: codes 1..=45 → gids 255..=299.
         assert_eq!(format4_gid(&blobs[1], 1), Some(255), "slice 1's first code → its gid");
         assert_eq!(format4_gid(&blobs[1], 45), Some(299), "slice 1's last code → its gid");
+    }
+
+    /// A name the font's `post` table duplicates across two used gids goes to
+    /// the lower gid, deterministically: the name assignment runs over
+    /// gid-sorted pairs, so whichever gid the `codes` `HashMap` happens to
+    /// yield first cannot pick the winner — otherwise the same input PDF
+    /// would export to different bytes across runs (random dedup fallbacks).
+    /// Fixture: a post 2.0 table whose gids 1 and 2 both point at one pool
+    /// name (legal in post 2.0); codes 1 and 2 assigned to gids 1 and 2.
+    #[test]
+    fn duplicate_post_names_go_to_the_lower_gid() {
+        // post 2.0 over three glyphs: the 32-byte header, numberOfNewGlyphs,
+        // glyphNameIndex [.notdef(0), 258, 258] and one Pascal-string pool
+        // entry "box" — so gids 1 and 2 share the name.
+        let mut post = Vec::new();
+        post.extend_from_slice(&0x0002_0000u32.to_be_bytes()); // version 2.0
+        post.extend_from_slice(&0u32.to_be_bytes()); // italicAngle
+        post.extend_from_slice(&(-100i16).to_be_bytes()); // underlinePosition
+        post.extend_from_slice(&50u16.to_be_bytes()); // underlineThickness
+        post.extend_from_slice(&0u32.to_be_bytes()); // isFixedPitch
+        post.extend_from_slice(&[0; 16]); // memory limits
+        post.extend_from_slice(&3u16.to_be_bytes()); // numberOfNewGlyphs
+        post.extend_from_slice(&[0u16, 258, 258].iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<u8>>());
+        post.extend_from_slice(&[3, b'b', b'o', b'x']); // the "box" pool string
+        let mut table = FontTable::default();
+        let key = 42u128;
+        table.order.push(key);
+        table.fonts.insert(
+            key,
+            FontEntry {
+                kind: EmbeddedKind::TrueType(ttf_program_with_post(3, post)),
+                subtype: Some("TrueType".into()),
+                base_font: Some("PdfCraftTT".into()),
+                bbox: None,
+                decision: Some(Decision::Type42),
+                slices: Vec::new(),
+            },
+        );
+        assert_eq!(table.char_code(key, 1), 1, "gid 1 takes code 1");
+        assert_eq!(table.char_code(key, 2), 2, "gid 2 takes code 2");
+        let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
+        assert!(preamble.contains("/.notdef /box /g0002 /.notdef"), "Encoding: code 1 keeps the shared name, code 2 takes the fallback: {preamble}");
+        assert!(preamble.contains("/box 1 def\n"), "CharStrings: the shared name maps to the lower gid: {preamble}");
+        assert!(preamble.contains("/g0002 2 def\n"), "CharStrings: the higher gid keeps its own fallback entry: {preamble}");
     }
 
     // --------------------------------------------------------------- extras
