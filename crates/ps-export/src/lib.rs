@@ -20,6 +20,7 @@ mod images;
 mod psnum;
 mod sfnt;
 mod shading;
+mod type1_subset;
 
 use std::sync::Arc;
 

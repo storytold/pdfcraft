@@ -787,6 +787,66 @@ fn text_page_matches_ghostscript() {
     assert_matches_oracle("text", &text_pdf());
 }
 
+/// Decrypt the eexec section of an exported Type 1 program: the one hex line
+/// after `currentfile eexec`, eexec-decrypted. The decryptor advances its
+/// seed by the *ciphertext* byte (the input), so it is not the fixture
+/// builder's encryptor run backwards — the two share only the XOR. Test-side
+/// expect on the markers: the export always emits the Layer A shape.
+fn t1_eexec_plain(ps: &[u8]) -> Vec<u8> {
+    const MARK: &[u8] = b"currentfile eexec\n";
+    let at = ps.windows(MARK.len()).position(|w| w == MARK).expect("the eexec marker");
+    let hex_start = at + MARK.len();
+    let hex_end = hex_start + ps[hex_start..].iter().position(|&b| b == b'\n').expect("the hex line ends");
+    let cipher: Vec<u8> =
+        ps[hex_start..hex_end].chunks(2).map(|pair| u8::from_str_radix(&String::from_utf8_lossy(pair), 16).expect("a hex pair")).collect();
+    let mut seed: u32 = 55665;
+    cipher
+        .iter()
+        .map(|&c| {
+            let plain = c ^ ((seed >> 8) as u8);
+            seed = (u32::from(c).wrapping_add(seed).wrapping_mul(52845).wrapping_add(22719)) & 0xFFFF;
+            plain
+        })
+        .collect()
+}
+
+/// Whether `haystack` contains `needle` (byte-wise).
+fn has_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty() || haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Task 8's gate: a subsetted Type 1 program loads in gs. A page drawing only
+/// 'A' exports with a program whose charstrings are `.notdef` and A alone —
+/// proven by decrypting the emitted eexec (B's charstring is gone) — gs's
+/// txtwrite reads the drawn string back out of the exported PostScript, and
+/// the whole-page rasters match (Task 6's helper set). Skips its gs halves
+/// when gs is not installed.
+#[test]
+fn subset_program_loads_in_gs() {
+    let pdf = assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        // F1: the embedded Type 1 (descriptor 5, program 6), 'A' alone drawn.
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftTest /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R >>".to_vec(),
+        stream_obj("", b"BT /F1 72 Tf 14.4 100 Td (A) Tj ET"),
+        b"<< /Type /FontDescriptor /FontName /PdfCraftTest /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile 6 0 R >>".to_vec(),
+        stream_obj("", &t1_program()),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+    ]);
+    let out = export(std::sync::Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the Type 1 page exports");
+    assert!(out.warnings.is_empty(), "subsetting degrades nothing: {:?}", out.warnings);
+    // The program really was subsetted: A's charstring rides, B's does not.
+    let plain = t1_eexec_plain(&out.bytes);
+    assert!(has_bytes(&plain, b"/A 20 RD "), "A's charstring rides: {plain:?}");
+    assert!(!has_bytes(&plain, b"/B "), "B's charstring is dropped: {plain:?}");
+    assert!(has_bytes(&plain, b"/.notdef "), ".notdef rides: {plain:?}");
+    let Some(text) = gs_text(&out.bytes, "t1-subset") else {
+        return;
+    };
+    assert!(text.contains('A'), "the drawn string is extractable: {text:?}");
+    assert_matches_oracle("t1-subset", &pdf);
+}
+
 /// Real-font TrueType (Inter) as a live Type 42 font: gs's FreeType renders the
 /// embedded sfnts through the exported `/FontType 42` dictionary (the
 /// `fonts.rs` module docs record the emission shape this gs build requires),

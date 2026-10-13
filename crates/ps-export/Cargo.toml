@@ -20,6 +20,9 @@ pdfcraft-render = { workspace = true }
 # Parses embedded Type 1 font programs for their glyph-name table; the same skrifa
 # hayro-interpret uses (same version, so glyph ids match by construction).
 skrifa = "0.47"
+# SHA-256 of embedded Type 1 programs — the font prolog's dedup key (the same
+# pin crypt, sign, xfa and automation carry).
+sha2 = "0.11"
 
 [dev-dependencies]
 # The oracle tests: the exporter's output is rasterized by Ghostscript and compared with
