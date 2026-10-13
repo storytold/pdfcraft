@@ -99,7 +99,7 @@ features total).
 | All embedded images | yes | yes | good | `create.export-all-images` |
 | XML 1.0 | yes | no | none | `create.export-xml` planned |
 | SVG | no (dropped by Adobe) | no | none | `create.export-svg` planned |
-| PostScript, EPS | yes | yes (DSC-structured program; geometry, images, shadings, Type 1 text, embedded fonts as text, annotations) | good for Layers A+B (Ghostscript oracle: mean per-channel delta ≤ 2/255 vs PdfCraft's own raster, geometry pixel-exact under matched policy; fonts as text — TrueType as Type 42 with a synthesized cmap, CFF/CID as Type 0 composites, Type 42/Type 1 subsetting — ink- and raster-gated, txtwrite-extractable only for the Type 42 arms; the CID CJK gate reads a craft-fonts checkout at runtime and skips when absent); transparency unflattened, CFF whole, tiling flat gray, true CMYK/Separation pending (all noted) | `create.export-ps`, `create.export-eps` partial (#1561) |
+| PostScript, EPS | yes | yes (DSC-structured program; geometry, images, shadings, Type 1 text, embedded fonts as text, annotations) | good for Layers A+B (Ghostscript oracle: mean per-channel delta ≤ 2/255 vs PdfCraft's own raster, geometry pixel-exact under matched policy; fonts as text — TrueType as Type 42 with a synthesized cmap, CFF/CID as Type 0 composites, Type 42/Type 1 subsetting — ink- and raster-gated, txtwrite-extractable only for the Type 42 arms; the CID CJK gate reads a craft-fonts checkout at runtime and skips when absent); transparency unflattened and tiling flat gray (runtime-warned), CFF whole and true CMYK/Separation pending (documented limits, not runtime warnings) | `create.export-ps`, `create.export-eps` partial (#1561) |
 
 ## OCR (scans to searchable PDF)
 
