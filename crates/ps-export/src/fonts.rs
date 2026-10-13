@@ -1,4 +1,4 @@
-//! Text emission: Type 1 passthrough, Type 42 and vectorized fallback (Layer A, Task 5).
+//! Text emission: Type 1 passthrough and vectorized fallback (Layer A, Tasks 5+7).
 //!
 //! Glyphs reach the device one at a time; text leaves as text whenever the PDF
 //! embeds a font program PostScript can execute natively:
@@ -7,10 +7,16 @@
 //!   (they are a complete, self-defining PostScript font), then a copy is defined
 //!   under our own name with the PDF's `/FontBBox` and a re-built `/Encoding` that
 //!   maps our sequential character codes to the program's glyph names.
-//! - **TrueType** (`/FontFile2`, `/Subtype /TrueType`): a Type 42 font dictionary
-//!   built in the prolog, with the raw font bytes as `/sfnts` and an `/Encoding`
-//!   that maps our codes to `/glyphNNNN` names (the Type 42 by-index convention).
-//!   `/GlyphNames2Unicode` is omitted (Layer A; text-extraction parity is later).
+//! - **TrueType** (`/FontFile2`) **vectorizes in Layer A**. The Type 42 emission
+//!   this crate shipped between Tasks 5 and 7 was removed by the Task 7 Ghostscript
+//!   gate: gs resolves Type 42 character codes through the font's *own* `cmap`,
+//!   ignoring the `/Encoding` and `/CharStrings` a Type 42 dictionary carries
+//!   (proven two ways — hand-editing the exported string from our assigned codes
+//!   to the codes the font's cmap maps makes the same glyphs draw, and a real
+//!   embedded Inter draws nothing for codes 1..N while the source PDF draws every
+//!   glyph). Emitting it would ship invisible text; vectorizing shows exactly the
+//!   outlines the raster renderer shows. Re-enabling needs cmap synthesis over
+//!   the assigned codes (mupdf's approach), verified against gs — a later task.
 //! - **Everything else** — CFF (`/FontFile3`), CID/Type0, Type 3, non-embedded and
 //!   unreadable font programs — is vectorized through the Task 3 path machinery
 //!   (`outline()` → path ops under the glyph transform), with one fidelity note
@@ -27,10 +33,6 @@
 //! from the observed transforms, so positioning never depends on the PDF's
 //! declared widths agreeing with the font's.
 
-// The first live constructor arrives with Task 7's `export()` assembly; until then
-// only the tests build a FontTable, so the emission chain is dead code otherwise.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use hayro::hayro_interpret::CacheKey;
@@ -45,8 +47,6 @@ use crate::psnum;
 pub(crate) enum TextStrategy {
     /// Embedded Type 1: program bytes in the prolog, re-encoded copy, `show` text.
     Type1Passthrough,
-    /// Embedded TrueType: Type 42 dictionary with `sfnts`, `show` text.
-    Type42,
     /// Outline glyphs as plain path operations.
     Vectorize,
 }
@@ -56,8 +56,10 @@ pub(crate) enum TextStrategy {
 enum EmbeddedKind {
     /// `/FontFile` — a Type 1 font program, decoded.
     Type1(Vec<u8>),
-    /// `/FontFile2` — TrueType data, decoded.
-    TrueType(Vec<u8>),
+    /// `/FontFile2` — TrueType data, decoded. (The bytes themselves are not held:
+    /// the Type 42 arm is disabled by the Task 7 gate, and the cmap-synthesis
+    /// follow-up will re-read them from the dict when it lands.)
+    TrueType,
     /// `/FontFile3` — CFF or OpenType (never executed as text in Layer A).
     Cff,
     /// No embedded program.
@@ -68,8 +70,6 @@ enum EmbeddedKind {
 enum Decision {
     /// The parsed Type 1 program: its own name (for `findfont`) and gid → glyph name.
     Type1 { name: String, names: HashMap<u32, String> },
-    /// The TrueType units-per-em, needed for the Type 42 `/FontMatrix`.
-    Type42 { upem: u32 },
     /// Path fallback; the note (if any) was queued when this was decided.
     Vectorize,
 }
@@ -121,11 +121,14 @@ pub(crate) struct FontTable {
 }
 
 impl FontTable {
-    /// Walk the page's font resources (own and inherited) and extract, per font
-    /// dict, the embedded program bytes, subtype and bounding box. Everything is
-    /// copied, so the table outlives the PDF objects.
-    pub(crate) fn from_resources(resources: &Resources<'_>) -> Self {
-        let mut table = Self::default();
+    /// Merge one page's font resources (own and inherited) into the table and
+    /// extract, per font dict, the embedded program bytes, subtype and bounding
+    /// box. Everything is copied, so the table outlives the PDF objects. Font
+    /// dicts already known (the same indirect object seen from another page's
+    /// resources) keep their entry, so decisions and slice numbering carry
+    /// across the pages of one export and never produce two PostScript fonts
+    /// for one PDF font.
+    pub(crate) fn add_resources(&mut self, resources: &Resources<'_>) {
         let mut level = Some(resources.clone());
         while let Some(res) = level {
             for key in res.fonts.keys() {
@@ -133,15 +136,14 @@ impl FontTable {
                     continue;
                 };
                 let cache_key = CacheKey::cache_key(&dict);
-                if table.fonts.contains_key(&cache_key) {
+                if self.fonts.contains_key(&cache_key) {
                     continue;
                 }
-                table.order.push(cache_key);
-                table.fonts.insert(cache_key, entry_of(&dict));
+                self.order.push(cache_key);
+                self.fonts.insert(cache_key, entry_of(&dict));
             }
             level = res.parent().cloned();
         }
-        table
     }
 
     /// Decide (once per font) how its glyphs are emitted. Queues a fidelity note
@@ -152,7 +154,6 @@ impl FontTable {
             return TextStrategy::Vectorize;
         };
         let key = outline.font_cache_key();
-        let has_font_data = outline.font_data().is_some();
         if !self.fonts.contains_key(&key) {
             self.order.push(key);
             self.fonts.insert(key, FontEntry::unknown());
@@ -180,17 +181,12 @@ impl FontTable {
                 self.pending_notes.push("text vectorized (font program unreadable)".into());
                 Decision::Vectorize
             }
-            (Some(EmbeddedKind::TrueType(data)), Some("TrueType")) if has_font_data => match read_upem(data) {
-                Some(upem) if (16..=16384).contains(&upem) => Decision::Type42 { upem },
-                _ => {
-                    self.pending_notes.push("text vectorized (font program unreadable)".into());
-                    Decision::Vectorize
-                }
-            },
-            (Some(EmbeddedKind::TrueType(_)), _) => {
-                // The bytes exist but hayro did not load them (the glyph ids would
-                // belong to a substitute font), or the subtype is unexpected.
-                self.pending_notes.push("text vectorized (font program unreadable)".into());
+            (Some(EmbeddedKind::TrueType), _) => {
+                // The Task 7 Ghostscript gate: gs resolves Type 42 char codes through
+                // the font's own cmap, so our assigned codes draw nothing (module docs).
+                // Vectorize — the outlines the raster renderer shows — until cmap
+                // synthesis over the assigned codes exists and is verified.
+                self.pending_notes.push("text vectorized (Type 42 pending cmap synthesis)".into());
                 Decision::Vectorize
             }
             (Some(EmbeddedKind::Cff), _) => {
@@ -211,7 +207,6 @@ impl FontTable {
     fn strategy_of(entry: &FontEntry) -> TextStrategy {
         match entry.decision {
             Some(Decision::Type1 { .. }) => TextStrategy::Type1Passthrough,
-            Some(Decision::Type42 { .. }) => TextStrategy::Type42,
             _ => TextStrategy::Vectorize,
         }
     }
@@ -285,20 +280,11 @@ impl FontTable {
             let Some(entry) = self.fonts.get(key) else {
                 continue;
             };
-            match entry.decision.as_ref() {
-                Some(Decision::Type1 { name, names }) => {
-                    let EmbeddedKind::Type1(program) = &entry.kind else { continue };
-                    for slice in &entry.slices {
-                        type1_resource(&mut out, slice, name, names, program, entry.bbox);
-                    }
+            if let Some(Decision::Type1 { name, names }) = entry.decision.as_ref() {
+                let EmbeddedKind::Type1(program) = &entry.kind else { continue };
+                for slice in &entry.slices {
+                    type1_resource(&mut out, slice, name, names, program, entry.bbox);
                 }
-                Some(Decision::Type42 { upem }) => {
-                    let EmbeddedKind::TrueType(data) = &entry.kind else { continue };
-                    for slice in &entry.slices {
-                        type42_resource(&mut out, slice, *upem, entry.bbox, data);
-                    }
-                }
-                _ => {}
             }
         }
         out
@@ -321,41 +307,6 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
     out.extend_from_slice(b"] put\ndefinefont pop\n%%EndResource\n");
 }
 
-/// One Type 42 dictionary built from raw TrueType bytes.
-fn type42_resource(out: &mut Vec<u8>, slice: &Slice, upem: u32, bbox: Option<[f64; 4]>, data: &[u8]) {
-    out.extend_from_slice(format!("%%BeginResource: font {}\n", slice.name).as_bytes());
-    out.extend_from_slice(format!("/{n} 10 dict dup begin\n/FontName /{n} def\n/FontType 42 def\n/PaintType 0 def\n", n = slice.name).as_bytes());
-    out.extend_from_slice(format!("/FontMatrix [1 {upem} div 0 0 1 {upem} div 0 0] def\n").as_bytes());
-    match bbox {
-        Some(bbox) => out.extend_from_slice(format!("/FontBBox {} def\n", bbox_text(bbox)).as_bytes()),
-        // No PDF bbox: generous and never clipping (only font-cache sizing reads it).
-        None => out.extend_from_slice(format!("/FontBBox [-{u} -{u} {u} {u}] def\n", u = 2 * upem).as_bytes()),
-    }
-    out.extend_from_slice(b"/Encoding [");
-    encoding_names(out, &slice.codes.iter().map(|(gid, code)| (*code, format!("glyph{gid}"))).collect::<Vec<_>>());
-    out.extend_from_slice(b"] def\n");
-    // Ghostscript's Type 42 machinery also wants a /CharStrings dict mapping
-    // the encoding names to glyph indices (name → integer). Fonts without it
-    // are rejected at `definefont` there (verified; ps2write emits one too).
-    let mut gids = slice.codes.keys().copied().collect::<Vec<_>>();
-    gids.sort_unstable();
-    out.extend_from_slice(b"/CharStrings 256 dict dup begin\n/.notdef 0 def\n");
-    for gid in gids {
-        out.extend_from_slice(format!("/glyph{gid} {gid} def\n").as_bytes());
-    }
-    out.extend_from_slice(b"end def\n/sfnts [\n");
-    // Chunked per the Type 42 convention: at most 65535 bytes per string, every
-    // chunk but the last a multiple of four.
-    const CHUNK: usize = 65520;
-    for (i, chunk) in data.chunks(CHUNK).enumerate() {
-        if i > 0 {
-            out.push(b'\n');
-        }
-        out.extend_from_slice(ps_string(chunk).as_bytes());
-    }
-    out.extend_from_slice(b"] def\ncurrentdict end definefont pop\n%%EndResource\n");
-}
-
 /// Build the walk result for one font dict.
 fn entry_of(dict: &Dict<'_>) -> FontEntry {
     let kind = dict
@@ -364,7 +315,10 @@ fn entry_of(dict: &Dict<'_>) -> FontEntry {
             if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile") {
                 stream.decoded().ok().map(|d| EmbeddedKind::Type1(d.into_owned()))
             } else if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile2") {
-                stream.decoded().ok().map(|d| EmbeddedKind::TrueType(d.into_owned()))
+                // Decoding validates the program (an undecodable one falls through
+                // to the not-embedded note); the bytes themselves are re-read by
+                // the cmap-synthesis follow-up, not held here.
+                stream.decoded().ok().map(|_| EmbeddedKind::TrueType)
             } else if desc.contains_key(b"FontFile3") {
                 Some(EmbeddedKind::Cff)
             } else {
@@ -402,20 +356,6 @@ fn parse_type1(program: &[u8]) -> Option<(String, HashMap<u32, String>)> {
     let name = font.name()?.to_string();
     let names = font.glyph_names().map(|(gid, name)| (gid.to_u32(), name.to_string())).collect();
     Some((name, names))
-}
-
-/// A TrueType font's units-per-em, from its `head` table (all reads bounded).
-fn read_upem(data: &[u8]) -> Option<u32> {
-    let num_tables = u16::from_be_bytes(data.get(4..6)?.try_into().ok()?);
-    let dir = data.get(12..)?;
-    for record in dir.as_chunks::<16>().0.iter().take(usize::from(num_tables)) {
-        if record.starts_with(b"head") {
-            let offset = usize::try_from(u32::from_be_bytes(record.get(8..12)?.try_into().ok()?)).ok()?;
-            let at = offset.checked_add(18)?;
-            return Some(u32::from(u16::from_be_bytes(data.get(at..at.checked_add(2)?)?.try_into().ok()?)));
-        }
-    }
-    None
 }
 
 /// A PostScript font bbox `[x0 y0 x1 y1]` (values already validated finite).
@@ -458,14 +398,16 @@ fn gid_name(names: &HashMap<u32, String>, gid: u32) -> String {
 
 /// Emit a font program verbatim, bracketed as a binary DSC section when its
 /// bytes are not printable ASCII (a hex-eexec PFA-style program needs nothing).
-/// The `%%BeginData` count covers the payload plus its terminating newline.
+/// The `%%BeginData` count covers the payload plus its terminating newline, in the
+/// DSC 3.0 form `<numberof> <type> <bytesorlines>` ("Binary Bytes" — the examples
+/// in Adobe 5001.DSC_Spec.pdf, e.g. `%%BeginData: 135174 Hex Bytes`).
 fn emit_program_bytes(out: &mut Vec<u8>, program: &[u8]) {
     let ascii = program.iter().all(|b| matches!(*b, b'\n' | b'\r' | b'\t' | 0x20..=0x7e));
     if ascii {
         out.extend_from_slice(program);
         out.push(b'\n');
     } else {
-        out.extend_from_slice(format!("%%BeginData: {} 0 BinaryBytes\n", program.len() + 1).as_bytes());
+        out.extend_from_slice(format!("%%BeginData: {} Binary Bytes\n", program.len() + 1).as_bytes());
         out.extend_from_slice(program);
         out.push(b'\n');
         out.extend_from_slice(b"%%EndData\n");
@@ -831,7 +773,7 @@ mod tests {
         let page = pdf.pages().first().expect("fixture has a page");
         let cache = InterpreterCache::new();
         let mut state = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 200.0, 300.0), &cache, page.xref(), InterpreterSettings::default());
-        let mut device = PsDevice::with_fonts(None, page.resources());
+        let mut device = PsDevice::from_table(None, page.resources(), FontTable::default());
         interpret_page(page, &mut state, &mut device);
         device.finish();
         (
@@ -876,22 +818,21 @@ mod tests {
         assert_eq!(out.matches("gsave").count(), out.matches("grestore").count(), "balanced wrap: {out}");
     }
 
-    /// An embedded TrueType font is emitted as a Type 42: `sfnts` from the
-    /// FontFile2 bytes, `/FontMatrix` from the units-per-em, `/Encoding` mapping
-    /// assigned codes to `/glyphNNNN`, no `/GlyphNames2Unicode`.
+    /// An embedded TrueType font vectorizes (the Task 7 gate disabled the Type 42
+    /// arm): the glyphs become path operators, one note records why, and no font
+    /// is defined or selected. The gate evidence is in the module docs — gs maps
+    /// Type 42 codes through the font's own cmap, so our assigned codes drew
+    /// nothing for real fonts.
     #[test]
-    fn truetype_emits_type42_sfnts() {
+    fn embedded_truetype_vectorizes_until_cmap_synthesis() {
         let ttf = ttf_program();
         let pdf = font_pdf(TT_FONT, TT_DESC, "", &ttf, b"BT /F1 24 Tf 20 100 Td (AB) Tj ET");
         let (out, notes, preamble) = driven(&pdf);
-        assert_eq!(notes.join("\n"), "", "Type 42 degrades nothing");
-        assert!(preamble.contains("/FontType 42 def\n"), "Type 42: {preamble}");
-        assert!(preamble.contains("/FontMatrix [1 1000 div 0 0 1 1000 div 0 0] def\n"), "upem 1000 matrix: {preamble}");
-        assert!(preamble.contains("/Encoding [\n/.notdef /glyph1 /glyph2 "), "codes map to glyph ids: {preamble}");
-        assert!(!preamble.contains("GlyphNames2Unicode"), "omitted in Layer A: {preamble}");
-        let expected = ps_string(&ttf);
-        assert!(contains_bytes(&preamble, expected.as_bytes()), "sfnts carries the raw TrueType bytes: {preamble}");
-        assert!(out.contains("(\\001\\002) [600 0 0 0] xyshow\n"), "text as text: {out}");
+        assert!(notes.iter().any(|n| n.contains("Type 42 pending cmap synthesis")), "gate outcome noted: {notes:?}");
+        assert!(out.contains("moveto\n") && out.contains("fill\n"), "glyph outlines as path ops: {out}");
+        assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text-as-text: {out}");
+        assert!(!preamble.contains("%%BeginResource"), "no font resource: {preamble}");
+        assert!(!preamble.contains("/FontType 42"), "no Type 42 dictionary: {preamble}");
     }
 
     /// A CFF font program (`/FontFile3 /Type1C`) is vectorized: the glyph becomes
@@ -927,11 +868,13 @@ mod tests {
 
     /// Consecutive same-font, same-basis glyphs batch into one `xyshow` — across
     /// a `Td`, whose translation the offsets absorb; a basis change (new font
-    /// size) flushes and starts a new run.
+    /// size) flushes and starts a new run. (Fixture: the embedded Type 1, whose
+    /// A/B advances are 600/700 — the TrueType arm vectorizes since the Task 7
+    /// gate.)
     #[test]
     fn glyph_runs_batch_into_show() {
         let pdf =
-            font_pdf(TT_FONT, TT_DESC, "", &ttf_program(), b"BT /F1 24 Tf 20 100 Td (AB) Tj 0 -30 Td (AB) Tj ET\nBT /F1 12 Tf 20 150 Td (AB) Tj ET");
+            font_pdf(T1_FONT, T1_DESC, "", &t1_program(), b"BT /F1 24 Tf 20 100 Td (AB) Tj 0 -30 Td (AB) Tj ET\nBT /F1 12 Tf 20 150 Td (AB) Tj ET");
         let (out, notes, _preamble) = driven(&pdf);
         assert_eq!(notes.join("\n"), "", "no degradations: {notes:?}");
         assert_eq!(out.matches("xyshow").count(), 2, "two runs, not four glyphs: {out}");

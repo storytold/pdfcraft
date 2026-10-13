@@ -14,10 +14,6 @@
 //! against Ghostscript), and a function carrying one degrades instead of poisoning the
 //! whole file.
 
-// The emission chain becomes reachable from `device.rs` with this task; the `export()`
-// assembly that reaches it from outside the crate arrives with Task 7.
-#![allow(dead_code)]
-
 use hayro::hayro_interpret::color::{ColorComponents, DeviceSpace};
 use hayro::hayro_interpret::pattern::{Pattern, ShadingPattern};
 use hayro::hayro_interpret::shading::{Shading, ShadingFunction, ShadingType, Triangle};

@@ -5,9 +5,6 @@
 //! `%%Pages:`), `%%Page`/`%%PageBoundingBox` per page, and a `%%Trailer`/`%%EOF` tail. Every
 //! fidelity note becomes one `%%PdfCraftNote:` comment line of printable ASCII only.
 
-// Foundation for the later Layer A emitter tasks; until they call these, only the tests do.
-#![allow(dead_code)]
-
 use crate::PsFormat;
 
 /// Append one DSC comment line (text plus `\n`) to `out`.

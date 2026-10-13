@@ -9,7 +9,7 @@
 //! gsave
 //! [a b c d e f] concat                      %% the transform, image pixel space
 //! /DeviceRGB setcolorspace                  %% or `0 setgray` / paint ops
-//! %%BeginData: <bytes> 0 BinaryBytes        %% binary passthrough sections only
+//! %%BeginData: <bytes> Binary Bytes          %% binary passthrough sections only
 //! << /ImageType 1 /Width w /Height h /BitsPerComponent 8 /Decode [0 1 0 1 0 1]
 //!    /ImageMatrix [1 0 0 1 0 0]
 //!    /DataSource currentfile /DCTDecode filter >> image
@@ -37,10 +37,6 @@
 //!   the export continues. An image with `/SMask`/`/Mask` is emitted unmasked with the
 //!   note "image soft mask ignored" (pre-compositing is not reachable from this crate in
 //!   Layer A).
-
-// Like the other emitter modules: the chain only goes live once Task 7's `export()`
-// constructs the device; until then only the tests do.
-#![allow(dead_code)]
 
 use hayro::hayro_interpret::hayro_syntax::Filter;
 use hayro::hayro_interpret::hayro_syntax::object::{Array, Dict, Name};
@@ -199,9 +195,11 @@ impl Plan {
         emit.op(setup);
         let line = image_invocation(self.width, self.height, self.bits, decode, &self.source);
         // The payload is binary: bracket it as a DSC data section so consumers can skip
-        // the bytes, and count the invocation line plus its newline plus the payload.
+        // the bytes, and count the invocation line plus its newline plus the payload, in
+        // the DSC 3.0 form `<numberof> <type> <bytesorlines>` ("Binary Bytes" — the
+        // examples in Adobe 5001.DSC_Spec.pdf, e.g. `%%BeginData: 135174 Hex Bytes`).
         let count = line.len() + 1 + payload.len();
-        emit.op(&format!("%%BeginData: {count} 0 BinaryBytes"));
+        emit.op(&format!("%%BeginData: {count} Binary Bytes"));
         emit.op(&line);
         emit.out.extend_from_slice(payload);
         emit.out.push(b'\n');
@@ -465,7 +463,7 @@ mod tests {
         assert!(out.contains("/DeviceRGB setcolorspace\n"), "3-component space: {out}");
         assert!(contains_bytes(&raw, &DCT_PAYLOAD), "exact DCT bytes verbatim: {out:?}");
         let count = invocation.len() + 1 + DCT_PAYLOAD.len();
-        assert!(out.contains(&format!("%%BeginData: {count} 0 BinaryBytes\n")), "count covers line+payload: {out}");
+        assert!(out.contains(&format!("%%BeginData: {count} Binary Bytes\n")), "count covers line+payload: {out}");
         assert!(out.contains("\n%%EndData\n"), "DSC data section closed: {out}");
         assert_eq!(notes, "", "no degradations for a clean passthrough");
     }

@@ -5,13 +5,12 @@
 //! Every draw is self-contained: `gsave`, the total CTM baked in via `concat`, the path
 //! coordinates raw, the paint operator, `grestore`. Clip paths arrive from the interpreter
 //! already transformed into that space, so they are emitted raw inside their own `gsave` and
-//! released by the matching `grestore`. Text, images, shadings/patterns and transparency
-//! degrade to fidelity notes here; Tasks 4–7 wire them.
+//! released by the matching `grestore`. Shadings/patterns go through `shading.rs`; text and
+//! images through `fonts.rs`/`images.rs`. Transparency has no Level 3-agnostic operator form,
+//! so it degrades to fidelity notes (Task 7 policy: one note per page, first occurrence
+//! only — normal pages stay note-free).
 
-// The device's first live constructor arrives with Task 7's `export()` assembly; until then
-// only the tests build one, so the emission chain is dead code in the non-test lib target.
-#![allow(dead_code)]
-
+use std::collections::HashSet;
 use std::marker::PhantomData;
 
 use hayro::hayro_interpret::color::Color;
@@ -36,6 +35,8 @@ pub(crate) struct Emitter {
     pub(crate) notes: Vec<FidelityNote>,
     /// The 1-based page the emitter is currently inside, used to tag notes.
     pub(crate) page: Option<usize>,
+    /// Note texts already recorded for this page (the first-occurrence-per-page policy).
+    noted: HashSet<String>,
 }
 
 impl Emitter {
@@ -67,6 +68,15 @@ impl Emitter {
     /// Record a degradation against the current page.
     pub(crate) fn note(&mut self, text: &str) {
         self.notes.push(FidelityNote { page: self.page, text: text.to_string() });
+    }
+
+    /// Record a degradation once per page (first occurrence only). The transparency policy:
+    /// the interpreter re-announces the blend mode/mask before every draw, and one note per
+    /// page per degradation is what a reader wants — not one per painted rectangle.
+    pub(crate) fn note_once(&mut self, text: &str) {
+        if self.noted.insert(text.to_string()) {
+            self.note(text);
+        }
     }
 }
 
@@ -106,20 +116,26 @@ struct TextRun<'a> {
 
 impl<'a> PsDevice<'a> {
     /// A device emitting into a fresh buffer, tagging notes with `page` (1-based, if known).
+    /// The unit-test constructor: `export()` always supplies the page's font resources
+    /// (and the document's running font table) via [`Self::from_table`].
+    #[cfg(test)]
     pub(crate) fn new(page: Option<usize>) -> Self {
-        Self { emit: Emitter { out: Vec::new(), notes: Vec::new(), page }, fonts: FontTable::default(), run: None, _marker: PhantomData }
+        Self {
+            emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new() },
+            fonts: FontTable::default(),
+            run: None,
+            _marker: PhantomData,
+        }
     }
 
     /// A device whose text strategies come from `resources` (the page's own —
     /// the same dicts the interpreter resolves fonts through, so the glyph font
-    /// cache keys index the table).
-    pub(crate) fn with_fonts(page: Option<usize>, resources: &Resources<'_>) -> Self {
-        Self {
-            emit: Emitter { out: Vec::new(), notes: Vec::new(), page },
-            fonts: FontTable::from_resources(resources),
-            run: None,
-            _marker: PhantomData,
-        }
+    /// cache keys index the table) plus the document's running `FontTable`, so
+    /// font decisions and slice names carry across the pages of one export.
+    pub(crate) fn from_table(page: Option<usize>, resources: &Resources<'_>, fonts: FontTable) -> Self {
+        let mut fonts = fonts;
+        fonts.add_resources(resources);
+        Self { emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new() }, fonts, run: None, _marker: PhantomData }
     }
 
     /// Emit any pending text run. Called before every other operator (program
@@ -140,11 +156,10 @@ impl<'a> PsDevice<'a> {
         };
         self.emit.op("gsave");
         concat(&mut self.emit, Affine::new([run.basis[0], run.basis[1], run.basis[2], run.basis[3], 0.0, 0.0]));
-        // The prolog font's natural matrix is 1/1000 (Type 1 programs) or
-        // 1/upem (our Type 42 dicts); scaling by 1000 makes the effective glyph
-        // matrix the identity on 1000-unit glyph space, which is exactly the
-        // space the run basis maps. (`scalefont` takes the font itself, not its
-        // key — verified against the Ghostscript oracle.)
+        // The prolog font's natural matrix is 1/1000 (Type 1 programs), so scaling
+        // by 1000 makes the effective glyph matrix the identity on 1000-unit glyph
+        // space, which is exactly the space the run basis maps. (`scalefont` takes
+        // the font itself, not its key — verified against the Ghostscript oracle.)
         self.emit.op(&format!("/{name} findfont 1000 scalefont setfont"));
         paint_ops(&mut self.emit, &run.paint);
         self.emit.coord(run.origin.x);
@@ -447,15 +462,18 @@ fn ascii_safe(bytes: &[u8]) -> String {
 }
 
 impl<'a> Device<'a> for PsDevice<'a> {
+    /// No PostScript operator form: a soft mask degrades to one note per page.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
         if mask.is_some() {
-            self.emit.note("transparency ignored (soft mask)");
+            self.emit.note_once("transparency ignored (soft mask)");
         }
     }
 
+    /// `Normal` (the default everywhere) is not a degradation; anything else records one
+    /// note per page naming the mode.
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
         if !matches!(blend_mode, BlendMode::Normal) {
-            self.emit.note(&format!("transparency ignored (blend {blend_mode:?})"));
+            self.emit.note_once(&format!("transparency ignored (blend {blend_mode:?})"));
         }
     }
 
@@ -487,9 +505,12 @@ impl<'a> Device<'a> for PsDevice<'a> {
         }
     }
 
+    /// Transparency groups composite; Level 3 PostScript has no portable equivalent, so the
+    /// group's contents draw as if at full opacity, with one note per page when the group
+    /// actually carried opacity, a mask or a non-Normal blend.
     fn push_transparency_group(&mut self, opacity: f32, mask: Option<SoftMask<'a>>, blend_mode: BlendMode) {
         if opacity < 1.0 || mask.is_some() || !matches!(blend_mode, BlendMode::Normal) {
-            self.emit.note("transparency ignored (transparency group)");
+            self.emit.note_once("transparency ignored (transparency group)");
         }
     }
 
@@ -516,7 +537,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
                     for note in self.fonts.drain_notes() {
                         self.emit.note(&note);
                     }
-                    if matches!(strategy, TextStrategy::Type1Passthrough | TextStrategy::Type42) {
+                    if matches!(strategy, TextStrategy::Type1Passthrough) {
                         let key = outline.font_cache_key();
                         let gid = outline.glyph_id().to_u32();
                         // A Type 1 code whose glyph is not in the parsed program
@@ -559,6 +580,8 @@ impl<'a> Device<'a> for PsDevice<'a> {
         self.emit.op("grestore");
     }
 
+    /// The matching pop of [`Self::push_transparency_group`]: nothing to undo, since the
+    /// push emitted nothing (any degradation was noted there, once per page).
     fn pop_transparency_group(&mut self) {}
 
     fn draw_rect(&mut self, rect: &Rect, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
@@ -886,11 +909,13 @@ mod tests {
         );
     }
 
-    /// The transparency stubs emit no operators and only note actual degradations (the default
-    /// blend mode, absent mask and full-opacity group are not degradations).
+    /// The transparency methods emit no operators and only note actual degradations (the
+    /// default blend mode, absent mask and full-opacity group are not degradations) — once
+    /// per page, however often the interpreter re-announces them.
     #[test]
     fn transparency_stubs_note_and_emit_nothing() {
         let mut dev = device();
+        dev.set_blend_mode(BlendMode::Multiply);
         dev.set_blend_mode(BlendMode::Multiply);
         dev.set_blend_mode(BlendMode::Normal);
         dev.set_soft_mask(None);
@@ -901,6 +926,8 @@ mod tests {
 
         let mut dev = device();
         dev.push_transparency_group(0.5, None, BlendMode::Normal);
-        assert!(dev.emit.notes.iter().any(|n| n.text.contains("transparency group")), "group opacity noted: {:?}", dev.emit.notes);
+        dev.push_transparency_group(0.5, None, BlendMode::Normal);
+        let group_notes = dev.emit.notes.iter().filter(|n| n.text.contains("transparency group")).count();
+        assert_eq!(group_notes, 1, "one group note per page, first occurrence only: {:?}", dev.emit.notes);
     }
 }
