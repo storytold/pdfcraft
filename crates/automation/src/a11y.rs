@@ -597,3 +597,23 @@ mod review_html_tests {
         assert!(!html.contains("<script>"));
     }
 }
+
+/// A PostScript export refusal in words an agent can act on: what was wrong, and what is allowed.
+fn ps_failed(e: pdfcraft_engine::export::PsExportError) -> ToolError {
+    use pdfcraft_engine::export::PsExportError;
+    match e {
+        PsExportError::UnreadableDocument(reason) => failed(format!("the document could not be exported: {reason}")),
+        PsExportError::InvalidPages { requested, page_count } => {
+            let bad: Vec<String> = requested.iter().filter(|p| **p >= page_count).map(|p| (p + 1).to_string()).collect();
+            failed(format!(
+                "page{} {} not in the document, which has {page_count} page{}",
+                if bad.len() == 1 { "" } else { "s" },
+                bad.join(", "),
+                if page_count == 1 { "" } else { "s" }
+            ))
+        }
+        PsExportError::EpsNeedsExactlyOnePage { requested } => {
+            failed(format!("an .eps file takes exactly one page, not {requested}: pass pages with one page number, or export .ps for several pages"))
+        }
+    }
+}
