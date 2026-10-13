@@ -6,8 +6,10 @@
 //! dictionaries — a sampled function's data rides in a `/DataSource` string — and a
 //! type 4 calculator as a `/Function { … }` procedure over the same restricted operator
 //! subset PDF defines; all forms verified against the Ghostscript oracle. Tiling
-//! patterns degrade to a flat colour (the recorded Task 6 decision; see
-//! [`tiling_approx`]).
+//! pattern *fills* are `pattern.rs`'s `makepattern` machinery now; the flat gray of
+//! [`tiling_approx`] remains their decline path (an undecodable or transparent cell,
+//! unusable geometry) and the stand-in at positions with no path to paint through —
+//! text runs and stencil masks ([`pattern_approx`]).
 //!
 //! PostScript's reals are 32-bit, so a number beyond `f32::MAX` (or a non-finite one)
 //! has no operand at all: it is a limitcheck on every conforming interpreter (verified
@@ -84,25 +86,13 @@ pub(crate) fn shading_fill(sp: &ShadingPattern, emit: &mut Emitter, rule: FillRu
     }
 }
 
-/// Emit a pattern paint for a *stroke*: `shfill` fills the clip, so a stroked shape
-/// cannot take a shading — the shading degrades to its flat mid-tone colour. Tiling
-/// patterns degrade exactly as everywhere else. Returns `true` when handled, `false`
-/// for flat colours.
-pub(crate) fn shading_stroke_approx(paint: &Paint<'_>, emit: &mut Emitter) -> bool {
-    match paint {
-        Paint::Color(_) => false,
-        Paint::Pattern(p) => match &**p {
-            Pattern::Shading(sp) => {
-                emit.note("shading approximated (stroked path)");
-                flat_colour(sp, emit);
-                true
-            }
-            Pattern::Tiling(_) => {
-                tiling_approx(emit);
-                true
-            }
-        },
-    }
+/// Emit a shading-pattern paint for a *stroke*: `shfill` fills the clip, so a stroked
+/// shape cannot take a shading — the shading degrades to its flat mid-tone colour. (A
+/// tiling stroke needs no approximation: `pattern.rs`'s `setpattern` colours a `stroke`
+/// as well as a `fill`, so `paint_draw` routes tiling patterns there for every mode.)
+pub(crate) fn shading_stroke_approx(sp: &ShadingPattern, emit: &mut Emitter) {
+    emit.note("shading approximated (stroked path)");
+    flat_colour(sp, emit);
 }
 
 /// Emit a flat stand-in for a pattern paint at a position that has no path or clip to
@@ -129,13 +119,12 @@ pub(crate) fn ps_function(f: &Function) -> Result<Vec<u8>, &'static str> {
     Ok(out.into_bytes())
 }
 
-/// The recorded Task 6 tiling decision. `makepattern` needs three things the vendor
-/// type does not hand this emitter: the cell arrives as a raw content stream that
-/// `TilingPattern::interpret` re-parses (it does not pre-resolve through the device),
-/// `is_color` and the fallback paints are `pub(crate)` (so the required `/PaintType`
-/// dict entry is unknowable), and the emission signature carries no `Device` handle to
-/// drive the cell through. Every tiling pattern therefore degrades to a deterministic
-/// mid-gray plus exactly one note.
+/// The flat gray stand-in for a tiling pattern. The fill route lives in
+/// `pattern.rs` now (`makepattern` pattern resources); this remains the
+/// decline path there — an undecodable or transparent cell, unusable geometry,
+/// each disclosed with its own note by the caller — and the stand-in
+/// [`pattern_approx`] paints at positions with no path or clip to pattern
+/// through (text runs, stencil masks), with exactly one note.
 pub(crate) fn tiling_approx(emit: &mut Emitter) {
     emit.note("tiling pattern approximated");
     emit.op("0.5 setgray");
@@ -1228,22 +1217,5 @@ mod tests {
             "degradation noted with the reason: {notes:?}"
         );
         assert!(out.contains("setrgbcolor") || out.contains("setgray"), "flat colour emitted: {out}");
-    }
-
-    /// The Task 6 tiling decision: the cell is a raw content stream that
-    /// `TilingPattern::interpret` re-parses (it does not pre-resolve through the
-    /// device), and `is_color` plus the fallback paints are `pub(crate)`, so
-    /// `/PaintType` and any flat colour are unknowable here — `makepattern` is out of
-    /// reach. Every tiling pattern therefore degrades to exactly one note and a flat
-    /// colour, and the shape still paints.
-    #[test]
-    fn tiling_pattern_either_makepattern_or_note() {
-        let pattern = stream_obj("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >>", b"0 0 5 5 re f");
-        let (out, notes) = driven(&pattern_pdf(&pattern, &[]));
-        assert!(!out.contains("/PatternType 1"), "no makepattern dict: {out}");
-        assert!(!out.contains("makepattern"), "no makepattern: {out}");
-        assert_eq!(notes, vec![FidelityNote { page: None, text: "tiling pattern approximated".into() }], "exactly the recorded note");
-        assert!(out.contains("0.5 setgray"), "flat colour: {out}");
-        assert!(out.contains("\nfill\n"), "the rectangle still paints: {out}");
     }
 }

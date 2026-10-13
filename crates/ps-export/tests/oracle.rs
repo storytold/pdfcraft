@@ -857,33 +857,6 @@ fn separation_pdf() -> Vec<u8> {
     ])
 }
 
-/// A page of `/Separation` spot colours: three colorants over each alternate device
-/// space (CMYK, RGB, Gray), each tint transform an exponential function, plus a
-/// calculator transform whose outputs exceed its `/Range` (1.5 and -0.2 clamp to 1 and
-/// 0) — the Task 3 colorspace-resource emission surface. The first colorant paints at
-/// two tints, so one resource serves two use sites. The CMYK-alternate regions carry
-/// the same cross-pipeline conversion difference as the CMYK fixture (see
-/// [`CMYK_TOLERANCE`]), so the gate uses its bound.
-fn separation_pdf() -> Vec<u8> {
-    assemble(vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
-        stream_obj(
-            "",
-            b"/CS1 cs 1 sc 14.4 259.2 129.6 86.4 re f\n\
-              /CS1 cs 0.35 sc 158.4 259.2 115.2 86.4 re f\n\
-              /CS2 cs 0.75 sc 14.4 129.6 129.6 115.2 re f\n\
-              /CS3 cs 0.5 sc 158.4 129.6 115.2 115.2 re f\n\
-              /CS4 cs 0.5 sc 14.4 14.4 259.2 100.8 re f",
-        ),
-        b"<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Resources << /ColorSpace << /CS1 [/Separation /Spot /DeviceCMYK 5 0 R] /CS2 [/Separation /Plate2 /DeviceRGB 6 0 R] /CS3 [/Separation /Ink3 /DeviceGray 7 0 R] /CS4 [/Separation /CalcSpot /DeviceCMYK 8 0 R] >> >> >>".to_vec(),
-        b"<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0.8 0 0 1] /N 1 >>".to_vec(),
-        b"<< /FunctionType 2 /Domain [0 1] /C0 [1 0.5 0] /C1 [0 0.5 1] /N 1 >>".to_vec(),
-        b"<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_vec(),
-        stream_obj("/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1 0 1]", b"{ pop 1.5 0 -0.2 0 }"),
-    ])
-}
-
 /// A page painting an *oversized* free-form mesh shading: 1500 triangles whose re-encoded
 /// `/DataSource` (67500 bytes) exceeds the 65535-byte PostScript string limit, so the export
 /// degrades the shading to its flat mid-tone — and that fallback must actually paint ink.
