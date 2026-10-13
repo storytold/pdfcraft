@@ -11,21 +11,33 @@
 //! - **TrueType** (`/FontFile2`) leaves as **Type 42**: one `%%BeginResource`
 //!   dictionary per 256-code slice whose `/sfnts` carry the program rewritten by
 //!   `sfnt::synthesize_cmap` — a (3,0) format-4 subtable installed over the
-//!   slice's assigned codes, mupdf's construction. That rewrite answers the Task 7
-//!   Ghostscript gate: gs resolves Type 42 character codes through the font's
-//!   *own* `cmap`, ignoring the `/Encoding` and `/CharStrings` the dictionary
-//!   carries — proven two ways, by hand-editing the exported string from our
-//!   assigned codes to the codes the font's cmap maps (the same glyphs drew), and
-//!   by a real embedded Inter drawing nothing for codes 1..N while the source PDF
-//!   drew every glyph — so our codes only draw once the font's own cmap maps
-//!   them. gs still *requires* a `/CharStrings` for `definefont` to accept the
-//!   dict at all (verified; ps2write emits one too), so the emitter carries the
-//!   same `/gNNNN` names in both, informationally. `/FontMatrix` is
-//!   `1/unitsPerEm`, emitted as `1 upem div` so it is exact for every upem,
-//!   which the device's `1000 scalefont` convention needs
-//!   (`upem × 1/upem × 1000 = 1000`). A program that does not parse, or that the
-//!   rewrite cannot carry, vectorizes with a note naming the family and the
-//!   reason; the arm's gs-raster verification is Task 3's gate.
+//!   slice's assigned codes, mupdf's construction, the original subtables kept.
+//!   The dictionary's shape is the one gs's own `ps2write` emits, verified
+//!   end-to-end (ink, txtwrite extraction and raster parity) against
+//!   **gs 10.08.0 (build 2026-09-08)**, this repo's oracle:
+//!   `/FontMatrix [1 0 0 1 0 0]` — the identity, because this build scales
+//!   Type 42 outlines by `1/unitsPerEm` itself and a `[1/upem]` matrix would
+//!   divide twice (the Layer A-era `[1/upem]` emission rendered microscopic,
+//!   which read as "codes draw nothing"); `/Encoding` and `/CharStrings`
+//!   carry the program's real glyph names (`post` table via skrifa, `/gNNNN`
+//!   fallback), because this build resolves a shown code through
+//!   Encoding → name → CharStrings → gid — the PLRM route — and its txtwrite
+//!   maps those names back to Unicode through the Adobe Glyph List, which is
+//!   what makes the drawn text extractable; and the definition ends
+//!   `currentdict end definefont pop` with exactly the name and the dict as
+//!   `definefont`'s two operands (the earlier `dup begin … currentdict end
+//!   definefont` left three operands, so the dict became the FontDirectory
+//!   key — invisible to `findfont`, Courier substitution: the Task 2 "gs
+//!   finding", an emission bug, not an environmental one). The synthesized
+//!   cmap stays in the sfnts for consumers that resolve Type 42 codes through
+//!   the cmap per the Type 42 convention; under this gs it is inert but
+//!   harmless (the same bytes render and extract with it present). gs still
+//!   *requires* a `/CharStrings` for `definefont` to accept the dict at all
+//!   (verified), so the emitter always carries one. The device's `1000
+//!   scalefont` convention is unchanged: identity matrix × 1000 gives exactly
+//!   1 pt per 1000-unit glyph-space unit, as with Type 1. A program that does
+//!   not parse, or that the rewrite cannot carry, vectorizes with a note
+//!   naming the family and the reason.
 //! - **Everything else** — CFF (`/FontFile3`), CID/Type0, Type 3, non-embedded and
 //!   unreadable font programs — is vectorized through the Task 3 path machinery
 //!   (`outline()` → path ops under the glyph transform), with one fidelity note
@@ -38,10 +50,10 @@
 //! text-matrix advances are pure translations, which compose exactly) batch into
 //! a single `xyshow`: the CTM becomes the run's linear part, the font is scaled
 //! so its effective glyph matrix is the identity on 1000-unit space (`1000
-//! scalefont` over the program's natural matrix — 1/1000 for Type 1,
-//! 1/unitsPerEm for Type 42), and every glyph origin comes from the observed
-//! transforms, so positioning never depends on the PDF's declared widths
-//! agreeing with the font's.
+//! scalefont` over the program's natural matrix — 1/1000 for Type 1; identity
+//! for Type 42, where gs applies 1/unitsPerEm itself), and every glyph origin
+//! comes from the observed transforms, so positioning never depends on the
+//! PDF's declared widths agreeing with the font's.
 
 use std::collections::HashMap;
 
@@ -347,25 +359,52 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
 }
 
 /// One Type 42 pseudo-font over an embedded TrueType program: the sfnt
-/// rewritten by [`sfnt::synthesize_cmap`] so the slice's assigned codes resolve
-/// through a synthesized (3,0) cmap — the bytes gs actually executes; it
-/// ignores `/Encoding` (module docs) — wrapped in a `/FontType 42` dictionary.
-/// `/PaintType 0` and `/CharStrings` (name → gid, `.notdef` → 0) are gs's
-/// requirements: `definefont` rejects a Type 42 dict without a `/CharStrings`
-/// (verified against gs 10.08; ps2write emits one too) even though code
-/// resolution never consults it. `/FontMatrix` is `1/unitsPerEm`, emitted as
-/// `1 upem div` because array literals execute their tokens, which keeps the
-/// value exact for every upem (a decimal rounded to four places would scale a
-/// 2048-upem font by 2.4%), and the device's `1000 scalefont` convention needs
-/// exactly `upem × 1/upem × 1000 = 1000`. `/Encoding` is informational
-/// (`/gNNNN` names, codes not assigned stay `.notdef`); `/FontBBox` comes from
-/// the PDF when it carries one. The sfnts are chunked per the Type 42
-/// convention — at most 65535 bytes per string, every chunk but the last a
-/// multiple of four. A program the decision somehow cannot rewrite defines
-/// nothing rather than shipping a broken dictionary — the strategy arm
-/// dress-rehearsed the same rewrite, so this is not a route input can reach.
+/// rewritten by [`sfnt::synthesize_cmap`] (a (3,0) format-4 subtable over the
+/// slice's assigned codes, the original subtables kept) wrapped in a
+/// `/FontType 42` dictionary in the shape gs's own `ps2write` emits — the
+/// shape verified end-to-end against gs 10.08.0 (build 2026-09-08), this
+/// repo's oracle:
+///
+/// - `/FontMatrix [1 0 0 1 0 0]` — the identity, *not* `1/unitsPerEm`: this
+///   gs build scales Type 42 glyph outlines by `1/upem` itself before the
+///   font matrix applies, so a `[1/upem]` matrix divides twice and renders
+///   the text microscopic (measured: a 36 pt em at 0.018 pt). The device's
+///   `1000 scalefont` convention then lands exactly 1 pt per 1000-unit
+///   glyph-space unit, unchanged from the Type 1 arm.
+/// - `/Encoding` and `/CharStrings` carry the program's *real* glyph names
+///   (its `post` table, CFF charset as skrifa resolves them): this build
+///   resolves a `show`n code through `/Encoding` → name → `/CharStrings` →
+///   gid — the PLRM route, *not* the sfnt cmap (proven: a font whose cmap
+///   maps no assigned code still draws through the names) — and gs's
+///   txtwrite maps those names back to Unicode through the Adobe Glyph
+///   List, which is what makes the drawn text extractable. A glyph with no
+///   real name falls back to `/gNNNN` (renders identically; extraction for
+///   that glyph degrades honestly). The synthesized cmap stays in the sfnts
+///   for consumers that follow the Type 42 convention of resolving codes
+///   through the cmap; it is harmless under this gs (the same bytes render
+///   and extract with it present).
+/// - `/PaintType 0` and `/CharStrings` (`.notdef` → 0, one name per assigned
+///   gid) are gs's `definefont` requirements for a Type 42 dict (verified;
+///   ps2write emits both).
+/// - The definition is `/Name N dict begin … currentdict end definefont
+///   pop` — the name and the dict are exactly `definefont`'s two operands.
+///   (The previous `dup begin … currentdict end definefont` shape left
+///   three operands on the stack, so the *dict* became the FontDirectory
+///   key — filed as `--nostringval--`, invisible to `findfont`, Courier
+///   substitution: the whole Task 2 "gs finding".)
+///
+/// `/FontBBox` comes from the PDF when it carries one. The sfnts are chunked
+/// per the Type 42 convention — at most 65535 bytes per string, every chunk
+/// but the last a multiple of four. A program the decision somehow cannot
+/// rewrite defines nothing rather than shipping a broken dictionary — the
+/// strategy arm dress-rehearsed the same rewrite, so this is not a route
+/// input can reach.
 fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Option<[f64; 4]>) {
-    let Some(upem) = units_per_em(program) else { return };
+    // gs divides Type 42 outlines by `head.unitsPerEm` itself, so a zero
+    // upem breaks the consumer even though the emitted matrix is identity.
+    if units_per_em(program).is_none() {
+        return;
+    }
     let mappings: Vec<(u16, u16)> = slice
         .codes
         .iter()
@@ -374,27 +413,41 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
         .filter_map(|(gid, code)| Some((u16::from(*code), u16::try_from(*gid).ok()?)))
         .collect();
     let Some(sfnts) = sfnt::synthesize_cmap(program, &mappings) else { return };
+    // The load-bearing names: real when the program carries them, `/gNNNN`
+    // otherwise, unique within the slice, never `.notdef` or an unusable
+    // PostScript literal.
+    let font = match skrifa::FontRef::from_index(program, 0) {
+        Ok(font) => font,
+        Err(_) => return,
+    };
+    let names = skrifa::GlyphNames::new(&font);
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let name_of = |gid: u32, used: &mut std::collections::HashSet<String>| match names.get(skrifa::GlyphId::new(gid)) {
+        Some(name) if !name.is_synthesized() && usable_ps_name(name.as_str()) => {
+            let name = name.as_str().to_string();
+            if name == ".notdef" || !used.insert(name.clone()) { glyph_fallback_name(gid) } else { name }
+        }
+        _ => glyph_fallback_name(gid),
+    };
+    let assigned: Vec<(u32, u8, String)> = slice.codes.iter().map(|(gid, code)| (*gid, *code, name_of(*gid, &mut used))).collect();
     out.extend_from_slice(format!("%%BeginResource: font {}\n", slice.name).as_bytes());
-    // The definition shape (`/Name <n> dict dup begin … currentdict end
-    // definefont pop`) mirrors the emission this crate verified against gs in
-    // Tasks 5–7, so it is not perturbed casually.
-    out.extend_from_slice(format!("/{} 10 dict dup begin\n", slice.name).as_bytes());
+    out.extend_from_slice(format!("/{} 11 dict begin\n", slice.name).as_bytes());
     out.extend_from_slice(format!("/FontName /{} def\n", slice.name).as_bytes());
     out.extend_from_slice(b"/FontType 42 def\n");
     out.extend_from_slice(b"/PaintType 0 def\n");
-    out.extend_from_slice(format!("/FontMatrix [1 {upem} div 0 0 1 {upem} div 0 0] def\n").as_bytes());
+    out.extend_from_slice(b"/FontMatrix [1 0 0 1 0 0] def\n");
     if let Some(bbox) = bbox {
         out.extend_from_slice(format!("/FontBBox {} def\n", bbox_text(bbox)).as_bytes());
     }
     out.extend_from_slice(b"/Encoding [");
-    encoding_names(out, &slice.codes.iter().map(|(gid, code)| (*code, format!("g{gid:04}"))).collect::<Vec<_>>());
+    encoding_names(out, &assigned.iter().map(|(_, code, name)| (*code, name.clone())).collect::<Vec<_>>());
     out.extend_from_slice(b"] def\n");
     // The gs-required name → gid table, over the same names the Encoding carries.
-    let mut gids = slice.codes.keys().copied().collect::<Vec<_>>();
-    gids.sort_unstable();
+    let mut named = assigned.clone();
+    named.sort_unstable_by_key(|(gid, _, _)| *gid);
     out.extend_from_slice(b"/CharStrings 256 dict dup begin\n/.notdef 0 def\n");
-    for gid in gids {
-        out.extend_from_slice(format!("/g{gid:04} {gid} def\n", gid = gid).as_bytes());
+    for (gid, _, name) in &named {
+        out.extend_from_slice(format!("/{name} {gid} def\n").as_bytes());
     }
     out.extend_from_slice(b"end def\n");
     out.extend_from_slice(b"/sfnts [\n");
@@ -406,8 +459,28 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
     out.extend_from_slice(b"] def\ncurrentdict end definefont pop\n%%EndResource\n");
 }
 
+/// The fallback glyph name for `gid` when the program carries no real one:
+/// the `/gNNNN` convention (unique per gid by construction, a valid literal
+/// name, and meaningless to the Adobe Glyph List — so extraction degrades
+/// for that glyph while rendering is unaffected).
+fn glyph_fallback_name(gid: u32) -> String {
+    format!("g{gid:04}")
+}
+
+/// Whether `name` can ride into the emission as a PostScript literal name:
+/// non-empty, short, and free of the delimiters and whitespace the tokenizer
+/// would break on (real-world `post` names are, but a hostile font's are not
+/// bound by that).
+fn usable_ps_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 127
+        && name.bytes().all(|b| matches!(b, b'!'..=b'~') && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'))
+}
+
 /// `head.unitsPerEm` of an sfnt, when the program parses and the value is
-/// usable: a zero upem has no inverse, and `/FontMatrix [1/upem …]` needs one.
+/// usable: gs divides Type 42 glyph outlines by the upem itself, so a zero
+/// upem breaks the consumer's scaling even though the emitted `/FontMatrix`
+/// is the identity.
 fn units_per_em(program: &[u8]) -> Option<u16> {
     let font = skrifa::FontRef::from_index(program, 0).ok()?;
     let upem = font.head().ok()?.units_per_em();
@@ -1048,9 +1121,10 @@ mod tests {
     /// An embedded TrueType font leaves as Type 42 text: no degradation note;
     /// the preamble defines a `/FontType 42` dictionary per slice whose
     /// `/sfnts` carry the program rewritten by cmap synthesis — the (3,0)
-    /// format-4 subtable maps codes 1,2 → gids 1,2 — with the `1/unitsPerEm`
-    /// `/FontMatrix` and the PDF's `/FontBBox`; and the page draws through the
-    /// same run machinery as Type 1 (`1000 scalefont` over `1/upem`).
+    /// format-4 subtable maps codes 1,2 → gids 1,2 — with the identity
+    /// `/FontMatrix` (gs 10.08 applies 1/upem itself) and the PDF's
+    /// `/FontBBox`; and the page draws through the same run machinery as
+    /// Type 1 (`1000 scalefont`, 1 pt per 1000-unit glyph space).
     #[test]
     fn embedded_truetype_emits_type42_with_synthesized_cmap() {
         let ttf = ttf_program();
@@ -1060,8 +1134,8 @@ mod tests {
         assert!(preamble.contains("%%BeginResource: font PdfCraftF0\n"), "our font resource: {preamble}");
         assert!(preamble.contains("/FontType 42 def\n"), "a Type 42 dictionary: {preamble}");
         assert!(
-            preamble.contains("/FontMatrix [1 1000 div 0 0 1 1000 div 0 0] def\n"),
-            "1/unitsPerEm matrix (exact by division, not a rounded decimal): {preamble}"
+            preamble.contains("/FontMatrix [1 0 0 1 0 0] def\n"),
+            "identity matrix — gs 10.08 divides Type 42 outlines by upem itself, so 1/upem would divide twice: {preamble}"
         );
         assert!(preamble.contains("/FontBBox [0 -200 700 800] def\n"), "PDF's FontBBox applied: {preamble}");
         assert!(preamble.contains("/g0001 /g0002"), "informational Encoding names the assigned gids: {preamble}");

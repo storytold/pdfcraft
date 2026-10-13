@@ -8,10 +8,24 @@
 //! `cmap` leads with a (3,0) format-4 subtable built from maximal runs of
 //! consecutive code→gid pairs plus the mandatory final `0xFFFF` segment, and
 //! keeps every original subtable except a superseded (3,0) one alongside it,
-//! so a consumer's gid→Unicode reverse mapping survives. Task 3's Ghostscript
-//! gate arbitrates this choice: if ink or extraction fails there, the
-//! documented fallbacks to try, in order, are a (1,0) format-6 and a (3,10)
-//! format-12 subtable — and the working combination gets recorded here.
+//! so a consumer's gid→Unicode reverse mapping survives.
+//!
+//! **Task 3's Ghostscript gate verdict (gs 10.08.0, build 2026-09-08):** the
+//! (3,0) format-4 synthesis *stands* — no fallback subtable was needed — but
+//! for a different reason than Layer A believed. This gs build resolves a
+//! shown Type 42 code through the dictionary's `/Encoding` name →
+//! `/CharStrings` gid (the PLRM route), not through the sfnt cmap: a font
+//! whose cmap maps none of the assigned codes still draws every glyph through
+//! its names. The synthesized subtable therefore does not carry rendering on
+//! this build; it stays in the sfnts because the Type 42 convention (resolving
+//! codes through the font's own cmap, as other consumers and older gs builds
+//! do) is served by it, and it is proven harmless under this gs — the same
+//! bytes render and extract with it present. The kept original subtables do
+//! real work for extraction consumers that reverse-map gid → Unicode. The
+//! documented fallbacks ((1,0) format-6, (3,10) format-12) were not exercised:
+//! the first working combination tried was (3,0) format-4 + originals, and
+//! the fixes the gate actually demanded were in the dictionary around the
+//! sfnts, not the cmap inside them (see `fonts.rs` module docs).
 //!
 //! Parsing goes through skrifa — the same version hayro-interpret uses, so
 //! glyph ids agree by construction — while all writing is hand-rolled and
