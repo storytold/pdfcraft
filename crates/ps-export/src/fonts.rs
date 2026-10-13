@@ -5,10 +5,14 @@
 //! Glyphs reach the device one at a time; text leaves as text whenever the PDF
 //! embeds a font program PostScript can execute natively:
 //!
-//! - **Type 1** (`/FontFile`): the font program's bytes land in the prolog verbatim
-//!   (they are a complete, self-defining PostScript font), then a copy is defined
-//!   under our own name with the PDF's `/FontBBox` and a re-built `/Encoding` that
-//!   maps our sequential character codes to the program's glyph names.
+//! - **Type 1** (`/FontFile`): the font program's bytes land in the prolog — since
+//!   Layer B subsetted to the used charstrings (`type1_subset`, which re-emits a
+//!   fully-used program byte-identically) and deduplicated by FontFile bytes: the
+//!   first dict or slice to carry a program embeds it, every later one `findfont`s
+//!   it — then a copy is defined under our own name with the PDF's `/FontBBox` and
+//!   a re-built `/Encoding` that maps our sequential character codes to the
+//!   program's glyph names (which the subset keeps, by construction: the kept set
+//!   is exactly the union of what the slices show, plus `.notdef`).
 //! - **TrueType** (`/FontFile2` under a simple font) leaves as **Type 42**: one
 //!   `%%BeginResource` dictionary per 256-code slice whose `/sfnts` carry the
 //!   program rewritten by `sfnt::synthesize_cmap` — a (3,0) format-4 subtable
@@ -76,6 +80,7 @@
 //! never depends on the PDF's declared widths agreeing with the font's.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use hayro::hayro_interpret::CacheKey;
 use hayro::hayro_interpret::font::Glyph;
@@ -88,6 +93,7 @@ use skrifa::raw::ps::cff::CffFontRef;
 use crate::cid;
 use crate::psnum;
 use crate::sfnt;
+use crate::type1_subset::subset_type1;
 
 /// How glyphs of one font are emitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +243,13 @@ pub(crate) struct FontTable {
     pending_notes: Vec<String>,
     /// Global counter handing out PostScript font names, one per slice.
     slice_counter: usize,
+    /// SHA-256 of an emitted Type 1 FontFile stream → the PostScript name its
+    /// program filed itself under. The first dict carrying a program records
+    /// it here; a later dict whose FontFile bytes are identical `findfont`s
+    /// that name instead of embedding the bytes again (byte-identical
+    /// programs carry the same `/FontName` by construction, and the emitted
+    /// subset covers every sharing dict's glyphs — see [`FontTable::preamble`]).
+    programs: HashMap<[u8; 32], String>,
 }
 
 impl FontTable {
@@ -533,17 +546,72 @@ impl FontTable {
 
     /// The font definitions for the prolog (`%%BeginResource` per PostScript
     /// font, in first-use order). Vectorized fonts define nothing.
-    pub(crate) fn preamble(&self) -> Vec<u8> {
+    ///
+    /// Type 1 programs are subsetted to the union of the glyph names the
+    /// export shows ([`type1_subset::subset_type1`]) — a union, because font
+    /// dicts whose FontFile bytes are byte-identical share **one** program
+    /// blob: the first occurrence embeds the subset, later ones (other dicts,
+    /// or later slices of the same font) only `findfont` it under the name it
+    /// defined itself. A program that cannot be subset embeds verbatim (Layer
+    /// A behaviour, only larger, no note); `programs` is the dedup ledger,
+    /// keyed by SHA-256 of the FontFile bytes.
+    pub(crate) fn preamble(&mut self) -> Vec<u8> {
+        // Pass 1 — the union of used glyph names per program bytes. Every
+        // dict sharing a program shares the one emitted subset, so it must
+        // cover them all: two dicts with identical bytes may well show
+        // disjoint glyph sets.
+        let mut used: HashMap<[u8; 32], std::collections::BTreeSet<String>> = HashMap::new();
+        for i in 0..self.order.len() {
+            let Some(key) = self.order.get(i).copied() else { continue };
+            let Some(entry) = self.fonts.get(&key) else { continue };
+            if let (Some(Decision::Type1 { names, .. }), EmbeddedKind::Type1(program)) = (entry.decision.as_ref(), &entry.kind) {
+                let shown = used.entry(program_hash(program)).or_default();
+                for slice in &entry.slices {
+                    for gid in slice.codes.keys() {
+                        if let Some(name) = names.get(gid) {
+                            shown.insert(name.clone());
+                        }
+                    }
+                }
+            }
+        }
         let mut out = Vec::new();
-        for key in &self.order {
-            let Some(entry) = self.fonts.get(key) else {
-                continue;
-            };
+        for i in 0..self.order.len() {
+            let Some(key) = self.order.get(i).copied() else { continue };
+            let Some(entry) = self.fonts.get(&key) else { continue };
             match entry.decision.as_ref() {
                 Some(Decision::Type1 { name, names }) => {
                     let EmbeddedKind::Type1(program) = &entry.kind else { continue };
+                    // Nothing shown means nothing to define — and no claim on
+                    // the program, which a later dict sharing these bytes may
+                    // still need embedded (mirrors the composite arm's empty-
+                    // codes guard).
+                    if entry.slices.is_empty() {
+                        continue;
+                    }
+                    let hash = program_hash(program);
+                    // The first slice of the first dict carrying these bytes
+                    // embeds the subset; every later slice — this dict's own
+                    // or another dict's — `findfont`s it (`take()` hands the
+                    // bytes to exactly one resource).
+                    let mut program = match self.programs.entry(hash) {
+                        Entry::Occupied(_) => None, // already in the prolog; the copies findfont it
+                        Entry::Vacant(vacant) => {
+                            vacant.insert(name.clone());
+                            // The subset covers the union of every sharing
+                            // dict's names; a declined subset embeds the
+                            // program verbatim (correct output, only larger).
+                            let wanted: Vec<&str> = used.get(&hash).map(|set| set.iter().map(String::as_str).collect()).unwrap_or_default();
+                            Some(subset_type1(program, &wanted).unwrap_or_else(|| program.to_vec()))
+                        }
+                    };
+                    // The findfont target: the name the emitted program
+                    // filed itself under (byte-identical bytes carry the
+                    // same /FontName, so this is `name` itself — the map
+                    // makes the sharing explicit).
+                    let target = self.programs.get(&hash).cloned().unwrap_or_else(|| name.clone());
                     for slice in &entry.slices {
-                        type1_resource(&mut out, slice, name, names, program, entry.bbox);
+                        type1_resource(&mut out, slice, &target, names, program.take().as_deref(), entry.bbox);
                     }
                 }
                 Some(Decision::Type42) => {
@@ -614,10 +682,16 @@ fn composite_preamble(out: &mut Vec<u8>, entry: &FontEntry, mappings: &[(u16, u3
     cid::type0_parent(out, &names.font, &names.cmap, &names.descendant);
 }
 
-/// One re-encoded copy of the verbatim Type 1 program.
-fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &HashMap<u32, String>, program: &[u8], bbox: Option<[f64; 4]>) {
+/// One re-encoded copy of a Type 1 program. `program` is `Some(bytes)` for
+/// the resource that embeds them — the first dict or slice carrying those
+/// FontFile bytes, subsetted to the export's used glyph names — and `None`
+/// for every later one, which `findfont`s the program under its own name
+/// instead of embedding it again (`original` is that name either way).
+fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &HashMap<u32, String>, program: Option<&[u8]>, bbox: Option<[f64; 4]>) {
     out.extend_from_slice(format!("%%BeginResource: font {}\n", slice.name).as_bytes());
-    emit_program_bytes(out, program);
+    if let Some(program) = program {
+        emit_program_bytes(out, program);
+    }
     out.extend_from_slice(format!("/{n} /{original} findfont dup length dict copy\n", n = slice.name).as_bytes());
     // A built font carries an FID entry; definefont rejects a copy that keeps it.
     out.extend_from_slice(b"dup /FID known { dup /FID undef } if\n");
@@ -985,6 +1059,15 @@ fn bbox_of(dict: &Dict<'_>) -> Option<[f64; 4]> {
         *slot = n.as_f64();
     }
     bbox.iter().all(|v| v.is_finite()).then_some(bbox)
+}
+
+/// The SHA-256 of a Type 1 FontFile stream — the prolog's dedup key for
+/// already-embedded programs (a real digest, not a hand-rolled one: a
+/// collision here would emit a page that references a font whose glyphs were
+/// subsetted away). The same helper `xfa` uses to find pictures again.
+fn program_hash(program: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(program).into()
 }
 
 /// Parse a Type 1 font program into its own name and its glyph-name table — the
@@ -1792,6 +1875,9 @@ mod tests {
 
     /// An embedded Type 1 font's program bytes land in the prolog verbatim, with
     /// the PDF's `/FontBBox` and a re-encoded copy under our own font name.
+    /// (Layer B subsets the program, but this fixture draws every glyph, and a
+    /// fully-used program re-emits byte-identically — so the verbatim assert
+    /// stays true, now by construction.)
     #[test]
     fn type1_fontfile_bytes_land_in_prolog() {
         let program = t1_program();
@@ -1810,6 +1896,147 @@ mod tests {
         assert!(out.contains("/PdfCraftF0 findfont 1000 scalefont setfont\n"), "font selected: {out}");
         assert!(out.contains("(\\001\\002) [600 0 0 0] xyshow\n"), "batched show: {out}");
         assert_eq!(out.matches("gsave").count(), out.matches("grestore").count(), "balanced wrap: {out}");
+    }
+
+    /// Two font dicts whose FontFile streams are byte-identical (different
+    /// `/BaseFont`s) share one program blob: the first dict to reach the
+    /// prolog embeds the subsetted program, the second `findfont`s it — the
+    /// program's cleartext header appears exactly once while both re-encoded
+    /// copies exist and the page draws with both. The dicts draw *disjoint*
+    /// glyphs (F1 'A', F2 'B'), pinning the subtle half: the one emitted
+    /// subset covers the union of every sharing dict's names, so the second
+    /// dict's copy finds its glyph in a program it did not embed. (Layer B
+    /// Task 8's dedup; the table runs across the whole document, so pages
+    /// hit the same map — the next test drives the per-slice half.)
+    #[test]
+    fn identical_programs_across_dicts_dedup() {
+        let program = t1_program();
+        let font2 = "<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftTwin /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 8 0 R >>";
+        let desc2 = "<< /Type /FontDescriptor /FontName /PdfCraftTwin /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile 9 0 R >>";
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [10 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            T1_FONT.as_bytes().to_vec(),
+            stream_obj("", b"BT /F1 24 Tf 20 100 Td (A) Tj ET\nBT /F2 24 Tf 20 200 Td (B) Tj ET"),
+            T1_DESC.as_bytes().to_vec(),
+            stream_obj("", &program),
+            font2.as_bytes().to_vec(),
+            desc2.as_bytes().to_vec(),
+            stream_obj("", &program),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R /F2 7 0 R >> >> >>".to_vec(),
+        ];
+        let pdf = assemble(objs);
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "the shared program degrades nothing");
+        assert_eq!(preamble.matches("%!PS-AdobeFont-1.0: PdfCraftTest").count(), 1, "one program blob: {preamble}");
+        assert!(
+            preamble.contains("%%BeginResource: font PdfCraftF0\n") && preamble.contains("%%BeginResource: font PdfCraftF1\n"),
+            "both re-encoded copies exist: {preamble}"
+        );
+        assert!(
+            preamble.contains("/PdfCraftF0 /PdfCraftTest findfont dup length dict copy\n")
+                && preamble.contains("/PdfCraftF1 /PdfCraftTest findfont dup length dict copy\n"),
+            "both copies findfont the one program: {preamble}"
+        );
+        assert!(out.contains("/PdfCraftF0 findfont") && out.contains("/PdfCraftF1 findfont"), "the page draws with both: {out}");
+        assert_eq!(out.matches(" show\n").count(), 2, "one run per font (a single glyph emits plain `show`): {out}");
+        // The one subset covers both dicts' glyphs: decrypt the emitted eexec
+        // (the seed advances by the ciphertext byte, so this is not
+        // `t1_encrypt` run backwards) and find both charstrings.
+        let eexec = preamble.find("currentfile eexec\n").expect("the eexec marker") + "currentfile eexec\n".len();
+        let line_end = eexec + preamble[eexec..].find('\n').expect("the hex line ends");
+        let cipher: Vec<u8> = preamble.as_bytes()[eexec..line_end]
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(&String::from_utf8_lossy(pair), 16).expect("a hex pair"))
+            .collect();
+        let mut seed: u32 = 55665;
+        let plain: Vec<u8> = cipher
+            .iter()
+            .map(|&c| {
+                let plain = c ^ ((seed >> 8) as u8);
+                seed = (u32::from(c).wrapping_add(seed).wrapping_mul(52845).wrapping_add(22719)) & 0xFFFF;
+                plain
+            })
+            .collect();
+        let plain = String::from_utf8_lossy(&plain);
+        assert!(contains_bytes(&plain, b"/A "), "F1's glyph survives: {plain:?}");
+        assert!(contains_bytes(&plain, b"/B "), "F2's glyph survives in the program it did not embed: {plain:?}");
+    }
+
+    /// A font whose text spills into a second slice embeds its program once:
+    /// the second slice's resource `findfont`s the first's program (Layer B
+    /// Task 8; Layer A re-embedded the whole program per slice). Driven at
+    /// the `FontTable` level, like the Type 42 slice test — a fixture font
+    /// with >255 real glyphs is impractical to synthesize, and the codes
+    /// assign regardless of the program's glyph count.
+    #[test]
+    fn type1_second_slice_findfonts_the_first() {
+        let program = t1_program();
+        let (name, names) = parse_type1(&program).expect("the fixture parses");
+        let mut table = FontTable::default();
+        let key = 42u128;
+        table.order.push(key);
+        table.fonts.insert(
+            key,
+            FontEntry {
+                kind: EmbeddedKind::Type1(program),
+                subtype: Some("Type1".into()),
+                descendant_subtype: None,
+                base_font: Some("PdfCraftTest".into()),
+                bbox: Some([0.0, -200.0, 700.0, 800.0]),
+                csi: None,
+                w: None,
+                decision: Some(Decision::Type1 { name, names }),
+                slices: Vec::new(),
+                cid_codes: HashMap::new(),
+                composite: None,
+            },
+        );
+        for gid in 0..300u32 {
+            table.char_code(key, gid);
+        }
+        let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
+        assert_eq!(preamble.matches("%!PS-AdobeFont-1.0: PdfCraftTest").count(), 1, "one program blob across the slices: {preamble}");
+        assert_eq!(preamble.matches("%%BeginResource: font").count(), 2, "one resource per slice: {preamble}");
+        assert!(
+            preamble.contains("/PdfCraftF1 /PdfCraftTest findfont dup length dict copy\n"),
+            "the second slice findfonts the first's program: {preamble}"
+        );
+    }
+
+    /// A program whose eexec section is corrupt *after* the cleartext header
+    /// — the tail is cut, so the charstrings still parse (the strategy keeps
+    /// the passthrough arm; no note) but the subsetter declines
+    /// (`subset_type1` → `None`): emission falls back to the Layer A verbatim
+    /// path, bytes and all. A deeper cut that defeats even `parse_type1`
+    /// still vectorizes — the unreadable-program arm, re-proven here.
+    #[test]
+    fn unparseable_program_falls_back_verbatim() {
+        let whole = t1_program();
+        let marker = whole.windows(b"currentfile eexec\n".len()).position(|w| w == b"currentfile eexec\n").expect("the eexec marker");
+        let hex_start = marker + "currentfile eexec\n".len();
+        let hex_end = hex_start + whole[hex_start..].iter().position(|&b| b == b'\n').expect("the hex line ends");
+        let mut corrupt = whole[..hex_end - 30].to_vec();
+        corrupt.extend_from_slice(&whole[hex_end..]);
+        // Unit half: the tail cut declines, and skrifa still parses — that
+        // combination is exactly what keeps the emission on the passthrough
+        // arm instead of vectorizing.
+        assert!(crate::type1_subset::subset_type1(&corrupt, &["A"]).is_none(), "the corrupt tail declines the subset");
+        assert!(parse_type1(&corrupt).is_some_and(|(name, names)| name == "PdfCraftTest" && !names.is_empty()), "skrifa still parses it");
+        let pdf = font_pdf(T1_FONT, T1_DESC, "", &corrupt, b"BT /F1 24 Tf 20 100 Td (AB) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "the verbatim fallback is not a degradation");
+        assert!(contains_bytes(&preamble, &corrupt), "the corrupt program rides verbatim (Layer A behaviour): {preamble}");
+        assert!(preamble.contains("/PdfCraftF0 /PdfCraftTest findfont dup length dict copy\n"), "the copy still findfonts it: {preamble}");
+        assert!(out.contains("xyshow"), "the text still draws through the font: {out}");
+        // The deeper cut: even parse_type1 fails, so the glyphs vectorize
+        // (the existing unreadable-program arm, unchanged).
+        let deep = &whole[..600];
+        let pdf = font_pdf(T1_FONT, T1_DESC, "", deep, b"BT /F1 24 Tf 20 100 Td (AB) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert!(notes.iter().any(|n| n.contains("unreadable")), "noted: {notes:?}");
+        assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text-as-text: {out}");
+        assert!(!preamble.contains("%%BeginResource"), "no font resource: {preamble}");
     }
 
     /// An embedded TrueType font leaves as Type 42 text: no degradation note;
