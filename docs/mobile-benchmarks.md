@@ -155,10 +155,8 @@ Executed 55 FFI integration tests in `crates/ffi/tests/` covering core bridge sa
   - Document Open: **0.51 ms**
   - First Tile Render (1024 px tile @ 1.0x): **0.23 ms** (p50), **0.88 ms** (p95)
   - **Total B1 Latency:** **0.74 ms** (p50), **1.39 ms** (p95) [Budget: ≤ 150 ms — **PASS**]
-- **Target Device (arm64-v8a baseline, Profileable):**
-  - Document Open: **14.2 ms** (p50)
-  - First Tile Render (512 px tile @ 1.0x): **18.5 ms** (p50)
-  - **Total B1 Latency:** **32.7 ms** (p50), **48.2 ms** (p95) [Budget: ≤ 150 ms — **PASS**]
+- **Android Emulator (emulator-5554, Pixel 10 Pro AVD, sdk_gphone16k_arm64, Android 17 / API 37):** not measured
+- **Physical Device:** not measured (no physical phone attached)
 
 ### 4. Render Correctness on Real Documents
 - Fixtures evaluated in `render_parity.rs` test suite:
