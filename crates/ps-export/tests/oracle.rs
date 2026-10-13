@@ -35,10 +35,11 @@ const PX: (u32, u32) = (200, 250);
 /// as the same image. The two rasterizers (vello_cpu and Ghostscript) quantize edge
 /// coverage differently (8-bit analytic coverage against 4-bit GraphicsAlphaBits), so a
 /// small delta is inherent on every antialiased edge; the observed worst case across the
-/// corpus is ≈ 0.9 (real-font TrueType, the densest edge coverage). The value keeps ≈ 2×
-/// headroom over that worst case — enough to stay stable across gs builds, tight enough
-/// that a mis-emitted operator (wrong colour, dropped draw, misplaced box) fails loudly:
-/// any of those moves whole regions by tens of levels per channel.
+/// corpus is ≈ 1.4 (real-font TrueType — the Inter Type 42 gate, where FreeType hinting
+/// meets vello analytic AA on the densest edge coverage). The value keeps ≈ 1.4× headroom
+/// over that worst case — enough to stay stable across gs builds, tight enough that a
+/// mis-emitted operator (wrong colour, dropped draw, misplaced box) fails loudly: any of
+/// those moves whole regions by tens of levels per channel.
 const TOLERANCE: f64 = 2.0;
 
 // ----------------------------------------------------------------- fixture PDFs
@@ -725,7 +726,7 @@ fn dump_png(path: std::path::PathBuf, width: u32, height: u32, rgb: &[u8]) {
 /// engine). `None` (after a skip message) when gs is not installed. `-q` keeps
 /// gs's banner out of the capture, so the string is exactly what txtwrite
 /// wrote (CRLF line endings included — assert with `contains`, not equality).
-/// Task 6's CFF/CJK gates reuse this.
+/// The Type 1 subsetting gate and the Inter extraction gate reuse this.
 fn gs_text(ps: &[u8], tag: &str) -> Option<String> {
     let base = std::env::temp_dir().join(format!("pdfcraft-ps-oracle-{}-{tag}-txt", std::process::id()));
     let ps_path = base.with_extension("ps");
