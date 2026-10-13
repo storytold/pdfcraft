@@ -709,4 +709,44 @@ mod tests {
         scene.pop_frame();
         assert!(scene.flatten().is_none(), "the budget is spent");
     }
+
+    /// The log survives a flatten and replays with content the next time: the second
+    /// flatten — with nothing new recorded — still composites the first's draws, so
+    /// recorded closures run twice with identical pixels (the reason `record` takes
+    /// `FnMut`; clearing the log after a successful flatten would fail here). The
+    /// draw sits inside a balanced recorded clip pair, so a recorded pop replays too,
+    /// not only the still-open wrappers `flatten` unwinds.
+    #[test]
+    fn log_replays_with_content_after_a_flatten() {
+        let page = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let matrix = page_matrix(page);
+        let rect = Rect::new(4.0, 4.0, 12.0, 12.0);
+        let blue = Paint::Color(Color::from_rgba(AlphaColor::new([0.0, 0.0, 1.0, 1.0])));
+
+        let mut scene = ShadowScene::new(page);
+        scene.push_frame();
+        // A balanced clip pair around the draw — the shape of a form XObject's
+        // /BBox clip wrapping its content.
+        scene.record_push_clip(&ClipPath { path: page.to_path(0.1), fill: FillRule::NonZero });
+        scene.record(move |r| r.draw_rect(&rect, matrix, &blue, &PathDrawMode::Fill(FillRule::NonZero)));
+        scene.extend(rect);
+        scene.record_pop_clip();
+        scene.pop_frame().expect("a frame was pushed");
+        let first = scene.flatten().expect("a 20×20 pt page is far under every cap");
+        assert!(first.width > 0 && first.height > 0, "the region is the draw's box");
+        // The region is exactly the rect, so its centre pixel is blue over white.
+        let mid = &first.rgb[((first.height / 2 * first.width + first.width / 2) * 3) as usize..];
+        assert_eq!([mid[0], mid[1], mid[2]], [0, 0, 255], "the draw's ink is in the first raster");
+
+        // Nothing new recorded: the second flatten can only come from the surviving
+        // log, replayed over the same region.
+        scene.push_frame();
+        scene.extend(rect);
+        scene.pop_frame().expect("a frame was pushed");
+        let second = scene.flatten().expect("the budget is not spent");
+        assert_eq!((second.width, second.height), (first.width, first.height), "the same region, the same pixel grid");
+        let mid = &second.rgb[((second.height / 2 * second.width + second.width / 2) * 3) as usize..];
+        assert_eq!([mid[0], mid[1], mid[2]], [0, 0, 255], "the same draw replays into the second raster");
+        assert_eq!(second.rgb, first.rgb, "the replay is byte-identical: closures run twice with the same result");
+    }
 }
