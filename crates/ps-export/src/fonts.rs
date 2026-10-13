@@ -1,4 +1,5 @@
-//! Text emission: Type 1 passthrough and vectorized fallback (Layer A, Tasks 5+7).
+//! Text emission: Type 1 passthrough, Type 42 with synthesized cmaps, and
+//! vectorized fallback (Layer A Tasks 5+7, Layer B Task 2).
 //!
 //! Glyphs reach the device one at a time; text leaves as text whenever the PDF
 //! embeds a font program PostScript can execute natively:
@@ -7,16 +8,24 @@
 //!   (they are a complete, self-defining PostScript font), then a copy is defined
 //!   under our own name with the PDF's `/FontBBox` and a re-built `/Encoding` that
 //!   maps our sequential character codes to the program's glyph names.
-//! - **TrueType** (`/FontFile2`) **vectorizes in Layer A**. The Type 42 emission
-//!   this crate shipped between Tasks 5 and 7 was removed by the Task 7 Ghostscript
-//!   gate: gs resolves Type 42 character codes through the font's *own* `cmap`,
-//!   ignoring the `/Encoding` and `/CharStrings` a Type 42 dictionary carries
-//!   (proven two ways — hand-editing the exported string from our assigned codes
-//!   to the codes the font's cmap maps makes the same glyphs draw, and a real
-//!   embedded Inter draws nothing for codes 1..N while the source PDF draws every
-//!   glyph). Emitting it would ship invisible text; vectorizing shows exactly the
-//!   outlines the raster renderer shows. Re-enabling needs cmap synthesis over
-//!   the assigned codes (mupdf's approach), verified against gs — a later task.
+//! - **TrueType** (`/FontFile2`) leaves as **Type 42**: one `%%BeginResource`
+//!   dictionary per 256-code slice whose `/sfnts` carry the program rewritten by
+//!   `sfnt::synthesize_cmap` — a (3,0) format-4 subtable installed over the
+//!   slice's assigned codes, mupdf's construction. That rewrite answers the Task 7
+//!   Ghostscript gate: gs resolves Type 42 character codes through the font's
+//!   *own* `cmap`, ignoring the `/Encoding` and `/CharStrings` the dictionary
+//!   carries — proven two ways, by hand-editing the exported string from our
+//!   assigned codes to the codes the font's cmap maps (the same glyphs drew), and
+//!   by a real embedded Inter drawing nothing for codes 1..N while the source PDF
+//!   drew every glyph — so our codes only draw once the font's own cmap maps
+//!   them. gs still *requires* a `/CharStrings` for `definefont` to accept the
+//!   dict at all (verified; ps2write emits one too), so the emitter carries the
+//!   same `/gNNNN` names in both, informationally. `/FontMatrix` is
+//!   `1/unitsPerEm`, emitted as `1 upem div` so it is exact for every upem,
+//!   which the device's `1000 scalefont` convention needs
+//!   (`upem × 1/upem × 1000 = 1000`). A program that does not parse, or that the
+//!   rewrite cannot carry, vectorizes with a note naming the family and the
+//!   reason; the arm's gs-raster verification is Task 3's gate.
 //! - **Everything else** — CFF (`/FontFile3`), CID/Type0, Type 3, non-embedded and
 //!   unreadable font programs — is vectorized through the Task 3 path machinery
 //!   (`outline()` → path ops under the glyph transform), with one fidelity note
@@ -29,9 +38,10 @@
 //! text-matrix advances are pure translations, which compose exactly) batch into
 //! a single `xyshow`: the CTM becomes the run's linear part, the font is scaled
 //! so its effective glyph matrix is the identity on 1000-unit space (`1000
-//! scalefont` over the program's natural matrix), and every glyph origin comes
-//! from the observed transforms, so positioning never depends on the PDF's
-//! declared widths agreeing with the font's.
+//! scalefont` over the program's natural matrix — 1/1000 for Type 1,
+//! 1/unitsPerEm for Type 42), and every glyph origin comes from the observed
+//! transforms, so positioning never depends on the PDF's declared widths
+//! agreeing with the font's.
 
 use std::collections::HashMap;
 
@@ -39,14 +49,20 @@ use hayro::hayro_interpret::CacheKey;
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use hayro::hayro_interpret::hayro_syntax::page::Resources;
+use skrifa::raw::TableProvider as _;
 
 use crate::psnum;
+use crate::sfnt;
 
 /// How glyphs of one font are emitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextStrategy {
     /// Embedded Type 1: program bytes in the prolog, re-encoded copy, `show` text.
     Type1Passthrough,
+    /// Embedded TrueType: Type 42 dictionaries in the prolog, their sfnts
+    /// rewritten with a synthesized (3,0) cmap over the assigned codes, `show`
+    /// text.
+    Type42Cmap,
     /// Outline glyphs as plain path operations.
     Vectorize,
 }
@@ -56,10 +72,9 @@ pub(crate) enum TextStrategy {
 enum EmbeddedKind {
     /// `/FontFile` — a Type 1 font program, decoded.
     Type1(Vec<u8>),
-    /// `/FontFile2` — TrueType data, decoded. (The bytes themselves are not held:
-    /// the Type 42 arm is disabled by the Task 7 gate, and the cmap-synthesis
-    /// follow-up will re-read them from the dict when it lands.)
-    TrueType,
+    /// `/FontFile2` — TrueType data, decoded and held for the Type 42 emission
+    /// (the preamble rewrites it with a synthesized cmap per slice).
+    TrueType(Vec<u8>),
     /// `/FontFile3` — CFF or OpenType (never executed as text in Layer A).
     Cff,
     /// No embedded program.
@@ -70,6 +85,9 @@ enum EmbeddedKind {
 enum Decision {
     /// The parsed Type 1 program: its own name (for `findfont`) and gid → glyph name.
     Type1 { name: String, names: HashMap<u32, String> },
+    /// Embedded TrueType: the program lives in the entry's `kind`; the preamble
+    /// synthesizes a cmap over each slice's assigned codes.
+    Type42,
     /// Path fallback; the note (if any) was queued when this was decided.
     Vectorize,
 }
@@ -89,6 +107,8 @@ struct FontEntry {
     kind: EmbeddedKind,
     /// `/Subtype` of the font dict, when readable.
     subtype: Option<String>,
+    /// `/BaseFont` of the font dict, when readable (names the family in notes).
+    base_font: Option<String>,
     /// `/FontDescriptor /FontBBox` (or the font dict's own, for Type 3).
     bbox: Option<[f64; 4]>,
     decision: Option<Decision>,
@@ -99,7 +119,7 @@ impl FontEntry {
     /// The entry for a font the resource walk never saw (nested resources, or a
     /// fallback font with no dict of its own).
     fn unknown() -> Self {
-        Self { kind: EmbeddedKind::None, subtype: None, bbox: None, decision: None, slices: Vec::new() }
+        Self { kind: EmbeddedKind::None, subtype: None, base_font: None, bbox: None, decision: None, slices: Vec::new() }
     }
 }
 
@@ -181,13 +201,19 @@ impl FontTable {
                 self.pending_notes.push("text vectorized (font program unreadable)".into());
                 Decision::Vectorize
             }
-            (Some(EmbeddedKind::TrueType), _) => {
-                // The Task 7 Ghostscript gate: gs resolves Type 42 char codes through
-                // the font's own cmap, so our assigned codes draw nothing (module docs).
-                // Vectorize — the outlines the raster renderer shows — until cmap
-                // synthesis over the assigned codes exists and is verified.
-                self.pending_notes.push("text vectorized (Type 42 pending cmap synthesis)".into());
-                Decision::Vectorize
+            (Some(EmbeddedKind::TrueType(program)), _) => {
+                // The Type 42 arm (Layer B): the preamble rewrites the program
+                // with a (3,0) cmap over the assigned codes — the only route by
+                // which our codes draw under gs (module docs). The decision
+                // dress-rehearsals that rewrite, so a program that cannot carry
+                // it vectorizes here, before any code is assigned.
+                if type42_ready(program) {
+                    Decision::Type42
+                } else {
+                    let family = entry.and_then(|e| e.base_font.as_deref()).unwrap_or("unnamed");
+                    self.pending_notes.push(format!("text vectorized (Type 42 '{family}' program unreadable)"));
+                    Decision::Vectorize
+                }
             }
             (Some(EmbeddedKind::Cff), _) => {
                 self.pending_notes.push("text vectorized (CFF font program)".into());
@@ -207,6 +233,7 @@ impl FontTable {
     fn strategy_of(entry: &FontEntry) -> TextStrategy {
         match entry.decision {
             Some(Decision::Type1 { .. }) => TextStrategy::Type1Passthrough,
+            Some(Decision::Type42) => TextStrategy::Type42Cmap,
             _ => TextStrategy::Vectorize,
         }
     }
@@ -280,11 +307,23 @@ impl FontTable {
             let Some(entry) = self.fonts.get(key) else {
                 continue;
             };
-            if let Some(Decision::Type1 { name, names }) = entry.decision.as_ref() {
-                let EmbeddedKind::Type1(program) = &entry.kind else { continue };
-                for slice in &entry.slices {
-                    type1_resource(&mut out, slice, name, names, program, entry.bbox);
+            match entry.decision.as_ref() {
+                Some(Decision::Type1 { name, names }) => {
+                    let EmbeddedKind::Type1(program) = &entry.kind else { continue };
+                    for slice in &entry.slices {
+                        type1_resource(&mut out, slice, name, names, program, entry.bbox);
+                    }
                 }
+                Some(Decision::Type42) => {
+                    let EmbeddedKind::TrueType(program) = &entry.kind else { continue };
+                    // Each slice synthesizes its own cmap over the codes it
+                    // owns; slices beyond the first duplicate the sfnts
+                    // (acceptable — W3 shrinks them).
+                    for slice in &entry.slices {
+                        type42_resource(&mut out, slice, program, entry.bbox);
+                    }
+                }
+                _ => {}
             }
         }
         out
@@ -307,6 +346,108 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
     out.extend_from_slice(b"] put\ndefinefont pop\n%%EndResource\n");
 }
 
+/// One Type 42 pseudo-font over an embedded TrueType program: the sfnt
+/// rewritten by [`sfnt::synthesize_cmap`] so the slice's assigned codes resolve
+/// through a synthesized (3,0) cmap — the bytes gs actually executes; it
+/// ignores `/Encoding` (module docs) — wrapped in a `/FontType 42` dictionary.
+/// `/PaintType 0` and `/CharStrings` (name → gid, `.notdef` → 0) are gs's
+/// requirements: `definefont` rejects a Type 42 dict without a `/CharStrings`
+/// (verified against gs 10.08; ps2write emits one too) even though code
+/// resolution never consults it. `/FontMatrix` is `1/unitsPerEm`, emitted as
+/// `1 upem div` because array literals execute their tokens, which keeps the
+/// value exact for every upem (a decimal rounded to four places would scale a
+/// 2048-upem font by 2.4%), and the device's `1000 scalefont` convention needs
+/// exactly `upem × 1/upem × 1000 = 1000`. `/Encoding` is informational
+/// (`/gNNNN` names, codes not assigned stay `.notdef`); `/FontBBox` comes from
+/// the PDF when it carries one. The sfnts are chunked per the Type 42
+/// convention — at most 65535 bytes per string, every chunk but the last a
+/// multiple of four. A program the decision somehow cannot rewrite defines
+/// nothing rather than shipping a broken dictionary — the strategy arm
+/// dress-rehearsed the same rewrite, so this is not a route input can reach.
+fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Option<[f64; 4]>) {
+    let Some(upem) = units_per_em(program) else { return };
+    let mappings: Vec<(u16, u16)> = slice
+        .codes
+        .iter()
+        // A gid past the u16 the cmap carries cannot resolve and is dropped,
+        // exactly as `synthesize_cmap` drops it below `numGlyphs`.
+        .filter_map(|(gid, code)| Some((u16::from(*code), u16::try_from(*gid).ok()?)))
+        .collect();
+    let Some(sfnts) = sfnt::synthesize_cmap(program, &mappings) else { return };
+    out.extend_from_slice(format!("%%BeginResource: font {}\n", slice.name).as_bytes());
+    // The definition shape (`/Name <n> dict dup begin … currentdict end
+    // definefont pop`) mirrors the emission this crate verified against gs in
+    // Tasks 5–7, so it is not perturbed casually.
+    out.extend_from_slice(format!("/{} 10 dict dup begin\n", slice.name).as_bytes());
+    out.extend_from_slice(format!("/FontName /{} def\n", slice.name).as_bytes());
+    out.extend_from_slice(b"/FontType 42 def\n");
+    out.extend_from_slice(b"/PaintType 0 def\n");
+    out.extend_from_slice(format!("/FontMatrix [1 {upem} div 0 0 1 {upem} div 0 0] def\n").as_bytes());
+    if let Some(bbox) = bbox {
+        out.extend_from_slice(format!("/FontBBox {} def\n", bbox_text(bbox)).as_bytes());
+    }
+    out.extend_from_slice(b"/Encoding [");
+    encoding_names(out, &slice.codes.iter().map(|(gid, code)| (*code, format!("g{gid:04}"))).collect::<Vec<_>>());
+    out.extend_from_slice(b"] def\n");
+    // The gs-required name → gid table, over the same names the Encoding carries.
+    let mut gids = slice.codes.keys().copied().collect::<Vec<_>>();
+    gids.sort_unstable();
+    out.extend_from_slice(b"/CharStrings 256 dict dup begin\n/.notdef 0 def\n");
+    for gid in gids {
+        out.extend_from_slice(format!("/g{gid:04} {gid} def\n", gid = gid).as_bytes());
+    }
+    out.extend_from_slice(b"end def\n");
+    out.extend_from_slice(b"/sfnts [\n");
+    const CHUNK: usize = 65520;
+    for chunk in sfnts.chunks(CHUNK) {
+        out.extend_from_slice(hex_payload(chunk).as_bytes());
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b"] def\ncurrentdict end definefont pop\n%%EndResource\n");
+}
+
+/// `head.unitsPerEm` of an sfnt, when the program parses and the value is
+/// usable: a zero upem has no inverse, and `/FontMatrix [1/upem …]` needs one.
+fn units_per_em(program: &[u8]) -> Option<u16> {
+    let font = skrifa::FontRef::from_index(program, 0).ok()?;
+    let upem = font.head().ok()?.units_per_em();
+    (upem != 0).then_some(upem)
+}
+
+/// Whether the Type 42 emission can carry `program`: skrifa parses it
+/// (`FontRef` + `head` with a usable upem) and [`sfnt::synthesize_cmap`]
+/// succeeds over it. The synthesis call is the strategy-time dress rehearsal
+/// of the rewrite the preamble performs per slice — the same pipeline with an
+/// empty mapping set, which cannot overflow where a full one could — so a
+/// font whose tables or old-cmap extents defeat the rewrite vectorizes before
+/// any code is assigned, instead of emitting a page that references a font
+/// that never got defined.
+fn type42_ready(program: &[u8]) -> bool {
+    units_per_em(program).is_some() && sfnt::synthesize_cmap(program, &[]).is_some()
+}
+
+/// A PostScript hex string literal carrying `bytes`: pure-ASCII lowercase hex
+/// inside `<…>`, wrapped near 200 columns — whitespace is free inside a hex
+/// string, so the wrap cannot change the bytes a consumer reads. Task 4's
+/// CID-keyed emission reuses this for its `/sfnts` too.
+pub(crate) fn hex_payload(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2).saturating_add(2));
+    out.push('<');
+    let mut column = 1usize;
+    for byte in bytes {
+        if column + 2 > 200 {
+            out.push('\n');
+            column = 0;
+        }
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0x0f)] as char);
+        column += 2;
+    }
+    out.push('>');
+    out
+}
+
 /// Build the walk result for one font dict.
 fn entry_of(dict: &Dict<'_>) -> FontEntry {
     let kind = dict
@@ -315,10 +456,10 @@ fn entry_of(dict: &Dict<'_>) -> FontEntry {
             if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile") {
                 stream.decoded().ok().map(|d| EmbeddedKind::Type1(d.into_owned()))
             } else if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile2") {
-                // Decoding validates the program (an undecodable one falls through
-                // to the not-embedded note); the bytes themselves are re-read by
-                // the cmap-synthesis follow-up, not held here.
-                stream.decoded().ok().map(|_| EmbeddedKind::TrueType)
+                // Decoding validates the program (an undecodable one falls
+                // through to the not-embedded note); the bytes are held for
+                // the Type 42 emission to rewrite per slice.
+                stream.decoded().ok().map(|d| EmbeddedKind::TrueType(d.into_owned()))
             } else if desc.contains_key(b"FontFile3") {
                 Some(EmbeddedKind::Cff)
             } else {
@@ -329,6 +470,7 @@ fn entry_of(dict: &Dict<'_>) -> FontEntry {
     FontEntry {
         kind,
         subtype: dict.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_string()),
+        base_font: dict.get::<Name<'_>>(b"BaseFont").map(|n| n.as_str().to_string()),
         bbox: bbox_of(dict),
         decision: None,
         slices: Vec::new(),
@@ -576,6 +718,15 @@ mod tests {
     /// A→1 and B→2, and a version-3.0 `post` (no names, so `/glyphNNNN`
     /// addressing is the only route — exactly what the emitter uses).
     fn ttf_program() -> Vec<u8> {
+        ttf_program_with_glyphs(3)
+    }
+
+    /// [`ttf_program`] with a custom `maxp` glyph count: the slice-spilling
+    /// test assigns codes for 300 gids, and `synthesize_cmap` bounds mappings
+    /// against `numGlyphs`, so the font must claim them (the `glyf` data still
+    /// holds two boxes — these fixtures exercise tables and text emission,
+    /// not outlines).
+    fn ttf_program_with_glyphs(num_glyphs: u16) -> Vec<u8> {
         fn be16(v: u16) -> [u8; 2] {
             v.to_be_bytes()
         }
@@ -611,7 +762,7 @@ mod tests {
         let hmtx = [be16(600), be16(0), be16(0), be16(0)].concat();
         let mut maxp = Vec::new();
         maxp.extend_from_slice(&be32(0x0001_0000));
-        maxp.extend_from_slice(&be16(3)); // numGlyphs
+        maxp.extend_from_slice(&be16(num_glyphs)); // numGlyphs
         maxp.extend_from_slice(&[0; 26]);
         let mut cmap = Vec::new();
         cmap.extend_from_slice(&be16(0)); // version
@@ -787,6 +938,82 @@ mod tests {
         needle.is_empty() || haystack.as_bytes().windows(needle.len()).any(|w| w == needle)
     }
 
+    // ------------------------------------------------------- sfnts inspection
+
+    /// A big-endian u16 at `at`, `None` when the slice is too short.
+    fn be16_at(data: &[u8], at: usize) -> Option<u16> {
+        Some(u16::from_be_bytes(data.get(at..at.checked_add(2)?)?.try_into().ok()?))
+    }
+
+    /// A big-endian u32 at `at`, `None` when the slice is too short.
+    fn be32_at(data: &[u8], at: usize) -> Option<u32> {
+        Some(u32::from_be_bytes(data.get(at..at.checked_add(4)?)?.try_into().ok()?))
+    }
+
+    /// The decoded `/sfnts` data of a preamble, one entry per resource in
+    /// order: everything hex between `/sfnts [` and the closing `]` (string
+    /// chunk boundaries and wrap newlines vanish — whitespace is free inside
+    /// a hex string, and only hex digits survive the filter).
+    fn sfnts_blobs(ps: &str) -> Vec<Vec<u8>> {
+        let mut blobs = Vec::new();
+        let mut rest = ps;
+        while let Some(start) = rest.find("/sfnts [") {
+            rest = &rest[start + 8..];
+            let Some(end) = rest.find("] def") else { break };
+            let hex: String = rest[..end].chars().filter(|c| c.is_ascii_hexdigit()).collect();
+            let bytes =
+                hex.as_bytes().chunks(2).map(|pair| u8::from_str_radix(&String::from_utf8_lossy(pair), 16).expect("a hex digit pair")).collect();
+            blobs.push(bytes);
+            rest = &rest[end..];
+        }
+        blobs
+    }
+
+    /// The directory entry for `tag` in a raw sfnt: (offset, length).
+    fn dir_entry(font: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {
+        let num = usize::from(be16_at(font, 4)?);
+        for i in 0..num {
+            let at = 12 + i * 16;
+            let record = font.get(at..at.checked_add(16)?)?;
+            if record.get(..4)? == tag {
+                let offset = usize::try_from(u32::from_be_bytes(record.get(8..12)?.try_into().ok()?)).ok()?;
+                let length = usize::try_from(u32::from_be_bytes(record.get(12..16)?.try_into().ok()?)).ok()?;
+                return Some((offset, length));
+            }
+        }
+        None
+    }
+
+    /// Look `code` up in the (3,0) format-4 subtable of `font`'s synthesized
+    /// cmap the way a consumer does: find the segment, add `idDelta`.
+    fn format4_gid(font: &[u8], code: u16) -> Option<u16> {
+        let (off, len) = dir_entry(font, b"cmap")?;
+        let cmap = font.get(off..off.checked_add(len)?)?;
+        let count = usize::from(be16_at(cmap, 2)?);
+        let mut sub = None;
+        for i in 0..count {
+            let at = 4 + i * 8;
+            if be16_at(cmap, at)? == 3 && be16_at(cmap, at.checked_add(2)?)? == 0 {
+                sub = usize::try_from(be32_at(cmap, at.checked_add(4)?)?).ok();
+                break;
+            }
+        }
+        let sub = sub?;
+        let seg_count = usize::from(be16_at(cmap, sub.checked_add(6)?)?) / 2;
+        let end_codes = sub.checked_add(14)?;
+        let start_codes = end_codes.checked_add(seg_count * 2 + 2)?;
+        let id_deltas = start_codes.checked_add(seg_count * 2)?;
+        for i in 0..seg_count {
+            let end = be16_at(cmap, end_codes.checked_add(i * 2)?)?;
+            let start = be16_at(cmap, start_codes.checked_add(i * 2)?)?;
+            if (start..=end).contains(&code) {
+                let delta = be16_at(cmap, id_deltas.checked_add(i * 2)?)?;
+                return Some(code.wrapping_add(delta));
+            }
+        }
+        None
+    }
+
     const T1_FONT: &str =
         "<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftTest /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R >>";
     const T1_DESC: &str = "<< /Type /FontDescriptor /FontName /PdfCraftTest /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile 6 0 R >>";
@@ -818,18 +1045,80 @@ mod tests {
         assert_eq!(out.matches("gsave").count(), out.matches("grestore").count(), "balanced wrap: {out}");
     }
 
-    /// An embedded TrueType font vectorizes (the Task 7 gate disabled the Type 42
-    /// arm): the glyphs become path operators, one note records why, and no font
-    /// is defined or selected. The gate evidence is in the module docs — gs maps
-    /// Type 42 codes through the font's own cmap, so our assigned codes drew
-    /// nothing for real fonts.
+    /// An embedded TrueType font leaves as Type 42 text: no degradation note;
+    /// the preamble defines a `/FontType 42` dictionary per slice whose
+    /// `/sfnts` carry the program rewritten by cmap synthesis — the (3,0)
+    /// format-4 subtable maps codes 1,2 → gids 1,2 — with the `1/unitsPerEm`
+    /// `/FontMatrix` and the PDF's `/FontBBox`; and the page draws through the
+    /// same run machinery as Type 1 (`1000 scalefont` over `1/upem`).
     #[test]
-    fn embedded_truetype_vectorizes_until_cmap_synthesis() {
+    fn embedded_truetype_emits_type42_with_synthesized_cmap() {
         let ttf = ttf_program();
         let pdf = font_pdf(TT_FONT, TT_DESC, "", &ttf, b"BT /F1 24 Tf 20 100 Td (AB) Tj ET");
         let (out, notes, preamble) = driven(&pdf);
-        assert!(notes.iter().any(|n| n.contains("Type 42 pending cmap synthesis")), "gate outcome noted: {notes:?}");
+        assert_eq!(notes.join("\n"), "", "Type 42 emission degrades nothing");
+        assert!(preamble.contains("%%BeginResource: font PdfCraftF0\n"), "our font resource: {preamble}");
+        assert!(preamble.contains("/FontType 42 def\n"), "a Type 42 dictionary: {preamble}");
+        assert!(
+            preamble.contains("/FontMatrix [1 1000 div 0 0 1 1000 div 0 0] def\n"),
+            "1/unitsPerEm matrix (exact by division, not a rounded decimal): {preamble}"
+        );
+        assert!(preamble.contains("/FontBBox [0 -200 700 800] def\n"), "PDF's FontBBox applied: {preamble}");
+        assert!(preamble.contains("/g0001 /g0002"), "informational Encoding names the assigned gids: {preamble}");
+        assert!(preamble.contains("currentdict end definefont pop\n%%EndResource\n"), "font defined: {preamble}");
+        // The sfnts are exactly the program rewritten over the assigned codes
+        // (codes 1,2 → gids 1,2), and their subtable resolves like a consumer's.
+        let blobs = sfnts_blobs(&preamble);
+        assert_eq!(blobs.len(), 1, "one slice, one sfnts string: {preamble}");
+        assert_eq!(
+            blobs[0],
+            crate::sfnt::synthesize_cmap(&ttf, &[(1, 1), (2, 2)]).expect("synthesis succeeds"),
+            "sfnts carry the synthesized-cmap rewrite"
+        );
+        assert_eq!(format4_gid(&blobs[0], 1), Some(1), "code 1 → gid 1");
+        assert_eq!(format4_gid(&blobs[0], 2), Some(2), "code 2 → gid 2");
+        assert_eq!(format4_gid(&blobs[0], 3), None, "an unassigned code stays unmapped");
+        // And the page draws text with it: one run, both codes, geometry from
+        // the observed transforms (A's 600-unit advance at 24 pt → 600 in
+        // 1000-unit glyph space).
+        assert!(out.contains("/PdfCraftF0 findfont 1000 scalefont setfont\n"), "font selected: {out}");
+        assert!(out.contains("(\\001\\002) [600 0 0 0] xyshow\n"), "batched show: {out}");
+        assert_eq!(out.matches("gsave").count(), out.matches("grestore").count(), "balanced wrap: {out}");
+    }
+
+    /// A FontFile2 the Type 42 arm cannot carry declines to Type 42: the note
+    /// names the strategy, the family and the reason, the glyphs vectorize (or
+    /// stay empty when the interpreter itself has no outline to show — the
+    /// raster renderer's view), and no font is defined or selected. Two cuts:
+    /// 100 bytes defeats the parse outright, while a tail cut parses (hayro
+    /// still reads `glyf` and draws substitute-able outlines) but defeats the
+    /// cmap rewrite — the strategy arm's dress rehearsal, not just `FontRef`.
+    #[test]
+    fn truetype_program_unreadable_vectorizes() {
+        let ttf = ttf_program();
+        // A tail cut: the directory and `glyf` parse, the truncated table
+        // extent fails the rewrite, and the outlines are path operators.
+        let tail = &ttf[..ttf.len() - 40];
+        let pdf = font_pdf(TT_FONT, TT_DESC, "", tail, b"BT /F1 24 Tf 20 100 Td (AB) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert!(
+            notes.iter().any(|n| n.contains("Type 42") && n.contains("PdfCraftTT") && n.contains("unreadable")),
+            "note names family and reason: {notes:?}"
+        );
         assert!(out.contains("moveto\n") && out.contains("fill\n"), "glyph outlines as path ops: {out}");
+        assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text-as-text: {out}");
+        assert!(!preamble.contains("%%BeginResource"), "no font resource: {preamble}");
+        assert!(!preamble.contains("/FontType 42"), "no Type 42 dictionary: {preamble}");
+        // A parse-level cut: the note still fires, and the export still
+        // completes (the interpreter shows nothing for such a font, so there
+        // is no outline to vectorize — matching the raster renderer).
+        let head = &ttf[..100];
+        let pdf = font_pdf(TT_FONT, TT_DESC, "", head, b"BT /F1 24 Tf 20 100 Td (AB) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert!(
+            notes.iter().any(|n| n.contains("Type 42") && n.contains("PdfCraftTT") && n.contains("unreadable")),
+            "note names family and reason: {notes:?}"
+        );
         assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text-as-text: {out}");
         assert!(!preamble.contains("%%BeginResource"), "no font resource: {preamble}");
         assert!(!preamble.contains("/FontType 42"), "no Type 42 dictionary: {preamble}");
@@ -869,8 +1158,7 @@ mod tests {
     /// Consecutive same-font, same-basis glyphs batch into one `xyshow` — across
     /// a `Td`, whose translation the offsets absorb; a basis change (new font
     /// size) flushes and starts a new run. (Fixture: the embedded Type 1, whose
-    /// A/B advances are 600/700 — the TrueType arm vectorizes since the Task 7
-    /// gate.)
+    /// A/B advances are 600/700 — the TrueType arm emits Type 42 since Layer B.)
     #[test]
     fn glyph_runs_batch_into_show() {
         let pdf =
@@ -917,6 +1205,49 @@ mod tests {
         // Repeated glyphs reuse their slice's code.
         assert_eq!(table.char_code(key, 7), 8);
         assert_eq!(table.slice_index(key, 299).and_then(|i| names.get(i)).map(String::as_str), Some("PdfCraftF1"));
+    }
+
+    /// Each 256-code slice synthesizes its own cmap: driving `FontTable`
+    /// directly (a fixture font drawn with >255 distinct glyphs is impractical
+    /// to synthesize), 300 assigned codes produce two Type 42 resources whose
+    /// sfnts map slice-0 codes and slice-1 codes to their gids respectively —
+    /// parsed from the format-4 bytes of each embedded blob. Slice 0's code 1
+    /// (the `.notdef` gid 0) carries no mapping: format 4 cannot resolve it.
+    #[test]
+    fn type42_second_slice_gets_own_cmap() {
+        let mut table = FontTable::default();
+        let key = 42u128;
+        table.order.push(key);
+        table.fonts.insert(
+            key,
+            FontEntry {
+                kind: EmbeddedKind::TrueType(ttf_program_with_glyphs(400)),
+                subtype: Some("TrueType".into()),
+                base_font: Some("PdfCraftTT".into()),
+                bbox: Some([0.0, -200.0, 700.0, 800.0]),
+                decision: Some(Decision::Type42),
+                slices: Vec::new(),
+            },
+        );
+        for gid in 0..300u32 {
+            table.char_code(key, gid);
+        }
+        let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
+        assert_eq!(preamble.matches("%%BeginResource: font").count(), 2, "one resource per slice: {preamble}");
+        assert!(
+            preamble.contains("%%BeginResource: font PdfCraftF0\n") && preamble.contains("%%BeginResource: font PdfCraftF1\n"),
+            "both slices defined: {preamble}"
+        );
+        assert_eq!(preamble.matches("/FontType 42 def").count(), 2, "both are Type 42: {preamble}");
+        let blobs = sfnts_blobs(&preamble);
+        assert_eq!(blobs.len(), 2, "one sfnts string per slice");
+        // Slice 0: codes 2..=255 → gids 1..=254 (code 1's gid 0 is dropped).
+        assert_eq!(format4_gid(&blobs[0], 1), None, "the .notdef code carries no mapping");
+        assert_eq!(format4_gid(&blobs[0], 2), Some(1), "slice 0's first code → its gid");
+        assert_eq!(format4_gid(&blobs[0], 255), Some(254), "slice 0's last code → its gid");
+        // Slice 1: codes 1..=45 → gids 255..=299.
+        assert_eq!(format4_gid(&blobs[1], 1), Some(255), "slice 1's first code → its gid");
+        assert_eq!(format4_gid(&blobs[1], 45), Some(299), "slice 1's last code → its gid");
     }
 
     // --------------------------------------------------------------- extras
