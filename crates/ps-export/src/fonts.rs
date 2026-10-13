@@ -866,14 +866,17 @@ fn glyph_fallback_name(gid: u32) -> String {
     format!("g{gid:04}")
 }
 
-/// The AGL spelling of `cp` as a synthesized glyph name: `uni` plus four
-/// uppercase hex digits on the BMP, six above it — the shape gs's txtwrite
-/// resolves back to the codepoint through its Adobe Glyph List, which is
-/// what makes a name-less glyph's text extractable. Only a name nothing else
-/// claimed rides into the emission; a real glyph literally named `uni0041`
-/// keeps it over the reverse map's suggestion.
+/// The AGL spelling of `cp` as a synthesized glyph name, per the AGL
+/// specification's mapping algorithm: `uni` plus exactly four uppercase hex
+/// digits on the BMP (a `uni` name is BMP-only — more digits are not an AGL
+/// name), and the unpadded `u` form above it — `u` plus four to six
+/// uppercase hex digits (`u10000`, `u1D11E`). These are the shapes gs's
+/// txtwrite resolves back to the codepoint through its Adobe Glyph List,
+/// which is what makes a name-less glyph's text extractable. Only a name
+/// nothing else claimed rides into the emission; a real glyph literally
+/// named `uni0041` keeps it over the reverse map's suggestion.
 fn uni_name(cp: u32) -> String {
-    if cp <= 0xFFFF { format!("uni{cp:04X}") } else { format!("uni{cp:06X}") }
+    if cp <= 0xFFFF { format!("uni{cp:04X}") } else { format!("u{cp:X}") }
 }
 
 /// gid → lowest Unicode codepoint mapping to it, from the font's own cmap
@@ -2698,6 +2701,40 @@ mod tests {
         assert!(preamble.contains("/uni0041 1 def\n"), "CharStrings: the codepoint's name maps to gid 1: {preamble}");
         assert!(preamble.contains("/g0002 2 def\n"), "CharStrings: the unmapped gid keeps its fallback entry: {preamble}");
         assert!(!preamble.contains("/g0001"), "the mapped gid no longer rides the meaningless fallback: {preamble}");
+    }
+
+    /// The AGL spellings of a synthesized name (review fix): `uni` plus
+    /// exactly four uppercase hex digits on the BMP — the gs-verified form —
+    /// and the unpadded `u` form above it (`u10000`, `u1D11E`), per the AGL
+    /// specification's mapping algorithm: `uni` names carry four hex digits
+    /// per BMP scalar, supplementary codepoints take `u` plus four to six
+    /// uppercase hex digits, and anything else (the pre-fix `uni` + six) is
+    /// not an AGL name — gs's resolver would leave it, and the glyph's text
+    /// with it, untranslated.
+    #[test]
+    fn uni_name_uses_agl_spellings() {
+        assert_eq!(uni_name(0x41), "uni0041");
+        assert_eq!(uni_name(0xFFFF), "uniFFFF");
+        assert_eq!(uni_name(0x1_0000), "u10000");
+        assert_eq!(uni_name(0x1_D11E), "u1D11E");
+        assert_eq!(uni_name(0x10_FFFF), "u10FFFF", "Unicode's top: the unpadded six-digit u form");
+    }
+
+    /// The reverse map's guards: nothing above Unicode's top is a codepoint,
+    /// gid 0 is `.notdef` (a subtable's "no glyph"), and the lowest
+    /// codepoint wins when a gid maps several times.
+    #[test]
+    fn reverse_cmap_rejects_non_codepoints_and_keeps_the_lowest() {
+        let mut map = ReverseCmap(HashMap::new());
+        map.set(0x1_10000, 1); // past Unicode's top
+        map.set(0x42, 0); // gid 0: .notdef
+        map.set(0x1_0000, 2); // astral, valid
+        map.set(0x44, 3);
+        map.set(0x43, 3); // the lower cp wins for gid 3
+        assert_eq!(map.get(1), None, "a cp above Unicode's top is not recorded");
+        assert_eq!(map.get(0), None, "gid 0 is never named from a cmap");
+        assert_eq!(map.get(2), Some(0x1_0000), "an astral cp records normally");
+        assert_eq!(map.get(3), Some(0x43), "the lowest codepoint per gid wins");
     }
 
     /// `composite_cycle_falls_back_to_whole_font`, the export half: a font
