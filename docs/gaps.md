@@ -221,10 +221,17 @@ update the numbers.
   through) and annotations redraw as a DSC-structured program whose Ghostscript-rasterized output
   matches PdfCraft's own render within a mean per-channel delta of 2/255, with txtwrite extraction
   where the emitted font carries glyph names (the Type 42 base-font arms; the composite arms prove
+<<<<<<< HEAD
   ink and raster parity, not extraction) — transparency is unflattened (Layer C), CFF subsetting is
   a Layer D revisit, and true CMYK/Separation emission and tiling patterns fall to a follow-up PR
   (tiling falls back to flat gray today), each degradation recorded as a warning.
 >>>>>>> 1b9178fb (M10: parity and docs for PS export Layer B - fonts as text)
+=======
+  ink and raster parity, not extraction) — transparency is unflattened (Layer C) and tiling
+  patterns fall back to flat gray, both runtime-warned (as are the text-vectorized fallbacks when
+  a font arm declines); CFF subsetting is a Layer D revisit and true CMYK/Separation emission a
+  follow-up PR, documented limitations of the current layer rather than runtime warnings.
+>>>>>>> cdd4a9f9 (M10: PS export Layer B docs - warned degradations vs documented limits)
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
   floating watermark text and per-page section sizes. Exact font matching, vector rules and
