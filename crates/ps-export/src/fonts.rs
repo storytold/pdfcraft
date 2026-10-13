@@ -315,11 +315,13 @@ impl FontTable {
                 }
                 Some(EmbeddedKind::TrueType(program)) => {
                     // The program ships verbatim inside the type-11 CIDFont,
-                    // so skrifa-parse is the dress rehearsal for gs's loader
-                    // (the same proxy the Type 42 arm uses, minus the cmap
-                    // rewrite we do not perform).
+                    // and `cidfont2_ready` dress-rehearses the exact parse
+                    // the preamble performs (`head` upem plus the `maxp`
+                    // that sizes the CIDMap), holding the type42_ready
+                    // invariant: never a page referencing a font that never
+                    // got defined.
                     match entry.and_then(|e| e.descendant_subtype.as_deref()) {
-                        Some("CIDFontType2") if units_per_em(program).is_some() => Decision::CidFontType2,
+                        Some("CIDFontType2") if cidfont2_ready(program) => Decision::CidFontType2,
                         Some("CIDFontType2") => {
                             self.pending_notes.push(format!("text vectorized (CID TrueType '{}' program unreadable)", family()));
                             Decision::Vectorize
@@ -563,6 +565,11 @@ impl FontTable {
                 }
                 Some(Decision::CidFontType2) => {
                     let EmbeddedKind::TrueType(program) = &entry.kind else { continue };
+                    // These parses mirror `cidfont2_ready`, the strategy-time
+                    // gate, so a font that reaches this decision always
+                    // carries them; the skips stay as guards, never as the
+                    // only line of defense (a `continue` here would emit a
+                    // page that references a font that never got defined).
                     let Some(font) = skrifa::FontRef::from_index(program, 0).ok() else { continue };
                     let Ok(maxp) = font.maxp() else { continue };
                     let mappings = composite_mappings(entry, None);
@@ -771,6 +778,18 @@ fn type42_ready(program: &[u8]) -> bool {
     units_per_em(program).is_some() && sfnt::synthesize_cmap(program, &[]).is_some()
 }
 
+/// Whether the CIDFontType 2 emission can carry `program`: the same parse the
+/// preamble performs — `FontRef` + `head` with a usable upem *and* a readable
+/// `maxp`, whose glyph count sizes the `/CIDMap` and `/CIDCount`. This is the
+/// strategy-time dress rehearsal of that emission, holding the `type42_ready`
+/// invariant: a program the preamble cannot carry vectorizes here, before any
+/// code is assigned, instead of emitting a page that references a font that
+/// never got defined.
+fn cidfont2_ready(program: &[u8]) -> bool {
+    let Ok(font) = skrifa::FontRef::from_index(program, 0) else { return false };
+    font.head().is_ok_and(|head| head.units_per_em() != 0) && font.maxp().is_ok()
+}
+
 /// A PostScript hex string literal carrying `bytes`: pure-ASCII lowercase hex
 /// inside `<…>`, wrapped near 200 columns — whitespace is free inside a hex
 /// string, so the wrap cannot change the bytes a consumer reads. Task 4's
@@ -872,24 +891,33 @@ fn csi_of(dict: &Dict<'_>) -> Option<cid::CidSystemInfo> {
 /// A PDF `/W` array re-serialized as a PostScript array: numbers and nested
 /// arrays of numbers only (the forms the PDF spec allows — `c [w]`,
 /// `c [w1 w2]` and `c c w`), brackets included, numbers through the operand
-/// formatter. Anything else (a Name, String, Dict, non-finite number, deeper
-/// nesting) makes the whole array uncarriable → `None` → `/DW 1000`.
+/// formatter. Anything else — a Name, String, Dict, non-finite number, deeper
+/// nesting, or **an empty array at either level** (a level with no objects
+/// has no `]` to balance a `[` for, and `/W ]` is a gs error that kills the
+/// whole program) — makes the whole array uncarriable → `None` → `/DW 1000`.
 fn w_array(array: &Array<'_>) -> Option<String> {
     fn emit_objects<'a>(objects: impl Iterator<Item = Object<'a>>, depth: u8) -> Option<String> {
         let mut out = String::from("[");
+        let mut any = false;
         for obj in objects {
             match obj {
                 Object::Number(n) => {
                     out.push_str(&psnum::num(n.as_f64())?);
                     out.push(' ');
+                    any = true;
                 }
                 Object::Array(inner) if depth == 0 => {
                     out.push_str(&emit_objects(inner.iter::<Object<'_>>(), 1)?);
                     out.push(' ');
+                    any = true;
                 }
                 _ => return None,
             }
         }
+        if !any {
+            return None;
+        }
+        // Only the trailing space of the last object; `any` guarantees one is there.
         out.pop();
         out.push(']');
         Some(out)
@@ -2156,6 +2184,81 @@ mod tests {
         assert_eq!(notes.join("\n"), "", "Type 3 interpretation is faithful: {notes:?}");
         assert!(out.contains("moveto\n") && out.contains("fill\n"), "glyph program drawn: {out}");
         assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text machinery: {out}");
+    }
+
+    /// Point `tag`'s sfnt directory entry past the end of the program: the
+    /// table becomes unreadable to skrifa while the rest (notably `head`)
+    /// still parses — exactly the gap between the old CIDFontType 2 strategy
+    /// gate (`head` only) and the preamble's `maxp` read that review round 1
+    /// closed.
+    fn bury_table(font: &[u8], tag: &[u8; 4]) -> Vec<u8> {
+        let mut out = font.to_vec();
+        let Some(num) = out.get(4..6).map(|b| usize::from(u16::from_be_bytes(b.try_into().expect("two bytes")))) else {
+            return out;
+        };
+        for i in 0..num {
+            let at = 12 + i * 16;
+            let past_end = (out.len() + 4096) as u32;
+            if out.get(at..at + 4) == Some(&tag[..])
+                && let Some(slot) = out.get_mut(at + 8..at + 12)
+            {
+                slot.copy_from_slice(&past_end.to_be_bytes());
+            }
+        }
+        out
+    }
+
+    /// An empty `/W` — outer or nested — carries no width entries, and a
+    /// level with no objects must never emit an unbalanced `]` (a gs error
+    /// that would kill the whole program): the CIDFontType 2 emission falls
+    /// back to `/DW 1000`.
+    #[test]
+    fn empty_w_array_falls_back_to_dw() {
+        for w in ["/W []", "/W [1 []]"] {
+            let pdf = type0_pdf(
+                "PdfCraftTT",
+                &format!(
+                    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /PdfCraftTT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 5 0 R /DW 1000 {w} /CIDToGIDMap /Identity >>"
+                ),
+                "<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>",
+                "",
+                &ttf_program(),
+                b"BT /F1 24 Tf 20 100 Td <00010002> Tj ET",
+            );
+            let (_out, notes, preamble) = driven(&pdf);
+            assert_eq!(notes.join("\n"), "", "the fallback is not a degradation: {notes:?}");
+            assert!(preamble.contains("/DW 1000 def\n"), "'{w}' falls back to /DW 1000: {preamble}");
+            assert!(!preamble.contains("/W ]") && !preamble.contains("]]"), "no unbalanced bracket from '{w}': {preamble}");
+        }
+    }
+
+    /// The CIDFontType 2 gate covers the preamble's whole parse: a program
+    /// whose `head` reads but whose `maxp` does not declines at strategy
+    /// time — vectorize with the family-naming note, no resource, no
+    /// `findfont` — instead of emitting a page that references a font that
+    /// never got defined.
+    #[test]
+    fn maxp_less_cidfonttype2_declines_at_strategy_time() {
+        let buried = bury_table(&ttf_program(), b"maxp");
+        // Unit half: the gate itself sees what the preamble will see.
+        assert!(cidfont2_ready(&ttf_program()), "the intact fixture passes");
+        assert!(!cidfont2_ready(&buried), "head parses, maxp does not: the gate must decline");
+        // Driven half: the strategy arm notes and vectorizes.
+        let pdf = type0_pdf(
+            "PdfCraftTT",
+            "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /PdfCraftTT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 5 0 R /DW 1000 /W [1 [600]] /CIDToGIDMap /Identity >>",
+            "<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>",
+            "",
+            &buried,
+            b"BT /F1 24 Tf 20 100 Td <00010002> Tj ET",
+        );
+        let (out, notes, preamble) = driven(&pdf);
+        assert!(
+            notes.iter().any(|n| n.contains("CID TrueType") && n.contains("PdfCraftTT") && n.contains("unreadable")),
+            "note names family and reason: {notes:?}"
+        );
+        assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text-as-text: {out}");
+        assert!(!preamble.contains("%%BeginResource"), "no font resource for a program the preamble cannot parse: {preamble}");
     }
 
     /// Stroked and invisible text never becomes `show` text: stroke modes
