@@ -180,6 +180,259 @@ fn test_render_parity_encrypted_document() {
     assert_ffi_matches_direct(encrypted, Some("secret123".into()), FfiTile { x: 0, y: 0, width: 200, height: 200 }, 1.0);
 }
 
+fn fixture_embedded_truetype() -> Vec<u8> {
+    let font_bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let stream = b"BT /F1 16 Tf 50 150 Td (Inter TrueType Embedded) Tj ET";
+    let mut out = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n");
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+    out.extend_from_slice(
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n",
+    );
+    out.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+    out.extend_from_slice(stream);
+    out.extend_from_slice(b"\nendstream endobj\n");
+    out.extend_from_slice(b"5 0 obj << /Type /Font /Subtype /TrueType /BaseFont /Inter-Regular /FirstChar 32 /LastChar 126 /Widths [500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500 500] /FontDescriptor 6 0 R >> endobj\n");
+    out.extend_from_slice(b"6 0 obj << /Type /FontDescriptor /FontName /Inter-Regular /Flags 32 /FontBBox [-200 -300 1200 1000] /ItalicAngle 0 /Ascent 900 /Descent -250 /CapHeight 700 /StemV 80 /FontFile2 7 0 R >> endobj\n");
+    out.extend_from_slice(format!("7 0 obj << /Length {} >> stream\n", font_bytes.len()).as_bytes());
+    out.extend_from_slice(font_bytes);
+    out.extend_from_slice(b"\nendstream endobj\n");
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    out
+}
+
+fn fixture_scanned_page() -> Vec<u8> {
+    let mut scan_pixels = Vec::with_capacity(16 * 16 * 3);
+    for y in 0..16 {
+        for x in 0..16 {
+            let v = ((x * 16 + y * 8) % 256) as u8;
+            scan_pixels.extend_from_slice(&[v, v, v]);
+        }
+    }
+    let stream = b"q 300 0 0 300 0 0 cm /ScanIm Do Q";
+    let mut out = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n");
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+    out.extend_from_slice(
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /ScanIm 5 0 R >> >> /Contents 4 0 R >> endobj\n",
+    );
+    out.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+    out.extend_from_slice(stream);
+    out.extend_from_slice(b"\nendstream endobj\n");
+    out.extend_from_slice(
+        format!(
+            "5 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >> stream\n",
+            scan_pixels.len()
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(&scan_pixels);
+    out.extend_from_slice(b"\nendstream endobj\n");
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    out
+}
+
+#[test]
+fn test_render_parity_embedded_truetype() {
+    assert_ffi_matches_direct(fixture_embedded_truetype(), None, FfiTile { x: 0, y: 0, width: 300, height: 300 }, 1.0);
+}
+
+fn cff_font_bytes() -> Vec<u8> {
+    fn be16(out: &mut Vec<u8>, n: u16) {
+        out.extend_from_slice(&n.to_be_bytes());
+    }
+    fn be32(out: &mut Vec<u8>, n: u32) {
+        out.extend_from_slice(&n.to_be_bytes());
+    }
+    fn number(n: i16) -> Vec<u8> {
+        let mut v = vec![28];
+        v.extend_from_slice(&n.to_be_bytes());
+        v
+    }
+    fn index(items: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        be16(&mut out, items.len() as u16);
+        if items.is_empty() {
+            return out;
+        }
+        out.push(1);
+        let mut at = 1;
+        out.push(at);
+        for i in items {
+            at += i.len() as u8;
+            out.push(at);
+        }
+        for i in items {
+            out.extend(i);
+        }
+        out
+    }
+    let name = index(&[b"RectFont".to_vec()]);
+    let mut dict = Vec::new();
+    for n in [0, 0, 500, 700] {
+        dict.extend(number(n));
+    }
+    dict.push(5);
+    let offset = 4 + name.len() + index(&[vec![0; dict.len() + 4]]).len() + 4;
+    dict.extend(number(offset as i16));
+    dict.push(17);
+    let mut rectangle = number(600);
+    rectangle.extend([139, 139, 21]);
+    for n in [500, 0, 0, 700, -500, 0, 0, -700] {
+        rectangle.extend(number(n));
+    }
+    rectangle.extend([5, 14]);
+    let mut cff = vec![1, 0, 4, 4];
+    cff.extend(name);
+    cff.extend(index(&[dict]));
+    cff.extend([0, 0, 0, 0]);
+    cff.extend(index(&[
+        vec![14],
+        {
+            let mut v = number(300);
+            v.push(14);
+            v
+        },
+        rectangle,
+    ]));
+    let mut head = vec![0; 54];
+    head[0..4].copy_from_slice(&[0, 1, 0, 0]);
+    head[12..16].copy_from_slice(&0x5f0f3cf5u32.to_be_bytes());
+    head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+    head[40..42].copy_from_slice(&500i16.to_be_bytes());
+    head[42..44].copy_from_slice(&700i16.to_be_bytes());
+    let mut hhea = vec![0; 36];
+    hhea[0..4].copy_from_slice(&[0, 1, 0, 0]);
+    hhea[4..6].copy_from_slice(&700i16.to_be_bytes());
+    hhea[6..8].copy_from_slice(&(-200i16).to_be_bytes());
+    hhea[34..36].copy_from_slice(&3u16.to_be_bytes());
+    let mut hmtx = Vec::new();
+    for w in [600, 300, 600] {
+        be16(&mut hmtx, w);
+        be16(&mut hmtx, 0);
+    }
+    let mut maxp = vec![0, 0, 0x50, 0];
+    be16(&mut maxp, 3);
+    let mut cmap = vec![0, 0, 0, 1, 0, 3, 0, 10];
+    be32(&mut cmap, 12);
+    be16(&mut cmap, 12);
+    be16(&mut cmap, 0);
+    be32(&mut cmap, 40);
+    be32(&mut cmap, 0);
+    be32(&mut cmap, 2);
+    for (cp, gid) in [(32, 1), (65, 2)] {
+        be32(&mut cmap, cp);
+        be32(&mut cmap, cp);
+        be32(&mut cmap, gid);
+    }
+    let names = [(1, "Rect Font"), (2, "Regular"), (6, "RectFont-Regular"), (13, "MIT License")];
+    let mut name = Vec::new();
+    be16(&mut name, 0);
+    be16(&mut name, names.len() as u16);
+    be16(&mut name, (6 + 12 * names.len()) as u16);
+    let mut data = Vec::new();
+    for (id, text) in names {
+        let bytes: Vec<_> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, 0x409, id, bytes.len() as u16, data.len() as u16] {
+            be16(&mut name, n);
+        }
+        data.extend(bytes);
+    }
+    name.extend(data);
+    let tables = [(*b"CFF ", cff), (*b"cmap", cmap), (*b"head", head), (*b"hhea", hhea), (*b"hmtx", hmtx), (*b"maxp", maxp), (*b"name", name)];
+    let mut out = b"OTTO".to_vec();
+    be16(&mut out, 7);
+    be16(&mut out, 64);
+    be16(&mut out, 2);
+    be16(&mut out, 48);
+    let mut payload = Vec::new();
+    let mut offset = 12 + 16 * tables.len();
+    for (tag, bytes) in tables {
+        out.extend(tag);
+        let mut padded = bytes.clone();
+        while padded.len() % 4 != 0 {
+            padded.push(0);
+        }
+        let sum = padded.as_chunks::<4>().0.iter().fold(0u32, |s, b| s.wrapping_add(u32::from_be_bytes(*b)));
+        be32(&mut out, sum);
+        be32(&mut out, offset as u32);
+        be32(&mut out, bytes.len() as u32);
+        offset += padded.len();
+        payload.extend(padded);
+    }
+    out.extend(payload);
+    out
+}
+
+fn fixture_embedded_cff() -> Vec<u8> {
+    let font_bytes = cff_font_bytes();
+    let stream = b"BT /F1 20 Tf 50 150 Td (A A) Tj ET";
+    let mut out = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n");
+    out.extend_from_slice(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    out.extend_from_slice(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+    out.extend_from_slice(
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n",
+    );
+    out.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+    out.extend_from_slice(stream);
+    out.extend_from_slice(b"\nendstream endobj\n");
+    out.extend_from_slice(b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /RectFont-Regular /FontDescriptor 6 0 R >> endobj\n");
+    out.extend_from_slice(b"6 0 obj << /Type /FontDescriptor /FontName /RectFont-Regular /Flags 32 /FontBBox [0 0 500 700] /ItalicAngle 0 /Ascent 700 /Descent 0 /CapHeight 700 /StemV 80 /FontFile3 7 0 R >> endobj\n");
+    out.extend_from_slice(format!("7 0 obj << /Subtype /OpenType /Length {} >> stream\n", font_bytes.len()).as_bytes());
+    out.extend_from_slice(&font_bytes);
+    out.extend_from_slice(b"\nendstream endobj\n");
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    out
+}
+
+#[test]
+fn test_render_parity_embedded_cff() {
+    assert_ffi_matches_direct(fixture_embedded_cff(), None, FfiTile { x: 0, y: 0, width: 300, height: 300 }, 1.0);
+}
+
+#[test]
+fn test_render_parity_scanned_page() {
+    assert_ffi_matches_direct(fixture_scanned_page(), None, FfiTile { x: 0, y: 0, width: 300, height: 300 }, 1.0);
+}
+
+#[test]
+fn test_render_parity_typical_multipage_pdf() {
+    let bytes = std::fs::read("../../mobile/fixtures/typical-10p.pdf").expect("read typical-10p.pdf");
+    for page in 0..5 {
+        let engine = Engine::new();
+        let doc_id = engine.open_bytes("typical.pdf".into(), bytes.clone(), None).expect("open typical");
+        let ffi_req = FfiRenderRequest {
+            page,
+            tile: Some(FfiTile { x: 0, y: 0, width: 297, height: 421 }),
+            scale: 0.5,
+            tag: page as u64,
+            preview: false,
+            reading_colors: None,
+            hide_comments: false,
+        };
+        let ffi_res = engine.render_tile(doc_id, ffi_req).expect("render tile");
+        assert!(ffi_res.error.is_none());
+
+        let mut direct = PageRenderer::new(Arc::new(bytes.clone()), Default::default());
+        let direct_res = direct.render(RenderRequest {
+            page: page as usize,
+            kind: RequestKind::Pixels,
+            tile: Some(Tile { x: 0, y: 0, w: 297, h: 421 }),
+            scale: 0.5,
+            tag: page as u64,
+            preview: false,
+        });
+
+        assert_eq!(ffi_res.width, direct_res.width);
+        assert_eq!(ffi_res.height, direct_res.height);
+        assert_eq!(ffi_res.pixels, direct_res.rgba.as_ref());
+        engine.close(doc_id).expect("close");
+    }
+}
+
 #[test]
 fn test_render_tiles_stitch_equal_to_full_render() {
     let pdf_bytes = fixture_standard_fonts();

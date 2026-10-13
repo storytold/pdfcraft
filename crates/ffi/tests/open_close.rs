@@ -93,20 +93,74 @@ fn test_close_nonexistent_doc_fails() {
     assert!(matches!(err, FfiError::NotFound { .. }));
 }
 
+fn current_rss_bytes() -> usize {
+    let pid = std::process::id();
+    let out = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid.to_string()]).output();
+    if let Ok(o) = out {
+        let txt = String::from_utf8_lossy(&o.stdout);
+        if let Ok(kb) = txt.trim().parse::<usize>() {
+            return kb * 1024;
+        }
+    }
+    0
+}
+
 #[test]
-fn test_10k_open_close_cycles_no_leak() {
+fn test_10k_open_render_close_cycles_bounded_rss() {
     let engine = Engine::new();
     let pdf = synthetic_pdf(1);
+
+    // Warm up 100 cycles to stabilize baseline memory
+    for i in 0..100 {
+        let name = format!("warmup_{i}.pdf");
+        let doc_id = engine.open_bytes(name, pdf.clone(), None).expect("open warmup");
+        let req = pdfcraft_ffi::FfiRenderRequest {
+            page: 0,
+            tile: Some(pdfcraft_ffi::FfiTile { x: 0, y: 0, width: 64, height: 64 }),
+            scale: 1.0,
+            tag: i as u64,
+            preview: false,
+            reading_colors: None,
+            hide_comments: false,
+        };
+        let _ = engine.render_tile(doc_id, req);
+        engine.close(doc_id).expect("close warmup");
+    }
+
+    let start_rss = current_rss_bytes();
 
     for i in 0..10_000 {
         let name = format!("doc_{i}.pdf");
         let doc_id = engine.open_bytes(name, pdf.clone(), None).expect("open doc in leak loop");
+        let req = pdfcraft_ffi::FfiRenderRequest {
+            page: 0,
+            tile: Some(pdfcraft_ffi::FfiTile { x: 0, y: 0, width: 64, height: 64 }),
+            scale: 1.0,
+            tag: (i + 1000) as u64,
+            preview: false,
+            reading_colors: None,
+            hide_comments: false,
+        };
+        let _ = engine.render_tile(doc_id, req);
         engine.close(doc_id).expect("close doc in leak loop");
     }
+
+    let end_rss = current_rss_bytes();
 
     assert_eq!(engine.document_count(), 0);
     assert_eq!(engine.cached_tile_count(), 0);
     assert_eq!(engine.cached_tile_bytes(), 0);
+
+    if start_rss > 0 && end_rss > 0 {
+        let diff_mb = (end_rss as f64 - start_rss as f64) / (1024.0 * 1024.0);
+        println!(
+            "10k open/render/close cycles: start RSS: {:.2} MB, end RSS: {:.2} MB (diff: {:.2} MB)",
+            start_rss as f64 / (1024.0 * 1024.0),
+            end_rss as f64 / (1024.0 * 1024.0),
+            diff_mb
+        );
+        assert!(diff_mb < 25.0, "RSS growth must be strictly bounded under 25 MB across 10k cycles; measured: {:.2} MB", diff_mb);
+    }
 }
 
 #[test]
