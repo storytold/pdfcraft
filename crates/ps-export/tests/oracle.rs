@@ -41,6 +41,18 @@ const PX: (u32, u32) = (200, 250);
 /// mis-emitted operator (wrong colour, dropped draw, misplaced box) fails loudly: any of
 /// those moves whole regions by tens of levels per channel.
 const TOLERANCE: f64 = 2.0;
+/// Mean per-channel delta, in 0–255 byte levels, below which the CMYK fixture's two rasters
+/// count as the same image. The fixture needs its own bound because the two rasterizers
+/// convert CMYK to RGB through *different* pipelines — gs renders `setcmykcolor` through its
+/// built-in device conversion, PdfCraft's raster converts the source's CMYK through its
+/// characterization profile — so every `k`/`K` region carries a constant per-channel offset
+/// between the two, not just edge-quantization noise. On gs 10.08.0 the two pipelines land
+/// within 2 levels per channel on every flat region and the measured whole-page delta is
+/// ≈ 0.5 (the offsets are tiny); the value keeps ≈ 3× headroom over that measurement to
+/// absorb a couple more levels of cross-build conversion shift — while staying tight enough
+/// to fail loudly on a mis-emitted colour: a swapped CMYK pair was measured at ≈ 33, and a
+/// dropped fill or wrong component moves whole regions by tens of levels.
+const CMYK_TOLERANCE: f64 = 1.5;
 
 // ----------------------------------------------------------------- fixture PDFs
 
@@ -95,6 +107,23 @@ fn geometry_pdf() -> Vec<u8> {
           [] 0 d\n0 1 1 rg\n43.2 216 m 115.2 345.6 72 216 158.4 316.8 c h f\n\
           1 0 1 rg\n187.2 230.4 72 86.4 re f\n\
           0 0 0 RG\n2 w 1 J 1 j\n187.2 216 m 259.2 331.2 l\n187.2 331.2 m 259.2 216 l S",
+    )
+}
+
+/// A flat-paint page in the source's own spaces: two DeviceCMYK `k` fills, a DeviceGray
+/// `g` fill, a DeviceRGB `rg` fill, a DeviceCMYK `K` stroke and two mixed-component `k`
+/// fills — the `setcmykcolor`/raw-`setgray` emission surface (the regions stay disjoint,
+/// so each colour's conversion difference stands alone in the delta).
+fn cmyk_pdf() -> Vec<u8> {
+    one_page(
+        "",
+        b"0 1 1 0 k\n20 20 100.8 72 re f\n\
+          1 0 1 0 k\n158.4 14.4 115.2 86.4 re f\n\
+          0.75 g\n14.4 115.2 115.2 57.6 re f\n\
+          1 0 0 rg\n158.4 115.2 115.2 57.6 re f\n\
+          0 0 1 0 0.2 K\n3 w\n14.4 216 m 273.6 216 l S\n\
+          0.2 0.4 0.6 0.1 k\n43.2 244.8 115.2 100.8 re f\n\
+          0 0.5 0.3 0.3 k\n158.4 244.8 115.2 100.8 re f",
     )
 }
 
@@ -700,21 +729,23 @@ fn mean_channel_delta(a: &[u8], b: &[u8]) -> f64 {
 }
 
 /// Export `pdf` as PostScript, rasterize both sides and compare: the whole oracle loop.
-/// Returns the achieved mean delta, or `None` when gs is absent (already skipped).
-fn assert_matches_oracle(tag: &str, pdf: &[u8]) -> Option<f64> {
+/// `tolerance` is the gate's own bound ([`TOLERANCE`], or [`CMYK_TOLERANCE`] for the CMYK
+/// fixture — the two CMYK→RGB pipelines differ structurally, see its doc). Returns the
+/// achieved mean delta, or `None` when gs is absent (already skipped).
+fn assert_matches_oracle(tag: &str, pdf: &[u8], tolerance: f64) -> Option<f64> {
     let out = export(Arc::new(pdf.to_vec()), &[0], PsFormat::Ps).expect("the fixture exports");
     let gs = gs_raster(&out.bytes, tag)?;
     let mine = pdfcraft_raster(pdf);
     assert_eq!((gs.0, gs.1), (mine.0, mine.1), "the two rasters of {tag} cover the same canvas");
     let delta = mean_channel_delta(&gs.2, &mine.2);
-    eprintln!("{tag}: mean per-channel delta {delta:.3}/255 (tolerance {TOLERANCE})");
+    eprintln!("{tag}: mean per-channel delta {delta:.3}/255 (tolerance {tolerance})");
     if let Ok(dir) = std::env::var("PDFCRAFT_ORACLE_DUMP") {
         dump_png(std::path::Path::new(&dir).join(format!("{tag}-gs.png")), gs.0, gs.1, &gs.2);
         dump_png(std::path::Path::new(&dir).join(format!("{tag}-mine.png")), mine.0, mine.1, &mine.2);
         let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{tag}.pdf")), pdf);
         let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{tag}.ps")), &out.bytes);
     }
-    assert!(delta < TOLERANCE, "{tag}: gs and PdfCraft rasters diverge (mean per-channel delta {delta:.3} ≥ {TOLERANCE})");
+    assert!(delta < tolerance, "{tag}: gs and PdfCraft rasters diverge (mean per-channel delta {delta:.3} ≥ {tolerance})");
     Some(delta)
 }
 
@@ -767,14 +798,24 @@ fn gs_text(ps: &[u8], tag: &str) -> Option<String> {
 /// this test does not make: it compares gs's raster with PdfCraft's, never gs with gs.
 #[test]
 fn geometry_page_matches_ghostscript() {
-    assert_matches_oracle("geometry", &geometry_pdf());
+    assert_matches_oracle("geometry", &geometry_pdf(), TOLERANCE);
+}
+
+/// Flat DeviceCMYK paints leave as `setcmykcolor` with the raw components (`0 1 1 0 k`
+/// becomes `0 1 1 0 setcmykcolor`), beside a raw-`setgray` grey fill and an RGB fill, a
+/// CMYK stroke and mixed-component fills — the same image from both rasterizers, under the
+/// CMYK-specific tolerance (the two CMYK→RGB pipelines differ; see [`CMYK_TOLERANCE`]).
+/// Observed delta ≈ 0.5.
+#[test]
+fn cmyk_page_matches_ghostscript() {
+    assert_matches_oracle("cmyk", &cmyk_pdf(), CMYK_TOLERANCE);
 }
 
 /// The DCTDecode image at a 1:1 pixel mapping: same JPEG bytes, two IDCTs. Observed
 /// delta ≈ 0.003 (JPEG decoder rounding on a handful of samples).
 #[test]
 fn image_page_matches_ghostscript() {
-    assert_matches_oracle("image", &image_pdf());
+    assert_matches_oracle("image", &image_pdf(), TOLERANCE);
 }
 
 /// The CCITTFaxDecode passthrough, with and without `/BlackIs1 true`: the same fax bytes
@@ -802,7 +843,7 @@ fn fax_page_matches_ghostscript() {
 /// non-embedded font as vectorized outlines. Observed delta ≈ 0.2.
 #[test]
 fn text_page_matches_ghostscript() {
-    assert_matches_oracle("text", &text_pdf());
+    assert_matches_oracle("text", &text_pdf(), TOLERANCE);
 }
 
 /// Decrypt the eexec section of an exported Type 1 program: the one hex line
@@ -862,7 +903,7 @@ fn subset_program_loads_in_gs() {
         return;
     };
     assert!(text.contains('A'), "the drawn string is extractable: {text:?}");
-    assert_matches_oracle("t1-subset", &pdf);
+    assert_matches_oracle("t1-subset", &pdf, TOLERANCE);
 }
 
 /// Real-font TrueType (Inter) as a live Type 42 font: gs's FreeType renders the
@@ -878,7 +919,7 @@ fn real_truetype_page_matches_ghostscript() {
         eprintln!("skipping the real-font oracle fixture: assets/fonts/Inter-Regular.ttf is absent");
         return;
     };
-    assert_matches_oracle("real-truetype", &pdf);
+    assert_matches_oracle("real-truetype", &pdf, TOLERANCE);
 }
 
 /// The W1 merge gate (real font, extraction half): embedded Inter leaves as a
@@ -921,7 +962,7 @@ fn embedded_real_truetype_draws_and_extracts_as_type42() {
 /// gradients. Observed delta ≈ 0.1 (gradient interpolation differs by design).
 #[test]
 fn shading_page_matches_ghostscript() {
-    assert_matches_oracle("shading", &shading_pdf());
+    assert_matches_oracle("shading", &shading_pdf(), TOLERANCE);
 }
 
 /// EPS output of the same geometry page rasterizes identically (gs runs the file and a
@@ -1078,7 +1119,7 @@ fn cff_promotion_page_matches_ghostscript() {
     // while sitting far above zero, which is what a CMap that maps nothing
     // paints (the raster comparison below catches wrong-but-nonempty glyphs).
     assert!(inked > 200, "the promoted composite painted {inked} inked pixels — a CMap or charset mismatch renders blank");
-    assert_matches_oracle("cff-promote", &pdf);
+    assert_matches_oracle("cff-promote", &pdf, TOLERANCE);
 }
 
 /// The W2 CID merge gate (craft-fonts at runtime): a Type0/CIDFontType2 page
@@ -1154,5 +1195,5 @@ fn cid_cjk_page_matches_ghostscript() {
     // 36 pt; the threshold keeps headroom below that while sitting far above
     // zero, which is what a CMap or CIDMap that maps nothing paints.
     assert!(inked > 400, "the CIDFontType2 composite painted {inked} inked pixels — a CMap or CIDMap mismatch renders blank");
-    assert_matches_oracle("cid-cjk", &pdf);
+    assert_matches_oracle("cid-cjk", &pdf, TOLERANCE);
 }

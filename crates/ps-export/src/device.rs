@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 use std::marker::PhantomData;
 
-use hayro::hayro_interpret::color::Color;
+use hayro::hayro_interpret::color::{Color, ColorSource};
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::page::Resources;
 use hayro::hayro_interpret::pattern::Pattern;
@@ -233,9 +233,21 @@ impl<'a> PsDevice<'a> {
 
 /// Whether two paints render identically (the run batching test). Patterns
 /// never compare equal: their equality is not observable through the public API.
+/// Colours compare as *sources* when both sides name one ([`Color::source`] +
+/// `PartialEq`): the same space with the same raw components — never merging two
+/// different sources, which would silently repaint a run's glyphs. When either
+/// side has no nameable source the 8-bit RGBA rendering view decides, exactly
+/// as before. The comparison is conservative by construction: sources that
+/// render identically but are named differently stay unmerged (a redundant
+/// flush re-emits colour operators; that is safe), and two separately parsed
+/// `/Separation` spaces compare unequal through the tint-transform identity
+/// rule — again only ever a redundant flush.
 fn same_paint(a: &Paint<'_>, b: &Paint<'_>) -> bool {
     match (a, b) {
-        (Paint::Color(x), Paint::Color(y)) => Color::to_rgba(x).components() == Color::to_rgba(y).components(),
+        (Paint::Color(x), Paint::Color(y)) => match (x.source(), y.source()) {
+            (Some(source_x), Some(source_y)) => source_x == source_y,
+            _ => Color::to_rgba(x).components() == Color::to_rgba(y).components(),
+        },
         _ => false,
     }
 }
@@ -384,26 +396,74 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
     emit.op("setmiterlimit");
 }
 
-/// Emit the paint's colour operators. `Color` exposes only its 8-bit RGBA view — the same values
-/// the raster renderer shows — so a flat colour is emitted as `setgray` when the triple is equal
-/// and `setrgbcolor` otherwise; alpha is drawn opaque and the drop recorded. Pattern paints
-/// degrade to their flat stand-in (`shading.rs` owns that policy; here there is no path or
-/// clip to shade through — this is the text-run and stencil-mask position).
+/// The colour as the 8-bit RGBA view the raster renderer shows (`setgray` for an equal
+/// triple, `setrgbcolor` otherwise) — the fallback for every source PostScript cannot
+/// name here.
+fn rgba_color_ops(emit: &mut Emitter, color: &Color) {
+    let [r, g, b, _] = Color::to_rgba(color).components();
+    if r == g && g == b {
+        emit.coord(f64::from(r));
+        emit.op("setgray");
+    } else {
+        emit.coord(f64::from(r));
+        emit.coord(f64::from(g));
+        emit.coord(f64::from(b));
+        emit.op("setrgbcolor");
+    }
+}
+
+/// Emit the paint's colour operators. A device-space colour names itself in PostScript
+/// with its *raw* components ([`Color::source`] — no 8-bit RGBA round-trip: `0.5 g` emits
+/// `0.5 setgray`, `0 1 1 0 k` emits `0 1 1 0 setcmykcolor`); an exactly equal RGB triple
+/// collapses to the shorter `setgray`. `/DeviceN` keeps the disclosed RGB approximation
+/// (one note per page), and every source an exporter cannot name — ICC, Cal, Lab, Indexed,
+/// pattern-embedded, and `/Separation` until its own emission lands — falls to the RGBA
+/// view. Short component slices fall to the RGBA view too (never trust input-derived
+/// lengths). Alpha is drawn opaque and the drop recorded, whatever arm emitted. Pattern
+/// paints degrade to their flat stand-in (`shading.rs` owns that policy; here there is no
+/// path or clip to shade through — this is the text-run and stencil-mask position).
 /// (`images.rs` reuses this for stencil masks, which paint with the current colour.)
 pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
     match paint {
         Paint::Color(color) => {
-            let [r, g, b, a] = Color::to_rgba(color).components();
-            if r == g && g == b {
-                emit.coord(f64::from(r));
-                emit.op("setgray");
-            } else {
-                emit.coord(f64::from(r));
-                emit.coord(f64::from(g));
-                emit.coord(f64::from(b));
-                emit.op("setrgbcolor");
+            match color.source() {
+                // DeviceGray: the one raw component is `setgray`'s operand.
+                Some(ColorSource::Gray([g, ..])) => {
+                    emit.coord(f64::from(*g));
+                    emit.op("setgray");
+                }
+                // DeviceRGB: an exactly equal triple *is* a grey value.
+                Some(ColorSource::Rgb([r, g, b, ..])) if r == g && g == b => {
+                    emit.coord(f64::from(*r));
+                    emit.op("setgray");
+                }
+                Some(ColorSource::Rgb([r, g, b, ..])) => {
+                    emit.coord(f64::from(*r));
+                    emit.coord(f64::from(*g));
+                    emit.coord(f64::from(*b));
+                    emit.op("setrgbcolor");
+                }
+                // DeviceCMYK: the four raw components, the space's own operator.
+                Some(ColorSource::Cmyk([c, m, y, k, ..])) => {
+                    emit.coord(f64::from(*c));
+                    emit.coord(f64::from(*m));
+                    emit.coord(f64::from(*y));
+                    emit.coord(f64::from(*k));
+                    emit.op("setcmykcolor");
+                }
+                // No DeviceN emission (the Wave 1 decision): the RGB approximation,
+                // disclosed once per page.
+                Some(ColorSource::DeviceN) => {
+                    emit.note_once("DeviceN color approximated (RGB)");
+                    rgba_color_ops(emit, color);
+                }
+                // Unnameable sources, /Separation (its own emission lands with the
+                // colorspace-resource work) and short component slices: the RGBA view.
+                _ => rgba_color_ops(emit, color),
             }
-            if a < 1.0 {
+            // Alpha is not representable in PostScript: the colour is still emitted
+            // (drawn opaque), and the drop is recorded — once per page, for every arm.
+            if Color::to_rgba(color).components()[3] < 1.0 {
                 emit.note_once("transparency ignored (paint alpha)");
             }
         }
@@ -664,7 +724,7 @@ mod tests {
     };
     use kurbo::{Affine, BezPath, Cap, Join, Rect};
 
-    use super::PsDevice;
+    use super::{PsDevice, same_paint};
     use crate::FidelityNote;
 
     /// A fresh device over an empty emitter, page tag unset.
@@ -824,16 +884,17 @@ mod tests {
         );
     }
 
-    /// A flat `Paint::Color` maps to the closest device colour operator: an equal RGB triple is
-    /// `setgray`, anything else `setrgbcolor`. (A source CMYK/grey colour space is not visible
-    /// through `Color`'s public API — `to_rgba()` is the only view, the same 8-bit RGBA the
-    /// raster renderer shows — so every flat colour arrives as one of these two.)
+    /// A flat `Paint::Color` maps to the closest device colour operator: an exactly equal RGB
+    /// triple is `setgray`, anything else `setrgbcolor` — with the raw f32 components (no 8-bit
+    /// RGBA round-trip; `Color::from_rgba` builds a DeviceRGB source, so this exercises the
+    /// Rgb arm's collapse). A source grey/CMYK space is covered fixture-wise by
+    /// [`gray_paint_emits_raw_setgray`] and [`cmyk_paint_emits_setcmykcolor`].
     #[test]
     fn flat_paint_emits_setgray_and_setrgbcolor() {
         let mut dev = device();
         let gray = Paint::Color(Color::from_rgba(AlphaColor::new([0.5, 0.5, 0.5, 1.0])));
         dev.draw_path(&line_path(), Affine::IDENTITY, &gray, &PathDrawMode::Fill(FillRule::NonZero));
-        assert!(output(&dev).contains("0.502 setgray\n"), "gray via setgray (128/255 after to_rgba): {}", output(&dev));
+        assert!(output(&dev).contains("0.5 setgray\n"), "an equal triple collapses to the raw setgray: {}", output(&dev));
 
         let mut dev = device();
         dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Fill(FillRule::NonZero));
@@ -846,6 +907,77 @@ mod tests {
         dev.draw_path(&line_path(), Affine::IDENTITY, &half_alpha, &PathDrawMode::Fill(FillRule::NonZero));
         assert!(output(&dev).contains("1 0 0 setrgbcolor\n"), "colour emitted despite alpha: {}", output(&dev));
         assert!(dev.emit.notes.iter().any(|n| n.text.contains("alpha")), "alpha drop recorded: {:?}", dev.emit.notes);
+    }
+
+    /// A source DeviceCMYK fill emits `setcmykcolor` with the four raw f32 components — the
+    /// `k` operands verbatim, no RGB round-trip — and degrades nothing.
+    #[test]
+    fn cmyk_paint_emits_setcmykcolor() {
+        let (s, notes) = exported(color_page("<< >>", b"0 1 1 0 k 10 10 80 80 re f", Vec::new()));
+        assert!(s.contains("0 1 1 0 setcmykcolor\n"), "the four raw components as setcmykcolor: {s}");
+        assert_eq!(notes, Vec::<FidelityNote>::new(), "a device-space colour degrades nothing: {notes:?}");
+    }
+
+    /// A source DeviceGray fill emits `setgray` with the raw operand (`0.5`, not the 8-bit
+    /// RGBA view's `0.502` the round-trip used to show).
+    #[test]
+    fn gray_paint_emits_raw_setgray() {
+        let (s, notes) = exported(color_page("<< >>", b"0.5 g 10 10 80 80 re f", Vec::new()));
+        assert!(s.contains("0.5 setgray\n"), "the raw gray operand as setgray: {s}");
+        assert_eq!(notes, Vec::<FidelityNote>::new(), "a device-space colour degrades nothing: {notes:?}");
+    }
+
+    /// A `/DeviceN` fill keeps the disclosed RGB approximation (Wave 1 decision: no DeviceN
+    /// emission): the colour rides `setrgbcolor` from the RGBA view, and the approximation
+    /// is recorded as a note.
+    #[test]
+    fn devicen_paint_notes_and_falls_back() {
+        let bytes = color_page(
+            "<< /ColorSpace << /CS1 [/DeviceN [/A] /DeviceRGB 5 0 R] >> >>",
+            b"/CS1 cs 0.5 sc 10 10 80 80 re f",
+            vec![b"<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>".to_vec()],
+        );
+        let (s, notes) = exported(bytes);
+        assert!(s.contains("setrgbcolor\n"), "the RGBA fallback still paints: {s}");
+        assert_eq!(
+            notes,
+            vec![FidelityNote { page: Some(1), text: "DeviceN color approximated (RGB)".into() }],
+            "the approximation is disclosed: {notes:?}"
+        );
+    }
+
+    /// Run batching compares nameable colours as sources: the same device space with the
+    /// same raw components merges (across two parses of the same fixture), different
+    /// components never merge, and two *different* spaces that render byte-identically
+    /// through the RGBA view stay unmerged — the conservative direction (a redundant flush
+    /// re-emits colour operators; a wrong merge would silently repaint a run's glyphs).
+    #[test]
+    fn same_paint_compares_sources_when_nameable() {
+        let fill_color = |content: &[u8]| {
+            let mut colors = fill_colors(color_page("<< >>", content, Vec::new()));
+            assert_eq!(colors.len(), 1, "the fixture's fill must reach the device once");
+            colors.remove(0)
+        };
+        let cyan = fill_color(b"0 1 1 0 k 10 10 80 80 re f");
+        let cyan_again = fill_color(b"0 1 1 0 k 10 10 80 80 re f");
+        let magenta = fill_color(b"1 0 1 0 k 10 10 80 80 re f");
+        assert!(same_paint(&Paint::Color(cyan.clone()), &Paint::Color(cyan_again.clone())), "same space, same raw components merge");
+        assert!(!same_paint(&Paint::Color(cyan.clone()), &Paint::Color(magenta.clone())), "different components never merge");
+
+        // DeviceGray 0.5 and DeviceRGB (128/255, 128/255, 128/255) quantize to the same
+        // 8-bit RGBA — the old comparison merged them — but they are different sources.
+        let gray = fill_color(b"0.5 g 10 10 80 80 re f");
+        let triple = fill_color(b"0.502 0.502 0.502 rg 10 10 80 80 re f");
+        let (Some(ColorSource::Gray(g)), Some(ColorSource::Rgb(t))) = (gray.source(), triple.source()) else {
+            panic!("the fixtures must arrive as Gray and Rgb sources");
+        };
+        assert_eq!(gray.to_rgba().components(), triple.to_rgba().components(), "the RGBA views are byte-identical");
+        assert_eq!(g, &[0.5], "the gray operand stays raw");
+        assert_eq!(t, &[0.502, 0.502, 0.502], "the rg operands stay raw too");
+        assert!(
+            !same_paint(&Paint::Color(gray.clone()), &Paint::Color(triple.clone())),
+            "different sources stay unmerged even when the RGBA views match"
+        );
     }
 
     /// Stroke properties map onto `setlinewidth`/`setdash`/`setlinejoin`/`setlinecap` (plus
@@ -1093,6 +1225,13 @@ mod tests {
         let mut device = ColorRecorder::default();
         interpret_page(page, &mut state, &mut device);
         device.colors
+    }
+
+    /// Export a one-page fixture through the real pipeline (`crate::export`, the same entry
+    /// the oracle drives): the program text and the fidelity notes.
+    fn exported(bytes: Vec<u8>) -> (String, Vec<FidelityNote>) {
+        let out = crate::export(std::sync::Arc::new(bytes), &[0], crate::PsFormat::Ps).expect("fixture exports");
+        (String::from_utf8_lossy(&out.bytes).into_owned(), out.warnings)
     }
 
     /// Device-space fills keep their source components: `0 1 1 0 k` is the four CMYK
