@@ -13,6 +13,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod cid;
+mod color;
 mod device;
 mod dsc;
 mod fonts;
@@ -129,11 +130,13 @@ pub fn export_with_config(
     order.sort_unstable();
     order.dedup();
 
-    // Drive every requested page into its own buffer. One `FontTable` runs across the
-    // whole document (font decisions and slice names carry between pages), one device
-    // per page (notes tag with the page's 1-based output position).
+    // Drive every requested page into its own buffer. One `FontTable` and one
+    // `Colorspaces` table run across the whole document (font decisions, slice
+    // names and separation resource names carry between pages), one device per
+    // page (notes tag with the page's 1-based output position).
     let cache = InterpreterCache::new();
     let mut fonts = FontTable::default();
+    let mut colorspaces = crate::color::Colorspaces::default();
     let mut driven: Vec<(Vec<u8>, Vec<FidelityNote>, [f64; 4])> = Vec::new();
     for &index in &order {
         let Some(page) = pdf.pages().get(index) else {
@@ -165,6 +168,10 @@ pub fn export_with_config(
             interpreter_settings(config),
         );
         let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts));
+        // Seed the page's emitter with the document's colorspace table (the
+        // same carry the fonts take): resource names stay stable and repeats
+        // stay single across pages.
+        device.emit.colorspaces = std::mem::take(&mut colorspaces);
         // Mirror `render_into`: clip to the page box, wrap the page in a transparency
         // group (full opacity, no mask — not a degradation), interpret, unwrap, unclip.
         let mut clip_path = crop.to_path(0.1);
@@ -184,6 +191,7 @@ pub fn export_with_config(
         let body = std::mem::take(&mut device.emit.out);
         let notes = std::mem::take(&mut device.emit.notes);
         fonts = std::mem::take(&mut device.fonts);
+        colorspaces = std::mem::take(&mut device.emit.colorspaces);
         driven.push((body, notes, bbox));
     }
 
@@ -200,9 +208,12 @@ pub fn export_with_config(
         warnings.push(note);
     }
     let preamble = fonts.preamble();
-    if !preamble.is_empty() {
+    // The separation resources ride in the same prolog block, after the fonts.
+    let colorspaces = colorspaces.prolog();
+    if !preamble.is_empty() || !colorspaces.is_empty() {
         out.extend_from_slice(b"%%BeginProlog\n");
         out.extend_from_slice(&preamble);
+        out.extend_from_slice(&colorspaces);
         out.extend_from_slice(b"%%EndProlog\n");
     }
     for (no, (body, notes, bbox)) in driven.iter().enumerate() {
@@ -542,6 +553,7 @@ mod tests {
         let p2 = s.find("%%Page: 2 2").expect("page 2 present");
         let blue = s.find("0 0 1 setrgbcolor").expect("page 2 ink");
         assert!(p1 < red && red < p2 && p2 < blue, "ascending pages, each with its own ink: {s}");
+        assert!(!s.contains("%%BeginProlog"), "pages with no fonts and no separations define no prolog resources: {s}");
         assert!(s.ends_with("%%Trailer\n%%Pages: 2\n%%EOF\n"), "trailer closes the document: {s}");
         assert_eq!(out.warnings, Vec::<FidelityNote>::new(), "plain pages degrade nothing");
     }

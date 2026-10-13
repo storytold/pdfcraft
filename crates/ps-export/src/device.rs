@@ -21,6 +21,7 @@ use hayro::hayro_interpret::{BlendMode, ClipPath, Device, FillRule, GlyphDrawMod
 use kurbo::{Affine, BezPath, Cap, Join, PathEl, Point, Rect};
 
 use crate::FidelityNote;
+use crate::color;
 use crate::fonts::{self, FontTable, TextStrategy};
 use crate::images;
 use crate::psnum;
@@ -37,6 +38,9 @@ pub(crate) struct Emitter {
     pub(crate) page: Option<usize>,
     /// Note texts already recorded for this page (the first-occurrence-per-page policy).
     noted: HashSet<String>,
+    /// The document's `/Separation` colorspace resources (`color.rs`): seeded
+    /// per page by `export()` so names stay stable and repeats stay single.
+    pub(crate) colorspaces: crate::color::Colorspaces,
 }
 
 impl Emitter {
@@ -126,7 +130,7 @@ impl<'a> PsDevice<'a> {
     #[cfg(test)]
     pub(crate) fn new(page: Option<usize>) -> Self {
         Self {
-            emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new() },
+            emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new(), colorspaces: Default::default() },
             fonts: FontTable::default(),
             run: None,
             _marker: PhantomData,
@@ -140,7 +144,12 @@ impl<'a> PsDevice<'a> {
     pub(crate) fn from_table(page: Option<usize>, resources: &Resources<'_>, fonts: FontTable) -> Self {
         let mut fonts = fonts;
         fonts.add_resources(resources);
-        Self { emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new() }, fonts, run: None, _marker: PhantomData }
+        Self {
+            emit: Emitter { out: Vec::new(), notes: Vec::new(), page, noted: HashSet::new(), colorspaces: Default::default() },
+            fonts,
+            run: None,
+            _marker: PhantomData,
+        }
     }
 
     /// Emit any pending text run. Called before every other operator (program
@@ -398,8 +407,8 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
 
 /// The colour as the 8-bit RGBA view the raster renderer shows (`setgray` for an equal
 /// triple, `setrgbcolor` otherwise) — the fallback for every source PostScript cannot
-/// name here.
-fn rgba_color_ops(emit: &mut Emitter, color: &Color) {
+/// name here. (`color.rs` reuses this for declined separations.)
+pub(crate) fn rgba_color_ops(emit: &mut Emitter, color: &Color) {
     let [r, g, b, _] = Color::to_rgba(color).components();
     if r == g && g == b {
         emit.coord(f64::from(r));
@@ -415,13 +424,15 @@ fn rgba_color_ops(emit: &mut Emitter, color: &Color) {
 /// Emit the paint's colour operators. A device-space colour names itself in PostScript
 /// with its *raw* components ([`Color::source`] — no 8-bit RGBA round-trip: `0.5 g` emits
 /// `0.5 setgray`, `0 1 1 0 k` emits `0 1 1 0 setcmykcolor`); an exactly equal RGB triple
-/// collapses to the shorter `setgray`. `/DeviceN` keeps the disclosed RGB approximation
-/// (one note per page), and every source an exporter cannot name — ICC, Cal, Lab, Indexed,
-/// pattern-embedded, and `/Separation` until its own emission lands — falls to the RGBA
-/// view. Short component slices fall to the RGBA view too (never trust input-derived
-/// lengths). Alpha is drawn opaque and the drop recorded, whatever arm emitted. Pattern
-/// paints degrade to their flat stand-in (`shading.rs` owns that policy; here there is no
-/// path or clip to shade through — this is the text-run and stencil-mask position).
+/// collapses to the shorter `setgray`. A `/Separation` spot colour keeps its identity: a
+/// prolog colorspace resource plus `setcolorspace`/`setcolor` (`color.rs`), declining to
+/// the RGBA view whenever the resource builder cannot rebuild the space. `/DeviceN` keeps
+/// the disclosed RGB approximation (one note per page), and every source an exporter
+/// cannot name — ICC, Cal, Lab, Indexed, pattern-embedded — falls to the RGBA view. Short
+/// component slices fall to the RGBA view too (never trust input-derived lengths). Alpha
+/// is drawn opaque and the drop recorded, whatever arm emitted. Pattern paints degrade to
+/// their flat stand-in (`shading.rs` owns that policy; here there is no path or clip to
+/// shade through — this is the text-run and stencil-mask position).
 /// (`images.rs` reuses this for stencil masks, which paint with the current colour.)
 pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
     match paint {
@@ -451,14 +462,19 @@ pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
                     emit.coord(f64::from(*k));
                     emit.op("setcmykcolor");
                 }
+                // /Separation: the spot colour re-emits as the prolog colorspace
+                // resource `/PdfCraftCS<n>` plus `setcolorspace`/`setcolor` at the
+                // use site; whatever `color.rs` cannot rebuild declines there.
+                Some(ColorSource::Separation { colorant, tint, alternate, tint_transform }) => {
+                    color::separation_paint(emit, color, colorant, tint.first().copied(), alternate, tint_transform);
+                }
                 // No DeviceN emission (the Wave 1 decision): the RGB approximation,
                 // disclosed once per page.
                 Some(ColorSource::DeviceN) => {
                     emit.note_once("DeviceN color approximated (RGB)");
                     rgba_color_ops(emit, color);
                 }
-                // Unnameable sources, /Separation (its own emission lands with the
-                // colorspace-resource work) and short component slices: the RGBA view.
+                // Unnameable sources and short component slices: the RGBA view.
                 _ => rgba_color_ops(emit, color),
             }
             // Alpha is not representable in PostScript: the colour is still emitted

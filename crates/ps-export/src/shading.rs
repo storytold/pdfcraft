@@ -576,17 +576,21 @@ fn function_dict(f: &ParsedFunction, out: &mut String) -> Result<(), &'static st
             out.push_str(" /Range ");
             write_pairs(out, range)?;
             out.push_str(" /Function ");
-            calc_procedure(program, out)?;
+            out.push('{');
+            calc_body(program, out)?;
+            out.push_str(" }");
             out.push_str(" >>");
             Ok(())
         }
     }
 }
 
-/// Write the calculator program as a PostScript procedure — the same operator subset
-/// PDF's calculator functions define (ISO 32000-2), which is legal procedure body.
-fn calc_procedure(ops: &[CalcOp], out: &mut String) -> Result<(), &'static str> {
-    out.push('{');
+/// Write the calculator program as a PostScript procedure body (no braces) —
+/// the same operator subset PDF's calculator functions define (ISO 32000-2),
+/// which is legal procedure body anywhere: `function_dict` embeds it as a
+/// `/Function` procedure, and `color.rs` embeds it as a Separation tint
+/// transform procedure.
+pub(crate) fn calc_body(ops: &[CalcOp], out: &mut String) -> Result<(), &'static str> {
     for op in ops {
         out.push(' ');
         match op {
@@ -626,14 +630,16 @@ fn calc_procedure(ops: &[CalcOp], out: &mut String) -> Result<(), &'static str> 
             CalcOp::True => out.push_str("true"),
             CalcOp::Xor => out.push_str("xor"),
             CalcOp::If(p) => {
-                calc_procedure(p, out)?;
-                out.push_str(" if");
+                out.push('{');
+                calc_body(p, out)?;
+                out.push_str(" } if");
             }
             CalcOp::IfElse(p1, p2) => {
-                calc_procedure(p1, out)?;
-                out.push(' ');
-                calc_procedure(p2, out)?;
-                out.push_str(" ifelse");
+                out.push('{');
+                calc_body(p1, out)?;
+                out.push_str(" } {");
+                calc_body(p2, out)?;
+                out.push_str(" } ifelse");
             }
             CalcOp::Copy => out.push_str("copy"),
             CalcOp::Dup => out.push_str("dup"),
@@ -643,7 +649,6 @@ fn calc_procedure(ops: &[CalcOp], out: &mut String) -> Result<(), &'static str> 
             CalcOp::Roll => out.push_str("roll"),
         }
     }
-    out.push_str(" }");
     Ok(())
 }
 
@@ -677,7 +682,8 @@ fn pack_samples(samples: &[u32], bits_per_sample: u8) -> Vec<u8> {
 
 /// One function number as PostScript operand text. Non-finite values and values beyond
 /// the 32-bit real range (a limitcheck on conforming interpreters) are refused.
-fn num(v: f64) -> Result<String, &'static str> {
+/// `color.rs` reuses this for tint-transform procedure constants.
+pub(crate) fn num(v: f64) -> Result<String, &'static str> {
     if !v.is_finite() {
         return Err("non-finite number in function");
     }
