@@ -96,8 +96,13 @@ pub(crate) struct PsDevice<'a> {
 /// basis and one paint, positioned by their observed glyph transforms.
 struct TextRun<'a> {
     font_key: u128,
-    /// Which 256-code slice of the font the codes live in (its PostScript name).
+    /// Which 256-code slice of the font the codes live in (its PostScript
+    /// name); composites have no slices and pass 0.
     slice: usize,
+    /// Whether the codes are composite 2-byte codes (CMap space) — the flush
+    /// then emits each as a big-endian byte pair — or the 1-byte codes of
+    /// the Type 1/Type 42 slices.
+    wide: bool,
     /// The run's linear part `[a b c d]`: the CTM every glyph of the run shares
     /// exactly (text-matrix advances are translations, which compose exactly).
     basis: [f64; 4],
@@ -106,7 +111,7 @@ struct TextRun<'a> {
     /// The first glyph's origin, in the run's user space (1000-unit glyph space).
     origin: Point,
     /// The assigned codes, in draw order.
-    codes: Vec<u8>,
+    codes: Vec<u16>,
     /// Displacement from each glyph's origin to the next, in user space —
     /// exactly what `xyshow` consumes.
     offsets: Vec<(f64, f64)>,
@@ -150,7 +155,10 @@ impl<'a> PsDevice<'a> {
         let Some(run) = self.run.take() else {
             return;
         };
-        let Some(name) = self.fonts.slice_names(run.font_key).get(run.slice).cloned() else {
+        // Composites select their single `PdfCraftF<n>` parent; the 1-byte
+        // strategies select the slice that owns the code.
+        let name = if run.wide { self.fonts.cid_name(run.font_key) } else { self.fonts.slice_names(run.font_key).get(run.slice).cloned() };
+        let Some(name) = name else {
             self.emit.note("text skipped (font entry missing)");
             return;
         };
@@ -165,7 +173,14 @@ impl<'a> PsDevice<'a> {
         self.emit.coord(run.origin.x);
         self.emit.coord(run.origin.y);
         self.emit.op("moveto");
-        let string = fonts::ps_string(&run.codes);
+        // Composite codes ride as big-endian byte pairs through the CMap's
+        // 2-byte codespace; the 1-byte strategies keep single bytes.
+        let bytes: Vec<u8> = if run.wide {
+            run.codes.iter().flat_map(|&code| [(code >> 8) as u8, (code & 0xff) as u8]).collect()
+        } else {
+            run.codes.iter().map(|&code| code as u8).collect()
+        };
+        let string = fonts::ps_string(&bytes);
         if run.codes.len() == 1 {
             self.emit.op(&format!("{string} show"));
         } else {
@@ -191,7 +206,7 @@ impl<'a> PsDevice<'a> {
     }
 
     /// Add one glyph to the pending run, or start a new one (flushing the old).
-    fn push_run_glyph(&mut self, font_key: u128, slice: usize, code: u8, total: Affine, paint: &Paint<'a>) {
+    fn push_run_glyph(&mut self, font_key: u128, slice: usize, code: u16, wide: bool, total: Affine, paint: &Paint<'a>) {
         let [a, b, c, d, e, f] = total.as_coeffs();
         let basis = [a, b, c, d];
         // The glyph origin in the run's user space: the inverse basis applied to
@@ -201,6 +216,7 @@ impl<'a> PsDevice<'a> {
         if let Some(run) = self.run.as_mut()
             && run.font_key == font_key
             && run.slice == slice
+            && run.wide == wide
             && run.basis == basis
             && same_paint(&run.paint, paint)
         {
@@ -210,7 +226,8 @@ impl<'a> PsDevice<'a> {
             return;
         }
         self.flush_text();
-        self.run = Some(TextRun { font_key, slice, basis, paint: paint.clone(), origin: user, codes: vec![code], offsets: Vec::new(), last: user });
+        self.run =
+            Some(TextRun { font_key, slice, wide, basis, paint: paint.clone(), origin: user, codes: vec![code], offsets: Vec::new(), last: user });
     }
 }
 
@@ -547,23 +564,41 @@ impl<'a> Device<'a> for PsDevice<'a> {
                     for note in self.fonts.drain_notes() {
                         self.emit.note(&note);
                     }
-                    if matches!(strategy, TextStrategy::Type1Passthrough | TextStrategy::Type42Cmap) {
-                        let key = outline.font_cache_key();
-                        let gid = outline.glyph_id().to_u32();
-                        // A Type 1 code whose glyph is not in the parsed program
-                        // would show the wrong glyph; that glyph vectorizes.
-                        // Type 1 only — a Type 42 code resolves through the
-                        // synthesized cmap the strategy arm proved writable.
-                        if strategy == TextStrategy::Type1Passthrough && self.fonts.type1_glyph_name(key, gid).is_none() {
-                            self.emit.note("text vectorized (glyph missing from font program)");
-                            self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
-                            return;
+                    match strategy {
+                        TextStrategy::Type1Passthrough | TextStrategy::Type42Cmap => {
+                            let key = outline.font_cache_key();
+                            let gid = outline.glyph_id().to_u32();
+                            // A Type 1 code whose glyph is not in the parsed program
+                            // would show the wrong glyph; that glyph vectorizes.
+                            // Type 1 only — a Type 42 code resolves through the
+                            // synthesized cmap the strategy arm proved writable.
+                            if strategy == TextStrategy::Type1Passthrough && self.fonts.type1_glyph_name(key, gid).is_none() {
+                                self.emit.note("text vectorized (glyph missing from font program)");
+                                self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
+                                return;
+                            }
+                            let code = u16::from(self.fonts.char_code(key, gid));
+                            let slice = self.fonts.slice_index(key, gid).unwrap_or(0);
+                            self.push_run_glyph(key, slice, code, false, total, paint);
                         }
-                        let code = self.fonts.char_code(key, gid);
-                        let slice = self.fonts.slice_index(key, gid).unwrap_or(0);
-                        self.push_run_glyph(key, slice, code, total, paint);
-                    } else {
-                        self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
+                        TextStrategy::CidFontType0 | TextStrategy::CidFontType2 => {
+                            let key = outline.font_cache_key();
+                            let gid = outline.glyph_id().to_u32();
+                            // Codes are u16 CIDs; a gid past `0xFFFE` cannot
+                            // ride one (0xFFFF is the gid-0 remap), so that
+                            // glyph vectorizes — the Type 1 "glyph missing"
+                            // pattern.
+                            if gid > 0xFFFE {
+                                self.emit.note("text vectorized (glyph missing from font program)");
+                                self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
+                                return;
+                            }
+                            let code = self.fonts.cid_code(key, gid);
+                            self.push_run_glyph(key, 0, code, true, total, paint);
+                        }
+                        TextStrategy::Vectorize => {
+                            self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
+                        }
                     }
                 }
                 // Stroked (and fill-then-stroke) text becomes outline paths:

@@ -1,5 +1,6 @@
-//! Text emission: Type 1 passthrough, Type 42 with synthesized cmaps, and
-//! vectorized fallback (Layer A Tasks 5+7, Layer B Task 2).
+//! Text emission: Type 1 passthrough, Type 42 with synthesized cmaps, PS
+//! Type 0 composites for CFF/CID fonts, and vectorized fallback (Layer A
+//! Tasks 5+7, Layer B Tasks 2+5).
 //!
 //! Glyphs reach the device one at a time; text leaves as text whenever the PDF
 //! embeds a font program PostScript can execute natively:
@@ -8,13 +9,13 @@
 //!   (they are a complete, self-defining PostScript font), then a copy is defined
 //!   under our own name with the PDF's `/FontBBox` and a re-built `/Encoding` that
 //!   maps our sequential character codes to the program's glyph names.
-//! - **TrueType** (`/FontFile2`) leaves as **Type 42**: one `%%BeginResource`
-//!   dictionary per 256-code slice whose `/sfnts` carry the program rewritten by
-//!   `sfnt::synthesize_cmap` — a (3,0) format-4 subtable installed over the
-//!   slice's assigned codes, mupdf's construction, the original subtables kept.
-//!   The dictionary's shape is the one gs's own `ps2write` emits, verified
-//!   end-to-end (ink, txtwrite extraction and raster parity) against
-//!   **gs 10.08.0 (build 2026-09-08)**, this repo's oracle:
+//! - **TrueType** (`/FontFile2` under a simple font) leaves as **Type 42**: one
+//!   `%%BeginResource` dictionary per 256-code slice whose `/sfnts` carry the
+//!   program rewritten by `sfnt::synthesize_cmap` — a (3,0) format-4 subtable
+//!   installed over the slice's assigned codes, mupdf's construction, the
+//!   original subtables kept. The dictionary's shape is the one gs's own
+//!   `ps2write` emits, verified end-to-end (ink, txtwrite extraction and raster
+//!   parity) against **gs 10.08.0 (build 2026-09-08)**, this repo's oracle:
 //!   `/FontMatrix [1 0 0 1 0 0]` — the identity, because this build scales
 //!   Type 42 outlines by `1/unitsPerEm` itself and a `[1/upem]` matrix would
 //!   divide twice (the Layer A-era `[1/upem]` emission rendered microscopic,
@@ -38,14 +39,30 @@
 //!   *requires* a `/CharStrings` for `definefont` to accept the dict at all
 //!   (verified), so the emitter always carries one. The device's `1000
 //!   scalefont` convention is unchanged: identity matrix × 1000 gives exactly
-//!   1 pt per 1000-unit glyph-space unit, as with Type 1. A program that does
-//!   not parse, or that the rewrite cannot carry, vectorizes with a note
-//!   naming the family and the reason.
-//! - **Everything else** — CFF (`/FontFile3`), CID/Type0, Type 3, non-embedded and
-//!   unreadable font programs — is vectorized through the Task 3 path machinery
-//!   (`outline()` → path ops under the glyph transform), with one fidelity note
-//!   per font recording why. Type 3 glyphs are the exception: their PDF drawing
-//!   instructions are re-interpreted through the device itself, which is faithful.
+//!   1 pt per 1000-unit glyph-space unit, as with Type 1.
+//! - **CFF and CID fonts** (a simple font's `/FontFile3 /Type1C`, or a Type0
+//!   over a CIDFontType0/CIDFontType2 descendant) leave as **Type 0
+//!   composites** (Task 5): a CMap resource mapping our assigned 2-byte
+//!   codes to the font's CIDs, a CIDFont resource embedding the program, and
+//!   a `composefont` parent — the shapes probed executable against gs 10.08
+//!   (`cid.rs` module docs carry the map). A simple CFF is *promoted* with
+//!   CID == charstring gid and `Adobe`/`Identity`/0; a native CID-keyed CFF
+//!   inverts its charset via skrifa (`cff_gid_to_cid`, the same parse hayro
+//!   performs) so the codes are the font's own CIDs, degrading to vectorized
+//!   paths with a note when the charset cannot be inverted; a CIDFontType2
+//!   embeds the TrueType program verbatim with an identity CIDMap (the PDF's
+//!   glyph ids survive as CIDs — hayro already applied any `/CIDToGIDMap`, and
+//!   the composite's own CID→glyph chain is ours). Extraction for the CID
+//!   arms resolves through the CMap→CID machinery, not glyph names, so no
+//!   txtwrite name round-trip exists for them — structural emission plus ink
+//!   is what is verified (the plan scopes extraction proof to the Latin
+//!   arms).
+//! - **Everything else** — OpenType-wrapped programs (`/FontFile3
+//!   /OpenType`), Type 3, non-embedded and unreadable font programs — is
+//!   vectorized through the Task 3 path machinery (`outline()` → path ops
+//!   under the glyph transform), with one fidelity note per font recording
+//!   why. Type 3 glyphs are the exception: their PDF drawing instructions
+//!   are re-interpreted through the device itself, which is faithful.
 //!
 //! Geometry: the interpreter hands each glyph `transform * glyph_transform`, the
 //! total map from 1000-unit glyph space to the page (findings (b)). Consecutive
@@ -54,18 +71,21 @@
 //! a single `xyshow`: the CTM becomes the run's linear part, the font is scaled
 //! so its effective glyph matrix is the identity on 1000-unit space (`1000
 //! scalefont` over the program's natural matrix — 1/1000 for Type 1; identity
-//! for Type 42, where gs applies 1/unitsPerEm itself), and every glyph origin
-//! comes from the observed transforms, so positioning never depends on the
-//! PDF's declared widths agreeing with the font's.
+//! for Type 42 and the composites, where gs applies the program's own scaling),
+//! and every glyph origin comes from the observed transforms, so positioning
+//! never depends on the PDF's declared widths agreeing with the font's.
 
 use std::collections::HashMap;
 
 use hayro::hayro_interpret::CacheKey;
 use hayro::hayro_interpret::font::Glyph;
-use hayro::hayro_interpret::hayro_syntax::object::{Array, Dict, Name, Object, Stream};
+use hayro::hayro_interpret::hayro_syntax::object::{Array, Dict, Name, Number, Object, Stream};
 use hayro::hayro_interpret::hayro_syntax::page::Resources;
+use skrifa::GlyphId;
 use skrifa::raw::TableProvider as _;
+use skrifa::raw::ps::cff::CffFontRef;
 
+use crate::cid;
 use crate::psnum;
 use crate::sfnt;
 
@@ -78,6 +98,12 @@ pub(crate) enum TextStrategy {
     /// rewritten with a synthesized (3,0) cmap over the assigned codes, `show`
     /// text.
     Type42Cmap,
+    /// Embedded CFF (promoted simple or native CID-keyed): a Type 0 composite
+    /// whose CMap maps our 2-byte codes to the font's CIDs, `show` text.
+    CidFontType0,
+    /// A Type0/CIDFontType2 with an embedded TrueType program: a Type 0
+    /// composite over a type-11 CIDFont, `show` text.
+    CidFontType2,
     /// Outline glyphs as plain path operations.
     Vectorize,
 }
@@ -90,8 +116,14 @@ enum EmbeddedKind {
     /// `/FontFile2` — TrueType data, decoded and held for the Type 42 emission
     /// (the preamble rewrites it with a synthesized cmap per slice).
     TrueType(Vec<u8>),
-    /// `/FontFile3` — CFF or OpenType (never executed as text in Layer A).
-    Cff,
+    /// `/FontFile3` — a bare CFF program, decoded. `cid_keyed` is the stream
+    /// dict's `/Subtype`: `CIDFontType0C` carries a charset of CIDs (the
+    /// native composite arm inverts it), anything else is treated as a
+    /// name-keyed `Type1C` (parse-checked before promotion).
+    Cff { bytes: Vec<u8>, cid_keyed: bool },
+    /// `/FontFile3 /Subtype /OpenType` — an sfnt wrapper we do not unwrap
+    /// (out of scope, Layer B); the strategy vectorizes with a note.
+    OpenType,
     /// No embedded program.
     None,
 }
@@ -103,8 +135,31 @@ enum Decision {
     /// Embedded TrueType: the program lives in the entry's `kind`; the preamble
     /// synthesizes a cmap over each slice's assigned codes.
     Type42,
+    /// A CFF composite. `cids` is the gid → CID table of a CID-keyed
+    /// program's charset (indexed by gid); `None` means identity — either a
+    /// promoted name-keyed CFF (gs renumbers CID == charstring index) or a
+    /// name-keyed program under a Type0 (hayro maps gid == CID through the
+    /// identity `/CIDToGIDMap`).
+    CidFontType0 { cids: Option<Vec<u32>> },
+    /// A Type0/CIDFontType2 composite over an embedded TrueType program:
+    /// the PDF's glyph ids ride as CIDs (identity CIDMap), so no table is
+    /// needed.
+    CidFontType2,
     /// Path fallback; the note (if any) was queued when this was decided.
     Vectorize,
+}
+
+/// The PostScript names of one composite font's three resources, minted from
+/// the same counter the simple-font slices use (so no two resources of the
+/// export ever share a name).
+#[derive(Clone, Debug)]
+struct CompositeNames {
+    /// The Type 0 parent (`PdfCraftF<n>`), the name `findfont` selects.
+    font: String,
+    /// The CMap resource (`PdfCraftM<n>`).
+    cmap: String,
+    /// The CIDFont descendant (`PdfCraftD<n>`).
+    descendant: String,
 }
 
 /// One pseudo-font of at most 256 assigned character codes. A font whose text
@@ -122,19 +177,48 @@ struct FontEntry {
     kind: EmbeddedKind,
     /// `/Subtype` of the font dict, when readable.
     subtype: Option<String>,
+    /// For a Type0 font: the descendant's `/Subtype` (CIDFontType0/2), when
+    /// readable — read from `/DescendantFonts[0]`, everything copied out.
+    descendant_subtype: Option<String>,
     /// `/BaseFont` of the font dict, when readable (names the family in notes).
     base_font: Option<String>,
     /// `/FontDescriptor /FontBBox` (or the font dict's own, for Type 3).
     bbox: Option<[f64; 4]>,
+    /// The descendant's `/CIDSystemInfo`, when readable (Type0 fonts only;
+    /// consumed by the CIDFontType 2 emission — the ReadData form of the
+    /// CIDFontType 0 has no home for it).
+    csi: Option<cid::CidSystemInfo>,
+    /// The descendant's `/W`, re-serialized as a PostScript array of numbers
+    /// and nested arrays (anything else in the PDF array → `None` → `/DW
+    /// 1000`). Carried by the CIDFontType 2 emission; never positions
+    /// anything under this device (`xyshow` supplies every displacement).
+    w: Option<String>,
     decision: Option<Decision>,
     slices: Vec<Slice>,
+    /// gid → assigned composite code (code = CID; gid 0 remapped to the
+    /// highest unused code). Filled by `cid_code` as glyphs arrive.
+    cid_codes: HashMap<u32, u16>,
+    /// The composite's resource names, minted at the first `cid_code`.
+    composite: Option<CompositeNames>,
 }
 
 impl FontEntry {
     /// The entry for a font the resource walk never saw (nested resources, or a
     /// fallback font with no dict of its own).
     fn unknown() -> Self {
-        Self { kind: EmbeddedKind::None, subtype: None, base_font: None, bbox: None, decision: None, slices: Vec::new() }
+        Self {
+            kind: EmbeddedKind::None,
+            subtype: None,
+            descendant_subtype: None,
+            base_font: None,
+            bbox: None,
+            csi: None,
+            w: None,
+            decision: None,
+            slices: Vec::new(),
+            cid_codes: HashMap::new(),
+            composite: None,
+        }
     }
 }
 
@@ -200,11 +284,57 @@ impl FontTable {
             return Self::strategy_of(entry);
         }
         let entry = self.fonts.get(&key);
+        let family = || entry.and_then(|e| e.base_font.as_deref()).unwrap_or("unnamed");
         let decision = match (entry.map(|e| &e.kind), entry.and_then(|e| e.subtype.as_deref())) {
-            (_, Some("Type0")) => {
-                self.pending_notes.push("text vectorized (CID font program)".into());
-                Decision::Vectorize
-            }
+            // A Type0 font: everything composite reads from the descendant
+            // (walked at entry time). The glyph's cache key indexes the
+            // parent dict, which is the dict the interpreter resolved.
+            (_, Some("Type0")) => match entry.map(|e| &e.kind) {
+                Some(EmbeddedKind::Cff { bytes, cid_keyed: true }) => {
+                    // A native CID-keyed CFF: the codes must be the font's
+                    // own CIDs, the inverse of its charset (the same parse
+                    // hayro performs, so the gids agree by construction).
+                    match cff_gid_to_cid(bytes) {
+                        Some(cids) => Decision::CidFontType0 { cids: Some(cids) },
+                        None => {
+                            self.pending_notes.push(format!("text vectorized (CFF '{}', charset unreadable)", family()));
+                            Decision::Vectorize
+                        }
+                    }
+                }
+                Some(EmbeddedKind::Cff { bytes, cid_keyed: false }) => {
+                    // A name-keyed program under a Type0: hayro maps gid ==
+                    // CID through the identity /CIDToGIDMap, so identity
+                    // codes carry it (parse-checked first).
+                    if cff_parses(bytes) {
+                        Decision::CidFontType0 { cids: None }
+                    } else {
+                        self.pending_notes.push(format!("text vectorized (CFF '{}' program unreadable)", family()));
+                        Decision::Vectorize
+                    }
+                }
+                Some(EmbeddedKind::TrueType(program)) => {
+                    // The program ships verbatim inside the type-11 CIDFont,
+                    // so skrifa-parse is the dress rehearsal for gs's loader
+                    // (the same proxy the Type 42 arm uses, minus the cmap
+                    // rewrite we do not perform).
+                    match entry.and_then(|e| e.descendant_subtype.as_deref()) {
+                        Some("CIDFontType2") if units_per_em(program).is_some() => Decision::CidFontType2,
+                        Some("CIDFontType2") => {
+                            self.pending_notes.push(format!("text vectorized (CID TrueType '{}' program unreadable)", family()));
+                            Decision::Vectorize
+                        }
+                        _ => {
+                            self.pending_notes.push("text vectorized (CID font program)".into());
+                            Decision::Vectorize
+                        }
+                    }
+                }
+                _ => {
+                    self.pending_notes.push("text vectorized (CID font program)".into());
+                    Decision::Vectorize
+                }
+            },
             (Some(EmbeddedKind::Type1(program)), st) if st != Some("TrueType") => match parse_type1(program) {
                 Some((name, names)) if !names.is_empty() => Decision::Type1 { name, names },
                 _ => {
@@ -225,13 +355,30 @@ impl FontTable {
                 if type42_ready(program) {
                     Decision::Type42
                 } else {
-                    let family = entry.and_then(|e| e.base_font.as_deref()).unwrap_or("unnamed");
-                    self.pending_notes.push(format!("text vectorized (Type 42 '{family}' program unreadable)"));
+                    self.pending_notes.push(format!("text vectorized (Type 42 '{}' program unreadable)", family()));
                     Decision::Vectorize
                 }
             }
-            (Some(EmbeddedKind::Cff), _) => {
-                self.pending_notes.push("text vectorized (CFF font program)".into());
+            (Some(EmbeddedKind::Cff { bytes, cid_keyed: false }), _) => {
+                // The promotion arm: a simple font's CFF becomes a composite
+                // with CID == charstring gid. Parse-checked so gs's loader
+                // never meets bytes skrifa already rejected.
+                if cff_parses(bytes) {
+                    Decision::CidFontType0 { cids: None }
+                } else {
+                    self.pending_notes.push(format!("text vectorized (CFF '{}' program unreadable)", family()));
+                    Decision::Vectorize
+                }
+            }
+            (Some(EmbeddedKind::Cff { cid_keyed: true, .. }), _) => {
+                // A CID-keyed program under a simple font is malformed (its
+                // CIDs belong to a character collection a simple font cannot
+                // name); decline honestly.
+                self.pending_notes.push(format!("text vectorized (CID-keyed CFF '{}' under a simple font)", family()));
+                Decision::Vectorize
+            }
+            (Some(EmbeddedKind::OpenType), _) => {
+                self.pending_notes.push(format!("text vectorized (OpenType-wrapped CFF '{}')", family()));
                 Decision::Vectorize
             }
             _ => {
@@ -249,6 +396,8 @@ impl FontTable {
         match entry.decision {
             Some(Decision::Type1 { .. }) => TextStrategy::Type1Passthrough,
             Some(Decision::Type42) => TextStrategy::Type42Cmap,
+            Some(Decision::CidFontType0 { .. }) => TextStrategy::CidFontType0,
+            Some(Decision::CidFontType2) => TextStrategy::CidFontType2,
             _ => TextStrategy::Vectorize,
         }
     }
@@ -309,6 +458,72 @@ impl FontTable {
         names.get(&glyph_id).map(String::as_str)
     }
 
+    /// The composite character code for `glyph_id`: **code = CID** — the
+    /// font's own CID for a native CID-keyed CFF (the decision's charset
+    /// inverse), the gid itself for identity fonts (promotion, CIDFontType2).
+    /// gid 0, whose codes the 1-byte arms must keep away from `.notdef`,
+    /// remaps to the **highest unused code** (`0xFFFF` downward, skipping any
+    /// code a sibling glyph's CID already took), and every assignment is
+    /// memoized so repeated glyphs keep their codes. The caller guarantees
+    /// `glyph_id <= 0xFFFE`; CIDs themselves are charset values and never
+    /// exceed 16 bits.
+    pub(crate) fn cid_code(&mut self, font_key: u128, glyph_id: u32) -> u16 {
+        if !self.fonts.contains_key(&font_key) {
+            self.order.push(font_key);
+            self.fonts.insert(font_key, FontEntry::unknown());
+        }
+        let counter = &mut self.slice_counter;
+        if let Some(entry) = self.fonts.get_mut(&font_key) {
+            if let Some(&code) = entry.cid_codes.get(&glyph_id) {
+                return code;
+            }
+            if entry.composite.is_none() {
+                let n = *counter;
+                *counter += 1;
+                entry.composite =
+                    Some(CompositeNames { font: format!("PdfCraftF{n}"), cmap: format!("PdfCraftM{n}"), descendant: format!("PdfCraftD{n}") });
+            }
+            let cid = Self::cid_of(entry, glyph_id);
+            let code = if glyph_id == 0 {
+                // The highest unused code, walking down past any CID a
+                // sibling already claimed; 0xFFFF is free unless some glyph's
+                // CID is exactly it, and the loop cannot run off the bottom
+                // without first finding a free code (there are at most 65536
+                // assigned codes).
+                let mut candidate = u16::MAX;
+                while entry.cid_codes.values().any(|&used| used == candidate) {
+                    candidate -= 1;
+                }
+                candidate
+            } else {
+                // Charset values are u16 and identity gids are ≤ 0xFFFE, so
+                // the conversion cannot truncate on the guarded path.
+                u16::try_from(cid).unwrap_or(0xFFFF)
+            };
+            entry.cid_codes.insert(glyph_id, code);
+            return code;
+        }
+        0
+    }
+
+    /// The CID a composite font's glyph `gid` draws: the charset inverse's
+    /// entry when the decision carries one, the gid itself otherwise
+    /// (identity fonts). Falls back to the gid for a gid past the table —
+    /// unreachable through the strategy, which sized the table from the same
+    /// parse the glyph ids come from.
+    fn cid_of(entry: &FontEntry, gid: u32) -> u32 {
+        match entry.decision.as_ref() {
+            Some(Decision::CidFontType0 { cids: Some(cids) }) => cids.get(gid as usize).copied().unwrap_or(gid),
+            _ => gid,
+        }
+    }
+
+    /// The PostScript font name of a font's composite (`PdfCraftF<n>`), for
+    /// `findfont` at flush time. `None` until the first `cid_code` minted it.
+    pub(crate) fn cid_name(&self, font_key: u128) -> Option<String> {
+        self.fonts.get(&font_key)?.composite.as_ref().map(|c| c.font.clone())
+    }
+
     /// Take the notes queued since the last drain.
     pub(crate) fn drain_notes(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_notes)
@@ -338,11 +553,58 @@ impl FontTable {
                         type42_resource(&mut out, slice, program, entry.bbox);
                     }
                 }
+                Some(Decision::CidFontType0 { cids }) => {
+                    let EmbeddedKind::Cff { bytes, .. } = &entry.kind else { continue };
+                    let mappings = composite_mappings(entry, cids.as_deref());
+                    // gs's own CFF loader route: the CFF promotes to the
+                    // CIDFont resource, carrying its own metrics and
+                    // CIDSystemInfo (the near-passthrough decision).
+                    composite_preamble(&mut out, entry, &mappings, |out, names| cid::cidfont_type0(out, &names.descendant, bytes));
+                }
+                Some(Decision::CidFontType2) => {
+                    let EmbeddedKind::TrueType(program) = &entry.kind else { continue };
+                    let Some(font) = skrifa::FontRef::from_index(program, 0).ok() else { continue };
+                    let Ok(maxp) = font.maxp() else { continue };
+                    let mappings = composite_mappings(entry, None);
+                    let csi = entry.csi.clone().unwrap_or_else(cid::identity_csi);
+                    // The type-11 key set around the PDF-transliterated ones;
+                    // the CIDMap is sized by the program's glyph count (the
+                    // strategy's parse gate guaranteed it reads).
+                    composite_preamble(&mut out, entry, &mappings, |out, names| {
+                        cid::cidfont_type2(out, &names.descendant, program, maxp.num_glyphs(), &csi, entry.w.as_deref());
+                    });
+                }
                 _ => {}
             }
         }
         out
     }
+}
+
+/// The CMap mappings of a composite font's assigned codes: `(code, cid)` for
+/// every gid `cid_code` has seen, the code the device shows and the CID that
+/// reaches the glyph (identity fonts: the gid; native fonts: the charset
+/// inverse's entry). The CMap emitter sorts and collapses them.
+fn composite_mappings(entry: &FontEntry, cids: Option<&[u32]>) -> Vec<(u16, u32)> {
+    entry
+        .cid_codes
+        .iter()
+        .map(|(gid, code)| (*code, cids.and_then(|c| c.get(usize::try_from(*gid).ok().unwrap_or(usize::MAX))).copied().unwrap_or(*gid)))
+        .collect()
+}
+
+/// One composite font's preamble block — CMap, descendant, parent, in the
+/// design's order — under their `%%BeginResource` comments. Nothing is
+/// emitted for a composite no glyph reached (no codes, no CMap to build);
+/// `descendant` receives the names and writes the CIDFont resource.
+fn composite_preamble(out: &mut Vec<u8>, entry: &FontEntry, mappings: &[(u16, u32)], descendant: impl FnOnce(&mut Vec<u8>, &CompositeNames)) {
+    let Some(names) = entry.composite.as_ref() else { return };
+    if entry.cid_codes.is_empty() {
+        return;
+    }
+    cid::cmap_resource(out, &names.cmap, 2, mappings);
+    descendant(out, names);
+    cid::type0_parent(out, &names.font, &names.cmap, &names.descendant);
 }
 
 /// One re-encoded copy of the verbatim Type 1 program.
@@ -531,33 +793,145 @@ pub(crate) fn hex_payload(bytes: &[u8]) -> String {
     out
 }
 
-/// Build the walk result for one font dict.
+/// Build the walk result for one font dict. For a Type0 the descendant dict
+/// (`/DescendantFonts[0]`) supplies the subtype, the descriptor program,
+/// `/W` and `/CIDSystemInfo`; everything is copied out, as the table must
+/// outlive the PDF objects.
 fn entry_of(dict: &Dict<'_>) -> FontEntry {
-    let kind = dict
-        .get::<Dict<'_>>(b"FontDescriptor")
-        .and_then(|desc| {
-            if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile") {
-                stream.decoded().ok().map(|d| EmbeddedKind::Type1(d.into_owned()))
-            } else if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile2") {
-                // Decoding validates the program (an undecodable one falls
-                // through to the not-embedded note); the bytes are held for
-                // the Type 42 emission to rewrite per slice.
-                stream.decoded().ok().map(|d| EmbeddedKind::TrueType(d.into_owned()))
-            } else if desc.contains_key(b"FontFile3") {
-                Some(EmbeddedKind::Cff)
-            } else {
-                Some(EmbeddedKind::None)
-            }
-        })
-        .unwrap_or(EmbeddedKind::None);
+    // A Type0's program and metrics live on the descendant; every other
+    // subtype keeps its own dict as the source.
+    let is_type0 = dict.get::<Name<'_>>(b"Subtype").map(|n| n.as_str() == "Type0").unwrap_or(false);
+    let descendant = if is_type0 { dict.get::<Array<'_>>(b"DescendantFonts").and_then(|fonts| fonts.iter::<Dict<'_>>().next()) } else { None };
+    let source = descendant.as_ref().unwrap_or(dict);
+    let kind = embedded_kind(source);
     FontEntry {
         kind,
         subtype: dict.get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_string()),
+        descendant_subtype: descendant.as_ref().and_then(|d| d.get::<Name<'_>>(b"Subtype")).map(|n| n.as_str().to_string()),
         base_font: dict.get::<Name<'_>>(b"BaseFont").map(|n| n.as_str().to_string()),
-        bbox: bbox_of(dict),
+        bbox: bbox_of(dict).or_else(|| descendant.as_ref().and_then(bbox_of)),
+        csi: source.get::<Dict<'_>>(b"CIDSystemInfo").and_then(|d| csi_of(&d)),
+        w: source.get::<Array<'_>>(b"W").and_then(|a| w_array(&a)),
         decision: None,
         slices: Vec::new(),
+        cid_codes: HashMap::new(),
+        composite: None,
     }
+}
+
+/// The embedded font program of a font dict's descriptor: `/FontFile` (Type
+/// 1), `/FontFile2` (TrueType) or `/FontFile3` (a bare CFF whose stream
+/// `/Subtype` picks the flavor: `CIDFontType0C` is CID-keyed, `OpenType` is
+/// the wrapper we decline, anything else — `Type1C`, or a missing subtype —
+/// is treated as a name-keyed CFF the parse gate checks). Decoding validates
+/// the program (an undecodable one falls through to the not-embedded note).
+fn embedded_kind(dict: &Dict<'_>) -> EmbeddedKind {
+    let Some(desc) = dict.get::<Dict<'_>>(b"FontDescriptor") else {
+        return EmbeddedKind::None;
+    };
+    if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile") {
+        return stream.decoded().ok().map(|d| EmbeddedKind::Type1(d.into_owned())).unwrap_or(EmbeddedKind::None);
+    }
+    if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile2") {
+        // The bytes are held for the Type 42 / CIDFontType 2 emission.
+        return stream.decoded().ok().map(|d| EmbeddedKind::TrueType(d.into_owned())).unwrap_or(EmbeddedKind::None);
+    }
+    if let Some(stream) = desc.get::<Stream<'_>>(b"FontFile3") {
+        let subtype = stream.dict().get::<Name<'_>>(b"Subtype").map(|n| n.as_str().to_string());
+        return match subtype.as_deref() {
+            Some("OpenType") => EmbeddedKind::OpenType,
+            Some("CIDFontType0C") => {
+                stream.decoded().ok().map(|d| EmbeddedKind::Cff { bytes: d.into_owned(), cid_keyed: true }).unwrap_or(EmbeddedKind::None)
+            }
+            // Type1C — or a missing/unknown subtype, which the CFF parse
+            // gate arbitrates before anything is emitted.
+            _ => stream.decoded().ok().map(|d| EmbeddedKind::Cff { bytes: d.into_owned(), cid_keyed: false }).unwrap_or(EmbeddedKind::None),
+        };
+    }
+    EmbeddedKind::None
+}
+
+/// A `/CIDSystemInfo` dict copied out: Registry and Ordering as strings (a
+/// Name in the wild is accepted too — both are ASCII identifiers), Supplement
+/// as an integer.
+fn csi_of(dict: &Dict<'_>) -> Option<cid::CidSystemInfo> {
+    let read = |key: &[u8]| -> Option<String> {
+        match dict.get::<Object<'_>>(key) {
+            Some(Object::String(s)) => Some(String::from_utf8_lossy(&s).into_owned()),
+            Some(Object::Name(n)) => Some(n.as_str().to_string()),
+            _ => None,
+        }
+    };
+    Some(cid::CidSystemInfo {
+        registry: read(b"Registry")?,
+        ordering: read(b"Ordering")?,
+        supplement: i32::try_from(dict.get::<Number>(b"Supplement")?.as_i64()).ok()?,
+    })
+}
+
+/// A PDF `/W` array re-serialized as a PostScript array: numbers and nested
+/// arrays of numbers only (the forms the PDF spec allows — `c [w]`,
+/// `c [w1 w2]` and `c c w`), brackets included, numbers through the operand
+/// formatter. Anything else (a Name, String, Dict, non-finite number, deeper
+/// nesting) makes the whole array uncarriable → `None` → `/DW 1000`.
+fn w_array(array: &Array<'_>) -> Option<String> {
+    fn emit_objects<'a>(objects: impl Iterator<Item = Object<'a>>, depth: u8) -> Option<String> {
+        let mut out = String::from("[");
+        for obj in objects {
+            match obj {
+                Object::Number(n) => {
+                    out.push_str(&psnum::num(n.as_f64())?);
+                    out.push(' ');
+                }
+                Object::Array(inner) if depth == 0 => {
+                    out.push_str(&emit_objects(inner.iter::<Object<'_>>(), 1)?);
+                    out.push(' ');
+                }
+                _ => return None,
+            }
+        }
+        out.pop();
+        out.push(']');
+        Some(out)
+    }
+    emit_objects(array.iter::<Object<'_>>(), 0)
+}
+
+/// Whether a bare CFF program parses through skrifa — the same parse hayro
+/// performs, and the dress rehearsal for gs's ReadData loader before a simple
+/// font's CFF is promoted.
+fn cff_parses(cff: &[u8]) -> bool {
+    CffFontRef::new(cff, 0, None).is_ok()
+}
+
+/// The gid → CID table of a CID-keyed CFF: the inverse view of its charset,
+/// read through skrifa's `CffFontRef` (the same parse hayro performs, so the
+/// glyph ids agree by construction — hayro hands the device the charstring
+/// index and keeps the CID→glyph mapping inside this same charset).
+/// `None` when the program is not CID-keyed, or its charset cannot be read
+/// for every glyph (truncated data, claimed glyph count past the charset,
+/// more glyphs than a 2-byte CID can address) — the caller degrades with a
+/// note rather than emitting codes that would draw wrong glyphs.
+fn cff_gid_to_cid(cff: &[u8]) -> Option<Vec<u32>> {
+    let font = CffFontRef::new(cff, 0, None).ok()?;
+    if !font.is_cid() {
+        return None;
+    }
+    let charset = font.charset()?;
+    let num_glyphs = font.num_glyphs();
+    // Charstring INDEX counts are 16-bit; a font claiming more glyphs than a
+    // 2-byte CID addresses cannot ride the composite route at all.
+    if num_glyphs > 0xFFFF {
+        return None;
+    }
+    let mut cids = Vec::with_capacity(num_glyphs as usize);
+    for gid in 0..num_glyphs {
+        // Charset values are u16 SIDs-or-CIDs; a glyph the charset does not
+        // cover would draw as .notdef under the PDF's own CID, so the whole
+        // table declines.
+        cids.push(u32::from(charset.string_id(GlyphId::new(gid))?.to_u16()));
+    }
+    Some(cids)
 }
 
 /// `/FontBBox` from the descriptor, falling back to the font dict itself (Type 3).
@@ -678,20 +1052,10 @@ mod tests {
         obj
     }
 
-    /// Assemble a one-page PDF: catalog, pages, font (`/F1` = object 3),
-    /// content (object 4), descriptor (5), a font-program stream (6, whatever
-    /// kind the test means it to be) and optional extra streams (7…), page last.
-    fn font_pdf(font: &str, descriptor: &str, fontfile_dict: &str, fontfile: &[u8], content: &[u8]) -> Vec<u8> {
-        let mut objs: Vec<Vec<u8>> = vec![
-            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-            // The page is the last object; its number fills /Kids below.
-            b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
-            font.as_bytes().to_vec(),
-            stream_obj("", content),
-            descriptor.as_bytes().to_vec(),
-            stream_obj(fontfile_dict, fontfile),
-        ];
-        objs.push(b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec());
+    /// Assemble a one-page PDF from object bodies numbered from 1, computing
+    /// the xref like `crates/engine/src/tests.rs` (lengths and offsets, never
+    /// counted by hand).
+    fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -707,6 +1071,41 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         out
+    }
+
+    /// Assemble a one-page PDF: catalog, pages, font (`/F1` = object 3),
+    /// content (object 4), descriptor (5), a font-program stream (6, whatever
+    /// kind the test means it to be) and optional extra streams (7…), page last.
+    fn font_pdf(font: &str, descriptor: &str, fontfile_dict: &str, fontfile: &[u8], content: &[u8]) -> Vec<u8> {
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            // The page is the last object; its number fills /Kids below.
+            b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            font.as_bytes().to_vec(),
+            stream_obj("", content),
+            descriptor.as_bytes().to_vec(),
+            stream_obj(fontfile_dict, fontfile),
+        ];
+        objs.push(b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec());
+        assemble(objs)
+    }
+
+    /// Assemble a one-page PDF with a Type0 `/F1`: the parent (object 3,
+    /// `/Encoding /Identity-H` over one descendant), content (4), the
+    /// descendant's descriptor (5), a font-program stream (6) and the
+    /// descendant dict (7), page last (8).
+    fn type0_pdf(base_font: &str, descendant: &str, descriptor: &str, fontfile_dict: &str, fontfile: &[u8], content: &[u8]) -> Vec<u8> {
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [8 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            format!("<< /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /Identity-H /DescendantFonts [7 0 R] >>").into_bytes(),
+            stream_obj("", content),
+            descriptor.as_bytes().to_vec(),
+            stream_obj(fontfile_dict, fontfile),
+            descendant.as_bytes().to_vec(),
+        ];
+        objs.push(b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec());
+        assemble(objs)
     }
 
     /// Adobe Type 1 encryption (eexec seed 55665, charstring seed 4330).
@@ -1003,6 +1402,188 @@ mod tests {
         out
     }
 
+    /// A minimal CID-keyed CFF (CIDFontType0C-shaped): ROS Adobe/Identity/0
+    /// via custom SIDs 391/392, one-FD FDArray over a Private DICT, FDSelect
+    /// format 0, and a format-0 charset mapping gid 1 → CID 10 and gid 2 →
+    /// CID 20 — deliberately non-identity, so a test can prove the emitted
+    /// codes are the font's CIDs and not the gids.
+    fn cid_cff_program() -> Vec<u8> {
+        fn index(items: &[&[u8]]) -> Vec<u8> {
+            let mut out = (items.len() as u16).to_be_bytes().to_vec();
+            if items.is_empty() {
+                return out;
+            }
+            out.push(1); // offSize
+            let mut offsets = vec![1u16];
+            let mut total = 1u16;
+            let mut data = Vec::new();
+            for item in items {
+                data.extend_from_slice(item);
+                total = total.saturating_add(item.len() as u16);
+                offsets.push(total);
+            }
+            for off in offsets {
+                out.push(off as u8);
+            }
+            out.extend_from_slice(&data);
+            out
+        }
+        fn i32(value: u32) -> Vec<u8> {
+            let mut out = vec![29];
+            out.extend_from_slice(&value.to_be_bytes());
+            out
+        }
+        let header = [0x01, 0x00, 0x04, 0x02].to_vec();
+        let name_index = index(&[b"PdfCraftCID"]);
+        let empty_index = index(&[]);
+        let string_index = index(&[b"Adobe", b"Identity"]); // SIDs 391, 392
+        let notdef = vec![14u8];
+        let a = vec![248, 136, 239, 22, 189, 189, 189, 89, 139, 39, 8, 14];
+        let b = vec![249, 80, 239, 22, 248, 36, 7, 247, 192, 6, 252, 36, 7, 14];
+        let charstrings = index(&[&notdef, &a, &b]);
+        // Charset format 0 over CIDs: gid 1 → 10, gid 2 → 20.
+        let charset = [0u8, 0, 10, 0, 20].to_vec();
+        // FDSelect format 0: every glyph in FD 0.
+        let fdselect = [0u8, 0, 0, 0].to_vec();
+        // Private DICT: defaultWidthX 0.
+        let private = vec![139, 20];
+
+        // Sizes are value-independent (fixed 5-byte operands), so offsets are
+        // computed with a placeholder top dict of the same length.
+        let top = |charset_pos: u32, charstrings_pos: u32, fdarray_pos: u32, fdselect_pos: u32, _private_pos: u32| {
+            let mut d = Vec::new();
+            d.extend(i32(391));
+            d.extend(i32(392));
+            d.extend(i32(0));
+            d.extend_from_slice(&[12, 30]); // ROS
+            d.extend(i32(2));
+            d.extend_from_slice(&[12, 34]); // CIDCount
+            d.extend(i32(charset_pos));
+            d.push(15); // charset
+            d.extend(i32(charstrings_pos));
+            d.push(17); // CharStrings
+            d.extend(i32(fdarray_pos));
+            d.extend_from_slice(&[12, 36]); // FDArray
+            d.extend(i32(fdselect_pos));
+            d.extend_from_slice(&[12, 37]); // FDSelect
+            d
+        };
+        let top_len = top(0, 0, 0, 0, 0).len();
+        let top_index_len = 2 + 1 + 2 + top_len;
+        let font_dict = |private_pos: u32| {
+            let mut d = Vec::new();
+            d.extend(i32(private.len() as u32));
+            d.extend(i32(private_pos));
+            d.push(18); // Private
+            d
+        };
+        let fdarray_len = 2 + 1 + 2 + font_dict(0).len();
+        let base = header.len() + name_index.len() + top_index_len + string_index.len() + empty_index.len();
+        let charset_pos = base;
+        let fdselect_pos = charset_pos + charset.len();
+        let charstrings_pos = fdselect_pos + fdselect.len();
+        let fdarray_pos = charstrings_pos + charstrings.len();
+        let private_pos = fdarray_pos + fdarray_len;
+        let top_index = index(&[&top(charset_pos as u32, charstrings_pos as u32, fdarray_pos as u32, fdselect_pos as u32, private_pos as u32)]);
+        let fdarray = index(&[&font_dict(private_pos as u32)]);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&header);
+        out.extend_from_slice(&name_index);
+        out.extend_from_slice(&top_index);
+        out.extend_from_slice(&string_index);
+        out.extend_from_slice(&empty_index); // Global Subr INDEX
+        out.extend_from_slice(&charset);
+        out.extend_from_slice(&fdselect);
+        out.extend_from_slice(&charstrings);
+        out.extend_from_slice(&fdarray);
+        out.extend_from_slice(&private);
+        out
+    }
+
+    /// [`cff_program`] stretched to 259 glyphs so codes past one byte exist:
+    /// every glyph gets the box charstring, and the charset sends the
+    /// StandardEncoding names B and C to gids 258 and 7 — so the content
+    /// `BC` draws gids `0x0102` and `0x0007` and the emitted codes are
+    /// exactly the big-endian pair test wants.
+    fn cff_program_sparse() -> Vec<u8> {
+        fn index(items: &[&[u8]]) -> Vec<u8> {
+            let mut out = (items.len() as u16).to_be_bytes().to_vec();
+            out.push(1); // offSize (fixture stays far below the u16 range)
+            let mut offsets = vec![1u16];
+            let mut total = 1u16;
+            let mut data = Vec::new();
+            for item in items {
+                data.extend_from_slice(item);
+                total = total.saturating_add(item.len() as u16);
+                offsets.push(total);
+            }
+            for off in offsets {
+                out.push(off as u8);
+            }
+            out.extend_from_slice(&data);
+            out
+        }
+        fn dict_int(value: u32, op: u8) -> Vec<u8> {
+            let mut out = vec![29];
+            out.extend_from_slice(&value.to_be_bytes());
+            out.push(op);
+            out
+        }
+        const GLYPHS: u32 = 259; // gids 0..=258
+        let header = [0x01, 0x00, 0x04, 0x02].to_vec();
+        let name_index = index(&[b"PdfCraftCFF"]);
+        let empty_index = index(&[]);
+        let notdef = vec![14u8];
+        let box_glyph = vec![249, 80, 239, 22, 248, 36, 7, 247, 192, 6, 252, 36, 7, 14];
+        // 258 boxes after .notdef: charstring data 258 * 14 = 3612 bytes, far
+        // below the u16 INDEX offsets carry.
+        let mut cs_items: Vec<Vec<u8>> = Vec::with_capacity(GLYPHS as usize);
+        cs_items.push(notdef.clone());
+        for _ in 1..GLYPHS {
+            cs_items.push(box_glyph.clone());
+        }
+        let refs: Vec<&[u8]> = cs_items.iter().map(|v| v.as_slice()).collect();
+        let cs_data = index(&refs);
+        // Charset format 0 over gids 1..=258: mostly SID 1 (space, unused);
+        // gid 7 → SID 36 (C), gid 258 → SID 35 (B).
+        let mut charset = vec![0u8];
+        for gid in 1..GLYPHS {
+            let sid: u16 = match gid {
+                7 => 36,   // C
+                258 => 35, // B
+                _ => 1,    // space
+            };
+            charset.extend_from_slice(&sid.to_be_bytes());
+        }
+        let private = vec![139, 20];
+        let top_len = dict_int(0, 15).len() + dict_int(0, 17).len() + 5 + 5 + 1;
+        let top_index_len = 2 + 1 + 2 + top_len;
+        let base = header.len() + name_index.len() + top_index_len + empty_index.len() * 2;
+        let charset_pos = base;
+        let charstrings_pos = charset_pos + charset.len();
+        let private_pos = charstrings_pos + cs_data.len();
+        let mut top = Vec::new();
+        top.extend(dict_int(charset_pos as u32, 15));
+        top.extend(dict_int(charstrings_pos as u32, 17));
+        top.extend_from_slice(&[29]);
+        top.extend_from_slice(&(private.len() as u32).to_be_bytes());
+        top.extend_from_slice(&[29]);
+        top.extend_from_slice(&(private_pos as u32).to_be_bytes());
+        top.push(18);
+        let top_index = index(&[&top]);
+        let mut out = Vec::new();
+        out.extend_from_slice(&header);
+        out.extend_from_slice(&name_index);
+        out.extend_from_slice(&top_index);
+        out.extend_from_slice(&empty_index);
+        out.extend_from_slice(&empty_index);
+        out.extend_from_slice(&charset);
+        out.extend_from_slice(&cs_data);
+        out.extend_from_slice(&private);
+        out
+    }
+
     // ------------------------------------------------------------------ drive
 
     /// Drive the device over one page of `pdf` and return (program, notes,
@@ -1214,23 +1795,187 @@ mod tests {
         assert!(!preamble.contains("/FontType 42"), "no Type 42 dictionary: {preamble}");
     }
 
-    /// A CFF font program (`/FontFile3 /Type1C`) is vectorized: the glyph becomes
-    /// path operators and no font is defined or selected.
+    /// A simple font's embedded CFF (`/FontFile3 /Type1C`) promotes to a PS
+    /// Type 0 composite: no degradation note; the preamble carries the CMap
+    /// (begincmap, cidrange grammar), the CIDFontType 0 descendant via gs's
+    /// ReadData route with the CFF hex, and the composefont parent; and the
+    /// page shows 2-byte codes — code = CID = charstring gid, so gids 1/2
+    /// ride as `(\000\001\000\002)`-style octal. (Reworked from the Layer A
+    /// `cff_font_vectorizes` test when the strategy flipped.)
     #[test]
-    fn cff_font_vectorizes() {
+    fn simple_cff_promotes_to_cidfonttype0() {
         let pdf = font_pdf(
             "<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftCFF /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R /Encoding /StandardEncoding >>",
             "<< /Type /FontDescriptor /FontName /PdfCraftCFF /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>",
             "/Subtype /Type1C",
             &cff_program(),
+            b"BT /F1 24 Tf 20 100 Td (AB) Tj ET",
+        );
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "CFF promotion degrades nothing: {notes:?}");
+        assert!(preamble.contains("%%BeginResource: cmap PdfCraftM0\n"), "the CMap resource: {preamble}");
+        assert!(preamble.contains("begincmap\n"), "the CMap body: {preamble}");
+        assert!(preamble.contains("%%BeginResource: cidfont PdfCraftD0\n"), "the descendant resource: {preamble}");
+        assert!(
+            preamble.contains("/PdfCraftD0 currentfile /ASCIIHexDecode filter //true //true ReadData\n"),
+            "gs's own CFF loader route: {preamble}"
+        );
+        assert!(
+            contains_bytes(&preamble, &cff_program()) || preamble.contains(&cff_program().iter().map(|b| format!("{b:02x}")).collect::<String>()),
+            "the CFF bytes ride as hex: {preamble}"
+        );
+        assert!(preamble.contains("/PdfCraftF0 /PdfCraftM0 [/PdfCraftD0] composefont pop\n"), "the composefont parent: {preamble}");
+        // Code = CID = gid for a promoted font; gids 1 and 2 shown as 2-byte
+        // codes, big-endian, octal-escaped in the show string.
+        assert!(out.contains("/PdfCraftF0 findfont 1000 scalefont setfont\n"), "font selected: {out}");
+        assert!(out.contains("(\\000\\001\\000\\002)"), "2-byte codes for gids 1 and 2: {out}");
+        assert_eq!(out.matches("gsave").count(), out.matches("grestore").count(), "balanced wrap: {out}");
+    }
+
+    /// A native CID-keyed CFF (`/FontFile3 /CIDFontType0C` under a Type0)
+    /// emits codes that are the *font's* CIDs — the charset inverse, not the
+    /// gids: content CIDs 10/20 land in gids 1/2, and the page shows
+    /// `(\000\012\000\024)`. The PDF descendant's `/W` and `/CIDSystemInfo`
+    /// have no home in the ReadData form (the near-passthrough decision), so
+    /// none is emitted.
+    #[test]
+    fn type0_cidfonttype0_uses_font_cids() {
+        let pdf = type0_pdf(
+            "PdfCraftCID",
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /PdfCraftCID /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> /FontDescriptor 5 0 R /DW 1000 /W [1 [500]] >>",
+            "<< /Type /FontDescriptor /FontName /PdfCraftCID /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>",
+            "/Subtype /CIDFontType0C",
+            &cid_cff_program(),
+            // Identity-H over 2-byte codes: CIDs 10 and 20 are the font's.
+            b"BT /F1 24 Tf 20 100 Td <000A0014> Tj ET",
+        );
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "the native CID arm degrades nothing: {notes:?}");
+        assert!(preamble.contains("begincmap\n"), "the CMap body: {preamble}");
+        assert!(preamble.contains("/PdfCraftD0 currentfile /ASCIIHexDecode filter //true //true ReadData\n"), "the ReadData route: {preamble}");
+        assert!(out.contains("/PdfCraftF0 findfont 1000 scalefont setfont\n"), "composite selected: {out}");
+        assert!(out.contains("(\\000\\012\\000\\024)"), "codes are the font's CIDs (10, 20), not the gids: {out}");
+        assert!(!preamble.contains("/W [1 [500]]"), "/W has no home in the ReadData form: {preamble}");
+        assert!(!preamble.contains("Japan1"), "the PDF's CIDSystemInfo has no home in the ReadData form: {preamble}");
+    }
+
+    /// A Type0 over a CIDFontType2 descendant with an embedded TrueType
+    /// program emits the type-11 CIDFontType 2: `/CIDFontType 2`,
+    /// `/CIDToGIDMap /Identity`, the identity `/CIDMap`, and the sfnts hex;
+    /// the PDF descendant's `/W` rides verbatim and the codes are the CIDs
+    /// (== gids under the identity map).
+    #[test]
+    fn type0_cidfonttype2_embeds_sfnts() {
+        let ttf = ttf_program();
+        let pdf = type0_pdf(
+            "PdfCraftTT",
+            "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /PdfCraftTT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 5 0 R /DW 1000 /W [1 [600] 2 [700]] /CIDToGIDMap /Identity >>",
+            "<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>",
+            "",
+            &ttf,
+            b"BT /F1 24 Tf 20 100 Td <00010002> Tj ET",
+        );
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "the CIDFontType 2 arm degrades nothing: {notes:?}");
+        assert!(preamble.contains("%%BeginResource: cidfont PdfCraftD0\n"), "the descendant resource: {preamble}");
+        assert!(preamble.contains("/CIDFontType 2 def\n"), "a CIDFontType 2 dict: {preamble}");
+        assert!(preamble.contains("/CIDToGIDMap /Identity def\n"), "identity CID-to-GID mapping: {preamble}");
+        assert!(preamble.contains("/CIDMap <000000010002> def\n"), "the identity CIDMap over the 3-glyph fixture: {preamble}");
+        assert!(preamble.contains("/W [1 [600] 2 [700]] def\n"), "the PDF's /W carried verbatim: {preamble}");
+        assert!(preamble.contains(&crate::fonts::hex_payload(&ttf)), "the whole TrueType program in sfnts hex: {preamble}");
+        assert!(preamble.contains("/PdfCraftF0 /PdfCraftM0 [/PdfCraftD0] composefont pop\n"), "the composefont parent: {preamble}");
+        assert!(out.contains("/PdfCraftF0 findfont 1000 scalefont setfont\n"), "composite selected: {out}");
+        assert!(out.contains("(\\000\\001\\000\\002)"), "codes are the CIDs (== gids): {out}");
+    }
+
+    /// gid 0 gets a non-zero composite code — the highest unused one, 0xFFFF
+    /// — and keeps it on the second call; a later gid keeps its own CID as
+    /// its code.
+    #[test]
+    fn notdef_gid_gets_a_nonzero_composite_code() {
+        let mut table = FontTable::default();
+        let key = 42u128;
+        table.order.push(key);
+        table.fonts.insert(
+            key,
+            FontEntry {
+                kind: EmbeddedKind::Cff { bytes: cff_program(), cid_keyed: false },
+                subtype: Some("Type1".into()),
+                descendant_subtype: None,
+                base_font: Some("PdfCraftCFF".into()),
+                bbox: None,
+                csi: None,
+                w: None,
+                decision: Some(Decision::CidFontType0 { cids: None }),
+                slices: Vec::new(),
+                cid_codes: HashMap::new(),
+                composite: None,
+            },
+        );
+        let zero = table.cid_code(key, 0);
+        assert_ne!(zero, 0, "gid 0 must not ride code 0");
+        assert_eq!(zero, 0xFFFF, "the highest unused code: {zero}");
+        assert_eq!(table.cid_code(key, 0), zero, "the remap is stable");
+        assert_eq!(table.cid_code(key, 5), 5, "a later gid keeps CID == gid");
+        // The preamble's CMap maps the remapped code back to CID 0.
+        let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
+        assert!(preamble.contains("1 begincidchar\n<FFFF> 0\nendcidchar\n"), "the remap rides as a cidchar: {preamble}");
+    }
+
+    /// A Type0 whose descendant carries no descriptor (no program at all)
+    /// vectorizes with the existing CID-font note.
+    #[test]
+    fn cid_font_without_program_vectorizes() {
+        let pdf = type0_pdf(
+            "PdfCraftCID",
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /PdfCraftCID /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>",
+            "<< >>",
+            "",
+            &[],
+            b"BT /F1 24 Tf 20 100 Td <0001> Tj ET",
+        );
+        let (out, notes, preamble) = driven(&pdf);
+        assert!(notes.iter().any(|n| n.contains("CID font program")), "the existing note path holds: {notes:?}");
+        assert!(out.contains("moveto\n") || out.contains("fill\n"), "substitute outline drawn: {out}");
+        assert!(!out.contains("findfont"), "no font machinery: {out}");
+        assert!(!preamble.contains("%%BeginResource"), "no resource: {preamble}");
+    }
+
+    /// A FontFile3 with `/Subtype /OpenType` stays vectorized with a note
+    /// naming the family and the wrapper.
+    #[test]
+    fn open_type_cff_stays_vectorized() {
+        let pdf = font_pdf(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftOT /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R /Encoding /StandardEncoding >>",
+            "<< /Type /FontDescriptor /FontName /PdfCraftOT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>",
+            "/Subtype /OpenType",
+            &cff_program(),
             b"BT /F1 24 Tf 20 100 Td (A) Tj ET",
         );
         let (out, notes, preamble) = driven(&pdf);
-        assert!(notes.iter().any(|n| n.contains("CFF")), "vectorization noted: {notes:?}");
+        assert!(notes.iter().any(|n| n.contains("OpenType-wrapped CFF") && n.contains("PdfCraftOT")), "note names family and wrapper: {notes:?}");
         assert!(out.contains("curveto\n"), "glyph outline as path ops: {out}");
         assert!(!out.contains("findfont") && !out.contains("scalefont"), "no font machinery: {out}");
         assert!(!preamble.contains("%%BeginResource"), "no font resource: {preamble}");
-        assert!(out.contains("fill\n"), "painted: {out}");
+    }
+
+    /// Composite codes emit big-endian: a sparse-CFF fixture whose content
+    /// reaches gids `0x0102` and `0x0007` shows the bytes `\001\002\000\007`
+    /// in that order inside one run.
+    #[test]
+    fn composite_codes_emit_big_endian() {
+        let pdf = font_pdf(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftCFF /FirstChar 65 /LastChar 67 /Widths [600 700 700] /FontDescriptor 5 0 R /Encoding /StandardEncoding >>",
+            "<< /Type /FontDescriptor /FontName /PdfCraftCFF /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>",
+            "/Subtype /Type1C",
+            &cff_program_sparse(),
+            // B → gid 258 (0x0102), C → gid 7 (0x0007).
+            b"BT /F1 24 Tf 20 100 Td (BC) Tj ET",
+        );
+        let (out, notes, _preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "no degradations: {notes:?}");
+        assert!(out.contains("(\\001\\002\\000\\007)"), "big-endian 2-byte codes in order: {out}");
+        assert_eq!(out.matches("xyshow").count(), 1, "one batched run: {out}");
     }
 
     /// A non-embedded font vectorizes (hayro's substitute outlines — the same
@@ -1313,10 +2058,15 @@ mod tests {
             FontEntry {
                 kind: EmbeddedKind::TrueType(ttf_program_with_glyphs(400)),
                 subtype: Some("TrueType".into()),
+                descendant_subtype: None,
                 base_font: Some("PdfCraftTT".into()),
                 bbox: Some([0.0, -200.0, 700.0, 800.0]),
+                csi: None,
+                w: None,
                 decision: Some(Decision::Type42),
                 slices: Vec::new(),
+                cid_codes: HashMap::new(),
+                composite: None,
             },
         );
         for gid in 0..300u32 {
@@ -1370,10 +2120,15 @@ mod tests {
             FontEntry {
                 kind: EmbeddedKind::TrueType(ttf_program_with_post(3, post)),
                 subtype: Some("TrueType".into()),
+                descendant_subtype: None,
                 base_font: Some("PdfCraftTT".into()),
                 bbox: None,
+                csi: None,
+                w: None,
                 decision: Some(Decision::Type42),
                 slices: Vec::new(),
+                cid_codes: HashMap::new(),
+                composite: None,
             },
         );
         assert_eq!(table.char_code(key, 1), 1, "gid 1 takes code 1");

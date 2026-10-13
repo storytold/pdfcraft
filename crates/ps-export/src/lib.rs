@@ -12,10 +12,6 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-// Landed ahead of its consumer: Task 5's composite arms (CFF promotion and
-// native CID fonts) call these emitters from the strategy table and the
-// preamble. Drop the allow once they do.
-#[allow(dead_code)]
 mod cid;
 mod device;
 mod dsc;
