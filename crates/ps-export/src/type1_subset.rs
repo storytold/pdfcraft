@@ -258,8 +258,13 @@ fn charstring_may_seac(body: &[u8]) -> bool {
     while let Some(&byte) = body.get(at) {
         let size = match byte {
             12 => 2, // an escaped operator; its sub-code rides along
-            247..=250 => 2,
-            251..=254 => 3,
+            // Type 1 charstrings: every number prefix 247–254 carries exactly one
+            // following byte (247–250 positive, 251–254 negative — the 3-byte short
+            // integer belongs to Type 2/CFF's byte 28). Mis-sizing a negative
+            // operand desynchronizes the scan: it can swallow the `12` of a `12 6`
+            // `seac` pair or a final `endchar`, and a real composing charstring
+            // then passes the check.
+            247..=254 => 2,
             255 => 5,
             _ => 1,
         };
@@ -847,7 +852,12 @@ mod tests {
         let explicit = [139, 248, 136, 13, 189, 139, 204, 209, 12, 6, 14];
         let terminal = [139, 248, 136, 13, 189, 139, 204, 209, 12, 6];
         let early = [139, 248, 136, 13, 189, 139, 14, 9, 14];
-        for accenting in [implicit.as_slice(), explicit.as_slice(), terminal.as_slice(), early.as_slice()] {
+        // A negative accent delta (−150, the two-byte `251 42`) directly in front of
+        // the explicit `12 6`: read as a 3-byte number (the Type 2 size), the extra
+        // byte swallows the `12`, the `6` lands as a lone operator, and the seac is
+        // missed — the subset would drop the base and accent glyphs silently.
+        let negative_adx = [139, 248, 136, 13, 189, 139, 204, 209, 251, 42, 12, 6, 14];
+        for accenting in [implicit.as_slice(), explicit.as_slice(), terminal.as_slice(), early.as_slice(), negative_adx.as_slice()] {
             let program = t1_over_raw(&t1_private(&[(".notdef", &notdef), ("A", accenting), ("B", &box_ops(700))]));
             assert!(subset_type1(&program, &["A"]).is_none(), "the seac shape {accenting:?} declines");
         }
