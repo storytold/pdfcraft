@@ -14,6 +14,8 @@ android {
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
         }
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -30,10 +32,19 @@ android {
             jniLibs.srcDirs("src/main/jniLibs")
         }
     }
+
+    lint {
+        // UniFFI generated bindings (pdfcraft_ffi.kt) use runtime reflection:
+        // java.lang.Class.forName("java.lang.ref.Cleaner") with fallback to UniffiJnaCleaner().
+        // Android Lint cannot detect reflection-based API guards on minSdk 26, reporting NewApi error.
+        disable.add("NewApi")
+    }
 }
 
 dependencies {
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     implementation("androidx.core:core-ktx:1.13.1")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
 }
