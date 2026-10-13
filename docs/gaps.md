@@ -179,10 +179,19 @@ update the numbers.
   through) and annotations redraw as a DSC-structured program whose Ghostscript-rasterized output
   matches PdfCraft's own render within a mean per-channel delta of 2/255, with txtwrite extraction
   where the emitted font carries glyph names (the Type 42 base-font arms; the composite arms prove
-  ink and raster parity, not extraction) — transparency is unflattened (Layer C) and tiling
-  patterns fall back to flat gray, both runtime-warned (as are the text-vectorized fallbacks when
-  a font arm declines); CFF subsetting is a Layer D revisit and true CMYK/Separation emission a
-  follow-up PR, documented limitations of the current layer rather than runtime warnings.
+  ink and raster parity, not extraction) — the W1 follow-up added true CMYK (setcmykcolor) and
+  /Separation colorspace paints, PatternType 1 tiling patterns via makepattern and /uniXXXX AGL
+  names for name-less TrueType; Layer C flattens transparency — real-transparency groups (sub-unit
+  opacity, soft masks, non-Normal blend modes, nested) leave as one opaque 300-dpi raster region,
+  tiling/image/glyph/shading interactions included, Ghostscript-gated under a flattening-specific
+  tolerance, with a per-page disclosure note and a decline ladder (a region past the 100-megapixel
+  cap, more than 128 flattens on a page, an unrecordable inline image touching the region, a replay
+  panic) that keeps the unflattened vector and its transparency-ignored note; blend or soft-mask
+  state outside any group keeps its warning too, and unconvertible tint transforms, DeviceN and
+  declining or transparent pattern cells fall back with runtime warnings (as do the
+  text-vectorized fallbacks when a font arm declines); CFF subsetting (Layer D revisit), flat gray
+  for pattern-painted text and the inline-image decline inside flattened regions are documented
+  limitations of the current layer rather than runtime warnings.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
   floating watermark text and per-page section sizes. Exact font matching, vector rules and
