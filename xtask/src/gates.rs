@@ -23,13 +23,13 @@ pub fn release_cli() -> PathBuf {
     target_dir().join("release").join(format!("pdfcraft-cli{}", std::env::consts::EXE_SUFFIX))
 }
 
-fn cargo() -> Command {
+pub(crate) fn cargo() -> Command {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(root());
     c
 }
 
-fn run(mut cmd: Command, what: &str) -> anyhow::Result<()> {
+pub(crate) fn run(mut cmd: Command, what: &str) -> anyhow::Result<()> {
     eprintln!("$ {what}");
     let status = cmd.status().with_context(|| format!("{what}: failed to spawn"))?;
     if !status.success() {

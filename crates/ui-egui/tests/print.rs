@@ -62,7 +62,8 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
         let out = std::env::temp_dir().join(format!("pdfcraft-print-current-{}-{current}.pdf", std::process::id()));
         h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
         h.state_mut().print_draft.printer = None;
-        h.run_steps(1);
+        h.state_mut().print_draft.printer_picked = true;
+        h.run_steps(2);
         h.get_by_label("Save as PDF").click();
         h.run_steps(3);
         assert_eq!(h.state().dialog, None);
@@ -94,7 +95,8 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let out = std::env::temp_dir().join(format!("pdfcraft-print-test-{}.pdf", std::process::id()));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().print_draft.printer = None;
-    h.run_steps(1);
+    h.state_mut().print_draft.printer_picked = true;
+    h.run_steps(2);
     h.get_by_label("Save as PDF").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
@@ -131,7 +133,8 @@ fn print_dialog_prints_the_selected_pages() {
     let out = std::env::temp_dir().join(format!("pdfcraft-print-selected-{}.pdf", std::process::id()));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().print_draft.printer = None;
-    h.run_steps(1);
+    h.state_mut().print_draft.printer_picked = true;
+    h.run_steps(2);
     h.get_by_label("Save as PDF").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);

@@ -9,6 +9,7 @@ mod fuzz;
 mod gates;
 mod layers;
 mod macos_integration;
+mod mobile;
 mod parity;
 mod screenshots;
 mod version;
@@ -41,6 +42,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
+    ("mobile-baseline", "Run mobile performance baseline (open time, tile render p50/p95, peak RSS)", mobile::baseline),
+    ("mobile-bindings", "Generate Swift and Kotlin bindings for pdfcraft-ffi (--check diffs against api/*.api)", mobile::bindings),
+    ("mobile-xcframework", "Build and package XCFramework for iOS device and simulator", mobile::xcframework),
+    ("mobile-android", "Build and package Android .so native libraries (16KB aligned) into pdfcraft-kit", mobile::android),
+    ("mobile-size", "Report binary footprint and per-feature cost of mobile libraries against budget B10", mobile::size),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {

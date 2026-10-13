@@ -47,6 +47,15 @@ pub struct Models {
     pub recognition: PathBuf,
 }
 
+static CUSTOM_MODELS_DIR: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Set or override the directory where OCR models (`text-detection.rten` and `text-recognition.rten`) are loaded from.
+pub fn set_models_dir(dir: impl Into<PathBuf>) {
+    if let Ok(mut lock) = CUSTOM_MODELS_DIR.write() {
+        *lock = Some(dir.into());
+    }
+}
+
 impl Models {
     /// The models in `dir`, if both files are there.
     pub fn in_dir(dir: &Path) -> Option<Models> {
@@ -54,7 +63,7 @@ impl Models {
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
-    /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
+    /// Look for the models: custom dir, then `$PDFCRAFT_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
@@ -63,6 +72,11 @@ impl Models {
     /// The directories [`Models::find`] looks in, in order.
     pub fn search_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
+        if let Ok(lock) = CUSTOM_MODELS_DIR.read()
+            && let Some(d) = lock.as_ref()
+        {
+            dirs.push(d.clone());
+        }
         if let Some(d) = std::env::var_os("PDFCRAFT_MODELS") {
             dirs.push(PathBuf::from(d));
         }

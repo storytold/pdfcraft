@@ -1,0 +1,519 @@
+public protocol EngineProtocol: AnyObject, Sendable {
+    func addDrawnSignature(docId: UInt64, page: UInt32, strokes: [[FfiPoint]], author: String?) throws
+    func addInkAnnotation(docId: UInt64, page: UInt32, strokes: [[FfiPoint]], colorRgb: UInt32?, strokeWidth: Float?, opacity: Float?, author: String?) throws
+    func addInkStroke(docId: UInt64, stroke: FfiInkStroke) throws
+    func addNoteAnnotation(docId: UInt64, page: UInt32, at: FfiPoint, contents: String, author: String?, icon: String?, colorRgb: UInt32?) throws
+    func addShapeAnnotation(docId: UInt64, page: UInt32, kind: FfiShapeKind, rect: FfiRect, strokeColor: UInt32?, fillColor: UInt32?, strokeWidth: Float?, author: String?) throws
+    func addStampAnnotation(docId: UInt64, page: UInt32, rect: FfiRect, stampName: String, author: String?) throws
+    func addTextBoxAnnotation(docId: UInt64, page: UInt32, rect: FfiRect, contents: String, fontSize: Float, author: String?, colorRgb: UInt32?) throws
+    func addTextMarkupRects(docId: UInt64, page: UInt32, rects: [FfiRect], kind: FfiTextMarkupKind, colorRgb: UInt32?, author: String?, contents: String?) throws
+    func addTextMarkupSelection(docId: UInt64, page: UInt32, startGlyph: UInt32, endGlyph: UInt32, kind: FfiTextMarkupKind, colorRgb: UInt32?, author: String?, contents: String?) throws
+    func addTypedSignature(docId: UInt64, page: UInt32, text: String, rect: FfiRect, author: String?) throws
+    func allComments(docId: UInt64) throws  -> [FfiCommentItem]
+    func applyOcrTextLayer(docId: UInt64, page: UInt32, words: [FfiOcrWord]) throws  -> UInt32
+    func applyRedactions(docId: UInt64) throws  -> FfiRedactionApplyResult
+    func auditRedactions(docId: UInt64) throws  -> [FfiRedactionFinding]
+    func autosaveSnapshots() throws  -> [FfiRecoverySnapshot]
+    func cachedTileBytes()  -> UInt64
+    func cachedTileCount()  -> UInt32
+    func canRedo(docId: UInt64) throws  -> String?
+    func canUndo(docId: UInt64) throws  -> String?
+    func cancelRenders(olderThanTag: UInt64)
+    func checkAccessibility(docId: UInt64) throws  -> FfiA11yReport
+    func clearRedactions(docId: UInt64) throws
+    func close(docId: UInt64) throws
+    func closeAll() throws
+    func compareDocuments(oldDocId: UInt64, newDocId: UInt64) throws  -> [FfiDocumentChange]
+    func compareDocumentsVisual(oldDocId: UInt64, newDocId: UInt64, dpi: Float?) throws  -> [FfiVisualDiff]
+    func convertToPdfa(docId: UInt64, level: String) throws  -> UInt32
+    func createFromImages(name: String, imageBytes: [Data]) throws  -> UInt64
+    func createSelfSignedDigitalId(name: String, password: String, keyType: String, organization: String?, unit: String?, email: String?, country: String?, validityYears: UInt32) throws  -> Data
+    func currentRenderTag()  -> UInt64
+    func declaredStandards(docId: UInt64) throws  -> FfiPreflightDeclared
+    func deleteAnnotation(docId: UInt64, page: UInt32, index: UInt32) throws
+    func docInfo(docId: UInt64) throws  -> FfiDocInfo
+    func documentCount()  -> UInt32
+    func eraseInkAt(docId: UInt64, page: UInt32, path: [FfiPoint], radiusView: Float) throws  -> Bool
+    func exportXfaDatasets(docId: UInt64) throws  -> String
+    func findText(docId: UInt64, page: UInt32, query: String, caseSensitive: Bool) throws  -> [FfiFindMatch]
+    func formFields(docId: UInt64, page: UInt32?) throws  -> [FfiFormField]
+    func getCjkFontStatus()  -> FfiCjkFontStatus
+    func getXfaStatus(docId: UInt64) throws  -> FfiXfaStatus
+    func handleMemoryPressure(level: FfiMemoryPressureLevel) throws
+    func hitTestAnnotation(docId: UInt64, page: UInt32, x: Float, y: Float) throws  -> FfiAnnotationSummary?
+    func importXfaDatasets(docId: UInt64, datasetsXml: String) throws
+    func inspectDigitalId(p12Bytes: Data, password: String?) throws  -> FfiDigitalIdInfo
+    func invokeTool(name: String, argsJson: String) throws  -> FfiToolResult
+    func isDirty(docId: UInt64) throws  -> Bool
+    func isFormJavascriptEnabled() throws  -> Bool
+    func isOcrAvailable()  -> Bool
+    func listDigitalSignatures(docId: UInt64) throws  -> [FfiDigitalSignature]
+    func markDocumentDifferences(oldDocId: UInt64, newDocId: UInt64) throws  -> UInt32
+    func markRecovered(docId: UInt64, path: String?) throws
+    func markRedactionRect(docId: UInt64, page: UInt32, rect: FfiRect, overlayText: String?) throws
+    func markRedactionText(docId: UInt64, text: String, overlayText: String?) throws  -> UInt32
+    func markSaved(docId: UInt64, path: String?) throws
+    func moveAnnotation(docId: UInt64, page: UInt32, index: UInt32, dxView: Float, dyView: Float) throws
+    func nearestGlyphAt(docId: UInt64, page: UInt32, x: Float, y: Float) throws  -> UInt32?
+    func nextRenderTag()  -> UInt64
+    func ocrStatus() throws  -> FfiOcrStatus
+    func openBytes(name: String, bytes: Data, password: String?) throws  -> UInt64
+    func openFile(pathStr: String, password: String?) throws  -> UInt64
+    func outline(docId: UInt64) throws  -> [FfiOutlineItem]
+    func pageComments(docId: UInt64, page: UInt32) throws  -> [FfiCommentItem]
+    func pageCount(docId: UInt64) throws  -> UInt32
+    func pageGeometry(docId: UInt64, page: UInt32) throws  -> FfiPageGeometry
+    func pageLinks(docId: UInt64, page: UInt32) throws  -> [FfiLink]
+    func pageText(docId: UInt64, page: UInt32) throws  -> String
+    func planPrefetch(currentPage: UInt32, totalPages: UInt32, direction: FfiScrollDirection, lookahead: UInt32)  -> [FfiPrefetchPlan]
+    func recognizePageText(docId: UInt64, page: UInt32, dpi: Float?, skipTextPages: Bool) throws  -> FfiOcrPageResult
+    func redo(docId: UInt64) throws  -> String
+    func renderTile(docId: UInt64, request: FfiRenderRequest) throws  -> FfiRenderResult
+    func replyToComment(docId: UInt64, page: UInt32, index: UInt32, text: String, author: String) throws
+    func resetForm(docId: UInt64, names: [String]?) throws
+    func resizeAnnotation(docId: UInt64, page: UInt32, index: UInt32, newRectView: FfiRect) throws
+    func runFormJavascript(docId: UInt64, script: String, target: String?) throws  -> FfiJsResult
+    func saveBytes(docId: UInt64) throws  -> Data
+    func saveToPath(docId: UInt64, targetPath: String) throws
+    func setCommentContents(docId: UInt64, page: UInt32, index: UInt32, text: String) throws
+    func setCommentMarked(docId: UInt64, page: UInt32, index: UInt32, marked: Bool, author: String) throws
+    func setCommentReviewState(docId: UInt64, page: UInt32, index: UInt32, state: FfiReviewState, author: String) throws
+    func setFormFieldCheck(docId: UInt64, name: String, checked: Bool) throws
+    func setFormFieldChoice(docId: UInt64, name: String, picked: [String]) throws
+    func setFormFieldRadio(docId: UInt64, name: String, selectedOption: String?) throws
+    func setFormFieldText(docId: UInt64, name: String, text: String) throws
+    func setFormFieldValue(docId: UInt64, name: String, value: String) throws
+    func setFormJavascriptEnabled(enabled: Bool) throws
+    func setOcrModelsDir(dirPath: String) throws
+    func setSandboxRoot(rootPath: String) throws
+    func signDocumentP12(docId: UInt64, p12Bytes: Data, password: String?, options: FfiSignOptions) throws  -> FfiSignResult
+    func signFormFieldDrawn(docId: UInt64, fieldName: String, normalizedStrokes: [[FfiPoint]], author: String?) throws
+    func signFormFieldTyped(docId: UInt64, fieldName: String, text: String, author: String?) throws
+    func styleAnnotation(docId: UInt64, page: UInt32, index: UInt32, strokeColorRgb: UInt32?, opacity: Float?, strokeWidth: Float?, fillColorRgb: UInt32?) throws
+    func takeFormJavascriptOutput(docId: UInt64) throws  -> FfiJsOutput
+    func textSelectionRects(docId: UInt64, page: UInt32, startGlyph: UInt32, endGlyph: UInt32) throws  -> [FfiRect]
+    func textSelectionString(docId: UInt64, page: UInt32, startGlyph: UInt32, endGlyph: UInt32) throws  -> String
+    func toggleFormFieldCheck(docId: UInt64, name: String) throws  -> Bool
+    func trimMemory() throws
+    func undo(docId: UInt64) throws  -> String
+    func verifyPdfa(docId: UInt64, level: String) throws  -> [FfiPreflightIssue]
+}
+
+public struct FfiA11yReport: Equatable, Hashable {
+    public var passedCount: UInt32
+    public var failedCount: UInt32
+    public var manualCheckCount: UInt32
+    public var skippedCount: UInt32
+    public var results: [FfiA11yRuleResult]
+    public init(passedCount: UInt32, failedCount: UInt32, manualCheckCount: UInt32, skippedCount: UInt32, results: [FfiA11yRuleResult]) {
+}
+
+public struct FfiA11yRuleResult: Equatable, Hashable {
+    public var ruleId: String
+    public var ruleName: String
+    public var category: String
+    public var status: FfiA11yStatus
+    public var description: String
+    public var explanation: String
+    public var findings: [String]
+    public init(ruleId: String, ruleName: String, category: String, status: FfiA11yStatus, description: String, explanation: String, findings: [String]) {
+}
+
+public struct FfiAnnotationSummary: Equatable, Hashable {
+    public var page: UInt32
+    public var index: UInt32
+    public var subtype: String
+    public var author: String?
+    public var contents: String?
+    public var rect: FfiRect
+    public var colorRgb: UInt32?
+    public var locked: Bool
+    public init(
+}
+
+public struct FfiChangeSide: Equatable, Hashable {
+    public var text: String
+    public var page: UInt32
+    public var rects: [FfiRect]
+    public init(text: String, page: UInt32, rects: [FfiRect]) {
+}
+
+public struct FfiChoiceOption: Equatable, Hashable {
+    public var exportValue: String
+    public var displayText: String
+    public init(
+}
+
+public struct FfiCjkFontStatus: Equatable, Hashable {
+    public var hasJapaneseFont: Bool
+    public var hasChineseFont: Bool
+    public var craftFontsCount: UInt32
+    public init(
+}
+
+public struct FfiCommentItem: Equatable, Hashable {
+    public var page: UInt32
+    public var index: UInt32
+    public var subtype: String
+    public var author: String?
+    public var contents: String?
+    public var modified: String?
+    public var name: String?
+    public var inReplyTo: String?
+    public var rect: FfiRect
+    public var colorRgb: UInt32?
+    public var reviewState: FfiReviewState?
+    public var isMarked: Bool
+    public var locked: Bool
+    public init(page: UInt32, index: UInt32, subtype: String, author: String?, contents: String?, modified: String?, name: String?, inReplyTo: String?, rect: FfiRect, colorRgb: UInt32?, reviewState: FfiReviewState?, isMarked: Bool, locked: Bool) {
+}
+
+public struct FfiDigitalIdInfo: Equatable, Hashable {
+    public var friendlyName: String?
+    public var commonName: String
+    public var organization: String?
+    public var unit: String?
+    public var email: String?
+    public var country: String?
+    public var serialHex: String
+    public var sha256Fingerprint: String
+    public var notBefore: String
+    public var notAfter: String
+    public var keyAlgorithm: String
+    public init(friendlyName: String?, commonName: String, organization: String?, unit: String?, email: String?, country: String?, serialHex: String, sha256Fingerprint: String, notBefore: String, notAfter: String, keyAlgorithm: String) {
+}
+
+public struct FfiDigitalSignature: Equatable, Hashable {
+    public var field: String
+    public var signed: Bool
+    public var status: String
+    public var summary: String
+    public var signer: String?
+    public var date: String?
+    public var reason: String?
+    public var location: String?
+    public var contact: String?
+    public var page: UInt32?
+    public var rect: FfiRect?
+    public var certify: UInt8?
+    public var revision: UInt32
+    public var details: [String]
+    public init(field: String, signed: Bool, status: String, summary: String, signer: String?, date: String?, reason: String?, location: String?, contact: String?, page: UInt32?, rect: FfiRect?, certify: UInt8?, revision: UInt32, details: [String]) {
+}
+
+public struct FfiDocInfo: Equatable, Hashable {
+    public var title: String?
+    public var author: String?
+    public var subject: String?
+    public var keywords: String?
+    public var creator: String?
+    public var producer: String?
+    public var pageCount: UInt32
+    public var encrypted: Bool
+    public var hasJavascript: Bool
+    public init(title: String?, author: String?, subject: String?, keywords: String?, creator: String?, producer: String?, pageCount: UInt32, encrypted: Bool, hasJavascript: Bool) {
+}
+
+public struct FfiDocumentChange: Equatable, Hashable {
+    public var kind: FfiChangeKind
+    public var oldSide: FfiChangeSide
+    public var newSide: FfiChangeSide
+    public init(kind: FfiChangeKind, oldSide: FfiChangeSide, newSide: FfiChangeSide) {
+}
+
+public struct FfiFindMatch: Equatable, Hashable {
+    public var page: UInt32
+    public var startGlyph: UInt32
+    public var endGlyph: UInt32
+    public var text: String
+    public var rect: FfiRect
+    public init(page: UInt32, startGlyph: UInt32, endGlyph: UInt32, text: String, rect: FfiRect) {
+}
+
+public struct FfiFormField: Equatable, Hashable {
+    public var name: String
+    public var page: UInt32?
+    public var widgetIndex: UInt32
+    public var kind: FfiFieldKind
+    public var value: [String]
+    public var defaultValue: [String]
+    public var options: [FfiChoiceOption]
+    public var rect: FfiRect
+    public var readOnly: Bool
+    public var required: Bool
+    public var multiline: Bool
+    public var password: Bool
+    public var maxLen: UInt32?
+    public var tooltip: String?
+    public var onState: String?
+    public init(
+}
+
+public struct FfiInkStroke: Equatable, Hashable {
+    public var page: UInt32
+    public var points: [FfiPoint]
+    public var colorRgb: UInt32
+    public var width: Float
+    public init(
+}
+
+public struct FfiJsOutput: Equatable, Hashable {
+    public var alerts: [String]
+    public var console: [String]
+    public var errors: [String]
+    public init(alerts: [String], console: [String], errors: [String]) {
+}
+
+public struct FfiJsResult: Equatable, Hashable {
+    public var success: Bool
+    public var output: String
+    public var error: String?
+    public init(success: Bool, output: String, error: String?) {
+}
+
+public struct FfiLink: Equatable, Hashable {
+    public var page: UInt32
+    public var rect: FfiRect
+    public var targetPage: UInt32?
+    public var targetUri: String?
+    public init(page: UInt32, rect: FfiRect, targetPage: UInt32?, targetUri: String?) {
+}
+
+public struct FfiOcrPageResult: Equatable, Hashable {
+    public var page: UInt32
+    public var words: [FfiOcrWord]
+    public var text: String
+    public var wordCount: UInt32
+    public var alreadyOnPage: UInt32
+    public var skipped: String?
+    public init(page: UInt32, words: [FfiOcrWord], text: String, wordCount: UInt32, alreadyOnPage: UInt32, skipped: String?) {
+}
+
+public struct FfiOcrStatus: Equatable, Hashable {
+    public var available: Bool
+    public var searchDirs: [String]
+    public var languages: [String]
+    public init(available: Bool, searchDirs: [String], languages: [String]) {
+}
+
+public struct FfiOcrWord: Equatable, Hashable {
+    public var text: String
+    public var rect: FfiRect
+    public init(text: String, rect: FfiRect) {
+}
+
+public struct FfiOutlineItem: Equatable, Hashable {
+    public var title: String
+    public var page: UInt32?
+    public var children: [FfiOutlineItem]
+    public init(title: String,
+}
+
+public struct FfiPageGeometry: Equatable, Hashable {
+    public var width: Float
+    public var height: Float
+    public var rotation: UInt32
+    public var label: String
+    public init(
+}
+
+public struct FfiPoint: Equatable, Hashable {
+    public var x: Float
+    public var y: Float
+    public init(x: Float, y: Float) {
+}
+
+public struct FfiPrefetchPlan: Equatable, Hashable {
+    public var page: UInt32
+    public var priority: FfiPrefetchPriority
+    public var preview: Bool
+    public init(
+}
+
+public struct FfiPreflightDeclared: Equatable, Hashable {
+    public var pdfaPart: UInt32?
+    public var pdfaConformance: String?
+    public var pdfuaPart: UInt32?
+    public var outputIntents: [String]
+    public init(pdfaPart: UInt32?, pdfaConformance: String?, pdfuaPart: UInt32?, outputIntents: [String]) {
+}
+
+public struct FfiPreflightIssue: Equatable, Hashable {
+    public var clause: String
+    public var message: String
+    public var page: UInt32?
+    public var fixable: Bool
+    public init(clause: String, message: String, page: UInt32?, fixable: Bool) {
+}
+
+public struct FfiReadingColors: Equatable, Hashable {
+    public var mode: FfiReadingColorsMode
+    public var customTextRgb: UInt32?
+    public var customBackgroundRgb: UInt32?
+    public var onlyBlack: Bool
+    public var lineArt: Bool
+    public init(mode: FfiReadingColorsMode,
+}
+
+public struct FfiRecoverySnapshot: Equatable, Hashable {
+    public var docId: UInt64
+    public var name: String
+    public var path: String?
+    public var bytes: Data
+    public var encrypted: Bool
+    public init(
+}
+
+public struct FfiRect: Equatable, Hashable {
+    public var x: Float
+    public var y: Float
+    public var width: Float
+    public var height: Float
+    public init(x: Float, y: Float, width: Float, height: Float) {
+}
+
+public struct FfiRedactionApplyResult: Equatable, Hashable {
+    public var appliedCount: UInt32
+    public var auditPassed: Bool
+    public var auditFindings: [FfiRedactionFinding]
+    public init(
+}
+
+public struct FfiRedactionFinding: Equatable, Hashable {
+    public var page: UInt32
+    public var kind: String
+    public var rect: FfiRect
+    public var coveredText: String
+    public init(
+}
+
+public struct FfiRenderRequest: Equatable, Hashable {
+    public var page: UInt32
+    public var tile: FfiTile?
+    public var scale: Float
+    public var tag: UInt64
+    public var preview: Bool
+    public var readingColors: FfiReadingColors?
+    public var hideComments: Bool
+    public init(
+}
+
+public struct FfiRenderResult: Equatable, Hashable {
+    public var page: UInt32
+    public var width: UInt32
+    public var height: UInt32
+    public var tag: UInt64
+    public var pixels: Data
+    public var error: String?
+    public var renderTimeMs: UInt32
+    public init(
+}
+
+public struct FfiSchemaField: Equatable, Hashable {
+    public var name: String
+    public var title: String
+    public var description: String
+    public var fieldType: FfiSchemaFieldType
+    public var required: Bool
+    public var defaultValue: String?
+    public var enumOptions: [String]
+    public var minimum: Double?
+    public var maximum: Double?
+    public init(name: String, title: String, description: String, fieldType: FfiSchemaFieldType, required: Bool, defaultValue: String?, enumOptions: [String], minimum: Double?, maximum: Double?) {
+}
+
+public struct FfiSignOptions: Equatable, Hashable {
+    public var fieldName: String?
+    public var page: UInt32?
+    public var rect: FfiRect?
+    public var reason: String?
+    public var location: String?
+    public var contact: String?
+    public var certifyLevel: UInt8?
+    public var graphicText: String?
+    public var graphicStrokes: [[FfiPoint]]?
+    public var outPath: String?
+    public init(
+}
+
+public struct FfiSignResult: Equatable, Hashable {
+    public var success: Bool
+    public var bytes: Data
+    public var savedPath: String?
+    public var signerName: String
+    public var fieldName: String
+    public var revision: UInt32
+    public init(success: Bool, bytes: Data, savedPath: String?, signerName: String, fieldName: String, revision: UInt32) {
+}
+
+public struct FfiTile: Equatable, Hashable {
+    public var x: UInt32
+    public var y: UInt32
+    public var width: UInt32
+    public var height: UInt32
+    public init(x: UInt32, y: UInt32, width: UInt32, height: UInt32) {
+}
+
+public struct FfiToolInfo: Equatable, Hashable {
+    public var name: String
+    public var title: String
+    public var description: String
+    public var inputSchemaJson: String
+    public var readOnly: Bool
+    public var destructive: Bool
+    public var classification: FfiToolClassification
+    public var mobileReason: String?
+    public init(name: String, title: String, description: String, inputSchemaJson: String, readOnly: Bool, destructive: Bool, classification: FfiToolClassification, mobileReason: String?) {
+}
+
+public struct FfiToolOutputFile: Equatable, Hashable {
+    public var name: String
+    public var mimeType: String
+    public var bytes: Data
+    public init(name: String, mimeType: String, bytes: Data) {
+}
+
+public struct FfiToolResult: Equatable, Hashable {
+    public var success: Bool
+    public var outputJson: String
+    public var outputFiles: [FfiToolOutputFile]
+    public var error: String?
+    public init(success: Bool, outputJson: String, outputFiles: [FfiToolOutputFile], error: String?) {
+}
+
+public struct FfiVisualDiff: Equatable, Hashable {
+    public var page: UInt32
+    public var rect: FfiRect
+    public init(page: UInt32, rect: FfiRect) {
+}
+
+public struct FfiXfaStatus: Equatable, Hashable {
+    public var kind: String
+    public var layoutPages: UInt32
+    public var layoutFields: UInt32
+    public var warnings: [String]
+    public init(
+}
+
+public struct MobileProfile: Equatable, Hashable {
+    public var workerThreads: UInt32
+    public var maxPixels: UInt32
+    public var maxSide: UInt32
+    public var imageCacheBytes: UInt64
+    public var maxDecodedStream: UInt64
+    public var maxPageContent: UInt64
+    public var tileSize: UInt32
+    public init(
+}
+
+public protocol RenderCallback: AnyObject, Sendable {
+    func onRenderComplete(result: FfiRenderResult)
+}
+
+public func defaultMobileProfile() -> MobileProfile  {
+public func lowMemoryMobileProfile() -> MobileProfile  {
+public func initWorkerThreadingHook()  {try! rustCall() {
+public func recommendedWorkerThreads() -> UInt32  {
+public func invokeTool(name: String, argsJson: String)throws  -> FfiToolResult  {
+public func listTools() -> [FfiToolInfo]  {
+public func parseToolSchema(inputSchemaJson: String)throws  -> [FfiSchemaField]  {

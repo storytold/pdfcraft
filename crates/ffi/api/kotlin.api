@@ -1,0 +1,106 @@
+public interface EngineInterface {
+    fun `addDrawnSignature`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `strokes`: List<List<FfiPoint>>, `author`: kotlin.String?)
+    fun `addInkAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `strokes`: List<List<FfiPoint>>, `colorRgb`: kotlin.UInt?, `strokeWidth`: kotlin.Float?, `opacity`: kotlin.Float?, `author`: kotlin.String?)
+    fun `addInkStroke`(`docId`: kotlin.ULong, `stroke`: FfiInkStroke)
+    fun `addNoteAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `at`: FfiPoint, `contents`: kotlin.String, `author`: kotlin.String?, `icon`: kotlin.String?, `colorRgb`: kotlin.UInt?)
+    fun `addShapeAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `kind`: FfiShapeKind, `rect`: FfiRect, `strokeColor`: kotlin.UInt?, `fillColor`: kotlin.UInt?, `strokeWidth`: kotlin.Float?, `author`: kotlin.String?)
+    fun `addStampAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `rect`: FfiRect, `stampName`: kotlin.String, `author`: kotlin.String?)
+    fun `addTextBoxAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `rect`: FfiRect, `contents`: kotlin.String, `fontSize`: kotlin.Float, `author`: kotlin.String?, `colorRgb`: kotlin.UInt?)
+    fun `addTextMarkupRects`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `rects`: List<FfiRect>, `kind`: FfiTextMarkupKind, `colorRgb`: kotlin.UInt?, `author`: kotlin.String?, `contents`: kotlin.String?)
+    fun `addTextMarkupSelection`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `startGlyph`: kotlin.UInt, `endGlyph`: kotlin.UInt, `kind`: FfiTextMarkupKind, `colorRgb`: kotlin.UInt?, `author`: kotlin.String?, `contents`: kotlin.String?)
+    fun `addTypedSignature`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `text`: kotlin.String, `rect`: FfiRect, `author`: kotlin.String?)
+    fun `allComments`(`docId`: kotlin.ULong): List<FfiCommentItem>
+    fun `applyOcrTextLayer`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `words`: List<FfiOcrWord>): kotlin.UInt
+    fun `applyRedactions`(`docId`: kotlin.ULong): FfiRedactionApplyResult
+    fun `auditRedactions`(`docId`: kotlin.ULong): List<FfiRedactionFinding>
+    fun `autosaveSnapshots`(): List<FfiRecoverySnapshot>
+    fun `cachedTileBytes`(): kotlin.ULong
+    fun `cachedTileCount`(): kotlin.UInt
+    fun `canRedo`(`docId`: kotlin.ULong): kotlin.String?
+    fun `canUndo`(`docId`: kotlin.ULong): kotlin.String?
+    fun `cancelRenders`(`olderThanTag`: kotlin.ULong)
+    fun `checkAccessibility`(`docId`: kotlin.ULong): FfiA11yReport
+    fun `clearRedactions`(`docId`: kotlin.ULong)
+    fun `close`(`docId`: kotlin.ULong)
+    fun `closeAll`()
+    fun `compareDocuments`(`oldDocId`: kotlin.ULong, `newDocId`: kotlin.ULong): List<FfiDocumentChange>
+    fun `compareDocumentsVisual`(`oldDocId`: kotlin.ULong, `newDocId`: kotlin.ULong, `dpi`: kotlin.Float?): List<FfiVisualDiff>
+    fun `convertToPdfa`(`docId`: kotlin.ULong, `level`: kotlin.String): kotlin.UInt
+    fun `createFromImages`(`name`: kotlin.String, `imageBytes`: List<kotlin.ByteArray>): kotlin.ULong
+    fun `createSelfSignedDigitalId`(`name`: kotlin.String, `password`: kotlin.String, `keyType`: kotlin.String, `organization`: kotlin.String?, `unit`: kotlin.String?, `email`: kotlin.String?, `country`: kotlin.String?, `validityYears`: kotlin.UInt): kotlin.ByteArray
+    fun `currentRenderTag`(): kotlin.ULong
+    fun `declaredStandards`(`docId`: kotlin.ULong): FfiPreflightDeclared
+    fun `deleteAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt)
+    fun `docInfo`(`docId`: kotlin.ULong): FfiDocInfo
+    fun `documentCount`(): kotlin.UInt
+    fun `eraseInkAt`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `path`: List<FfiPoint>, `radiusView`: kotlin.Float): kotlin.Boolean
+    fun `exportXfaDatasets`(`docId`: kotlin.ULong): kotlin.String
+    fun `findText`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `query`: kotlin.String, `caseSensitive`: kotlin.Boolean): List<FfiFindMatch>
+    fun `formFields`(`docId`: kotlin.ULong, `page`: kotlin.UInt?): List<FfiFormField>
+    fun `getCjkFontStatus`(): FfiCjkFontStatus
+    fun `getXfaStatus`(`docId`: kotlin.ULong): FfiXfaStatus
+    fun `handleMemoryPressure`(`level`: FfiMemoryPressureLevel)
+    fun `hitTestAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `x`: kotlin.Float, `y`: kotlin.Float): FfiAnnotationSummary?
+    fun `importXfaDatasets`(`docId`: kotlin.ULong, `datasetsXml`: kotlin.String)
+    fun `inspectDigitalId`(`p12Bytes`: kotlin.ByteArray, `password`: kotlin.String?): FfiDigitalIdInfo
+    fun `invokeTool`(`name`: kotlin.String, `argsJson`: kotlin.String): FfiToolResult
+    fun `isDirty`(`docId`: kotlin.ULong): kotlin.Boolean
+    fun `isFormJavascriptEnabled`(): kotlin.Boolean
+    fun `isOcrAvailable`(): kotlin.Boolean
+    fun `listDigitalSignatures`(`docId`: kotlin.ULong): List<FfiDigitalSignature>
+    fun `markDocumentDifferences`(`oldDocId`: kotlin.ULong, `newDocId`: kotlin.ULong): kotlin.UInt
+    fun `markRecovered`(`docId`: kotlin.ULong, `path`: kotlin.String?)
+    fun `markRedactionRect`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `rect`: FfiRect, `overlayText`: kotlin.String?)
+    fun `markRedactionText`(`docId`: kotlin.ULong, `text`: kotlin.String, `overlayText`: kotlin.String?): kotlin.UInt
+    fun `markSaved`(`docId`: kotlin.ULong, `path`: kotlin.String?)
+    fun `moveAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `dxView`: kotlin.Float, `dyView`: kotlin.Float)
+    fun `nearestGlyphAt`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `x`: kotlin.Float, `y`: kotlin.Float): kotlin.UInt?
+    fun `nextRenderTag`(): kotlin.ULong
+    fun `ocrStatus`(): FfiOcrStatus
+    fun `openBytes`(`name`: kotlin.String, `bytes`: kotlin.ByteArray, `password`: kotlin.String?): kotlin.ULong
+    fun `openFile`(`pathStr`: kotlin.String, `password`: kotlin.String?): kotlin.ULong
+    fun `outline`(`docId`: kotlin.ULong): List<FfiOutlineItem>
+    fun `pageComments`(`docId`: kotlin.ULong, `page`: kotlin.UInt): List<FfiCommentItem>
+    fun `pageCount`(`docId`: kotlin.ULong): kotlin.UInt
+    fun `pageGeometry`(`docId`: kotlin.ULong, `page`: kotlin.UInt): FfiPageGeometry
+    fun `pageLinks`(`docId`: kotlin.ULong, `page`: kotlin.UInt): List<FfiLink>
+    fun `pageText`(`docId`: kotlin.ULong, `page`: kotlin.UInt): kotlin.String
+    fun `planPrefetch`(`currentPage`: kotlin.UInt, `totalPages`: kotlin.UInt, `direction`: FfiScrollDirection, `lookahead`: kotlin.UInt): List<FfiPrefetchPlan>
+    fun `recognizePageText`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `dpi`: kotlin.Float?, `skipTextPages`: kotlin.Boolean): FfiOcrPageResult
+    fun `redo`(`docId`: kotlin.ULong): kotlin.String
+    fun `renderTile`(`docId`: kotlin.ULong, `request`: FfiRenderRequest): FfiRenderResult
+    fun `replyToComment`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `text`: kotlin.String, `author`: kotlin.String)
+    fun `resetForm`(`docId`: kotlin.ULong, `names`: List<kotlin.String>?)
+    fun `resizeAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `newRectView`: FfiRect)
+    fun `runFormJavascript`(`docId`: kotlin.ULong, `script`: kotlin.String, `target`: kotlin.String?): FfiJsResult
+    fun `saveBytes`(`docId`: kotlin.ULong): kotlin.ByteArray
+    fun `saveToPath`(`docId`: kotlin.ULong, `targetPath`: kotlin.String)
+    fun `setCommentContents`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `text`: kotlin.String)
+    fun `setCommentMarked`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `marked`: kotlin.Boolean, `author`: kotlin.String)
+    fun `setCommentReviewState`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `state`: FfiReviewState, `author`: kotlin.String)
+    fun `setFormFieldCheck`(`docId`: kotlin.ULong, `name`: kotlin.String, `checked`: kotlin.Boolean)
+    fun `setFormFieldChoice`(`docId`: kotlin.ULong, `name`: kotlin.String, `picked`: List<kotlin.String>)
+    fun `setFormFieldRadio`(`docId`: kotlin.ULong, `name`: kotlin.String, `selectedOption`: kotlin.String?)
+    fun `setFormFieldText`(`docId`: kotlin.ULong, `name`: kotlin.String, `text`: kotlin.String)
+    fun `setFormFieldValue`(`docId`: kotlin.ULong, `name`: kotlin.String, `value`: kotlin.String)
+    fun `setFormJavascriptEnabled`(`enabled`: kotlin.Boolean)
+    fun `setOcrModelsDir`(`dirPath`: kotlin.String)
+    fun `setSandboxRoot`(`rootPath`: kotlin.String)
+    fun `signDocumentP12`(`docId`: kotlin.ULong, `p12Bytes`: kotlin.ByteArray, `password`: kotlin.String?, `options`: FfiSignOptions): FfiSignResult
+    fun `signFormFieldDrawn`(`docId`: kotlin.ULong, `fieldName`: kotlin.String, `normalizedStrokes`: List<List<FfiPoint>>, `author`: kotlin.String?)
+    fun `signFormFieldTyped`(`docId`: kotlin.ULong, `fieldName`: kotlin.String, `text`: kotlin.String, `author`: kotlin.String?)
+    fun `styleAnnotation`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `index`: kotlin.UInt, `strokeColorRgb`: kotlin.UInt?, `opacity`: kotlin.Float?, `strokeWidth`: kotlin.Float?, `fillColorRgb`: kotlin.UInt?)
+    fun `takeFormJavascriptOutput`(`docId`: kotlin.ULong): FfiJsOutput
+    fun `textSelectionRects`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `startGlyph`: kotlin.UInt, `endGlyph`: kotlin.UInt): List<FfiRect>
+    fun `textSelectionString`(`docId`: kotlin.ULong, `page`: kotlin.UInt, `startGlyph`: kotlin.UInt, `endGlyph`: kotlin.UInt): kotlin.String
+    fun `toggleFormFieldCheck`(`docId`: kotlin.ULong, `name`: kotlin.String): kotlin.Boolean
+    fun `trimMemory`()
+    fun `undo`(`docId`: kotlin.ULong): kotlin.String
+    fun `verifyPdfa`(`docId`: kotlin.ULong, `level`: kotlin.String): List<FfiPreflightIssue>
+}
+
+public interface RenderCallback {
+    fun `onRenderComplete`(`result`: FfiRenderResult)
+}
+
+fun `lowMemoryMobileProfile`(): MobileProfile {

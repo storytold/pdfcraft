@@ -1,0 +1,7 @@
+# UniFFI configuration for PdfCraft (proc-macro mode)
+
+[bindings.kotlin]
+package_name = "app.pdfcraft.kit"
+
+[bindings.swift]
+module_name = "PdfCraftKit"
