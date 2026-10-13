@@ -1,12 +1,14 @@
 //! pdfcraft-ps-export — PDF → PostScript/EPS export (Layer A).
 //!
 //! The crate implements hayro-interpret's `Device` trait as a PostScript emitter and drives it
-//! through the same page-drive entry the raster renderer uses, so export semantics match
-//! `page_render` by construction. [`export`] validates the page selection, drives every
-//! requested page (content, annotations and form XObjects through `interpret_page`) into its
-//! own operator buffer, then assembles the DSC-structured program: header, font prolog, one
-//! `%%Page` block per page in ascending order, trailer — with every degradation recorded both
-//! in [`ExportedPs::warnings`] and as a `%%PdfCraftNote:` comment.
+//! through the same page-drive entry the raster renderer uses — and with the same font-resolver
+//! wiring (`pdfcraft_render::page_font_resolver`, the craft-fonts Japanese fallback over the
+//! standard-14 substitutes) — so export semantics match `page_render` by construction. [`export`]
+//! validates the page selection, drives every requested page (content, annotations and form
+//! XObjects through `interpret_page`) into its own operator buffer, then assembles the
+//! DSC-structured program: header, font prolog, one `%%Page` block per page in ascending order,
+//! trailer — with every degradation recorded both in [`ExportedPs::warnings`] and as a
+//! `%%PdfCraftNote:` comment.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -121,11 +123,14 @@ pub fn export(bytes: Arc<Vec<u8>>, pages: &[usize], format: PsFormat) -> Result<
             Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]),
             &cache,
             page.xref(),
-            // Default-based settings, the raster renderer's approach
-            // (`crates/render/src/raster.rs:67`): no viewer overrides exist for export.
-            // The nesting-depth/page-content budgets the safety rules pin live in the
+            // The same font-resolver wiring the raster renderer's `RenderConfig`
+            // configures its page drives with (`page_font_resolver`: the craft-fonts
+            // Japanese fallback over the standard-14 substitutes), so non-embedded
+            // Adobe-Japan1 text meets the same face in the exported program and in
+            // `page_render`'s raster. No viewer overrides exist for export; the
+            // nesting-depth/page-content budgets the safety rules pin live in the
             // interpreter's `Context` and reset with this fresh per-page context.
-            InterpreterSettings::default(),
+            interpreter_settings(),
         );
         let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts));
         // Mirror `render_into`: clip to the page box, wrap the page in a transparency
@@ -182,6 +187,16 @@ pub fn export(bytes: Arc<Vec<u8>>, pages: &[usize], format: PsFormat) -> Result<
     }
     out.extend_from_slice(&dsc::trailer(order.len()));
     Ok(ExportedPs { bytes: out, warnings })
+}
+
+/// The interpreter settings every exported page is driven with: exactly the
+/// font-resolver wiring the raster renderer's `RenderConfig::settings` installs
+/// ([`pdfcraft_render::page_font_resolver`]), so glyph substitution — including the
+/// craft-fonts Japanese fallback for non-embedded Adobe-Japan1 text — is identical on
+/// both sides of the oracle. Everything else stays at the defaults: export has no
+/// viewer overrides to layer on top.
+fn interpreter_settings() -> InterpreterSettings {
+    InterpreterSettings { font_resolver: pdfcraft_render::page_font_resolver(), ..InterpreterSettings::default() }
 }
 
 /// The axis-aligned box `rect` occupies after `transform`, as `[llx lly urx ury]`
@@ -590,5 +605,38 @@ mod tests {
         assert!(s.matches("fill\n").count() >= 15, "every glyph draws as a path: {s}");
         assert!(out.warnings.iter().any(|n| n.text.contains("Type 42 pending cmap synthesis")), "the disabled arm is disclosed: {:?}", out.warnings);
         assert!(s.contains("%%PdfCraftNote: text vectorized (Type 42 pending cmap synthesis)\n"), "note embedded: {s}");
+    }
+
+    /// Export drives its pages with the raster renderer's font resolver (spec D3's "match
+    /// `page_render` by construction"): [`super::interpreter_settings`] installs
+    /// `pdfcraft_render::page_font_resolver`, whose craft-fonts Japanese fallback answers a
+    /// non-embedded Adobe-Japan1 query with a real Japanese face where the bare default
+    /// resolver answers with the standard-14 Latin substitute — the divergence that once
+    /// made the oracle-side raster draw Japanese while the export vectorized Latin glyphs.
+    /// Built without craft-fonts there is no Japanese face, both resolvers answer alike,
+    /// and the parity holds that way too.
+    #[test]
+    fn export_uses_the_raster_renderers_font_resolver() {
+        use hayro::hayro_interpret::font::{FallbackFontQuery, FontQuery};
+        use hayro::hayro_interpret::hayro_cmap::{CharacterCollection, CidFamily};
+
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some("HeiseiMin-W3".into()),
+            character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        let as_bytes =
+            |resolved: Option<(hayro::hayro_interpret::font::FontData, u32)>| resolved.map(|(data, index)| (data.as_ref().as_ref().to_vec(), index));
+        let wired = as_bytes((super::interpreter_settings().font_resolver)(&query));
+        let bare = as_bytes((InterpreterSettings::default().font_resolver)(&query));
+        if pdfcraft_fonts::document_japanese_font().is_none() {
+            eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): both resolvers fall back alike");
+            assert_eq!(wired, bare, "without craft-fonts the resolver must not change substitution");
+            return;
+        }
+        let Some((face, _)) = wired else {
+            panic!("the Adobe-Japan1 fallback query resolved to no face");
+        };
+        assert_ne!(Some((face.clone(), 0)), bare, "the wired resolver answers with the craft-fonts Japanese face, not the standard-14 substitute");
     }
 }

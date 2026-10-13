@@ -366,6 +366,36 @@ fn transparency_pdf() -> Vec<u8> {
     ])
 }
 
+/// A page painting an *oversized* free-form mesh shading: 1500 triangles whose re-encoded
+/// `/DataSource` (67500 bytes) exceeds the 65535-byte PostScript string limit, so the export
+/// degrades the shading to its flat mid-tone — and that fallback must actually paint ink.
+/// (The pre-fix fallback emitted `fill` after a path-consuming `clip`; gs rendered a blank
+/// page.) Not raster-compared against PdfCraft's render of the source: the raster renderer
+/// draws the real mesh, the export honestly paints the disclosed flat stand-in — so the
+/// assertion is the oracle-side ink, not the delta.
+fn degraded_shading_pdf() -> Vec<u8> {
+    let mut data: Vec<u8> = Vec::new();
+    for i in 0..1500u32 {
+        let x = i as u8;
+        for vertex in [(x, 0x00u8), (x.wrapping_add(1), 0x64), (x.wrapping_add(2), 0x00)] {
+            data.push(0x00); // flag: a complete vertex record
+            data.push(vertex.0);
+            data.push(vertex.1);
+            data.extend_from_slice(&[0xff, 0x00, 0x00]); // red
+        }
+    }
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        stream_obj("", b"q /Sh1 sh Q"),
+        b"<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Resources << /Shading << /Sh1 5 0 R >> >> >>".to_vec(),
+        stream_obj(
+            "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 255 0 100 0 1 0 1 0 1]",
+            &data,
+        ),
+    ])
+}
+
 // ------------------------------------------------------------------ the oracle
 
 /// Render page 0 of `pdf` with PdfCraft's own rasterizer at the oracle's dpi: an opaque
@@ -584,4 +614,30 @@ fn transparency_page_exports_with_note() {
     assert_eq!(s.matches("fill\n").count(), 2, "both draws still emit: {s}");
     assert!(out.warnings.iter().any(|n| n.text.contains("transparency ignored (blend Multiply)")), "the degradation is recorded: {:?}", out.warnings);
     assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
+}
+
+/// A degraded shading paints ink: the oversized-mesh fixture degrades to the flat
+/// mid-tone, and the exported fallback's `fill` must cover the page in gs's raster (the
+/// pre-fix `clip`-then-`fill` fallback painted nothing — gs-verified: 0 inked pixels).
+/// The bytes are checked unconditionally (a `fill` that follows a rebuilt `newpath…`
+/// sequence), the raster wherever gs is installed.
+#[test]
+fn degraded_shading_paints_ink() {
+    let out = export(Arc::new(degraded_shading_pdf()), &[0], PsFormat::Ps).expect("the fixture exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(!s.contains("shfill"), "no shading dictionary painted: {s}");
+    assert!(
+        out.warnings.iter().any(|n| n.text.contains("shading approximated") && n.text.contains("string limit")),
+        "the degradation is recorded: {:?}",
+        out.warnings
+    );
+    let path = s.find("\nnewpath\n").expect("the fallback rebuilds the path");
+    let fill = path + s[path..].find("\nfill\n").expect("the rebuilt path is filled");
+    assert!(path < fill, "the fill follows the rebuilt newpath… sequence: {s}");
+    let Some((_, _, rgb)) = gs_raster(&out.bytes, "degraded-shading") else {
+        return;
+    };
+    // The flat mid-tone is ~0.5 gray over the whole page box: most of the raster is ink.
+    let inked = rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 200).count();
+    assert!(inked > (PX.0 * PX.1 / 2) as usize, "the degraded shading painted {inked} inked pixels, not a blank region");
 }

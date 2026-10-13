@@ -315,23 +315,31 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
     // PLRM `setdash` requires nonnegative elements with a positive sum (a violating pattern is
     // a rangecheck, which could truncate the page on a conforming interpreter); PDF calls
     // negative elements invalid and an all-zero pattern a solid line. Normalize rather than
-    // pass PDF data through: negative elements clamp to 0 (noted), an empty or all-zero
-    // pattern emits a solid line (the phase is meaningless then), and a negative phase is
-    // reduced modulo the pattern length — visually identical, never negative.
-    let clamped_sum: f64 = props.dash_array.iter().map(|d| f64::from(*d).max(0.0)).sum();
-    if clamped_sum > 0.0 {
+    // pass PDF data through: negative elements clamp to 0 (noted), and a pattern whose every
+    // element *formats* to "0" emits a solid line (the phase is meaningless then) — the gate
+    // must judge the tokens the interpreter will parse, not the raw values, because all-tiny
+    // elements (< 0.00005) and non-finite elements (repaired to 0) each render as "0" while
+    // their raw sum still passes a `> 0` check, which used to emit a zero-sum `[0 0]` pattern.
+    // A negative phase is reduced modulo the pattern length — visually identical, never
+    // negative.
+    let mut tokens: Vec<String> = Vec::with_capacity(props.dash_array.len());
+    for &d in &props.dash_array {
+        let d = f64::from(d);
+        if d < 0.0 {
+            emit.note("negative dash element replaced with 0");
+        }
+        tokens.push(emit.number(if d < 0.0 { 0.0 } else { d }));
+    }
+    if tokens.iter().any(|t| t.as_str() != "0") {
         let mut line = String::from("[");
-        for (i, d) in props.dash_array.iter().enumerate() {
-            let d = f64::from(*d);
-            if d < 0.0 {
-                emit.note("negative dash element replaced with 0");
-            }
+        for (i, t) in tokens.iter().enumerate() {
             if i > 0 {
                 line.push(' ');
             }
-            line.push_str(&emit.number(if d < 0.0 { 0.0 } else { d }));
+            line.push_str(t);
         }
         line.push_str("] ");
+        let clamped_sum: f64 = props.dash_array.iter().map(|d| f64::from(*d).max(0.0)).sum();
         let phase = f64::from(props.dash_offset);
         let phase = if phase < 0.0 { phase.rem_euclid(clamped_sum) } else { phase };
         line.push_str(&emit.number(phase));
@@ -403,9 +411,13 @@ fn paint_invisible(paint: &Paint<'_>) -> bool {
 
 /// The paint + path + painting-operator tail of a draw, routing pattern paints through
 /// the Task 6 shading machinery. `build` emits the path operators. Flat colours keep the
-/// Task 3 flow (colour, path, paint operator). A shading *fill* becomes the path plus
-/// the fill-rule clip and `shfill`; a shading *stroke* cannot clip-to-path and degrades
-/// to its flat colour; a tiling pattern degrades everywhere (the recorded decision).
+/// Task 3 flow (colour, path, paint operator). A shading *fill* hands `build`, the fill
+/// rule and the draw transform to [`shading::shading_fill`]: the `shfill` route clips to
+/// the built path, while the degraded route *fills* it with the flat mid-tone — and
+/// `clip` consumes the current path in PostScript, so the build cannot precede that
+/// decision (the fallback would fill no path at all). A shading *stroke* cannot
+/// clip-to-path and degrades to its flat colour; a tiling pattern degrades everywhere
+/// (the recorded decision).
 fn paint_draw(emit: &mut Emitter, transform: Affine, paint: &Paint<'_>, draw_mode: &PathDrawMode, build: impl FnOnce(&mut Emitter)) {
     match paint {
         Paint::Color(_) => {
@@ -414,16 +426,8 @@ fn paint_draw(emit: &mut Emitter, transform: Affine, paint: &Paint<'_>, draw_mod
             paint_op(emit, draw_mode);
         }
         Paint::Pattern(p) => match (&**p, draw_mode) {
-            (Pattern::Shading(_), PathDrawMode::Fill(rule)) => {
-                build(emit);
-                match rule {
-                    FillRule::NonZero => emit.op("clip"),
-                    FillRule::EvenOdd => emit.op("eoclip"),
-                }
-                // Back to page space: the shading's own matrix and BBox clip arrive
-                // there (the interpreter pre-concats the root transform into them).
-                concat_unless_identity(emit, transform.inverse());
-                shading::shading_paint(paint, emit);
+            (Pattern::Shading(sp), PathDrawMode::Fill(rule)) => {
+                shading::shading_fill(sp, emit, *rule, transform, build);
             }
             (Pattern::Shading(_), PathDrawMode::Stroke(_)) => {
                 shading::shading_stroke_approx(paint, emit);
@@ -431,19 +435,11 @@ fn paint_draw(emit: &mut Emitter, transform: Affine, paint: &Paint<'_>, draw_mod
                 paint_op(emit, draw_mode);
             }
             (Pattern::Tiling(_), _) => {
-                shading::shading_paint(paint, emit);
+                shading::tiling_approx(emit);
                 build(emit);
                 paint_op(emit, draw_mode);
             }
         },
-    }
-}
-
-/// `concat` the matrix unless it is the identity, keeping the program free of no-op
-/// lines (the draw `concat` itself always emits, per the Task 3 tests).
-fn concat_unless_identity(emit: &mut Emitter, transform: Affine) {
-    if transform != Affine::IDENTITY {
-        concat(emit, transform);
     }
 }
 
@@ -867,6 +863,44 @@ mod tests {
         // -6 mod 5 = 4.
         assert!(output(&dev).contains("[3 2] 4 setdash\n"), "phase reduced twice: {}", output(&dev));
         assert!(!output(&dev).contains("-6 setdash"), "no negative phase: {}", output(&dev));
+    }
+
+    /// Dash elements tinier than the four-decimal operand format renders (< 0.00005) once
+    /// slipped the raw-sum gate: `clamped_sum > 0` passed while every element formatted to
+    /// "0", emitting `[0 0] <phase> setdash` — a zero-sum pattern, an unrecoverable
+    /// rangecheck on every conforming interpreter (gs-verified: exit 1, the rest of the page
+    /// lost). The gate now sees the formatted tokens, so an all-"0" array is a solid line.
+    #[test]
+    fn all_tiny_dash_array_is_solid() {
+        let props = StrokeProps { dash_array: [0.00001f32, 0.00002].into_iter().collect(), ..Default::default() };
+        let mut dev = device();
+        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
+        let out = output(&dev);
+        assert!(out.contains("[] 0 setdash\n"), "solid, the sub-renderable pattern is meaningless: {out}");
+        assert!(!out.contains("[0 0]"), "no zero-sum pattern: {out}");
+        assert_eq!(dev.emit.notes, Vec::<FidelityNote>::new(), "nothing to repair: {:?}", dev.emit.notes);
+    }
+
+    /// All-`+inf` dash elements passed the same raw-sum gate (inf > 0) while each repairs to
+    /// the operand "0" — another `[0 0]` rangecheck. The formatted-token gate falls back to a
+    /// solid line, and each repair still records its note.
+    #[test]
+    fn infinite_dash_elements_fall_back_to_solid() {
+        let props = StrokeProps { dash_array: [f32::INFINITY, f32::INFINITY].into_iter().collect(), ..Default::default() };
+        let mut dev = device();
+        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
+        let out = output(&dev);
+        assert!(out.contains("[] 0 setdash\n"), "solid: {out}");
+        assert!(!out.contains("[0 0]"), "no zero-sum pattern: {out}");
+        assert_eq!(
+            dev.emit.notes,
+            vec![
+                FidelityNote { page: None, text: "non-finite coordinate replaced with 0".into() },
+                FidelityNote { page: None, text: "non-finite coordinate replaced with 0".into() },
+            ],
+            "each non-finite element's repair is recorded: {:?}",
+            dev.emit.notes
+        );
     }
 
     /// Alpha-0 flat paint is invisible (PDF Separation "None" paints nothing): the draw

@@ -17,32 +17,70 @@
 use hayro::hayro_interpret::color::{ColorComponents, DeviceSpace};
 use hayro::hayro_interpret::pattern::{Pattern, ShadingPattern};
 use hayro::hayro_interpret::shading::{Shading, ShadingFunction, ShadingType, Triangle};
-use hayro::hayro_interpret::{CalcOp, Function, Paint, ParsedFunction};
+use hayro::hayro_interpret::{CalcOp, FillRule, Function, Paint, ParsedFunction};
 use kurbo::Affine;
 
 use crate::device::Emitter;
 use crate::psnum;
 
-/// Emit a shading (or degrading tiling pattern) paint. Returns `true` when the paint was
-/// handled here, `false` for flat colours (the device owns those). Call for *fills*,
-/// with the painting path already built and clipped by the caller (`shfill` fills the
-/// clip) and in page space (the caller restores it by concating the inverse of the draw
-/// transform — the shading's matrix and BBox clip arrive in page space). A shading that
-/// cannot be expressed paints the clip with its flat mid-tone colour instead, so the
-/// caller emits nothing further either way.
-pub(crate) fn shading_paint(paint: &Paint<'_>, emit: &mut Emitter) -> bool {
-    match paint {
-        Paint::Color(_) => false,
-        Paint::Pattern(p) => match &**p {
-            Pattern::Shading(sp) => {
-                shading_fill(sp, emit);
-                true
+/// Emit one shading-pattern fill. `build` emits the painting path's operators in the
+/// draw's user space (the CTM the caller concated); `rule` is its fill rule and
+/// `transform` the draw transform, whose inverse hands the expressible route back to
+/// page space (the shading's own matrix and BBox clip arrive there — the interpreter
+/// pre-concats the root transform into them). That route builds the path, clips to it
+/// (`shfill` fills the clip) and paints the Level 3 dictionary; a shading this emitter
+/// cannot express builds the path and fills it with its flat mid-tone colour instead.
+/// The path build belongs *here*, after the decision: `clip` consumes the current path
+/// in PostScript, so a path built once before the decision cannot serve a fallback
+/// `fill` after the clip ate it (the pre-fix fallback painted nothing at all).
+pub(crate) fn shading_fill(sp: &ShadingPattern, emit: &mut Emitter, rule: FillRule, transform: Affine, build: impl FnOnce(&mut Emitter)) {
+    if sp.opacity <= 0.0 {
+        return;
+    }
+    if sp.transfer_function.is_some() {
+        emit.note("transfer function ignored (shading pattern)");
+    }
+    if sp.opacity < 1.0 {
+        emit.note("transparency ignored (shading pattern opacity)");
+    }
+    // The Dummy variant "should just be drawn transparent": nothing at all.
+    if matches!(&*sp.shading.shading_type, ShadingType::Dummy) {
+        return;
+    }
+
+    match shading_dict(&sp.shading) {
+        Ok(dict) => {
+            build(emit);
+            match rule {
+                FillRule::NonZero => emit.op("clip"),
+                FillRule::EvenOdd => emit.op("eoclip"),
             }
-            Pattern::Tiling(_) => {
-                tiling_approx(emit);
-                true
+            // Back to page space: the shading's own matrix and BBox clip arrive
+            // there.
+            concat_unless_identity(emit, transform.inverse());
+            emit.op("gsave");
+            // The shading's /BBox additionally clips; the interpreter delivers it
+            // already mapped through the pattern matrix, in page space.
+            if let Some(clip) = &sp.shading.clip_path {
+                crate::device::path_ops(emit, clip);
+                emit.op("clip");
             }
-        },
+            concat_unless_identity(emit, sp.matrix);
+            emit.op(&format!("{dict} shfill"));
+            emit.op("grestore");
+        }
+        Err(reason) => {
+            emit.note(&format!("shading approximated ({reason})"));
+            // The flat-colour route (colour, path, paint operator): the path is
+            // built here because the clip route never ran, and the rule's own
+            // operator encodes the fill rule.
+            flat_colour(sp, emit);
+            build(emit);
+            match rule {
+                FillRule::NonZero => emit.op("fill"),
+                FillRule::EvenOdd => emit.op("eofill"),
+            }
+        }
     }
 }
 
@@ -98,48 +136,9 @@ pub(crate) fn ps_function(f: &Function) -> Result<Vec<u8>, &'static str> {
 /// dict entry is unknowable), and the emission signature carries no `Device` handle to
 /// drive the cell through. Every tiling pattern therefore degrades to a deterministic
 /// mid-gray plus exactly one note.
-fn tiling_approx(emit: &mut Emitter) {
+pub(crate) fn tiling_approx(emit: &mut Emitter) {
     emit.note("tiling pattern approximated");
     emit.op("0.5 setgray");
-}
-
-/// Paint one shading pattern fill. See [`shading_paint`] for the calling contract.
-fn shading_fill(sp: &ShadingPattern, emit: &mut Emitter) {
-    if sp.opacity <= 0.0 {
-        return;
-    }
-    if sp.transfer_function.is_some() {
-        emit.note("transfer function ignored (shading pattern)");
-    }
-    if sp.opacity < 1.0 {
-        emit.note("transparency ignored (shading pattern opacity)");
-    }
-    // The Dummy variant "should just be drawn transparent": nothing at all.
-    if matches!(&*sp.shading.shading_type, ShadingType::Dummy) {
-        return;
-    }
-
-    match shading_dict(&sp.shading) {
-        Ok(dict) => {
-            emit.op("gsave");
-            // The shading's /BBox additionally clips; the interpreter delivers it
-            // already mapped through the pattern matrix, in page space.
-            if let Some(clip) = &sp.shading.clip_path {
-                crate::device::path_ops(emit, clip);
-                emit.op("clip");
-            }
-            concat_unless_identity(emit, sp.matrix);
-            emit.op(&format!("{dict} shfill"));
-            emit.op("grestore");
-        }
-        Err(reason) => {
-            emit.note(&format!("shading approximated ({reason})"));
-            // The caller clipped to the path and emits nothing else: fill the clip
-            // (which encodes the fill rule) with the flat colour here.
-            flat_colour(sp, emit);
-            emit.op("fill");
-        }
-    }
 }
 
 /// Build the shading dictionary (without `shfill`). `Err(reason)` for every shading
@@ -1023,6 +1022,38 @@ mod tests {
             "the note names the limit: {notes:?}"
         );
         assert!(out.contains("setgray"), "flat colour emitted: {out}");
+    }
+
+    /// A degraded shading fill must actually paint ink. `clip` consumes the current path
+    /// in PostScript, so the pre-fix fallback — flat colour + `fill` emitted after the
+    /// caller's path-consuming `clip` — filled no path at all (gs-verified: a blank
+    /// region). The fallback now builds the path itself and fills it: the flat colour,
+    /// then a rebuilt `newpath…` sequence, then the fill operator.
+    #[test]
+    fn degraded_shading_rebuilds_the_path_it_fills() {
+        // The same oversized mesh as `oversized_mesh_degrades_to_note`, painted over
+        // the fixture's 20 20 160 100 rectangle.
+        let mut data: Vec<u8> = Vec::new();
+        for i in 0..1500u32 {
+            let x = i as u8;
+            for vertex in [(x, 0x00u8), (x.wrapping_add(1), 0x64), (x.wrapping_add(2), 0x00)] {
+                data.push(0x00); // flag
+                data.push(vertex.0);
+                data.push(vertex.1);
+                data.extend_from_slice(&[0xff, 0x00, 0x00]); // red
+            }
+        }
+        let dict = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 255 0 100 0 1 0 1 0 1]";
+        let (out, notes) = driven(&mesh_pdf(dict, &data, &[]));
+        assert!(!out.contains("shfill"), "no shading painted: {out}");
+        assert!(notes.iter().any(|n| n.text.contains("shading approximated")), "the degradation is noted: {notes:?}");
+        // Flat colour, then the rebuilt path, then the fill that paints it — in that
+        // order (a `fill` that follows a rebuilt `newpath…` sequence).
+        let colour = out.find("setgray").expect("the flat mid-tone colour");
+        let path = colour + out[colour..].find("newpath").expect("the path is rebuilt");
+        let fill = path + out[path..].find("fill\n").expect("the rebuilt path is filled");
+        assert!(colour < path && path < fill, "colour, rebuilt path, fill — in that order: {out}");
+        assert!(out.contains("closepath\nfill\n"), "the fill closes the rebuilt path: {out}");
     }
 
     // ------------------------------------------------------------------ tests
