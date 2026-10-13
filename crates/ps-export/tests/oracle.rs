@@ -998,6 +998,48 @@ fn embedded_real_truetype_draws_and_extracts_as_type42() {
     assert!(text.contains("HAMBURGEFONSTIV"), "the drawn text is extractable: {text:?}");
 }
 
+/// The W1 AGL naming gate (Task 5): a post-3.0 TrueType — no glyph names at
+/// all — leaves as a Type 42 whose `/Encoding` and `/CharStrings` carry
+/// `uniXXXX` names synthesized from the program's own cmap (the reverse
+/// map), and those names make the text extractable: gs's txtwrite resolves
+/// the `uniXXXX` spelling through the Adobe Glyph List, where the `/gNNNN`
+/// fallback is meaningless — the honest degradation before this task. Ink on
+/// the oracle side proves the drawn code still resolves
+/// Encoding → name → CharStrings → gid. Raster parity for this fixture is
+/// [`text_page_matches_ghostscript`], whose F3 is the same font drawn as
+/// "AB". Skips its gs halves when gs is not installed.
+#[test]
+fn agl_post3_names_extract() {
+    let pdf = assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        // F1: the post-3.0 synthetic TrueType (descriptor 5, program 6), 'A' alone drawn.
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /PdfCraftTT /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R >>".to_vec(),
+        stream_obj("", b"BT /F1 72 Tf 14.4 100 Td (A) Tj ET"),
+        b"<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
+        stream_obj("", &ttf_program()),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+    ]);
+    let out = export(Arc::new(pdf), &[0], PsFormat::Ps).expect("the post-3.0 page exports");
+    assert!(out.warnings.is_empty(), "the synthesized names degrade nothing: {:?}", out.warnings);
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("/FontType 42"), "the Type 42 dictionary emits: {s}");
+    assert!(s.contains("/uni0041"), "the mapped glyph carries its codepoint as its name: {s}");
+    assert!(!s.contains("/g0001"), "the mapped glyph no longer rides the meaningless fallback: {s}");
+    let Some(text) = gs_text(&out.bytes, "agl-post3") else {
+        return;
+    };
+    assert!(text.contains('A'), "the name-less glyph's text is extractable through its AGL name: {text:?}");
+    let Some((_, _, rgb)) = gs_raster(&out.bytes, "agl-post3") else {
+        return;
+    };
+    // Measured ≈ 300 inked pixels (the filled 300×400-unit box at 72 pt =
+    // 15×20 px at the oracle's 50 dpi); the threshold keeps 2× headroom below
+    // that while sitting far above the blank a broken name→gid chain paints.
+    let inked = rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 200).count();
+    assert!(inked > 150, "the drawn glyph painted {inked} inked pixels through its synthesized name");
+}
+
 /// Axial and radial shadings: gs's `shfill` interpolation against the raster renderer's
 /// gradients. Observed delta ≈ 0.1 (gradient interpolation differs by design).
 #[test]

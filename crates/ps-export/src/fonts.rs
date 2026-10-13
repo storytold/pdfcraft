@@ -28,10 +28,14 @@
 //!   fallback), because this build resolves a shown code through
 //!   Encoding → name → CharStrings → gid — the PLRM route — and its txtwrite
 //!   maps those names back to Unicode through the Adobe Glyph List, which is
-//!   what makes the drawn text extractable. A glyph with no real name falls
-//!   back to `/gNNNN` (renders identically; extraction for that glyph
-//!   degrades honestly), and a name the font duplicates across gids goes to
-//!   its lowest gid, so the emission is byte-reproducible. The definition
+//!   what makes the drawn text extractable. A glyph with no real name takes
+//!   the AGL `uniXXXX` spelling of its codepoint from the program's own cmap
+//!   (a reverse map, lowest codepoint per gid — so a name-less post 3.0 font
+//!   still extracts); only a glyph the cmap leaves unmapped too falls back to
+//!   `/gNNNN` (renders identically; extraction for that glyph degrades
+//!   honestly), and a name the font duplicates across gids goes to its lowest
+//!   gid with real names winning over synthesized ones, so the emission is
+//!   byte-reproducible. The definition
 //!   ends `currentdict end definefont pop` with exactly the name and the
 //!   dict as `definefont`'s two operands (the earlier `dup begin …
 //!   currentdict end definefont` left three operands, so the dict became the
@@ -89,6 +93,7 @@ use hayro::hayro_interpret::hayro_syntax::page::Resources;
 use skrifa::GlyphId;
 use skrifa::raw::TableProvider as _;
 use skrifa::raw::ps::cff::CffFontRef;
+use skrifa::raw::tables::cmap::{CmapIterLimits, PlatformId};
 
 use crate::cid;
 use crate::psnum;
@@ -730,8 +735,12 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
 ///   List, which is what makes the drawn text extractable. The tables are
 ///   built from the ORIGINAL program's gids, and that stays correct over
 ///   the subset precisely because the surgery keeps ids stable. A glyph
-///   with no real name falls back to `/gNNNN` (renders identically;
-///   extraction for that glyph degrades honestly). The synthesized cmap
+///   with no real name takes the AGL `uniXXXX` spelling of its codepoint
+///   from the program's own cmap ([`ReverseCmap`], lowest codepoint per
+///   gid, real names claiming theirs first), which txtwrite resolves the
+///   same way; only one the cmap leaves unmapped too falls back to
+///   `/gNNNN` (renders identically; extraction for that glyph degrades
+///   honestly). The synthesized cmap
 ///   stays in the sfnts for consumers that follow the Type 42 convention
 ///   of resolving codes through the cmap; it is harmless under this gs
 ///   (the same bytes render and extract with it present).
@@ -777,31 +786,49 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
     let used: Vec<u32> = slice.codes.keys().copied().collect();
     let subset = sfnt::subset_glyphs(program, &used).unwrap_or_else(|| program.to_vec());
     let Some(sfnts) = sfnt::synthesize_cmap(&subset, &mappings).or_else(|| sfnt::synthesize_cmap(program, &mappings)) else { return };
-    // The load-bearing names: real when the program carries them, `/gNNNN`
-    // otherwise, unique within the slice, never `.notdef` or an unusable
-    // PostScript literal.
+    // The load-bearing names: real when the program carries them, otherwise
+    // the AGL `uniXXXX` of the glyph's codepoint when the cmap maps one,
+    // `/gNNNN` as the last resort — unique within the slice, never `.notdef`
+    // or an unusable PostScript literal.
     let font = match skrifa::FontRef::from_index(program, 0) {
         Ok(font) => font,
         Err(_) => return,
     };
     let names = skrifa::GlyphNames::new(&font);
-    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let name_of = |gid: u32, used: &mut std::collections::HashSet<String>| match names.get(skrifa::GlyphId::new(gid)) {
-        Some(name) if !name.is_synthesized() && usable_ps_name(name.as_str()) => {
-            let name = name.as_str().to_string();
-            if name == ".notdef" || !used.insert(name.clone()) { glyph_fallback_name(gid) } else { name }
-        }
-        _ => glyph_fallback_name(gid),
-    };
-    // Duplicate real names resolve deterministically: the pairs are sorted by
-    // gid before names are assigned, so when the font's `post` table gives two
-    // used gids the same name (legal in post 2.0) the lower gid keeps it and
-    // the higher falls back — `HashMap` iteration order is random per process
-    // and must not pick the winner, or the same input PDF would export to
-    // different bytes across runs.
+    let reverse = ReverseCmap::of(program);
     let mut pairs: Vec<(u32, u8)> = slice.codes.iter().map(|(gid, code)| (*gid, *code)).collect();
     pairs.sort_unstable_by_key(|&(gid, _)| gid);
-    let assigned: Vec<(u32, u8, String)> = pairs.into_iter().map(|(gid, code)| (gid, code, name_of(gid, &mut used))).collect();
+    // Names are claimed in two passes over the gid-sorted pairs, and both
+    // resolve duplicates deterministically: `HashMap` iteration order is
+    // random per process and must not pick a winner, or the same input PDF
+    // would export to different bytes across runs. Pass 1 takes the real
+    // `post`/CFF names in gid order, so a name the font gives two used gids
+    // (legal in post 2.0) stays with the lower gid. Pass 2 names whatever is
+    // left from the cmap's reverse map — only after every real name is
+    // claimed, so a glyph literally named `uni0041` wins over a lower gid
+    // whose codepoint wanted the same spelling.
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut claimed: Vec<Option<String>> = pairs
+        .iter()
+        .map(|&(gid, _)| {
+            let name = match names.get(GlyphId::new(gid)) {
+                Some(name) if !name.is_synthesized() && usable_ps_name(name.as_str()) => name.as_str().to_string(),
+                _ => return None,
+            };
+            (name != ".notdef" && used.insert(name.clone())).then_some(name)
+        })
+        .collect();
+    let assigned: Vec<(u32, u8, String)> = pairs
+        .iter()
+        .zip(&mut claimed)
+        .map(|(&(gid, code), claim)| {
+            let name = claim
+                .take()
+                .or_else(|| reverse.get(gid).map(uni_name).filter(|name| used.insert(name.clone())))
+                .unwrap_or_else(|| glyph_fallback_name(gid));
+            (gid, code, name)
+        })
+        .collect();
     out.extend_from_slice(format!("%%BeginResource: font {}\n", slice.name).as_bytes());
     out.extend_from_slice(format!("/{} 11 dict begin\n", slice.name).as_bytes());
     out.extend_from_slice(format!("/FontName /{} def\n", slice.name).as_bytes());
@@ -830,12 +857,102 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
     out.extend_from_slice(b"] def\ncurrentdict end definefont pop\n%%EndResource\n");
 }
 
-/// The fallback glyph name for `gid` when the program carries no real one:
-/// the `/gNNNN` convention (unique per gid by construction, a valid literal
-/// name, and meaningless to the Adobe Glyph List — so extraction degrades
-/// for that glyph while rendering is unaffected).
+/// The fallback glyph name for `gid` when the program carries no real one
+/// and the cmap maps no codepoint to it: the `/gNNNN` convention (unique per
+/// gid by construction, a valid literal name, and meaningless to the Adobe
+/// Glyph List — so extraction degrades for that glyph while rendering is
+/// unaffected).
 fn glyph_fallback_name(gid: u32) -> String {
     format!("g{gid:04}")
+}
+
+/// The AGL spelling of `cp` as a synthesized glyph name: `uni` plus four
+/// uppercase hex digits on the BMP, six above it — the shape gs's txtwrite
+/// resolves back to the codepoint through its Adobe Glyph List, which is
+/// what makes a name-less glyph's text extractable. Only a name nothing else
+/// claimed rides into the emission; a real glyph literally named `uni0041`
+/// keeps it over the reverse map's suggestion.
+fn uni_name(cp: u32) -> String {
+    if cp <= 0xFFFF { format!("uni{cp:04X}") } else { format!("uni{cp:06X}") }
+}
+
+/// gid → lowest Unicode codepoint mapping to it, from the font's own cmap
+/// subtables — the same subtables Layer B W1 keeps in the sfnts. Built once
+/// per Type 42 emission from the program bytes: a glyph the `post` table
+/// leaves nameless takes an AGL [`uni_name`] from it. Degrades to empty —
+/// every lookup misses, every gid keeps `/gNNNN` — when the program or its
+/// cmap does not parse: a name is never worth failing the emission over.
+struct ReverseCmap(HashMap<u32, u32>);
+
+impl ReverseCmap {
+    /// The reverse map of `program`'s cmap: Unicode-platform subtables
+    /// preferred, each walked through read-fonts' own hardened pair
+    /// iterators (bounded by Unicode's top and the font's glyph count, the
+    /// oss-fuzz-hardened limits), plus a whole-walk budget for hostile
+    /// record counts.
+    fn of(program: &[u8]) -> Self {
+        let mut map = Self(HashMap::new());
+        let Ok(font) = skrifa::FontRef::from_index(program, 0) else { return map };
+        let Ok(cmap) = font.cmap() else { return map };
+        // Unicode-platform subtables ((0,*) and (3,*)) carry the semantic
+        // mappings; other platforms (the fixture's (1,0) Roman) only when no
+        // Unicode one exists.
+        let records = cmap.encoding_records();
+        let prefer_unicode = records.iter().any(|record| unicode_platform(record.platform_id()));
+        let limits = CmapIterLimits::default_for_font(&font);
+        // The work bound: at most one step per Unicode codepoint across the
+        // whole walk. Real fonts sit orders below it; a hostile cmap whose
+        // records re-point at full-range subtables stops here with a short
+        // map instead of a hang.
+        let mut work: u32 = 0x110000;
+        for record in records {
+            if prefer_unicode && !unicode_platform(record.platform_id()) {
+                continue;
+            }
+            if let Ok(subtable) = record.subtable(cmap.offset_data()) {
+                for (cp, gid) in subtable.iter_with_limits(limits) {
+                    if work == 0 {
+                        break;
+                    }
+                    work -= 1;
+                    map.set(cp, gid.to_u32());
+                }
+            }
+        }
+        map
+    }
+
+    /// The lowest codepoint mapped to `gid`, when the cmap carries one.
+    fn get(&self, gid: u32) -> Option<u32> {
+        self.0.get(&gid).copied()
+    }
+
+    /// Record `cp → gid` unless a better pair is known: TrueType gids are
+    /// u16 (nothing past one is addressable), gid 0 is `.notdef` (a
+    /// subtable's "no glyph"), nothing above Unicode's top is a codepoint,
+    /// and the lowest codepoint wins when a gid maps several times.
+    fn set(&mut self, cp: u32, gid: u32) {
+        if cp > 0x10FFFF || gid == 0 || gid > 0xFFFF {
+            return;
+        }
+        match self.0.entry(gid) {
+            Entry::Occupied(mut slot) => {
+                if cp < *slot.get() {
+                    slot.insert(cp);
+                }
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(cp);
+            }
+        }
+    }
+}
+
+/// Whether `id` is a Unicode-bearing platform: platform 0 (Unicode, any
+/// encoding) or platform 3 (Windows, any encoding — including the (3,0)
+/// symbol spelling, whose codepoints are still the font's own).
+fn unicode_platform(id: PlatformId) -> bool {
+    matches!(id, PlatformId::Unicode | PlatformId::Windows)
 }
 
 /// Whether `name` can ride into the emission as a PostScript literal name:
@@ -1372,8 +1489,9 @@ mod tests {
 
     /// A minimal TrueType font: 1000 upem, three glyphs (empty outlines — these
     /// fixtures test text emission, not outlines), a (1,0) format-6 cmap mapping
-    /// A→1 and B→2, and a version-3.0 `post` (no names, so `/glyphNNNN`
-    /// addressing is the only route — exactly what the emitter uses).
+    /// A→1 and B→2, and a version-3.0 `post` (no names — the emitter
+    /// synthesizes `uniXXXX` from the cmap for exactly this fixture shape,
+    /// W1 Task 5).
     fn ttf_program() -> Vec<u8> {
         ttf_program_with_glyphs(3)
     }
@@ -1384,13 +1502,20 @@ mod tests {
     /// holds two boxes — these fixtures exercise tables and text emission,
     /// not outlines).
     fn ttf_program_with_glyphs(num_glyphs: u16) -> Vec<u8> {
+        ttf_program_with_post(num_glyphs, post3_table())
+    }
+
+    /// A version-3.0 `post` table: the 32-byte header alone, no names — every
+    /// glyph name the emitter asks for is synthesized, so the fixtures built
+    /// over it exercise the cmap reverse-map naming (W1 Task 5).
+    fn post3_table() -> Vec<u8> {
         let mut post = Vec::new();
         post.extend_from_slice(&[0x00, 0x03, 0x00, 0x00]); // version 3.0
         post.extend_from_slice(&[0; 4]); // italicAngle
         post.extend_from_slice(&(-100i16).to_be_bytes()); // underlinePosition
         post.extend_from_slice(&50u16.to_be_bytes()); // underlineThickness
         post.extend_from_slice(&[0; 20]); // isFixedPitch + memory limits
-        ttf_program_with_post(num_glyphs, post)
+        post
     }
 
     /// [`ttf_program_with_glyphs`] with a caller-supplied `post` table: the
@@ -1550,13 +1675,7 @@ mod tests {
     fn composite_ttf_program(cycle: bool) -> Vec<u8> {
         let glyph3 = if cycle { composite_glyph(&[(3, 0)]) } else { composite_glyph(&[(1, 0), (2, 300)]) };
         let glyphs = vec![box_glyph(), box_glyph(), glyph3, box_glyph()];
-        let mut post = Vec::new();
-        post.extend_from_slice(&[0x00, 0x03, 0x00, 0x00]); // version 3.0
-        post.extend_from_slice(&[0; 4]); // italicAngle
-        post.extend_from_slice(&(-100i16).to_be_bytes()); // underlinePosition
-        post.extend_from_slice(&50u16.to_be_bytes()); // underlineThickness
-        post.extend_from_slice(&[0; 20]); // isFixedPitch + memory limits
-        ttf_program_over(&glyphs, 5, &[1, 2, 3], &post)
+        ttf_program_over(&glyphs, 5, &[1, 2, 3], &post3_table())
     }
 
     /// A minimal CFF (Type1C) font: `.notdef`, `A` (one curve) and `B` (a box).
@@ -2133,7 +2252,7 @@ mod tests {
             "identity matrix — gs 10.08 divides Type 42 outlines by upem itself, so 1/upem would divide twice: {preamble}"
         );
         assert!(preamble.contains("/FontBBox [0 -200 700 800] def\n"), "PDF's FontBBox applied: {preamble}");
-        assert!(preamble.contains("/g0001 /g0002"), "informational Encoding names the assigned gids: {preamble}");
+        assert!(preamble.contains("/uni0041 /uni0042"), "Encoding names the assigned gids — their AGL codepoints, post 3.0: {preamble}");
         assert!(preamble.contains("currentdict end definefont pop\n%%EndResource\n"), "font defined: {preamble}");
         // The sfnts are exactly the program rewritten over the assigned codes
         // (codes 1,2 → gids 1,2), and their subtable resolves like a consumer's.
@@ -2532,9 +2651,53 @@ mod tests {
         assert_eq!(table.char_code(key, 1), 1, "gid 1 takes code 1");
         assert_eq!(table.char_code(key, 2), 2, "gid 2 takes code 2");
         let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
-        assert!(preamble.contains("/.notdef /box /g0002 /.notdef"), "Encoding: code 1 keeps the shared name, code 2 takes the fallback: {preamble}");
+        assert!(
+            preamble.contains("/.notdef /box /uni0042 /.notdef"),
+            "Encoding: code 1 keeps the shared name, code 2 takes the fallback: {preamble}"
+        );
         assert!(preamble.contains("/box 1 def\n"), "CharStrings: the shared name maps to the lower gid: {preamble}");
-        assert!(preamble.contains("/g0002 2 def\n"), "CharStrings: the higher gid keeps its own fallback entry: {preamble}");
+        assert!(preamble.contains("/uni0042 2 def\n"), "CharStrings: the higher gid falls back to its codepoint's AGL name: {preamble}");
+    }
+
+    /// A post 3.0 font carries no glyph names, so every name the emission
+    /// needs is synthesized: the cmap's reverse map gives a mapped gid the
+    /// AGL `uniXXXX` spelling of its codepoint — the name gs's txtwrite
+    /// resolves back to Unicode, where `/gNNNN` is meaningless — while a used
+    /// gid the cmap never maps keeps the `/gNNNN` fallback. Fixture: post 3.0
+    /// over three glyphs whose (1,0) format-6 cmap maps only 'A' (65) → gid
+    /// 1; gid 2 stays unmapped.
+    #[test]
+    fn post3_glyphs_get_uni_names() {
+        let ttf = ttf_program_over(&[box_glyph(), box_glyph()], 3, &[1], &post3_table());
+        let mut table = FontTable::default();
+        let key = 42u128;
+        table.order.push(key);
+        table.fonts.insert(
+            key,
+            FontEntry {
+                kind: EmbeddedKind::TrueType(ttf),
+                subtype: Some("TrueType".into()),
+                descendant_subtype: None,
+                base_font: Some("PdfCraftTT".into()),
+                bbox: None,
+                csi: None,
+                w: None,
+                decision: Some(Decision::Type42),
+                slices: Vec::new(),
+                cid_codes: HashMap::new(),
+                composite: None,
+            },
+        );
+        assert_eq!(table.char_code(key, 1), 1, "gid 1 takes code 1");
+        assert_eq!(table.char_code(key, 2), 2, "gid 2 takes code 2");
+        let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
+        assert!(
+            preamble.contains("/.notdef /uni0041 /g0002 /.notdef"),
+            "Encoding: the mapped gid carries its codepoint, the unmapped keeps the fallback: {preamble}"
+        );
+        assert!(preamble.contains("/uni0041 1 def\n"), "CharStrings: the codepoint's name maps to gid 1: {preamble}");
+        assert!(preamble.contains("/g0002 2 def\n"), "CharStrings: the unmapped gid keeps its fallback entry: {preamble}");
+        assert!(!preamble.contains("/g0001"), "the mapped gid no longer rides the meaningless fallback: {preamble}");
     }
 
     /// `composite_cycle_falls_back_to_whole_font`, the export half: a font
@@ -2600,10 +2763,11 @@ mod tests {
         let (out, notes, preamble) = driven(&pdf);
         assert_eq!(notes.join("\n"), "", "subsetting degrades nothing");
         assert!(out.contains("xyshow"), "the text draws through the font: {out}");
-        // post 3.0: every name is the /gNNNN fallback, keyed by the ORIGINAL
-        // gid — unchanged by the subset, by construction.
-        assert!(preamble.contains("/g0001 1 def\n"), "CharStrings names gid 1 under its original id: {preamble}");
-        assert!(preamble.contains("/g0003 3 def\n"), "CharStrings names the composite gid 3 under its original id: {preamble}");
+        // post 3.0: the synthesized names are the cmap's AGL codepoints
+        // ('A' → gid 1, 'C' → gid 3), keyed by the ORIGINAL gid — unchanged
+        // by the subset, by construction.
+        assert!(preamble.contains("/uni0041 1 def\n"), "CharStrings names gid 1 under its original id: {preamble}");
+        assert!(preamble.contains("/uni0043 3 def\n"), "CharStrings names the composite gid 3 under its original id: {preamble}");
         // ...and the subset keeps those gids alive, the pure component included.
         let blobs = sfnts_blobs(&preamble);
         assert_eq!(blobs.len(), 1, "one slice, one sfnts string: {preamble}");
