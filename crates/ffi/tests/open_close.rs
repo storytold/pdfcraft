@@ -152,14 +152,21 @@ fn test_10k_open_render_close_cycles_bounded_rss() {
     assert_eq!(engine.cached_tile_bytes(), 0);
 
     if start_rss > 0 && end_rss > 0 {
-        let diff_mb = (end_rss as f64 - start_rss as f64) / (1024.0 * 1024.0);
+        let diff_bytes = end_rss.saturating_sub(start_rss);
+        let diff_mib = diff_bytes as f64 / (1024.0 * 1024.0);
         println!(
-            "10k open/render/close cycles: start RSS: {:.2} MB, end RSS: {:.2} MB (diff: {:.2} MB)",
+            "10k open/render/close cycles: start RSS: {:.2} MiB, end RSS: {:.2} MiB (diff: {:.2} MiB, {} bytes)",
             start_rss as f64 / (1024.0 * 1024.0),
             end_rss as f64 / (1024.0 * 1024.0),
-            diff_mb
+            diff_mib,
+            diff_bytes
         );
-        assert!(diff_mb < 25.0, "RSS growth must be strictly bounded under 25 MB across 10k cycles; measured: {:.2} MB", diff_mb);
+        assert!(
+            diff_mib <= 5.0,
+            "RSS growth must be strictly bounded under 5.00 MiB (5,242,880 B) across 10k cycles; measured: {:.2} MiB ({} B)",
+            diff_mib,
+            diff_bytes
+        );
     }
 }
 
