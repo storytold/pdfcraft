@@ -73,6 +73,8 @@ struct ScanToRead {
 
 pub struct OcrRun {
     pub doc: DocId,
+    /// Results belong only to the document state captured when recognition started.
+    pub generation: u64,
     pub progress: Arc<Mutex<OcrProgress>>,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
@@ -296,7 +298,8 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto });
+        let generation = self.session.get(id).map_or(0, |d| d.edit_generation());
+        self.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: auto });
         self.poll_ocr();
     }
 
@@ -442,7 +445,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto) = (run.doc, run.progress.clone(), run.automatic);
+        let (doc, generation, progress, auto) = (run.doc, run.generation, run.progress.clone(), run.automatic);
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -483,11 +486,14 @@ impl PdfCraftApp {
         // The result is for the bytes the run started from. If the document has changed since (a
         // page deleted or moved, say) its page index may now name another page: drop it, and let
         // the page in view be judged again.
-        if let Some(a) = auto
-            && self.session.get(doc).map(|d| d.edit_generation()) != Some(a.generation)
-        {
-            if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
+        if self.session.get(doc).map(|d| d.edit_generation()) != Some(generation) {
+            if let Some(a) = auto
+                && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
+            {
                 view.auto_ocr_tried.remove(&a.page);
+            }
+            if !automatic {
+                self.notify_tr("The document changed while text was being recognized, so the result was discarded. Run Recognize text again.");
             }
             return;
         }
@@ -634,7 +640,7 @@ mod tests {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
             let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-            OcrRun { doc: app.active_ids().unwrap().1, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
+            OcrRun { doc: app.active_ids().unwrap().1, generation, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
 
@@ -674,7 +680,7 @@ mod tests {
             skipped: None,
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, automatic: Some(AutoOcr { page: 0, generation }) });
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: Some(AutoOcr { page: 0, generation }) });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let mut png = std::io::Cursor::new(Vec::new());
@@ -714,7 +720,7 @@ mod tests {
         app.set_option("language", "en").unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: DocId(1), progress, automatic: None });
+        app.ocr_run = Some(OcrRun { doc: DocId(1), generation: 0, progress, automatic: None });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -727,5 +733,53 @@ mod tests {
         assert!(app.ocr_batch.is_none());
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.starts_with("Recognize text failed"), "{toast}");
+    }
+}
+        }
+    }
+}
+
+#[cfg(test)]
+mod stale_manual_result_tests {
+    use super::*;
+    use pdfcraft_engine::ocr::PlacedWord;
+    use pdfcraft_engine::{AddedText, Edit, Session};
+
+    /// An app with a one-page document and a finished recognition run captured at that state.
+    fn app_with_finished_run() -> Option<(PdfCraftApp, DocId)> {
+        let mut s = Session::new();
+        let bytes = s.create_from_text("t", "Some text").ok()?;
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, bytes.to_vec()).ok()?;
+        let id = app.active_ids()?.1;
+        let generation = app.session.get(id)?.edit_generation();
+        let word = PlacedWord { text: "scanned".into(), origin: [50.0, 700.0], across: [40.0, 0.0], up: [0.0, 12.0] };
+        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None };
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress });
+        Some((app, id))
+    }
+
+    /// An unchanged document takes the result as one "Recognize text" edit.
+    #[test]
+    fn result_is_applied_when_the_document_is_unchanged() {
+        let (mut app, id) = app_with_finished_run().expect("app with a run");
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none());
+        assert_eq!(app.session.get(id).and_then(|d| d.can_undo()), Some("Recognize text"));
+    }
+
+    /// An edit made while recognition ran changes the pages; the old result is refused, not applied.
+    #[test]
+    fn result_is_refused_when_the_document_changed_meanwhile() {
+        let (mut app, id) = app_with_finished_run().expect("app with a run");
+        let note = AddedText { rect: [50.0, 600.0, 300.0, 640.0], text: "Added meanwhile".into(), size: 12.0, ..Default::default() };
+        app.session.apply(id, Edit::AddText { page: 0, text: note }).expect("edit");
+        let before = app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned));
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none());
+        assert_eq!(app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned)), before, "nothing was added");
+        let toast = app.toast.clone().expect("toast").0;
+        assert!(toast.contains("changed while text was being recognized"), "{toast}");
     }
 }
