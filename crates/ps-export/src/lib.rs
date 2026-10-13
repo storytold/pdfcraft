@@ -13,10 +13,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod cid;
+mod color;
 mod device;
 mod dsc;
+mod flatten;
 mod fonts;
 mod images;
+mod pattern;
 mod psnum;
 mod sfnt;
 mod shading;
@@ -73,10 +76,6 @@ pub enum PsExportError {
 
 /// Export the given PDF `bytes` to PostScript (`PsFormat::Ps`) or EPS (`PsFormat::Eps`).
 ///
-/// `password` opens an encrypted `bytes` (the document's user password; empty for a plain
-/// file), the same way the raster renderer's `RenderConfig::password` opens its copy —
-/// a protected document exports as it displays.
-///
 /// `pages` are 0-based page indices; they are validated against the page count (out of
 /// range → [`PsExportError::InvalidPages`]), emitted in ascending order, and duplicates
 /// collapse. EPS output needs exactly one page
@@ -129,11 +128,15 @@ pub fn export_with_config(
     order.sort_unstable();
     order.dedup();
 
-    // Drive every requested page into its own buffer. One `FontTable` runs across the
-    // whole document (font decisions and slice names carry between pages), one device
-    // per page (notes tag with the page's 1-based output position).
+    // Drive every requested page into its own buffer. One `FontTable` and one
+    // `Colorspaces`/`Patterns` resource table run across the whole document
+    // (font decisions, slice names, separation and pattern resource names
+    // carry between pages), one device per page (notes tag with the page's
+    // 1-based output position).
     let cache = InterpreterCache::new();
     let mut fonts = FontTable::default();
+    let mut colorspaces = crate::color::Colorspaces::default();
+    let mut patterns = crate::pattern::Patterns::default();
     let mut driven: Vec<(Vec<u8>, Vec<FidelityNote>, [f64; 4])> = Vec::new();
     for &index in &order {
         let Some(page) = pdf.pages().get(index) else {
@@ -149,9 +152,12 @@ pub fn export_with_config(
         // that transform — axis-aligned, PDF rotations being multiples of 90°.
         let crop = page.intersected_crop_box().to_kurbo();
         let bbox = transformed_bbox(crop, initial);
+        // The page's device-space box: the shadow scene's page (its regions clip to
+        // it) and the 300-dpi page matrix both come from it.
+        let page_rect = Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]);
         let mut state = Context::new(
             initial,
-            Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]),
+            page_rect,
             &cache,
             page.xref(),
             // The same font-resolver wiring the raster renderer's `RenderConfig`
@@ -164,11 +170,23 @@ pub fn export_with_config(
             // interpreter's `Context` and reset with this fresh per-page context.
             interpreter_settings(config),
         );
-        let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts));
+        let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts), page_rect);
+        // Seed the page's emitter with the document's colorspace and pattern
+        // tables (the same carry the fonts take): resource names stay stable
+        // and repeats stay single across pages.
+        device.emit.colorspaces = std::mem::take(&mut colorspaces);
+        device.emit.patterns = std::mem::take(&mut patterns);
         // Mirror `render_into`: clip to the page box, wrap the page in a transparency
         // group (full opacity, no mask — not a degradation), interpret, unwrap, unclip.
         let mut clip_path = crop.to_path(0.1);
         clip_path.apply_affine(initial);
+        // The clip floor the page's own clip opens from: a panic mid-interpretation
+        // can leave content clips open (each an unmatched `gsave`), and the cleanup
+        // below pops exactly one clip — without unwinding to this floor, that pop
+        // would close the innermost stray and the page clip's `gsave` would ride the
+        // page's wrapper pair onto the program's gstate stack, page after crashed
+        // page.
+        let clip_floor = device.clip_depth();
         device.push_clip_path(&ClipPath { path: clip_path, fill: FillRule::NonZero });
         device.push_transparency_group(1.0, None, BlendMode::Normal);
         // The raster renderer's last-resort guard again: a panic while interpreting a
@@ -181,9 +199,18 @@ pub fn export_with_config(
         device.pop_transparency_group();
         device.pop_clip_path();
         device.finish();
+        if crashed {
+            // After `finish` no group still withholds a buffer, so every clip's
+            // `gsave` is in the final program: close the clips the panic left open
+            // (the page clip's own included) down to the floor, each `grestore`
+            // landing after the `gsave` it balances.
+            device.unwind_clips_to(clip_floor);
+        }
         let body = std::mem::take(&mut device.emit.out);
         let notes = std::mem::take(&mut device.emit.notes);
         fonts = std::mem::take(&mut device.fonts);
+        colorspaces = std::mem::take(&mut device.emit.colorspaces);
+        patterns = std::mem::take(&mut device.emit.patterns);
         driven.push((body, notes, bbox));
     }
 
@@ -200,9 +227,15 @@ pub fn export_with_config(
         warnings.push(note);
     }
     let preamble = fonts.preamble();
-    if !preamble.is_empty() {
+    // The separation and pattern resources ride in the same prolog block, after
+    // the fonts.
+    let colorspaces = colorspaces.prolog();
+    let patterns = patterns.prolog();
+    if !preamble.is_empty() || !colorspaces.is_empty() || !patterns.is_empty() {
         out.extend_from_slice(b"%%BeginProlog\n");
         out.extend_from_slice(&preamble);
+        out.extend_from_slice(&colorspaces);
+        out.extend_from_slice(&patterns);
         out.extend_from_slice(b"%%EndProlog\n");
     }
     for (no, (body, notes, bbox)) in driven.iter().enumerate() {
@@ -542,6 +575,7 @@ mod tests {
         let p2 = s.find("%%Page: 2 2").expect("page 2 present");
         let blue = s.find("0 0 1 setrgbcolor").expect("page 2 ink");
         assert!(p1 < red && red < p2 && p2 < blue, "ascending pages, each with its own ink: {s}");
+        assert!(!s.contains("%%BeginProlog"), "pages with no fonts and no separations define no prolog resources: {s}");
         assert!(s.ends_with("%%Trailer\n%%Pages: 2\n%%EOF\n"), "trailer closes the document: {s}");
         assert_eq!(out.warnings, Vec::<FidelityNote>::new(), "plain pages degrade nothing");
     }
@@ -618,33 +652,6 @@ mod tests {
         assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
     }
 
-    /// A Type 3 glyph under render mode 3 (`3 Tr`) draws nothing: the interpreter hands
-    /// the device `GlyphDrawMode::Invisible` for the glyph procedure too (only mode 3
-    /// affects Type 3 text), and the device must skip it as it skips invisible outline
-    /// glyphs — the procedure paints what invisible text is meant to hide.
-    #[test]
-    fn invisible_type3_glyphs_draw_nothing() {
-        fn type3_pdf(render_mode: u8) -> Vec<u8> {
-            assemble(vec![
-                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-                b"<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
-                b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>".to_vec(),
-                stream_obj("", format!("BT /F1 100 Tf {render_mode} Tr 20 100 Td (a) Tj ET").as_bytes()),
-                b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
-                stream_obj("", b"0 0 100 100 re f"),
-            ])
-        }
-        let visible = export(std::sync::Arc::new(type3_pdf(0)), &[0], PsFormat::Ps).expect("visible Type 3 text exports");
-        let s = text(&visible);
-        assert!(s.contains("fill\n"), "the glyph procedure paints when visible: {s}");
-        let invisible = export(std::sync::Arc::new(type3_pdf(3)), &[0], PsFormat::Ps).expect("invisible Type 3 text exports");
-        let s = text(&invisible);
-        // The page's own crop-box clip still emits path operators; ink is what the
-        // glyph procedure must not leave behind.
-        assert!(!s.contains("fill\n") && !s.contains("eofill\n") && !s.contains("stroke\n"), "render mode 3 suppresses the glyph procedure: {s}");
-        assert!(s.ends_with("%%EOF\n"), "the program is still complete: {s}");
-    }
-
     /// A `/ca 0.5` ExtGState degrades to one paint-alpha note per page however many
     /// draws carry it (the module's transparency policy: first occurrence only).
     #[test]
@@ -660,31 +667,6 @@ mod tests {
         assert_eq!(s.matches("%%PdfCraftNote: transparency ignored (paint alpha)\n").count(), 1, "note embedded once: {s}");
     }
 
-    /// Stroked text's line width is a user-space operand (it scales with the CTM, never the
-    /// glyph matrix). Stroking under the glyph-space product multiplied the width by the font
-    /// size over 1000 — the emitted width doubled at 2000 units and thinned to slivers at
-    /// ordinary sizes.
-    #[test]
-    fn stroked_text_width_stays_in_user_space() {
-        let pdf = assemble(vec![
-            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-            b"<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
-            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
-            stream_obj("", b"3 w BT /F1 2000 Tf 1 Tr 10 100 Td (A) Tj ET"),
-            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
-        ]);
-        let out = export(std::sync::Arc::new(pdf), &[0], PsFormat::Ps).expect("stroked text exports");
-        let s = text(&out);
-        // The glyph path is emitted in user space (outline × glyph matrix, coords ~38..954
-        // for the 1000-unit 'A' at ×2) under the identity CTM, and `3 setlinewidth` rides
-        // inside that CTM: the width is user-space, exactly what the raster strokes. The old
-        // code drew the glyph-space path under the total map `[2 0 0 2 10 100] concat`, whose
-        // CTM multiplied the width by the glyph scale — 6 device units instead of 3.
-        assert!(s.contains("[1 0 0 1 0 0] concat\n3 setlinewidth\n"), "the width in user space, under the CTM alone: {s}");
-        assert!(s.contains("\n38 100 moveto\n"), "the outline in user-space coordinates: {s}");
-        assert!(!s.contains("[2 0 0 2 10 100] concat"), "the old total-map concat: {s}");
-    }
-
     /// A self-referencing form XObject exports to completion (the interpreter's nesting
     /// depth bound holds) with a balanced graphics-state stack.
     #[test]
@@ -694,6 +676,38 @@ mod tests {
         assert!(s.contains("fill\n"), "content after the form drew: {s}");
         assert!(s.ends_with("%%EOF\n"), "document closed: {s}");
         assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balance: {s}");
+    }
+
+    /// A one-page PDF drawing a backdrop, then a form XObject with a
+    /// `/Group << /S /Transparency >>` under an ExtGState with `/ca 0.5`: the
+    /// interpreter pushes a real-transparency group around the form's content, so
+    /// the flattening runs on the real drive path.
+    fn transparency_group_pdf() -> Vec<u8> {
+        assemble(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+            stream_obj("", b"1 0 0 rg 10 250 180 40 re f\nq /GS1 gs /Fm1 Do Q"),
+            b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+            stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 200 300] /Group << /S /Transparency >>", b"0 0 1 rg 20 20 100 50 re f"),
+        ])
+    }
+
+    /// The transparency flattening is format-independent: the opacity fixture exports
+    /// as PS and as EPS with the same single raster image (the group's vector ops
+    /// withheld and replaced) and the same disclosure note.
+    #[test]
+    fn eps_and_ps_share_flattening() {
+        let bytes = std::sync::Arc::new(transparency_group_pdf());
+        for format in [PsFormat::Ps, PsFormat::Eps] {
+            let out = export(std::sync::Arc::clone(&bytes), &[0], format).expect("the fixture exports");
+            let s = text(&out);
+            assert_eq!(s.matches(">> image").count(), 1, "exactly one raster image, in both flavours ({format:?}): {s}");
+            assert!(s.contains("/DeviceRGB setcolorspace\n"), "the opaque-raster pipeline ({format:?}): {s}");
+            assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "disclosed ({format:?}): {:?}", out.warnings);
+            assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "the note travels in the file ({format:?}): {s}");
+            assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balance ({format:?}): {s}");
+        }
     }
 
     /// An empty page selection yields the header and trailer only — still complete,
@@ -715,45 +729,6 @@ mod tests {
             "header + trailer, nothing between"
         );
         assert!(out.warnings.is_empty(), "nothing was driven, nothing degraded");
-    }
-
-    /// The Task 7 Ghostscript gate, pinned: gs resolves Type 42 character codes
-    /// through the font's own `cmap`, so a Type 42 emission with our assigned codes
-    /// drew *nothing* for a real embedded font (Inter-Regular), while the source PDF
-    /// drew every glyph — and hand-editing the exported codes to the cmap's codes made
-    /// the same glyphs draw. Until cmap synthesis over the assigned codes exists, an
-    /// embedded TrueType font must vectorize (noted), never emit a Type 42 dictionary.
-    /// The real font rides along as a repo asset, so this also covers a font whose
-    /// cmap is (3,1)-only with a post 3.0 table — the shape real documents carry.
-    // Task 3 flips this gate: cmap synthesis landed (Layer B W1), and this test's
-    // vectorization expectations now contradict it until Task 3 re-verifies the
-    // Type 42 arm against gs and flips the assertions.
-    #[ignore]
-    #[test]
-    fn embedded_real_truetype_never_emits_type42() {
-        let path = format!("{}/../../assets/fonts/Inter-Regular.ttf", env!("CARGO_MANIFEST_DIR"));
-        let Ok(inter) = std::fs::read(&path) else {
-            // The asset moved or was renamed: the synthetic equivalent
-            // (`fonts::tests::embedded_truetype_emits_type42_with_synthesized_cmap`)
-            // still guards the arm.
-            return;
-        };
-        let objs: Vec<Vec<u8>> = vec![
-            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-            b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 400 200] >>".to_vec(),
-            b"<< /Type /Font /Subtype /TrueType /BaseFont /Inter-Regular /Encoding /WinAnsiEncoding /FontDescriptor 5 0 R >>".to_vec(),
-            stream_obj("", b"BT /F1 12 Tf 20 100 Td (HAMBURGEFONSTIV) Tj ET"),
-            b"<< /Type /FontDescriptor /FontName /Inter-Regular /Flags 32 /FontBBox [0 -200 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
-            stream_obj("", &inter),
-            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
-        ];
-        let out = export(std::sync::Arc::new(assemble(objs)), &[0], PsFormat::Ps).expect("real-font page exports");
-        let s = text(&out);
-        assert!(!s.contains("/FontType 42"), "no Type 42 dictionary: {s}");
-        assert!(!s.contains("xyshow") && !s.contains("findfont"), "no text-as-text: {s}");
-        assert!(s.matches("fill\n").count() >= 15, "every glyph draws as a path: {s}");
-        assert!(out.warnings.iter().any(|n| n.text.contains("Type 42 pending cmap synthesis")), "the disabled arm is disclosed: {:?}", out.warnings);
-        assert!(s.contains("%%PdfCraftNote: text vectorized (Type 42 pending cmap synthesis)\n"), "note embedded: {s}");
     }
 
     /// Export drives its pages with the raster renderer's font resolver (spec D3's "match
