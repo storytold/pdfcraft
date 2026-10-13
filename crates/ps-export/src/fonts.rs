@@ -709,8 +709,9 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
 /// composite components, ids stable, unused glyphs emptied) and then
 /// [`sfnt::synthesize_cmap`] (a (3,0) format-4 subtable over the slice's
 /// assigned codes, the original subtables kept) — a subset the surgery
-/// cannot carry falls back to the whole program (output identical, only
-/// larger) — wrapped in a `/FontType 42` dictionary in the shape gs's own
+/// cannot carry, or one whose cmap synthesis declines, falls back to the
+/// whole program (output identical, only larger) — wrapped in a
+/// `/FontType 42` dictionary in the shape gs's own
 /// `ps2write` emits — the shape verified end-to-end against gs 10.08.0
 /// (build 2026-09-08), this repo's oracle:
 ///
@@ -765,11 +766,17 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
         .collect();
     // The one-pass pipeline: subset the program to the slice's glyph closure
     // (Task 7 — stable gids, unused glyphs emptied, components followed),
-    // then synthesize the cmap over it. `None` falls back to the whole font —
-    // output identical, only larger, so no note (silence-on-correct).
+    // then synthesize the cmap over the subset — each step that declines
+    // falls back to the whole program before giving up: a subset the surgery
+    // cannot carry embeds it verbatim, and a subset whose cmap synthesis
+    // declines is retried over the whole program (stable gids keep the same
+    // mappings correct). Every fallback emits what the un-subsetted pipeline
+    // would, only larger, so no note (silence-on-correct); the `return` needs
+    // the whole-program synthesis to fail too, which `type42_ready` rehearsed
+    // at strategy time — the page's `findfont` cannot miss.
     let used: Vec<u32> = slice.codes.keys().copied().collect();
     let subset = sfnt::subset_glyphs(program, &used).unwrap_or_else(|| program.to_vec());
-    let Some(sfnts) = sfnt::synthesize_cmap(&subset, &mappings) else { return };
+    let Some(sfnts) = sfnt::synthesize_cmap(&subset, &mappings).or_else(|| sfnt::synthesize_cmap(program, &mappings)) else { return };
     // The load-bearing names: real when the program carries them, `/gNNNN`
     // otherwise, unique within the slice, never `.notdef` or an unusable
     // PostScript literal.
@@ -2552,6 +2559,32 @@ mod tests {
             sfnt::synthesize_cmap(&ttf, &[(1, 1), (2, 3)]).expect("the whole-font synthesis succeeds"),
             "the sfnts carry the whole font — every glyph's data — identically to the un-subsetted pipeline"
         );
+    }
+
+    /// The W1×W3 seam contract (final review, finding 1): the Type 42
+    /// pipeline — subset, then synthesize the cmap over the subset — defines
+    /// nothing only when the whole-program synthesis declines too, so the
+    /// page's `findfont` cannot miss. Here the drawn set includes a cyclic
+    /// composite: the strategy rehearsal passes over the whole program while
+    /// the subset declines, and the export still defines the resource with a
+    /// WORKING cmap — a consumer resolves each assigned code to its gid
+    /// through the emitted (3,0) subtable — and notes nothing (correct
+    /// output, only larger).
+    #[test]
+    fn type42_declined_subset_still_defines_working_cmap() {
+        let ttf = composite_ttf_program(true);
+        assert!(type42_ready(&ttf), "the strategy rehearsal passes over the whole program");
+        assert!(sfnt::subset_glyphs(&ttf, &[1, 3]).is_none(), "the unit half: the cycle declines the subset");
+        let pdf = font_pdf(TT_FONT, TT_DESC, "", &ttf, b"BT /F1 24 Tf 20 100 Td (AC) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "a silent fallback is correct, only larger");
+        assert!(preamble.contains("%%BeginResource: font PdfCraftF0\n"), "the resource the page findfonts is defined: {preamble}");
+        assert!(out.contains("/PdfCraftF0 findfont"), "the page draws through it: {out}");
+        let blobs = sfnts_blobs(&preamble);
+        assert_eq!(blobs.len(), 1, "one slice, one sfnts string: {preamble}");
+        assert_eq!(format4_gid(&blobs[0], 1), Some(1), "code 1 → gid 1 through the emitted cmap");
+        assert_eq!(format4_gid(&blobs[0], 2), Some(3), "code 2 → gid 3 through the emitted cmap");
+        assert_eq!(format4_gid(&blobs[0], 3), None, "an unassigned code stays unmapped");
     }
 
     /// The Type 42 name tables stay valid over the subset: `/Encoding` and
