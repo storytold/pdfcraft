@@ -66,6 +66,11 @@ pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale,
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;
 
+// PdfCraft patch (ps-export): the offscreen renderer the PostScript exporter's
+// transparency flattener drives (see `offscreen.rs`).
+mod offscreen;
+pub use offscreen::OffscreenRenderer;
+
 /// A cache used by the renderer.
 ///
 /// Ideally, such a cache should be constructed once per PDF and then reused across
