@@ -655,8 +655,13 @@ impl<'a> Device<'a> for PsDevice<'a> {
 
 #[cfg(test)]
 mod tests {
-    use hayro::hayro_interpret::color::{AlphaColor, Color};
-    use hayro::hayro_interpret::{BlendMode, ClipPath, Device, FillRule, Paint, PathDrawMode, StrokeProps};
+    use hayro::hayro_interpret::color::{AlphaColor, Color, ColorSource, DeviceSpace};
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, FillRule, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, ParsedFunction,
+        PathDrawMode, SoftMask, StrokeProps, interpret_page,
+    };
     use kurbo::{Affine, BezPath, Cap, Join, Rect};
 
     use super::PsDevice;
@@ -1007,5 +1012,146 @@ mod tests {
         dev.push_transparency_group(0.5, None, BlendMode::Normal);
         let group_notes = dev.emit.notes.iter().filter(|n| n.text.contains("transparency group")).count();
         assert_eq!(group_notes, 1, "one group note per page, first occurrence only: {:?}", dev.emit.notes);
+    }
+
+    // ---------------------------------------------- `Color::source()` (vendor patch)
+
+    /// A `<< … >> stream … endstream` object body, in the hand-written style of
+    /// `crates/engine/src/tests.rs` (length computed, not counted by hand).
+    fn stream_obj(dict: &str, body: &[u8]) -> Vec<u8> {
+        let mut obj = format!("<< {dict} /Length {} >>\nstream\n", body.len()).into_bytes();
+        obj.extend_from_slice(body);
+        obj.extend_from_slice(b"\nendstream");
+        obj
+    }
+
+    /// Assemble a PDF from object bodies (numbered from 1), computing the xref like
+    /// `crates/engine/src/tests.rs::fixture` (lengths and offsets, never counted by hand).
+    fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// A one-page PDF whose page `/Resources` body is `resources` and whose content stream
+    /// is `content`, followed by `extra` objects (so a color-space array can reference one,
+    /// e.g. its tint-transform function as object 5).
+    fn color_page(resources: &str, content: &[u8], extra: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources {resources} >>").into_bytes(),
+            stream_obj("", content),
+        ];
+        objs.extend(extra);
+        assemble(objs)
+    }
+
+    /// Records the `Paint::Color` of every draw that reaches the device.
+    #[derive(Default)]
+    struct ColorRecorder {
+        colors: Vec<Color>,
+    }
+
+    impl Device<'_> for ColorRecorder {
+        fn set_soft_mask(&mut self, _mask: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _blend_mode: BlendMode) {}
+        fn draw_path(&mut self, _path: &BezPath, _transform: Affine, paint: &Paint<'_>, _mode: &PathDrawMode) {
+            if let Paint::Color(color) = paint {
+                self.colors.push(color.clone());
+            }
+        }
+        fn push_clip_path(&mut self, _clip_path: &ClipPath) {}
+        fn push_transparency_group(&mut self, _opacity: f32, _mask: Option<SoftMask<'_>>, _blend_mode: BlendMode) {}
+        fn draw_glyph(&mut self, _glyph: &Glyph<'_>, _transform: Affine, _glyph_transform: Affine, _paint: &Paint<'_>, _mode: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _image: Image<'_, '_>, _transform: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    /// Parse `bytes` and drive the single page through `interpret_page` — the same entry
+    /// `export()` drives — capturing every fill's `Paint::Color`. The interpreter hands the
+    /// device the colour in its source space with the raw components; `to_rgba()` is only
+    /// the rendering view, which is exactly what `Color::source()` must see past.
+    fn fill_colors(bytes: Vec<u8>) -> Vec<Color> {
+        let pdf = Pdf::new(bytes).expect("fixture parses");
+        let page = pdf.pages().first().expect("fixture has a page");
+        let cache = InterpreterCache::new();
+        let mut state = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 200.0, 300.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut device = ColorRecorder::default();
+        interpret_page(page, &mut state, &mut device);
+        device.colors
+    }
+
+    /// Device-space fills keep their source components: `0 1 1 0 k` is the four CMYK
+    /// operands, `0.5 g` the one gray operand — what the exporter needs to emit
+    /// `setcmykcolor`/`setgray` instead of a lossy RGBA round-trip.
+    #[test]
+    fn paint_source_cmyk_and_gray_fills_keep_components() {
+        let cmyk = fill_colors(color_page("<< >>", b"0 1 1 0 k 10 10 80 80 re f", Vec::new()));
+        assert_eq!(cmyk.len(), 1, "the fill must reach the device once");
+        assert_eq!(cmyk[0].source(), Some(ColorSource::Cmyk(&[0.0, 1.0, 1.0, 0.0])));
+
+        let gray = fill_colors(color_page("<< >>", b"0.5 g 10 10 80 80 re f", Vec::new()));
+        assert_eq!(gray.len(), 1, "the fill must reach the device once");
+        assert_eq!(gray[0].source(), Some(ColorSource::Gray(&[0.5])));
+    }
+
+    /// A `/Separation` fill names its colorant, keeps the tint operand, names the alternate
+    /// device space and carries the parsed tint transform — everything an exporter needs to
+    /// rebuild `[/Separation /Spot /DeviceCMYK <fn>]` and a `setcolorspace`+`setcolor` pair.
+    #[test]
+    fn paint_source_separation_fill_keeps_colorant_tint_alternate_transform() {
+        let bytes = color_page(
+            "<< /ColorSpace << /CS1 [/Separation /Spot /DeviceCMYK 5 0 R] >> >>",
+            b"/CS1 cs 0.5 sc 10 10 80 80 re f",
+            vec![b"<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 1 1 0] /N 1 >>".to_vec()],
+        );
+        let colors = fill_colors(bytes);
+        assert_eq!(colors.len(), 1, "the fill must reach the device once");
+        let Some(ColorSource::Separation { colorant, tint, alternate, tint_transform }) = colors[0].source() else {
+            panic!("a /Separation fill must name its source: {:?}", colors[0].source());
+        };
+        assert_eq!(colorant, "Spot", "the colorant name survives parsing");
+        assert_eq!(tint, &[0.5], "the `sc` operand, not the converted alternate values");
+        assert_eq!(alternate, Some(DeviceSpace::Cmyk), "the /DeviceCMYK alternate space");
+        // And the transform is the fixture's object 5, not a stand-in: its parsed snapshot
+        // carries exactly the C0/C1/N the fixture wrote.
+        match tint_transform.parsed() {
+            ParsedFunction::Exponential { domain, range, c0, c1, exponent } => {
+                assert_eq!(domain, vec![(0.0, 1.0)], "the /Domain the fixture wrote");
+                assert_eq!(range, None, "no /Range in the fixture");
+                assert_eq!(c0, vec![0.0, 0.0, 0.0, 0.0], "the /C0 the fixture wrote");
+                assert_eq!(c1, vec![0.0, 1.0, 1.0, 0.0], "the /C1 the fixture wrote");
+                assert_eq!(exponent, 1.0, "the /N the fixture wrote");
+            }
+            other => panic!("expected the fixture's exponential tint transform: {other:?}"),
+        }
+    }
+
+    /// A `/DeviceN` fill is a bare marker: the components stay unexposed (Wave 1 keeps
+    /// today's RGB fallback for DeviceN; only device spaces and Separation are re-emitted).
+    #[test]
+    fn paint_source_devicen_fill_is_bare() {
+        let bytes = color_page(
+            "<< /ColorSpace << /CS1 [/DeviceN [/A] /DeviceRGB 5 0 R] >> >>",
+            b"/CS1 cs 0.5 sc 10 10 80 80 re f",
+            vec![b"<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>".to_vec()],
+        );
+        let colors = fill_colors(bytes);
+        assert_eq!(colors.len(), 1, "the fill must reach the device once");
+        assert_eq!(colors[0].source(), Some(ColorSource::DeviceN));
     }
 }

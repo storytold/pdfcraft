@@ -250,6 +250,15 @@ impl<'a> TilingPattern<'a> {
         })
     }
 
+    /// PdfCraft patch (ps-export): whether this is a coloured tiling pattern
+    /// (`/PaintType 1`), whose content stream sets its own colours, as opposed to an
+    /// uncoloured one (`/PaintType 2`), which must be painted in the colour operand of
+    /// the `scn`/`SCN` that selected the pattern. Mirrors the public `bbox`/`x_step`/
+    /// `y_step`/`matrix` fields and [`Self::interpret`].
+    pub fn is_color(&self) -> bool {
+        self.is_color
+    }
+
     /// Interpret the contents of the pattern into the given device.
     pub fn interpret(
         &self,
