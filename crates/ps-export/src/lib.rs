@@ -17,6 +17,11 @@ mod dsc;
 mod fonts;
 mod images;
 mod psnum;
+// Landed ahead of its consumer: Task 2's Type 42 emission calls
+// `sfnt::synthesize_cmap`, and Task 7 reuses `sfnt::write_directory` for
+// glyf/loca surgery. Drop the allow once one of them does.
+#[allow(dead_code)]
+mod sfnt;
 mod shading;
 
 use std::sync::Arc;
