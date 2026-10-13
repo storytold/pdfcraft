@@ -37,13 +37,14 @@
 //!
 //! `None` on any parse failure — a program that cannot be split and
 //! re-assembled safely embeds verbatim instead (Layer A behaviour: correct
-//! output, only larger, no note). One fidelity caveat is disclosed here
-//! rather than fixed: a kept charstring that composes itself through `seac`
-//! (via OtherSubrs) references its base and accent *by name*; if those
-//! glyphs are shown nowhere else they are dropped, and that glyph degrades
-//! in the consumer. Fonts driving the export's own fixtures do not use
-//! `seac`; the honest fallback for one that does is the raster oracle
-//! diverging on that glyph.
+//! output, only larger, no note). The same fallback covers `seac`, the
+//! standard-encoding accent composition Adobe-era Type 1 fonts build
+//! é/ü/à from: a composing charstring references its base and accent
+//! glyphs *by name*, so a subset that drops them would break the glyph in
+//! the consumer with no note. Any kept charstring whose byte shape looks
+//! like `seac` (see [`may_compose_accents`]) declines the whole subset.
+//! True retention — resolving bchar/achar through StandardEncoding into the
+//! kept set — is the future refinement.
 //!
 //! Hostile inputs follow AGENTS §4: every offset and length is validated
 //! against the input with `get()` and checked arithmetic before use, an
@@ -53,6 +54,16 @@
 
 /// The eexec layer's cipher seed (Adobe Type 1 Font Format, § 7).
 const EEXEC_SEED: u32 = 55665;
+
+/// The charstring layer's cipher seed — the same cipher over the bytes each
+/// `/name <n> RD` entry carries (Adobe Type 1 Font Format, § 6).
+const CHARSTRING_SEED: u32 = 4330;
+
+/// The largest `/lenIV` a real font carries: the value counts the random
+/// bytes prefixing every charstring, the format's default is 4, and no real
+/// font exceeds a handful. Anything larger means the charstring bytes cannot
+/// be judged, so the subset declines.
+const MAX_LEN_IV: usize = 32;
 
 /// The classic PFA trailer this module re-emits: eight lines of 64 zeros
 /// (512 `0` characters, which consumers skip as noise while their eexec
@@ -72,6 +83,13 @@ pub(crate) fn subset_type1(program: &[u8], used: &[&str]) -> Option<Vec<u8>> {
     let (header, cipher) = split_program(program)?;
     let plain = eexec_decrypt(EEXEC_SEED, &cipher);
     let split = split_private(&plain, used)?;
+    // A kept charstring that composes accents references other glyphs by
+    // name; dropping those would break it silently, so any seac-shaped one
+    // declines the whole subset (verbatim fallback — correct, only larger).
+    let len_iv = len_iv(&plain);
+    if len_iv > MAX_LEN_IV || may_compose_accents(&split.kept, len_iv) {
+        return None;
+    }
     // Reassemble the plaintext: prefix verbatim, the charstring block with
     // only the kept entries in their original order, tail verbatim through
     // `closefile`. A fully-used program re-emits byte-identically (the test
@@ -164,6 +182,89 @@ fn eexec_decrypt(seed: u32, data: &[u8]) -> Vec<u8> {
             plain
         })
         .collect()
+}
+
+/// The private dict's `/lenIV`: how many random bytes prefix every
+/// charstring, which the seac scan decrypts past. The format's default is
+/// 4; the last definition wins, matching consumers that read the dict
+/// sequentially. A negative value (charstrings not encrypted) reads as no
+/// integer here, so the previous value stands — a skip that can only cost
+/// size, never correctness.
+fn len_iv(plain: &[u8]) -> usize {
+    const NAME: &[u8] = b"lenIV";
+    let mut value = 4usize;
+    let mut from = 0usize;
+    while let Some(at) = find_sub(plain, NAME, from)
+        && at > 0
+        && plain.get(at - 1) == Some(&b'/')
+    {
+        if let Some((n, _)) = read_count(plain, skip_ws(plain, at + NAME.len())) {
+            value = n;
+        }
+        from = at + 1;
+    }
+    value
+}
+
+/// Whether any kept charstring may compose accents — `seac`, the
+/// standard-encoding accent construction Adobe-era Type 1 fonts build
+/// é/ü/à from. A composing charstring references its base and accent
+/// glyphs *by name* (through StandardEncoding), so a subset that drops
+/// them would break the glyph in the consumer with no note: any seac shape
+/// declines the whole subset.
+///
+/// The judgement is byte-shaped, not interpreted — charstrings are
+/// tokenized into numbers and operators (no stack semantics), and three
+/// shapes fire:
+///
+/// - the explicit `seac` escape operator, bytes `12 6` (no other escaped
+///   operator uses sub-code 6, so an operator token `12 6` can only be it);
+/// - an `endchar` (`14`) anywhere **but** the final byte — operands-then-
+///   `endchar` mid-string, the shape a composing charstring takes when more
+///   follows it;
+/// - four or more operands sitting on the **final** `endchar` — seac's
+///   implicit spelling, `adx ady bchar achar endchar` (a legal charstring
+///   otherwise ends with at most one width operand, its metrics consumed by
+///   `hsbw`/`sbw` long before).
+///
+/// A number payload that happens to hold these bytes fires too; that only
+/// costs size, and a seac never slips through. The operands-before-endchar
+/// count is seac's own arity (4, or 5 with the sidebearing) — two or three
+/// trailing operands belong to malformed charstrings the consumer errors on
+/// regardless of subsetting.
+fn may_compose_accents(kept: &[Charstring<'_>], len_iv: usize) -> bool {
+    kept.iter().any(|charstring| {
+        let plain = eexec_decrypt(CHARSTRING_SEED, charstring.data);
+        plain.get(len_iv..).is_some_and(charstring_may_seac)
+    })
+}
+
+/// One decrypted charstring's byte shape, judged for `seac` (see
+/// [`may_compose_accents`] for the three signals and why each is sound).
+fn charstring_may_seac(body: &[u8]) -> bool {
+    let mut explicit = false;
+    let mut early_endchar = false;
+    let mut into_endchar = 0usize;
+    let mut at = 0usize;
+    let mut operands = 0usize; // numbers since the last operator token
+    while let Some(&byte) = body.get(at) {
+        let size = match byte {
+            12 => 2, // an escaped operator; its sub-code rides along
+            247..=250 => 2,
+            251..=254 => 3,
+            255 => 5,
+            _ => 1,
+        };
+        match byte {
+            12 if body.get(at + 1) == Some(&6) => explicit = true, // `seac`
+            14 if at + size == body.len() => into_endchar = operands,
+            14 => early_endchar = true,
+            32..=255 => operands = operands.saturating_add(1),
+            _ => operands = 0,
+        }
+        at += size;
+    }
+    explicit || early_endchar || into_endchar >= 4
 }
 
 /// Split a program into its cleartext header (ending at the `eexec` token)
@@ -720,5 +821,45 @@ mod tests {
         assert!(subset_type1(&cut, &["A"]).is_none(), "a tail without closefile declines");
         let no_block = b"dup /Private 8 dict dup begin\n/lenIV 0 def\nend\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n";
         assert!(subset_type1(&t1_over_raw(no_block), &["A"]).is_none(), "no /CharStrings block declines");
+    }
+
+    /// `seac` (accent composition) declines the whole subset, in every byte
+    /// spelling the consumers accept: the explicit `12 6` operator (with and
+    /// without a following `endchar` — the Blue Book form ends the charstring
+    /// at `seac`), operands sitting on a final `endchar` (the implicit
+    /// spelling), and an early `endchar` mid-string. The plain box
+    /// charstrings — a bare final `endchar` with an empty stack — must not
+    /// trip (fix round 1: a composing glyph references its base and accent
+    /// by name, and dropping those broke it silently).
+    #[test]
+    fn seac_charstrings_decline_the_subset() {
+        let notdef = [139, 248, 136, 13, 14];
+        // `0 500 hsbw 50 0 bchar achar …`: four operands into seac's spellings.
+        let implicit = [139, 248, 136, 13, 189, 139, 204, 209, 14];
+        let explicit = [139, 248, 136, 13, 189, 139, 204, 209, 12, 6, 14];
+        let terminal = [139, 248, 136, 13, 189, 139, 204, 209, 12, 6];
+        let early = [139, 248, 136, 13, 189, 139, 14, 9, 14];
+        for accenting in [implicit.as_slice(), explicit.as_slice(), terminal.as_slice(), early.as_slice()] {
+            let program = t1_over_raw(&t1_private(&[(".notdef", &notdef), ("A", accenting), ("B", &box_ops(700))]));
+            assert!(subset_type1(&program, &["A"]).is_none(), "the seac shape {accenting:?} declines");
+        }
+        // The plain shapes subset (also proven by every other test in this
+        // module, which would fail if the detector over-fired).
+        let program = t1_over_raw(&t1_private(&[(".notdef", &notdef), ("A", &box_ops(500)), ("B", &box_ops(700))]));
+        assert!(subset_type1(&program, &["A"]).is_some(), "a plain charstring subsets");
+        // Three trailing operands (fewer than seac's arity) stay on the
+        // legal side: endchar's optional width operand is one, and malformed
+        // two/three-operand tails are the consumer's error, not ours.
+        let width = [139, 248, 136, 13, 189, 14];
+        let program = t1_over_raw(&t1_private(&[(".notdef", &notdef), ("A", &width), ("B", &box_ops(700))]));
+        assert!(subset_type1(&program, &["A"]).is_some(), "one width operand into endchar subsets");
+        // A hostile /lenIV would push the byte scan past every charstring —
+        // the bytes cannot be judged, so the subset declines.
+        let private = t1_private(&[(".notdef", &notdef), ("A", &implicit), ("B", &box_ops(700))]);
+        let at = private.windows(b"/lenIV 0 def".len()).position(|w| w == b"/lenIV 0 def").expect("the lenIV line");
+        let mut hostile = private[..at].to_vec();
+        hostile.extend_from_slice(b"/lenIV 9999 def");
+        hostile.extend_from_slice(&private[at + "/lenIV 0 def".len()..]);
+        assert!(subset_type1(&t1_over_raw(&hostile), &["A"]).is_none(), "an absurd /lenIV declines (the bytes cannot be judged)");
     }
 }

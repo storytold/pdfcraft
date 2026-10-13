@@ -1317,6 +1317,52 @@ mod tests {
         out
     }
 
+    /// [`t1_program`] with 'A' composing through `seac`: `0 500 hsbw
+    /// 50 0 66 66 endchar` — four operands into a final `endchar`, the
+    /// implicit spelling of Type 1's standard-encoding accent construction
+    /// (skrifa's evaluator — the parse both hayro and the oracle ride —
+    /// resolves operands 66/66 as base/accent codes 'B'/'B' through
+    /// StandardEncoding). 'B' stays a plain box, so the composing glyph
+    /// renders from real charstrings during the drive.
+    fn seac_t1_program() -> Vec<u8> {
+        // `0 500 hsbw 50 0 66 66 endchar`: adx=50, ady=0, bchar=achar='B'.
+        const SEAC_A: [u8; 9] = [139, 248, 136, 13, 189, 139, 205, 205, 14];
+        const BOX_B: [u8; 20] = [139, 249, 80, 13, 239, 22, 139, 248, 36, 5, 247, 192, 139, 5, 139, 252, 36, 5, 9, 14];
+        const NOTDEF: [u8; 5] = [139, 248, 136, 13, 14];
+        let mut private: Vec<u8> = Vec::new();
+        private.extend_from_slice(
+            b"dup /Private 8 dict dup begin\n\
+              /RD {string currentfile exch readstring pop} executeonly def\n\
+              /ND {noaccess def} executeonly def\n\
+              /NP {noaccess put} executeonly def\n\
+              /lenIV 0 def\n\
+              2 index /CharStrings 3 dict dup begin\n",
+        );
+        for (name, ops) in [(".notdef", NOTDEF.as_slice()), ("A", SEAC_A.as_slice()), ("B", BOX_B.as_slice())] {
+            let cipher = t1_charstring(ops);
+            private.extend_from_slice(format!("/{name} {} RD ", cipher.len()).as_bytes());
+            private.extend_from_slice(&cipher);
+            private.extend_from_slice(b"ND\n");
+        }
+        private.extend_from_slice(
+            b"end\nend\nreadonly put\nnoaccess put\n\
+              dup /FontName get exch definefont pop\n\
+              mark currentfile closefile\n",
+        );
+        let mut plain = vec![0x5a, 0xa5, 0x37, 0xc3];
+        plain.extend_from_slice(&private);
+        let cipher = t1_encrypt(55665, &plain);
+        let mut out = b"%!PS-AdobeFont-1.0: PdfCraftTest 001.001\n11 dict begin\n/FontName /PdfCraftTest def\n/PaintType 0 def\n/FontType 1 def\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/Encoding StandardEncoding def\n/FontBBox [0 -200 700 800] readonly def\ncurrentdict end\ncurrentfile eexec\n".to_vec();
+        out.extend_from_slice(cipher.iter().map(|b| format!("{b:02x}")).collect::<String>().as_bytes());
+        out.push(b'\n');
+        for _ in 0..8 {
+            out.extend_from_slice(&[b'0'; 64]);
+            out.push(b'\n');
+        }
+        out.extend_from_slice(b"cleartomark\n");
+        out
+    }
+
     /// A minimal TrueType font: 1000 upem, three glyphs (empty outlines — these
     /// fixtures test text emission, not outlines), a (1,0) format-6 cmap mapping
     /// A→1 and B→2, and a version-3.0 `post` (no names, so `/glyphNNNN`
@@ -2037,6 +2083,27 @@ mod tests {
         assert!(notes.iter().any(|n| n.contains("unreadable")), "noted: {notes:?}");
         assert!(!out.contains("findfont") && !out.contains("xyshow"), "no text-as-text: {out}");
         assert!(!preamble.contains("%%BeginResource"), "no font resource: {preamble}");
+    }
+
+    /// A program whose kept glyph composes accents (`seac`) declines the
+    /// subset and embeds verbatim (fix round 1): the composing charstring
+    /// references its base and accent by name — here 'A' composes from 'B' —
+    /// and the subset would drop 'B' when nothing else shows it, breaking
+    /// 'A' in the consumer with no note. The whole program rides verbatim,
+    /// the copy still findfonts it, the text still draws, nothing degrades.
+    #[test]
+    fn seac_program_falls_back_verbatim() {
+        let program = seac_t1_program();
+        // Unit half: the composing shape declines; a plain program of the
+        // same construction subsets (the detector does not over-fire).
+        assert!(crate::type1_subset::subset_type1(&program, &["A"]).is_none(), "the seac charstring declines the subset");
+        assert!(crate::type1_subset::subset_type1(&t1_program(), &["A"]).is_some(), "the plain fixture still subsets");
+        let pdf = font_pdf(T1_FONT, T1_DESC, "", &program, b"BT /F1 24 Tf 20 100 Td (A) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "the verbatim fallback is not a degradation");
+        assert!(contains_bytes(&preamble, &program), "the whole program rides verbatim, B included: {preamble}");
+        assert!(preamble.contains("/PdfCraftF0 /PdfCraftTest findfont dup length dict copy\n"), "the copy still findfonts it: {preamble}");
+        assert!(out.contains("/PdfCraftF0 findfont") && out.contains(" show\n"), "the composing glyph still draws through the font: {out}");
     }
 
     /// An embedded TrueType font leaves as Type 42 text: no degradation note;
