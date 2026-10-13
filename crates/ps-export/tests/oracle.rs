@@ -11,6 +11,14 @@
 //!
 //! Fixture pages are 288×360 pt, a whole multiple of the 1.44 pt pixel at 50 dpi, so both
 //! rasters are exactly 200×250 px and the pixel grids coincide without rounding luck.
+//!
+//! The W2 merge gates (CFF promotion, CID composites) prove the composite arms the
+//! same way, with one addition: on this gs build txtwrite maps composite text to its
+//! raw codes as Unicode, never to glyph names, so those gates assert structure, ink
+//! and raster parity, leaving extraction to the name-carrying base-font arms (the
+//! tests' doc comments carry the probes). Their craft-fonts fixtures are read at test
+//! runtime from `CRAFT_FONTS_DIR` when a checkout exists — the raster-crate
+//! precedent — so no font bytes ride in the repository.
 
 use std::io::Cursor;
 use std::process::Command;
@@ -325,6 +333,84 @@ fn ttf_program() -> Vec<u8> {
     out
 }
 
+/// A minimal CFF (Type1C) font: `.notdef`, `A` (one curve) and `B` (a box).
+/// Copied from `src/fonts.rs`'s test module (house style: each test module
+/// owns its fixtures) for the CFF-promotion gate's no-checkout arm.
+fn cff_program() -> Vec<u8> {
+    /// A CFF INDEX over `items` (offSize 1; the fixture stays far below 256).
+    fn index(items: &[&[u8]]) -> Vec<u8> {
+        let mut out = (items.len() as u16).to_be_bytes().to_vec();
+        if items.is_empty() {
+            return out;
+        }
+        out.push(1); // offSize
+        let mut offsets = vec![1u16];
+        let mut total = 1u16;
+        let mut data = Vec::new();
+        for item in items {
+            data.extend_from_slice(item);
+            // The fixture stays far below the u16 range; saturate rather
+            // than wrap if that ever changes.
+            total = total.saturating_add(item.len() as u16);
+            offsets.push(total);
+        }
+        for off in offsets {
+            out.push(off as u8);
+        }
+        out.extend_from_slice(&data);
+        out
+    }
+    fn dict_int(value: u32, op: u8) -> Vec<u8> {
+        let mut out = vec![29];
+        out.extend_from_slice(&value.to_be_bytes());
+        out.push(op);
+        out
+    }
+    let header = [0x01, 0x00, 0x04, 0x02].to_vec();
+    let name_index = index(&[b"PdfCraftCFF"]);
+    let empty_index = index(&[]);
+    // Type 2 charstrings: .notdef = endchar; A = `500 100 hmoveto, one
+    // rrcurveto, endchar`; B = `700 100 hmoveto, box, endchar`.
+    let notdef = vec![14u8];
+    let a = vec![248, 136, 239, 22, 189, 189, 189, 89, 139, 39, 8, 14];
+    let b = vec![249, 80, 239, 22, 248, 36, 7, 247, 192, 6, 252, 36, 7, 14];
+    let charstrings = index(&[&notdef, &a, &b]);
+    // Charset format 0: gid 1 → SID 34 ('A'), gid 2 → SID 35 ('B').
+    let charset = [0u8, 0, 34, 0, 35].to_vec();
+    // Private DICT: defaultWidthX 0.
+    let private = vec![139, 20];
+
+    // Offsets for the Top DICT. Its own size is value-independent (fixed
+    // 5-byte operands), so it is measured with placeholder operands first.
+    let top_len = dict_int(0, 15).len() + dict_int(0, 17).len() + 5 + 5 + 1;
+    let top_index_len = 2 + 1 + 2 + top_len;
+    let base = header.len() + name_index.len() + top_index_len + empty_index.len() * 2;
+    let charset_pos = base;
+    let charstrings_pos = charset_pos + charset.len();
+    let private_pos = charstrings_pos + charstrings.len();
+
+    let mut top = Vec::new();
+    top.extend(dict_int(charset_pos as u32, 15));
+    top.extend(dict_int(charstrings_pos as u32, 17));
+    top.extend_from_slice(&[29]);
+    top.extend_from_slice(&(private.len() as u32).to_be_bytes());
+    top.extend_from_slice(&[29]);
+    top.extend_from_slice(&(private_pos as u32).to_be_bytes());
+    top.push(18);
+    let top_index = index(&[&top]);
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&name_index);
+    out.extend_from_slice(&top_index);
+    out.extend_from_slice(&empty_index); // String INDEX
+    out.extend_from_slice(&empty_index); // Global Subr INDEX
+    out.extend_from_slice(&charset);
+    out.extend_from_slice(&charstrings);
+    out.extend_from_slice(&private);
+    out
+}
+
 /// A text page over the Layer A/B strategies: embedded Type 1 (`show` text through the
 /// prolog font), embedded TrueType (Type 42 `show` text through the emitted dictionary)
 /// and a non-embedded font (vectorized substitute outlines). Each draws at 72 pt
@@ -420,6 +506,92 @@ fn degraded_shading_pdf() -> Vec<u8> {
             &data,
         ),
     ])
+}
+
+// --------------------------------------------------- craft-fonts (test runtime)
+
+/// Family-name prefixes AGENTS.md §1.1 forbids: Adobe's Source families and
+/// Noto CJK, which is Source Han under another name. The same list
+/// `crates/fonts/build.rs` keeps; the runtime gate skips those faces for the
+/// same reason the build never embeds them.
+const BARRED_FAMILIES: [&str; 5] = ["Source Han", "Source Serif", "Source Sans", "Noto Sans CJK", "Noto Serif CJK"];
+
+/// The flavor of a font program, detected from its magic bytes: a bare CFF
+/// starts `01 00`, an sfnt-wrapped CFF is `OTTO`, a TrueType sfnt is
+/// `0001 0000`.
+#[derive(Debug)]
+enum FaceFlavor {
+    Cff,
+    SfntCff,
+    TrueType,
+}
+
+/// The flavor of `bytes` from its leading magic, `None` when unrecognized
+/// (a `ttcf` collection, or not a font at all).
+fn flavor_of(bytes: &[u8]) -> Option<FaceFlavor> {
+    match bytes.first_chunk::<4>() {
+        Some([0x01, 0x00, ..]) => Some(FaceFlavor::Cff),
+        Some(b"OTTO") => Some(FaceFlavor::SfntCff),
+        Some([0x00, 0x01, 0x00, 0x00]) => Some(FaceFlavor::TrueType),
+        _ => None,
+    }
+}
+
+/// A face from a craft-fonts checkout read at test runtime (`CRAFT_FONTS_DIR`,
+/// manifest `fonts/manifest.txt`, `family | style | file | scripts` lines — the
+/// build script's format). `None` (after a skip message) when the checkout or a
+/// matching face is absent. The flavor is detected from the bytes' magic
+/// (bare CFF `01 00 …`, `OTTO`, `0001 0000`).
+///
+/// A face matches when its `scripts` list shares an entry with `scripts`. The
+/// reader is robust where the build script is strict — a malformed line, an
+/// unreadable file or an unknown magic skips that face with a message instead
+/// of failing the test (AGENTS.md §4: bad input, not a crash) — and it skips
+/// the [`BARRED_FAMILIES`] faces exactly as the build input does. No font
+/// bytes enter the repository: the checkout is read where it stands, like
+/// `CRAFT_FONTS_DIR` at build time.
+fn craft_face(scripts: &[&str]) -> Option<(Vec<u8>, FaceFlavor)> {
+    let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR") else {
+        eprintln!("skipping the craft-fonts oracle fixtures: CRAFT_FONTS_DIR is unset");
+        return None;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let manifest = dir.join("fonts/manifest.txt");
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(text) => text,
+        Err(why) => {
+            eprintln!("skipping the craft-fonts oracle fixtures: {} cannot be read ({why})", manifest.display());
+            return None;
+        }
+    };
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let fields: Vec<&str> = line.split(" | ").map(str::trim).collect();
+        let [family, _style, file, face_scripts, ..] = fields.as_slice() else {
+            eprintln!("craft-fonts manifest: skipping malformed line {line:?}");
+            continue;
+        };
+        if BARRED_FAMILIES.iter().any(|barred| family.starts_with(barred)) {
+            eprintln!("craft-fonts manifest: skipping {family} (AGENTS.md §1.1)");
+            continue;
+        }
+        if !face_scripts.split(',').any(|s| scripts.contains(&s.trim())) {
+            continue;
+        }
+        let bytes = match std::fs::read(dir.join(file)) {
+            Ok(bytes) => bytes,
+            Err(why) => {
+                eprintln!("craft-fonts manifest: {file} cannot be read ({why}); skipped");
+                continue;
+            }
+        };
+        let Some(flavor) = flavor_of(&bytes) else {
+            eprintln!("craft-fonts manifest: {file} has no known font magic; skipped");
+            continue;
+        };
+        return Some((bytes, flavor));
+    }
+    eprintln!("skipping the craft-fonts oracle fixtures: the manifest lists no face covering {}", scripts.join("/"));
+    None
 }
 
 // ------------------------------------------------------------------ the oracle
@@ -748,4 +920,156 @@ fn degraded_shading_paints_ink() {
     // The flat mid-tone is ~0.5 gray over the whole page box: most of the raster is ink.
     let inked = rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 200).count();
     assert!(inked > (PX.0 * PX.1 / 2) as usize, "the degraded shading painted {inked} inked pixels, not a blank region");
+}
+
+/// The W2 CFF-promotion merge gate (synthetic gs proof): a simple font's
+/// embedded CFF (`/FontFile3 /Type1C`) leaves as a PS Type 0 composite — the
+/// ReadData loader route, a `cidrange`/`cidchar` CMap, a `composefont`
+/// parent — and both rasterizers draw the same glyphs. The page embeds the
+/// craft-fonts Latin face when the checkout carries a bare-CFF one (read at
+/// test runtime via [`craft_face`]); otherwise the synthetic [`cff_program`]
+/// covers the arm with a skip line for the checkout half (today's checkout
+/// holds only TrueType faces, so CI without it runs the synthetic arm).
+///
+/// **Extraction is deliberately not asserted — a measured correction of the
+/// gate spec.** The spec expected `gs_text` to return the drawn Latin string
+/// "through the face's charset SIDs", but on this oracle build (gs 10.08.0)
+/// txtwrite maps composite text to its raw 2-byte codes as Unicode: the
+/// Task 5 probes return `U+0001 U+0002` for codes `<0001> <0002>` shown
+/// through the promoted font, unchanged when the CMap's mapping is swapped,
+/// and the charset's own names ('A', 'B') never surface. A promoted CFF is a
+/// CID arm the moment it is emitted, so Task 3's finding (extraction is
+/// meaningful only where the emitted font carries `/Encoding` glyph names —
+/// the base-font arms) covers it too. The gate therefore proves the arm the
+/// stronger way the plan scopes for CID arms — structure + oracle ink +
+/// raster parity ([`assert_matches_oracle`]) — while extraction stays proven
+/// where names exist, by the Type 42 gate
+/// ([`embedded_real_truetype_draws_and_extracts_as_type42`]). Skips its gs
+/// half when gs is not installed.
+#[test]
+fn cff_promotion_page_matches_ghostscript_and_extracts() {
+    let (program, from_checkout) = match craft_face(&["Latn"]) {
+        Some((bytes, FaceFlavor::Cff)) => (bytes, true),
+        Some((_, flavor)) => {
+            eprintln!(
+                "skipping the checkout half of the CFF gate: the Latin face is {flavor:?}, not a bare CFF; the synthetic program covers the promotion arm"
+            );
+            (cff_program(), false)
+        }
+        None => (cff_program(), false),
+    };
+    let pdf = assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        // F1: the simple font whose FontFile3 promotes (descriptor 5, program 6).
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftCFF /FirstChar 65 /LastChar 66 /Widths [600 700] /Encoding /StandardEncoding /FontDescriptor 5 0 R >>".to_vec(),
+        stream_obj("", b"BT /F1 72 Tf 14.4 100 Td (ABAB) Tj ET"),
+        b"<< /Type /FontDescriptor /FontName /PdfCraftCFF /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>".to_vec(),
+        stream_obj("/Subtype /Type1C", &program),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+    ]);
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the CFF page exports");
+    assert!(out.warnings.is_empty(), "the promotion arm degrades nothing: {:?}", out.warnings);
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    // Structure — the ratified Task 5 shapes: gs's own CFF loader route, the
+    // cidrange/cidchar CMap grammar with integer CID operands (`bfrange`/
+    // `bfchar` is the ToUnicode grammar: it defines but maps nothing — the
+    // probes inked zero through it), the composefont parent, and text drawing
+    // through the composite rather than vectorized paths.
+    assert!(s.contains("/ASCIIHexDecode filter //true //true ReadData\n"), "gs's own CFF loader route: {s}");
+    assert!(s.contains("composefont pop\n"), "the composefont parent: {s}");
+    assert!(s.contains("begincidrange") || s.contains("begincidchar"), "the CMap body uses the cid grammar: {s}");
+    assert!(!s.contains("bfchar") && !s.contains("bfrange"), "the ToUnicode grammar maps no code in a CID CMap: {s}");
+    assert!(s.contains("xyshow"), "the text draws through the composite: {s}");
+    if !from_checkout {
+        // The synthetic font's codes are the identity gids 1 and 2, which the
+        // CMap collapses into one cidrange line.
+        assert!(s.contains("<0001> <0002> 1\n"), "identity code==cid mappings collapse to one cidrange: {s}");
+    }
+    // Ink on the oracle side first: a CMap that maps nothing renders blank,
+    // and two blank rasters would delta 0 and pass the comparison vacuously.
+    let Some((_, _, rgb)) = gs_raster(&out.bytes, "cff-promote") else { return };
+    let inked = rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 200).count();
+    // Measured ≈ 740 inked pixels for the synthetic arm (the curve of A and
+    // the box of B twice at 72 pt); the threshold keeps headroom below that
+    // while sitting far above zero, which is what a CMap that maps nothing
+    // paints (the raster comparison below catches wrong-but-nonempty glyphs).
+    assert!(inked > 200, "the promoted composite painted {inked} inked pixels — a CMap or charset mismatch renders blank");
+    assert_matches_oracle("cff-promote", &pdf);
+}
+
+/// The W2 CID merge gate (craft-fonts at runtime): a Type0/CIDFontType2 page
+/// drawing CJK text (日本語) with the checkout's Jpn face, compared through the
+/// whole oracle loop. [`craft_face`] reads the face where the checkout stands;
+/// its cmap picks the gids (under `/Identity-H` with an identity
+/// `/CIDToGIDMap` the PDF's 2-byte codes are CIDs are gids), so the gate
+/// exercises the full chain: hayro's embedded-TrueType rendering of the source
+/// PDF against gs's type-11 CIDFont rendering of the exported composite.
+///
+/// **Extraction is deliberately not asserted — the plan's own scoping, on this
+/// build's semantics.** CID arms carry no glyph names, and txtwrite maps their
+/// text to the raw codes as Unicode (see
+/// [`cff_promotion_page_matches_ghostscript_and_extracts`] for the probes), so
+/// identity-CID CJK text has no recoverable Unicode through any name route:
+/// the extracted bytes would be the codes, not the characters. CJK fidelity is
+/// proven the stronger way instead — structural shape + oracle ink + raster
+/// match — while extraction coverage lives with the Latin arms that carry
+/// names (the Type 42 gate). The gate skips (with a message) when
+/// `CRAFT_FONTS_DIR` is unset, the Jpn face is absent, or it is not a
+/// TrueType face (only that flavor rides the CIDFontType2 arm here: the bare
+/// CFF flavors have no char→CID route without an ordering CMap). Skips its gs
+/// half when gs is not installed.
+#[test]
+fn cid_cjk_page_matches_ghostscript() {
+    let Some((bytes, flavor)) = craft_face(&["Jpn"]) else { return };
+    let FaceFlavor::TrueType = flavor else {
+        eprintln!("skipping the CID CJK gate: the Jpn face is {flavor:?}; only the TrueType flavor rides the CIDFontType2 arm");
+        return;
+    };
+    use skrifa::MetadataProvider as _;
+    let Ok(font) = skrifa::FontRef::new(&bytes) else {
+        eprintln!("skipping the CID CJK gate: the Jpn face does not parse as an sfnt");
+        return;
+    };
+    let charmap = font.charmap();
+    // A gid past 16 bits cannot ride the composite's 2-byte codes, so it drops.
+    let codes: Vec<u16> = "日本語".chars().filter_map(|c| charmap.map(c)).map(|g| g.to_u32()).filter_map(|gid| u16::try_from(gid).ok()).collect();
+    if codes.len() < 2 {
+        eprintln!("skipping the CID CJK gate: the Jpn face covers only {} of 日本語", codes.len());
+        return;
+    }
+    let show: String = codes.iter().map(|c| format!("{c:04X}")).collect();
+    let pdf = assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [8 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        // F1: the Type0 parent over one CIDFontType2 descendant (7), whose
+        // descriptor (5) embeds the face (6). Identity-H + identity CIDToGIDMap:
+        // the content's codes are CIDs are gids.
+        b"<< /Type /Font /Subtype /Type0 /BaseFont /CraftJpn /Encoding /Identity-H /DescendantFonts [7 0 R] >>".to_vec(),
+        stream_obj("", format!("BT /F1 36 Tf 14.4 200 Td <{show}> Tj ET").as_bytes()),
+        b"<< /Type /FontDescriptor /FontName /CraftJpn /Flags 4 /FontBBox [0 -200 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
+        stream_obj("", &bytes),
+        b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /CraftJpn /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 5 0 R /DW 1000 /CIDToGIDMap /Identity >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+    ]);
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the CJK page exports");
+    assert!(out.warnings.is_empty(), "the CIDFontType2 arm degrades nothing: {:?}", out.warnings);
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    // Structure — pdftops' type-11 key set around the PDF-transliterated ones,
+    // the composefont parent, and text drawing through the composite.
+    assert!(s.contains("/CIDFontType 2 def\n"), "the type-11 CIDFont dict: {s}");
+    assert!(s.contains("/CIDToGIDMap /Identity def\n"), "the identity CID-to-GID mapping: {s}");
+    assert!(s.contains("/GDBytes 2 def\n"), "gs's type-11 key set: {s}");
+    assert!(s.contains("/CIDMap "), "the identity CIDMap: {s}");
+    assert!(s.contains("composefont pop\n"), "the composefont parent: {s}");
+    assert!(s.contains("xyshow"), "the text draws through the composite, not vectorized paths: {s}");
+    // Ink on the oracle side first (a vacuous 0-delta pass needs it), then the
+    // full raster comparison — the CJK fidelity proof this gate exists for.
+    let Some((_, _, rgb)) = gs_raster(&out.bytes, "cid-cjk") else { return };
+    let inked = rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 200).count();
+    // Measured ≈ 1300 inked pixels for a stroke-dense synthetic Jpn face at
+    // 36 pt; the threshold keeps headroom below that while sitting far above
+    // zero, which is what a CMap or CIDMap that maps nothing paints.
+    assert!(inked > 400, "the CIDFontType2 composite painted {inked} inked pixels — a CMap or CIDMap mismatch renders blank");
+    assert_matches_oracle("cid-cjk", &pdf);
 }
