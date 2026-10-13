@@ -279,3 +279,34 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+/// Export a PDF ▸ PostScript / EPS: `.ps` holds every page, `.eps` the one page an EPS file
+/// takes — and the bytes are the ones the `doc_export_postscript` tool writes for the same
+/// document, not a second exporter.
+#[test]
+fn export_to_postscript() {
+    let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ps-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("e.pdf", None, doc).unwrap();
+    for (ext, header, format) in [
+        ("ps", "%!PS-Adobe-3.0\n", pdfcraft_engine::export::PsFormat::Ps),
+        ("eps", "%!PS-Adobe-3.0 EPSF-3.0\n", pdfcraft_engine::export::PsFormat::Eps),
+    ] {
+        let out = dir.join(format!("e.{ext}"));
+        app.save_override = Some(out.to_string_lossy().into_owned());
+        assert!(app.execute("export.ps"), "{ext}");
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert!(text.starts_with(header), "{ext} header: {text}");
+        assert!(text.contains("%%Page: 1 1\n"), "{ext} draws the page: {text}");
+        assert!(std::fs::metadata(&out).unwrap().len() > 40, "{ext}");
+        // The UI writes what the engine's exporter (and so the automation tool) writes.
+        let id = app.active_ids().unwrap().1;
+        let src = app.session.get(id).unwrap().export_source();
+        let pages: Vec<usize> = (0..src.pages).collect();
+        let expected = pdfcraft_engine::export::postscript(&src, &pages, format).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), expected.bytes, "{ext} matches the engine");
+    }
+}
