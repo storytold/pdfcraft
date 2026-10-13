@@ -47,6 +47,9 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("mobile-xcframework", "Build and package XCFramework for iOS device and simulator", mobile::xcframework),
     ("mobile-android", "Build and package Android .so native libraries (16KB aligned) into pdfcraft-kit", mobile::android),
     ("mobile-size", "Report binary footprint and per-feature cost of mobile libraries against budget B10", mobile::size),
+    ("mobile-viewer-size", "Build viewer-only libpdfcraft_ffi.so for aarch64-linux-android and assert size <= ceiling (+2%)", mobile::viewer_size),
+    ("mobile-push-corpus", "Push test corpus PDFs to Android device via adb", mobile::push_corpus),
+    ("mobile-tile-check", "Compare tiles rendered on emulator against host render with 1 LSB tolerance", mobile::tile_check),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {

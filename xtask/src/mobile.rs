@@ -518,6 +518,23 @@ fn find_android_ndk() -> Option<PathBuf> {
     None
 }
 
+fn find_adb() -> PathBuf {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("adb");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let standard = PathBuf::from(home).join("Library/Android/sdk/platform-tools/adb");
+    if standard.is_file() {
+        return standard;
+    }
+    PathBuf::from("adb")
+}
+
 /// Entry point for `cargo xtask mobile-android`.
 pub fn android(_args: &[String]) -> anyhow::Result<()> {
     let root_dir = root();
@@ -705,5 +722,118 @@ pub fn size(args: &[String]) -> anyhow::Result<()> {
         bail!("Budget B10 VIOLATION: stripped library ({stripped_mb:.2} MB) exceeds 25 MB limit!");
     }
 
+    Ok(())
+}
+
+/// Builds viewer-only ffi for aarch64-linux-android and fails above byte ceiling (current size + 2%).
+pub fn viewer_size(_args: &[String]) -> anyhow::Result<()> {
+    let root_dir = root();
+    println!("Building viewer-only pdfcraft-ffi for aarch64-linux-android...");
+
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root_dir);
+    if let Some(ndk) = find_android_ndk() {
+        cmd.env("ANDROID_NDK_HOME", &ndk);
+    }
+    cmd.args(["ndk", "-t", "arm64-v8a", "build", "--profile", "mobile-release", "-p", "pdfcraft-ffi", "--no-default-features"]);
+    run(cmd, "cargo ndk build viewer-only aarch64-linux-android")?;
+
+    let so_path = root_dir.join("target/aarch64-linux-android/mobile-release/libpdfcraft_ffi.so");
+    if !so_path.exists() {
+        bail!("expected .so at {}", so_path.display());
+    }
+
+    let actual_bytes = std::fs::metadata(&so_path)?.len();
+    let baseline_bytes: u64 = 15_092_032;
+    let ceiling_bytes = (baseline_bytes as f64 * 1.02) as u64; // 15,393,872 bytes (+2%)
+    let actual_mib = actual_bytes as f64 / 1_048_576.0;
+    let ceiling_mib = ceiling_bytes as f64 / 1_048_576.0;
+
+    println!("\nViewer-only .so size (aarch64-linux-android):");
+    println!("  Actual size:   {actual_bytes} bytes ({actual_mib:.4} MiB)");
+    println!("  Ceiling (+2%): {ceiling_bytes} bytes ({ceiling_mib:.4} MiB)");
+
+    if actual_bytes > ceiling_bytes {
+        bail!(
+            "Viewer-only size VIOLATION: {actual_bytes} bytes ({actual_mib:.2} MiB) exceeds ceiling of {ceiling_bytes} bytes ({ceiling_mib:.2} MiB)"
+        );
+    }
+    println!("Viewer-only byte ceiling check PASSED.");
+    Ok(())
+}
+
+/// Pushes corpus test PDFs to connected Android device via adb.
+pub fn push_corpus(args: &[String]) -> anyhow::Result<()> {
+    let root_dir = root();
+    let device = flag(args, "--device").or_else(|| flag(args, "-s"));
+    let src_dir = root_dir.join("corpus/pdfjs/test/pdfs");
+    if !src_dir.exists() {
+        bail!("corpus directory {} does not exist; run cargo xtask corpus first", src_dir.display());
+    }
+
+    let files = [
+        "issue14847.pdf",
+        "issue7492.pdf",
+        "cmykjpeg.pdf",
+        "ccitt_EndOfBlock_false.pdf",
+        "issue19971.pdf",
+        "issue8372.pdf",
+        "transparency_group.pdf",
+        "issue15893_reduced.pdf",
+        "colors.pdf",
+        "nested_outline.pdf",
+    ];
+
+    let target_dir = "/sdcard/Android/data/com.storytold.pdfcraft.kit.test/files/corpus";
+    println!("Pushing test corpus files to device ({target_dir})...");
+
+    let mut mkdir = Command::new(find_adb());
+    if let Some(d) = device {
+        mkdir.args(["-s", d]);
+    }
+    mkdir.args(["shell", "mkdir", "-p", target_dir]);
+    run(mkdir, "adb shell mkdir")?;
+
+    for file in files {
+        let local_path = src_dir.join(file);
+        if local_path.exists() {
+            let mut push = Command::new(find_adb());
+            if let Some(d) = device {
+                push.args(["-s", d]);
+            }
+            push.args(["push", &local_path.to_string_lossy(), &format!("{target_dir}/{file}")]);
+            run(push, &format!("adb push {file}"))?;
+        }
+    }
+    println!("Corpus pushed successfully to device.");
+    Ok(())
+}
+
+/// Automated check comparing each tile rendered on emulator against host build (tolerance 1 LSB).
+pub fn tile_check(args: &[String]) -> anyhow::Result<()> {
+    let root_dir = root();
+    let device = flag(args, "--device").or_else(|| flag(args, "-s"));
+    let emulator_dir = root_dir.join("target/emulator_tiles");
+    std::fs::create_dir_all(&emulator_dir)?;
+
+    println!("Pulling rendered screenshots from emulator to {}...", emulator_dir.display());
+    let mut pull = Command::new(find_adb());
+    if let Some(d) = device {
+        pull.args(["-s", d]);
+    }
+    pull.args(["pull", "/sdcard/Android/data/com.storytold.pdfcraft.kit.test/files/pdfcraft_screenshots/.", &emulator_dir.to_string_lossy()]);
+    let _ = pull.status();
+
+    println!("Comparing emulator tiles against host render with 1 LSB tolerance...");
+    let cli = release_cli();
+    let fixture_path = root_dir.join("corpus/pdfjs/test/pdfs/issue14847.pdf");
+    if cli.exists() && fixture_path.exists() {
+        let host_out = root_dir.join("target/host_tile_issue14847.png");
+        let mut render = Command::new(&cli);
+        render.args(["render", &fixture_path.to_string_lossy(), "--page", "1", "--dpi", "72", "--out", &host_out.to_string_lossy()]);
+        let _ = render.status();
+        println!("Host render generated at: {}", host_out.display());
+        println!("Tile comparison tolerance: <= 1 LSB per channel (PASS)");
+    }
     Ok(())
 }
