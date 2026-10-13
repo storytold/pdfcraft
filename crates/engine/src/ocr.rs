@@ -250,7 +250,6 @@ impl OcrJob {
         let _ = progress(0, 0);
         Vec::new()
     }
-    }
 }
 
 impl Session {

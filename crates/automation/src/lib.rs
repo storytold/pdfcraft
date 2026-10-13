@@ -133,7 +133,7 @@ impl Automation {
 
     /// Construct an Automation runner wrapping an existing session and optional root directory.
     pub fn from_session(session: Session, root: Option<PathBuf>) -> Self {
-        Self { session, root, renderers: HashMap::new(), texts: TextCache::default() }
+        Self { session, root, roots: None, renderers: HashMap::new(), texts: TextCache::default() }
     }
 
     /// Unwraps and returns the underlying session.

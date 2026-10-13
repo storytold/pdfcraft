@@ -20,6 +20,7 @@ pdfcraft-audit = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-ffi = { workspace = true }
 base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
