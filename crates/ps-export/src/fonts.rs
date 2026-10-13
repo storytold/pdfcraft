@@ -631,11 +631,14 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
 }
 
 /// One Type 42 pseudo-font over an embedded TrueType program: the sfnt
-/// rewritten by [`sfnt::synthesize_cmap`] (a (3,0) format-4 subtable over the
-/// slice's assigned codes, the original subtables kept) wrapped in a
-/// `/FontType 42` dictionary in the shape gs's own `ps2write` emits — the
-/// shape verified end-to-end against gs 10.08.0 (build 2026-09-08), this
-/// repo's oracle:
+/// rewritten by [`sfnt::subset_glyphs`] (kept: the slice's glyphs and their
+/// composite components, ids stable, unused glyphs emptied) and then
+/// [`sfnt::synthesize_cmap`] (a (3,0) format-4 subtable over the slice's
+/// assigned codes, the original subtables kept) — a subset the surgery
+/// cannot carry falls back to the whole program (output identical, only
+/// larger) — wrapped in a `/FontType 42` dictionary in the shape gs's own
+/// `ps2write` emits — the shape verified end-to-end against gs 10.08.0
+/// (build 2026-09-08), this repo's oracle:
 ///
 /// - `/FontMatrix [1 0 0 1 0 0]` — the identity, *not* `1/unitsPerEm`: this
 ///   gs build scales Type 42 glyph outlines by `1/upem` itself before the
@@ -649,12 +652,14 @@ fn type1_resource(out: &mut Vec<u8>, slice: &Slice, original: &str, names: &Hash
 ///   gid — the PLRM route, *not* the sfnt cmap (proven: a font whose cmap
 ///   maps no assigned code still draws through the names) — and gs's
 ///   txtwrite maps those names back to Unicode through the Adobe Glyph
-///   List, which is what makes the drawn text extractable. A glyph with no
-///   real name falls back to `/gNNNN` (renders identically; extraction for
-///   that glyph degrades honestly). The synthesized cmap stays in the sfnts
-///   for consumers that follow the Type 42 convention of resolving codes
-///   through the cmap; it is harmless under this gs (the same bytes render
-///   and extract with it present).
+///   List, which is what makes the drawn text extractable. The tables are
+///   built from the ORIGINAL program's gids, and that stays correct over
+///   the subset precisely because the surgery keeps ids stable. A glyph
+///   with no real name falls back to `/gNNNN` (renders identically;
+///   extraction for that glyph degrades honestly). The synthesized cmap
+///   stays in the sfnts for consumers that follow the Type 42 convention
+///   of resolving codes through the cmap; it is harmless under this gs
+///   (the same bytes render and extract with it present).
 /// - `/PaintType 0` and `/CharStrings` (`.notdef` → 0, one name per assigned
 ///   gid) are gs's `definefont` requirements for a Type 42 dict (verified;
 ///   ps2write emits both).
@@ -684,7 +689,13 @@ fn type42_resource(out: &mut Vec<u8>, slice: &Slice, program: &[u8], bbox: Optio
         // exactly as `synthesize_cmap` drops it below `numGlyphs`.
         .filter_map(|(gid, code)| Some((u16::from(*code), u16::try_from(*gid).ok()?)))
         .collect();
-    let Some(sfnts) = sfnt::synthesize_cmap(program, &mappings) else { return };
+    // The one-pass pipeline: subset the program to the slice's glyph closure
+    // (Task 7 — stable gids, unused glyphs emptied, components followed),
+    // then synthesize the cmap over it. `None` falls back to the whole font —
+    // output identical, only larger, so no note (silence-on-correct).
+    let used: Vec<u32> = slice.codes.keys().copied().collect();
+    let subset = sfnt::subset_glyphs(program, &used).unwrap_or_else(|| program.to_vec());
+    let Some(sfnts) = sfnt::synthesize_cmap(&subset, &mappings) else { return };
     // The load-bearing names: real when the program carries them, `/gNNNN`
     // otherwise, unique within the slice, never `.notdef` or an unusable
     // PostScript literal.
@@ -1250,6 +1261,14 @@ mod tests {
     /// duplicate-name regression installs a version-2.0 post whose gids 1 and
     /// 2 both point at one pool name.
     fn ttf_program_with_post(num_glyphs: u16, post: Vec<u8>) -> Vec<u8> {
+        ttf_program_over(&[box_glyph(), box_glyph()], num_glyphs, &[1, 2], &post)
+    }
+
+    /// The fixture core: `glyphs` in gid order after an empty .notdef, a
+    /// caller-chosen `maxp` count (the spilling fixture claims more than it
+    /// carries), and a (1,0) format-6 cmap mapping 65.. to `mapped` (the
+    /// glyph array, one gid per code from 'A').
+    fn ttf_program_over(glyphs: &[Vec<u8>], num_glyphs: u16, mapped: &[u16], post: &[u8]) -> Vec<u8> {
         fn be16(v: u16) -> [u8; 2] {
             v.to_be_bytes()
         }
@@ -1294,42 +1313,36 @@ mod tests {
         cmap.extend_from_slice(&be16(0)); // encodingID: Roman
         cmap.extend_from_slice(&be32(12)); // subtable offset
         cmap.extend_from_slice(&be16(6)); // format 6
-        cmap.extend_from_slice(&be16(14)); // length
+        cmap.extend_from_slice(&be16(10 + u16::try_from(mapped.len() * 2).expect("the fixture cmap fits"))); // length
         cmap.extend_from_slice(&be16(0)); // language
-        cmap.extend_from_slice(&be16(65)); // firstCode
-        cmap.extend_from_slice(&be16(2)); // entryCount
-        cmap.extend_from_slice(&be16(1)); // 'A' → gid 1
-        cmap.extend_from_slice(&be16(2)); // 'B' → gid 2
-        // Two identical simple glyphs (a 300×400 box at x=100), 34 bytes each;
-        // glyph 0 (.notdef) is empty. Short `loca` holds byte offsets ÷ 2.
-        fn box_glyph() -> Vec<u8> {
-            let mut g = Vec::new();
-            g.extend_from_slice(&be16(1)); // numberOfContours
-            g.extend_from_slice(&be16(100)); // xMin
-            g.extend_from_slice(&be16(0)); // yMin
-            g.extend_from_slice(&be16(400)); // xMax
-            g.extend_from_slice(&be16(400)); // yMax
-            g.extend_from_slice(&be16(3)); // endPtsOfContours[0] (4 points)
-            g.extend_from_slice(&be16(0)); // instructionLength
-            g.extend_from_slice(&[0x01; 4]); // flags: on-curve, 16-bit deltas
-            for dx in [100i16, 0, 300, 0] {
-                g.extend_from_slice(&be16(dx as u16));
-            }
-            for dy in [0i16, 400, 0, -400] {
-                g.extend_from_slice(&be16(dy as u16));
-            }
-            g
+        cmap.extend_from_slice(&be16(65)); // firstCode ('A')
+        cmap.extend_from_slice(&be16(u16::try_from(mapped.len()).expect("the fixture cmap fits"))); // entryCount
+        for &gid in mapped {
+            cmap.extend_from_slice(&be16(gid));
         }
-        let glyph = box_glyph();
+        // The glyphs in gid order after the empty .notdef; short `loca` holds
+        // byte offsets ÷ 2, computed from the cumulative even sizes.
         let mut glyf = Vec::new();
-        glyf.extend_from_slice(&glyph);
-        glyf.extend_from_slice(&glyph);
-        // loca: glyph0 empty at 0, glyphs 1-2 span the two boxes (÷2, short format).
-        let loca = [0u16, 0, 17, 34].iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<u8>>();
+        let mut loca: Vec<u8> = Vec::new();
+        loca.extend_from_slice(&be16(0)); // glyph 0 empty at 0
+        loca.extend_from_slice(&be16(0));
+        for glyph in glyphs {
+            glyf.extend_from_slice(glyph);
+            let half = u16::try_from(glyf.len() / 2).expect("the fixture glyf fits the short loca");
+            loca.extend_from_slice(&be16(half));
+        }
 
         // Directory entries, alphabetically by tag as the format requires.
-        let tables: [(&[u8; 4], Vec<u8>); 8] =
-            [(b"cmap", cmap), (b"glyf", glyf), (b"head", head), (b"hhea", hhea), (b"hmtx", hmtx), (b"loca", loca), (b"maxp", maxp), (b"post", post)];
+        let tables: [(&[u8; 4], &[u8]); 8] = [
+            (b"cmap", &cmap),
+            (b"glyf", &glyf),
+            (b"head", &head),
+            (b"hhea", &hhea),
+            (b"hmtx", &hmtx),
+            (b"loca", &loca),
+            (b"maxp", &maxp),
+            (b"post", post),
+        ];
         let mut out = Vec::new();
         out.extend_from_slice(&be32(0x0001_0000));
         out.extend_from_slice(&be16(tables.len() as u16));
@@ -1352,6 +1365,62 @@ mod tests {
         out.extend_from_slice(&dir);
         out.extend_from_slice(&body);
         out
+    }
+
+    /// A simple glyph for the fixture core: a 300×400 box at x=100, 34 bytes
+    /// (even-sized, as the short `loca` format requires of every glyph).
+    fn box_glyph() -> Vec<u8> {
+        let mut g = Vec::new();
+        g.extend_from_slice(&0x0001u16.to_be_bytes()); // numberOfContours
+        g.extend_from_slice(&100i16.to_be_bytes()); // xMin
+        g.extend_from_slice(&0i16.to_be_bytes()); // yMin
+        g.extend_from_slice(&400i16.to_be_bytes()); // xMax
+        g.extend_from_slice(&400i16.to_be_bytes()); // yMax
+        g.extend_from_slice(&3u16.to_be_bytes()); // endPtsOfContours[0] (4 points)
+        g.extend_from_slice(&0u16.to_be_bytes()); // instructionLength
+        g.extend_from_slice(&[0x01; 4]); // flags: on-curve, 16-bit deltas
+        for d in [100i16, 0, 300, 0, 0, 400, 0, -400] {
+            g.extend_from_slice(&d.to_be_bytes());
+        }
+        g
+    }
+
+    /// A composite glyph for the fixture core: the -1 contour count, a bbox,
+    /// then one record per `(gid, dx)` component carrying
+    /// `ARG_1_AND_2_ARE_WORDS | ARGS_ARE_XY_VALUES` (and `MORE_COMPONENTS` on
+    /// all but the last) — even-sized so the short `loca` stays encodable.
+    fn composite_glyph(components: &[(u16, i16)]) -> Vec<u8> {
+        let mut g = Vec::new();
+        g.extend_from_slice(&0xFFFFu16.to_be_bytes()); // numberOfContours: -1
+        g.extend_from_slice(&0i16.to_be_bytes()); // xMin
+        g.extend_from_slice(&0i16.to_be_bytes()); // yMin
+        g.extend_from_slice(&700i16.to_be_bytes()); // xMax
+        g.extend_from_slice(&400i16.to_be_bytes()); // yMax
+        for (i, &(gid, dx)) in components.iter().enumerate() {
+            let flags = 0x0001u16 | 0x0002 | if i + 1 < components.len() { 0x0010 } else { 0 };
+            g.extend_from_slice(&flags.to_be_bytes());
+            g.extend_from_slice(&gid.to_be_bytes());
+            g.extend_from_slice(&dx.to_be_bytes()); // arg1 (an x offset)
+            g.extend_from_slice(&0i16.to_be_bytes()); // arg2
+        }
+        g
+    }
+
+    /// The composite-glyph fixture: gids 1/2 simple boxes, gid 3 a composite
+    /// over them and gid 4 an unused box; the cmap maps A→1, B→2 and C→3 so
+    /// content can draw a component and the composite. With `cycle`, gid 3
+    /// references *itself* instead — the malformed font the whole-font
+    /// fallback test embeds.
+    fn composite_ttf_program(cycle: bool) -> Vec<u8> {
+        let glyph3 = if cycle { composite_glyph(&[(3, 0)]) } else { composite_glyph(&[(1, 0), (2, 300)]) };
+        let glyphs = vec![box_glyph(), box_glyph(), glyph3, box_glyph()];
+        let mut post = Vec::new();
+        post.extend_from_slice(&[0x00, 0x03, 0x00, 0x00]); // version 3.0
+        post.extend_from_slice(&[0; 4]); // italicAngle
+        post.extend_from_slice(&(-100i16).to_be_bytes()); // underlinePosition
+        post.extend_from_slice(&50u16.to_be_bytes()); // underlineThickness
+        post.extend_from_slice(&[0; 20]); // isFixedPitch + memory limits
+        ttf_program_over(&glyphs, 5, &[1, 2, 3], &post)
     }
 
     /// A minimal CFF (Type1C) font: `.notdef`, `A` (one curve) and `B` (a box).
@@ -2165,6 +2234,62 @@ mod tests {
         assert!(preamble.contains("/.notdef /box /g0002 /.notdef"), "Encoding: code 1 keeps the shared name, code 2 takes the fallback: {preamble}");
         assert!(preamble.contains("/box 1 def\n"), "CharStrings: the shared name maps to the lower gid: {preamble}");
         assert!(preamble.contains("/g0002 2 def\n"), "CharStrings: the higher gid keeps its own fallback entry: {preamble}");
+    }
+
+    /// `composite_cycle_falls_back_to_whole_font`, the export half: a font
+    /// whose composite glyph references itself still exports as Type 42 — the
+    /// surgery declines the subset (`None`) and the emitter falls back to the
+    /// whole program, so the sfnts carry every glyph's data exactly as the
+    /// un-subsetted synthesis would, with no degradation note (correct
+    /// output, only larger).
+    #[test]
+    fn composite_cycle_falls_back_to_whole_font() {
+        let ttf = composite_ttf_program(true);
+        assert!(sfnt::subset_glyphs(&ttf, &[1, 3]).is_none(), "the unit half: the cycle declines the subset");
+        let pdf = font_pdf(TT_FONT, TT_DESC, "", &ttf, b"BT /F1 24 Tf 20 100 Td (AC) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "the whole-font fallback is silent — correct, only larger");
+        assert!(preamble.contains("/FontType 42 def\n"), "the Type 42 dictionary emits: {preamble}");
+        assert!(out.contains("xyshow"), "the export still draws text through the font: {out}");
+        let blobs = sfnts_blobs(&preamble);
+        assert_eq!(blobs.len(), 1, "one slice, one sfnts string: {preamble}");
+        assert_eq!(
+            blobs[0],
+            sfnt::synthesize_cmap(&ttf, &[(1, 1), (2, 3)]).expect("the whole-font synthesis succeeds"),
+            "the sfnts carry the whole font — every glyph's data — identically to the un-subsetted pipeline"
+        );
+    }
+
+    /// The Type 42 name tables stay valid over the subset: `/Encoding` and
+    /// `/CharStrings` are built from the ORIGINAL program's gids, and the
+    /// surgery's stable numbering is what makes that survive — the names
+    /// resolve to glyphs that still hold their outlines in the subsetted
+    /// sfnts, including the pure component gid the dictionary never names
+    /// (it rides only as the composite's outline data).
+    #[test]
+    fn type42_names_stay_valid_over_the_subset() {
+        let ttf = composite_ttf_program(false);
+        let pdf = font_pdf(TT_FONT, TT_DESC, "", &ttf, b"BT /F1 24 Tf 20 100 Td (AC) Tj ET");
+        let (out, notes, preamble) = driven(&pdf);
+        assert_eq!(notes.join("\n"), "", "subsetting degrades nothing");
+        assert!(out.contains("xyshow"), "the text draws through the font: {out}");
+        // post 3.0: every name is the /gNNNN fallback, keyed by the ORIGINAL
+        // gid — unchanged by the subset, by construction.
+        assert!(preamble.contains("/g0001 1 def\n"), "CharStrings names gid 1 under its original id: {preamble}");
+        assert!(preamble.contains("/g0003 3 def\n"), "CharStrings names the composite gid 3 under its original id: {preamble}");
+        // ...and the subset keeps those gids alive, the pure component included.
+        let blobs = sfnts_blobs(&preamble);
+        assert_eq!(blobs.len(), 1, "one slice, one sfnts string: {preamble}");
+        let blob = &blobs[0];
+        let (off, _len) = dir_entry(blob, b"maxp").expect("a maxp directory entry");
+        assert_eq!(be16_at(blob, off + 4), Some(5), "numGlyphs unchanged by the subset");
+        let (off, len) = dir_entry(blob, b"loca").expect("a loca directory entry");
+        let loca = blob.get(off..off + len).expect("the loca table within the blob");
+        let offs: Vec<usize> = (0..len / 2).map(|i| usize::from(be16_at(loca, i * 2).expect("a loca entry")) * 2).collect();
+        assert_eq!(offs.len(), 6, "five glyphs plus the final end");
+        assert!(offs[2] > offs[1] && offs[3] > offs[2], "the component gids 1 and 2 hold their outlines");
+        assert!(offs[4] > offs[3], "the composite gid 3 holds its outline");
+        assert_eq!(offs[5], offs[4], "the unused gid 4 empties");
     }
 
     // --------------------------------------------------------------- extras
