@@ -540,11 +540,13 @@ impl<'a> Device<'a> for PsDevice<'a> {
                     for note in self.fonts.drain_notes() {
                         self.emit.note(&note);
                     }
-                    if matches!(strategy, TextStrategy::Type1Passthrough) {
+                    if matches!(strategy, TextStrategy::Type1Passthrough | TextStrategy::Type42Cmap) {
                         let key = outline.font_cache_key();
                         let gid = outline.glyph_id().to_u32();
                         // A Type 1 code whose glyph is not in the parsed program
                         // would show the wrong glyph; that glyph vectorizes.
+                        // Type 1 only — a Type 42 code resolves through the
+                        // synthesized cmap the strategy arm proved writable.
                         if strategy == TextStrategy::Type1Passthrough && self.fonts.type1_glyph_name(key, gid).is_none() {
                             self.emit.note("text vectorized (glyph missing from font program)");
                             self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Fill(FillRule::NonZero));
