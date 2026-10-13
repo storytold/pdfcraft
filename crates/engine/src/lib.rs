@@ -65,7 +65,10 @@ pub use pdfcraft_forms::{
 pub use pdfcraft_a11y as a11y;
 pub use pdfcraft_edit::{BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, first_undrawable};
 pub use pdfcraft_measure as measure;
+#[cfg(feature = "xfa")]
 pub use pdfcraft_xfa::Report as XfaLayout;
+#[cfg(not(feature = "xfa"))]
+pub use xfa::XfaLayout;
 
 pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
@@ -128,9 +131,14 @@ pub fn text_box_at(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Opti
 
 /// `text` in the script font as the graphic of a visible digital signature, as Fill & Sign types
 /// it. `None` for text with no outlines.
+#[cfg(feature = "sign")]
 pub fn typed_signature_graphic(text: &str) -> Option<pdfcraft_sign::Graphic> {
     let o = script_outline(text);
     o.contours.iter().any(|c| c.len() > 2).then_some(pdfcraft_sign::Graphic::Outlines(o.contours))
+}
+#[cfg(not(feature = "sign"))]
+pub fn typed_signature_graphic(_text: &str) -> Option<sign::Graphic> {
+    None
 }
 
 pub use links::{
@@ -145,16 +153,350 @@ pub use pdfcraft_annot::{
 };
 pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
+#[cfg(feature = "preflight")]
 pub use pdfcraft_preflight as pdfa;
+#[cfg(not(feature = "preflight"))]
+pub mod pdfa {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Level {
+        A1b,
+        A1a,
+        A2b,
+        A2u,
+        A2a,
+        A3b,
+        A3u,
+        A3a,
+    }
+    impl Level {
+        pub fn label(self) -> &'static str {
+            match self {
+                Level::A1b => "PDF/A-1b",
+                Level::A1a => "PDF/A-1a",
+                Level::A2b => "PDF/A-2b",
+                Level::A2u => "PDF/A-2u",
+                Level::A2a => "PDF/A-2a",
+                Level::A3b => "PDF/A-3b",
+                Level::A3u => "PDF/A-3u",
+                Level::A3a => "PDF/A-3a",
+            }
+        }
+        pub fn from_id(id: &str) -> Option<Self> {
+            match id {
+                "pdfa1b" | "1b" => Some(Level::A1b),
+                "pdfa2b" | "2b" => Some(Level::A2b),
+                "pdfa3b" | "3b" => Some(Level::A3b),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Issue {
+        pub clause: &'static str,
+        pub message: String,
+        pub pattern: &'static str,
+        pub value: Option<String>,
+        pub page: Option<usize>,
+        pub fixable: bool,
+    }
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct Declared {
+        pub pdfa: Option<(u8, String)>,
+        pub pdfua: Option<u8>,
+        pub output_intents: Vec<String>,
+    }
+    pub fn verify(_doc: &pdfcraft_cos::Document, _level: Level) -> Vec<Issue> {
+        Vec::new()
+    }
+    pub fn declared(_doc: &pdfcraft_cos::Document) -> Declared {
+        Declared::default()
+    }
+}
 pub use pdfcraft_print as print;
 pub use pdfcraft_redact::codes::{CODE_SETS as REDACTION_CODE_SETS, CodeSet as RedactionCodeSet};
 pub use pdfcraft_redact::patterns::{
     MAX_WORDS as REDACT_MAX_WORDS, PATTERNS as REDACT_PATTERNS, Pattern as RedactPattern, find as find_pattern, word_list as redact_word_list,
 };
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
+#[cfg(feature = "sign")]
 pub use pdfcraft_sign as sign;
+#[cfg(feature = "sign")]
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
+
+#[cfg(not(feature = "sign"))]
+pub mod sign {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SignatureStatus {
+        Valid,
+        #[default]
+        Unknown,
+        Invalid,
+    }
+
+    #[derive(Clone, PartialEq, Debug)]
+    pub enum Graphic {
+        Strokes(Vec<Vec<[f64; 2]>>),
+        Outlines(Vec<Vec<[f64; 2]>>),
+        Image { width: u32, height: u32, rgba: std::sync::Arc<Vec<u8>> },
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Detail {
+        pub message: String,
+        pub pattern: &'static str,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct SignatureInfo {
+        pub field: String,
+        pub signed: bool,
+        pub name: Option<String>,
+        pub signer: Option<String>,
+        pub date: Option<String>,
+        pub signing_time: Option<Time>,
+        pub status: SignatureStatus,
+        pub reason: Option<String>,
+        pub location: Option<String>,
+        pub contact: Option<String>,
+        pub page: Option<usize>,
+        pub rect: Option<[f64; 4]>,
+        pub visible: bool,
+        pub revision: usize,
+        pub signed_len: usize,
+        pub certificate: Option<Certificate>,
+        pub chain: Vec<Certificate>,
+        pub certify: Option<u8>,
+        pub sub_filter: Option<String>,
+        pub algorithm: Option<String>,
+        pub timestamp: bool,
+        pub timestamp_time: Option<Time>,
+        pub details: Vec<Detail>,
+        pub modification: Modification,
+    }
+
+    impl SignatureInfo {
+        pub fn summary(&self) -> &'static str {
+            if !self.signed {
+                return "Unsigned signature field";
+            }
+            match self.status {
+                SignatureStatus::Valid => "Signature is valid",
+                SignatureStatus::Unknown => "Signature validity is unknown",
+                SignatureStatus::Invalid => "Signature is invalid",
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct SignOptions {
+        pub field: Option<String>,
+        pub page: usize,
+        pub rect: Option<[f64; 4]>,
+        pub new_field_name: Option<String>,
+        pub reason: Option<String>,
+        pub location: Option<String>,
+        pub contact: Option<String>,
+        pub contact_info: Option<String>,
+        pub date: String,
+        pub certify: Option<u8>,
+        pub graphic: Option<Graphic>,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct TrustStore {
+        pub certs: Vec<Certificate>,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct DigestCache {
+        _unused: (),
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct Certificate {
+        pub raw: Vec<u8>,
+        pub subject: Name,
+        pub issuer: Name,
+        pub not_before: Time,
+        pub not_after: Time,
+        pub public_key: KeyDesc,
+    }
+
+    impl Certificate {
+        pub fn display_name(&self) -> String {
+            String::new()
+        }
+        pub fn serial_hex(&self) -> String {
+            String::new()
+        }
+        pub fn is_self_signed(&self) -> bool {
+            false
+        }
+        pub fn fingerprint(&self) -> String {
+            String::new()
+        }
+        pub fn self_signed(_name: &Name, _key: &PrivateKey, _not_before: Time, _years: u32, _serial: &[u8]) -> Result<Self, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct KeyDesc;
+    impl KeyDesc {
+        pub fn describe(&self) -> String {
+            String::new()
+        }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct Name;
+    impl Name {
+        pub fn build(_name: &str, _unit: &str, _org: &str, _email: &str, _country: &str) -> Self {
+            Self
+        }
+        pub fn display(&self) -> String {
+            String::new()
+        }
+        pub fn email(&self) -> Option<String> {
+            None
+        }
+        pub fn organization(&self) -> Option<&str> {
+            None
+        }
+        pub fn unit(&self) -> Option<&str> {
+            None
+        }
+        pub fn country(&self) -> Option<&str> {
+            None
+        }
+    }
+
+    pub mod der {
+        pub use super::Time;
+    }
+
+    pub use keys::DigestAlg;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct Time;
+    impl Time {
+        pub fn from_unix(_secs: i64) -> Self {
+            Self
+        }
+    }
+    impl std::fmt::Display for Time {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "")
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct PrivateKey;
+    impl PrivateKey {
+        pub fn generate_rsa(_bits: usize) -> Result<Self, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+        pub fn generate_p256() -> Result<Self, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct DigitalId {
+        pub key: PrivateKey,
+        pub certificate: Certificate,
+        pub chain: Vec<Certificate>,
+        pub friendly_name: Option<String>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Default)]
+    pub enum Modification {
+        #[default]
+        None,
+        Allowed(Vec<&'static str>),
+        Disallowed(Vec<&'static str>),
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum SignError {
+        #[error("not supported: {0}")]
+        Unsupported(String),
+        #[error("the digital ID password is incorrect")]
+        WrongPassword,
+        #[error("{0}")]
+        Other(String),
+    }
+
+    pub trait TimestampAuthority: Send + Sync {}
+
+    pub mod dss {
+        pub struct Evidence;
+    }
+
+    pub mod pkcs12 {
+        use super::{DigitalId, SignError};
+        pub fn open(_bytes: &[u8], _password: &str) -> Result<DigitalId, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+        pub fn write(_id: &DigitalId, _password: &str) -> Result<Vec<u8>, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+    }
+
+    pub mod keychain {
+        use super::{Certificate, DigitalId, SignError};
+        #[derive(Clone, Debug)]
+        pub struct Identity {
+            pub certificate: Certificate,
+        }
+        pub fn find(_ref: &str) -> Result<DigitalId, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+        pub fn identities(_name: Option<&str>) -> Result<Vec<Identity>, SignError> {
+            Ok(Vec::new())
+        }
+        pub fn reference(_c: &Certificate) -> String {
+            String::new()
+        }
+    }
+
+    pub mod windows {
+        use super::{Certificate, SignError};
+        #[derive(Clone, Debug)]
+        pub struct Identity {
+            pub certificate: Certificate,
+        }
+        pub fn list() -> Result<Vec<Identity>, SignError> {
+            Ok(Vec::new())
+        }
+        pub fn reference(_c: &Certificate) -> String {
+            String::new()
+        }
+    }
+
+    pub mod keys {
+        #[derive(Clone, Copy, Debug)]
+        pub enum DigestAlg {
+            Sha256,
+        }
+        impl DigestAlg {
+            pub fn digest(&self, _data: &[&[u8]]) -> Vec<u8> {
+                Vec::new()
+            }
+        }
+    }
+
+    pub mod x509 {
+        use super::{Certificate, SignError};
+        pub fn load_certificates(_bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
+            Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
+        }
+    }
+}
+
 pub use pdfcraft_xfdf::Format as DataFormat;
+#[cfg(not(feature = "sign"))]
+pub use sign::{SignOptions, SignatureInfo, SignatureStatus, TrustStore};
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
 /// filled-in PDF form), as CSV with one row per file.
@@ -384,7 +726,10 @@ pub struct Document {
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
     trust: Arc<TrustStore>,
+    #[cfg(feature = "sign")]
     sig_cache: Arc<pdfcraft_sign::DigestCache>,
+    #[cfg(not(feature = "sign"))]
+    sig_cache: Arc<sign::DigestCache>,
     editor: Option<Editor>,
     config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
@@ -393,7 +738,10 @@ pub struct Document {
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
     /// The parsed template of a laid-out XFA form, for its scripts.
+    #[cfg(feature = "xfa")]
     xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
+    #[cfg(not(feature = "xfa"))]
+    xfa_template: Option<Arc<()>>,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     xfa_scripts_off: bool,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or
@@ -1521,7 +1869,10 @@ pub enum Edit {
     /// Standards ▸ Save as PDF/A: fix what can be fixed for `level` (metadata, output intent,
     /// forbidden actions, annotation flags, …).
     ConvertPdfA {
+        #[cfg(feature = "preflight")]
         level: pdfcraft_preflight::Level,
+        #[cfg(not(feature = "preflight"))]
+        level: pdfa::Level,
     },
     /// What a script (button or console) changed in form fields: values, read-only, required
     /// and visibility.
@@ -1538,7 +1889,10 @@ pub enum Edit {
     /// image (from [`ocr::OcrJob::run`]).
     AddOcrText {
         page: usize,
+        #[cfg(feature = "ocr")]
         words: Vec<pdfcraft_ocr::PlacedWord>,
+        #[cfg(not(feature = "ocr"))]
+        words: Vec<ocr::PlacedWord>,
     },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
@@ -2201,10 +2555,13 @@ struct EditCtx {
     /// Field scripts run (`None`: JavaScript is off) and what they produced.
     js: Option<js::JsRunner>,
     /// A laid-out XFA form's template (`None`: not an XFA form, or JavaScript is off) and what
-    /// its scripts produced.
+    #[cfg(feature = "xfa")]
     xfa: Option<Arc<pdfcraft_xfa::model::Template>>,
+    #[cfg(not(feature = "xfa"))]
+    xfa: Option<Arc<()>>,
     xfa_out: js::JsOutput,
     /// The datasets stream this edit wrote (later writes in the edit replace it in place).
+    #[allow(dead_code)]
     xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     xfa_ran_away: bool,
@@ -2392,6 +2749,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             Some(js) => pdfcraft_forms::apply_script_changes(doc, changes, js)?,
             None => pdfcraft_forms::apply_script_changes(doc, changes, &mut pdfcraft_forms::NoScripts)?,
         },
+        #[cfg(feature = "xfa")]
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
             let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
@@ -2399,6 +2757,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
             ran.map_err(EditError::Invalid)?;
+        }
+        #[cfg(not(feature = "xfa"))]
+        Edit::XfaEvent { .. } => {
+            return Err(EditError::Unsupported("xfa"));
         }
         Edit::SetFieldImage { name, image } => {
             let (img, _) = embed_image(doc, name, image)?;
@@ -2410,27 +2772,37 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             // laid-out form shows it from there: so only pictures the layout can show, and only
             // for image fields (a laid-out one carries its SOM path; a static form's field name
             // is its path).
+            #[cfg(feature = "xfa")]
             let is_xfa = pdfcraft_xfa::read_packets(doc).ok().flatten().is_some();
+            #[cfg(not(feature = "xfa"))]
+            let is_xfa = false;
             let image_field = is_xfa
                 && pdfcraft_forms::fields(doc).iter().any(|f| f.name == *name && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon));
             if image_field {
-                let Some(content_type) = image_content_type(image) else {
-                    return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG or GIF picture; choose one of those")));
-                };
-                pdfcraft_forms::set_button_icon(doc, name, img, px)?;
-                let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
-                let path = match cx.xfa.as_deref() {
-                    Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
-                    None => pdfcraft_xfa::som_to_path(&som),
-                };
-                let r =
-                    pdfcraft_xfa::write_data_image(doc, &path, content_type, image, cx.xfa_datasets).map_err(|e| EditError::Write(e.to_string()))?;
-                if !r.written && r.warnings.is_empty() {
-                    return Err(EditError::Write(format!("{name}: the picture could not be written into the form's data")));
+                #[cfg(feature = "xfa")]
+                {
+                    let Some(content_type) = image_content_type(image) else {
+                        return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG or GIF picture; choose one of those")));
+                    };
+                    pdfcraft_forms::set_button_icon(doc, name, img, px)?;
+                    let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
+                    let path = match cx.xfa.as_deref() {
+                        Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
+                        None => pdfcraft_xfa::som_to_path(&som),
+                    };
+                    let r = pdfcraft_xfa::write_data_image(doc, &path, content_type, image, cx.xfa_datasets)
+                        .map_err(|e| EditError::Write(e.to_string()))?;
+                    if !r.written && r.warnings.is_empty() {
+                        return Err(EditError::Write(format!("{name}: the picture could not be written into the form's data")));
+                    }
+                    cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
+                    cx.xfa_out.errors.extend(r.warnings);
+                    xfa_after_data_change(doc, cx, false)?;
                 }
-                cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
-                cx.xfa_out.errors.extend(r.warnings);
-                xfa_after_data_change(doc, cx, false)?;
+                #[cfg(not(feature = "xfa"))]
+                {
+                    return Err(EditError::Unsupported("xfa"));
+                }
             } else {
                 pdfcraft_forms::set_button_icon(doc, name, img, px)?;
             }
@@ -2479,12 +2851,22 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 None => pdfcraft_forms::recalculate(doc)?,
             };
         }
+        #[cfg(feature = "preflight")]
         Edit::ConvertPdfA { level } => {
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
         }
+        #[cfg(not(feature = "preflight"))]
+        Edit::ConvertPdfA { .. } => {
+            return Err(EditError::Unsupported("preflight"));
+        }
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
+        #[cfg(feature = "ocr")]
         Edit::AddOcrText { page, words } => {
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
+        }
+        #[cfg(not(feature = "ocr"))]
+        Edit::AddOcrText { .. } => {
+            return Err(EditError::Unsupported("ocr"));
         }
         Edit::EditPageImage { page, index, change } => {
             let img = pdfcraft_edit::page_images(doc, *page)?
@@ -2604,8 +2986,12 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::ImportData { bytes, .. } => {
             // An XFA form takes XFA data files (XDP, datasets, or a data document) as its data;
             // XFDF, FDF, Acrobat's XML and tables go the usual way.
+            #[cfg(feature = "xfa")]
             let text = (pdfcraft_xfa::read_packets(doc).ok().flatten().is_some()).then(|| decode_data_file(bytes)).flatten();
+            #[cfg(not(feature = "xfa"))]
+            let text: Option<Result<String, String>> = None;
             match text {
+                #[cfg(feature = "xfa")]
                 Some(Ok(text)) if is_xfa_data_file(&text) => {
                     let expect_root = cx.xfa.as_ref().and_then(|t| t.root.common.name.clone());
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
@@ -2864,8 +3250,11 @@ pub enum EditError {
     Signed,
     #[error("{0}")]
     Invalid(String),
+    #[error("feature '{0}' is not supported in this build")]
+    Unsupported(&'static str),
 }
 
+#[cfg(feature = "sign")]
 impl From<pdfcraft_sign::SignError> for EditError {
     fn from(e: pdfcraft_sign::SignError) -> Self {
         EditError::Sign(e.to_string())
@@ -2921,6 +3310,7 @@ impl OpenContext {
     }
 }
 
+#[cfg(feature = "xfa")]
 /// Lay a dynamic XFA form out (pages and fields) and give its widgets appearances.
 fn xfa_layout(doc: &mut pdfcraft_cos::Document) -> Result<XfaLayout, String> {
     let mut report = pdfcraft_xfa::render_into(doc).map_err(|e| e.to_string())?;
@@ -2932,6 +3322,7 @@ fn xfa_layout(doc: &mut pdfcraft_cos::Document) -> Result<XfaLayout, String> {
 
 /// Give the fields of a laid-out XFA form their appearances. A signed signature box keeps the
 /// picture its signer's application drew.
+#[cfg(feature = "xfa")]
 pub(crate) fn xfa_redraw(doc: &mut pdfcraft_cos::Document) -> Result<(), String> {
     for f in pdfcraft_forms::fields(doc) {
         if f.kind == pdfcraft_forms::FieldKind::Signature && doc.get(f.obj).as_dict().is_some_and(|d| d.contains(b"V")) {
@@ -2944,6 +3335,7 @@ pub(crate) fn xfa_redraw(doc: &mut pdfcraft_cos::Document) -> Result<(), String>
 
 /// A warning for each field whose appearance PdfCraft drew with `?` for a character its font
 /// can't draw (laying out an XFA form's own values).
+#[cfg(feature = "xfa")]
 fn undrawn_field_warnings(doc: &pdfcraft_cos::Document) -> Vec<String> {
     pdfcraft_forms::undrawn_fields(doc)
         .into_iter()
@@ -2953,6 +3345,7 @@ fn undrawn_field_warnings(doc: &pdfcraft_cos::Document) -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "xfa")]
 /// The form's fields as the XFA data layer wants them.
 fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum> {
     use pdfcraft_forms::FieldKind as K;
@@ -2975,6 +3368,7 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
 /// `datasets`: the stream this edit already wrote, replaced in place rather than added again
 /// (and set to the one written).
 /// `tpl`: the form's parsed template when the document has one cached (else it is parsed).
+#[cfg(feature = "xfa")]
 fn xfa_sync_datasets(
     doc: &mut pdfcraft_cos::Document,
     tpl: Option<&pdfcraft_xfa::model::Template>,
@@ -3007,6 +3401,7 @@ fn note_warnings(list: &mut Vec<String>, new: &[String]) {
 /// A data file's text: UTF-8 or UTF-16 (by a byte order mark, or how `<` is written), or
 /// Latin-1 when its XML declaration says so. `None`: not text at all (FDF); `Err`: an
 /// encoding this can't read.
+#[cfg(feature = "xfa")]
 fn decode_data_file(bytes: &[u8]) -> Option<Result<String, String>> {
     if bytes.starts_with(b"%FDF") {
         return None;
@@ -3038,6 +3433,7 @@ fn decode_data_file(bytes: &[u8]) -> Option<Result<String, String>> {
     }
 }
 
+#[cfg(feature = "xfa")]
 /// Take the XFA out of `doc` and note what went with it: the packets, data no field showed,
 /// buttons that did nothing but run scripts, and fields whose value differs from the form's
 /// data (data PdfCraft could not read into them, now lost).
@@ -3066,6 +3462,7 @@ fn strip_xfa(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx) -> Result<(), E
     Ok(())
 }
 
+#[cfg(feature = "xfa")]
 /// Keep the document's XFA state in step with its file after an edit: a script may have laid
 /// the form out again (rows added, subforms shown), an edit may have taken the XFA out
 /// (flattened, or made static), or an undo put it back.
@@ -3091,9 +3488,14 @@ fn sync_xfa_state(doc: &mut Document) {
     }
 }
 
+#[cfg(not(feature = "xfa"))]
+fn sync_xfa_state(_doc: &mut Document) {}
+
+#[cfg(feature = "xfa")]
 /// How the warnings of a strip start, so they can be told from the XFA's own.
 const XFA_REMOVED_PREFIX: &str = "XFA removed: ";
 
+#[cfg(feature = "xfa")]
 /// Is this an XFA data file (an XDP, a datasets document, a data element or a data document),
 /// rather than XFDF, Acrobat's `<fields>` XML or a table? By its root element.
 fn is_xfa_data_file(text: &str) -> bool {
@@ -3119,6 +3521,7 @@ fn is_xfa_data_file(text: &str) -> bool {
     !local.is_empty() && !matches!(local, "xfdf" | "fields" | "html" | "body")
 }
 
+#[cfg(feature = "xfa")]
 /// The content type a picture is saved under, from its bytes: the kinds a laid-out form shows.
 fn image_content_type(bytes: &[u8]) -> Option<&'static str> {
     match pdfcraft_xfa::image::kind(bytes)? {
@@ -3131,6 +3534,7 @@ fn image_content_type(bytes: &[u8]) -> Option<&'static str> {
 /// After the XFA data changed outside the fields (an import, a picture): a laid-out form is
 /// laid out again from the data (then, when `calculate`, its calculations run), and the
 /// fields take the data's values.
+#[cfg(feature = "xfa")]
 fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, calculate: bool) -> Result<(), EditError> {
     if let Some(tpl) = cx.xfa.clone() {
         let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
@@ -3171,8 +3575,7 @@ fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, cal
     Ok(())
 }
 
-/// Give the fields the values the XFA datasets hold (a form filled in another viewer). Returns
-/// the names of the fields that changed.
+#[cfg(feature = "xfa")]
 fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<String>, String> {
     let data = xfa_field_data(doc);
     let fields = pdfcraft_forms::fields(doc);
@@ -3206,8 +3609,16 @@ fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<Stri
 }
 
 /// Validate the signature fields of `cos` (written as `bytes`).
-fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &pdfcraft_sign::DigestCache) -> Arc<Vec<SignatureInfo>> {
-    Arc::new(pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache))
+fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &sign::DigestCache) -> Arc<Vec<SignatureInfo>> {
+    #[cfg(feature = "sign")]
+    {
+        Arc::new(pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache))
+    }
+    #[cfg(not(feature = "sign"))]
+    {
+        let _ = (cos, bytes, trust, cache);
+        Arc::new(Vec::new())
+    }
 }
 
 impl Session {
@@ -3356,6 +3767,7 @@ impl Session {
             let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
             Ok((new_bytes, new_info, new_cos))
         };
+        #[cfg(feature = "xfa")]
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
             (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
                 let mut work = cos.clone();
@@ -3408,6 +3820,8 @@ impl Session {
             }
             (_, cos) => (bytes, info, cos, None),
         };
+        #[cfg(not(feature = "xfa"))]
+        let (bytes, info, cos, xfa) = (bytes, info, cos, None);
         // A laid-out XFA form: its initialize and calculate scripts run now, as on opening in
         // Acrobat; what they change is one more revision, still nothing to save.
         let mut script_output = js::JsOutput::default();
@@ -3553,7 +3967,10 @@ impl Session {
             };
             e.cos.note_repair(line);
         }
+        #[cfg(feature = "sign")]
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
+        #[cfg(not(feature = "sign"))]
+        let sig_cache = Arc::new(sign::DigestCache::default());
         let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
         Document {
             id: DocId(0),
@@ -3598,6 +4015,7 @@ impl Session {
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
         let name = doc.name.clone();
+        #[allow(unused_variables)]
         let is_xfa = doc.info.xfa.is_some();
         let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
         if !js_off {
@@ -3679,6 +4097,7 @@ impl Session {
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first.
+        #[cfg(feature = "xfa")]
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -3712,7 +4131,9 @@ impl Session {
             }
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+        #[allow(unused_mut)]
         let mut xfa_notes = Vec::new();
+        #[cfg(feature = "xfa")]
         if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
             let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
             xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
@@ -4291,9 +4712,12 @@ impl Session {
         guard(|| match format {
             DataFormat::Xfdf => Ok(pdfcraft_xfdf::export_xfdf(&cos, comments, fields, &doc.name).into_bytes()),
             DataFormat::Fdf => Ok(pdfcraft_xfdf::export_fdf(&cos, comments, fields, &doc.name)),
+            #[cfg(feature = "xfa")]
             DataFormat::Xml | DataFormat::Xdp if xfa => {
                 pdfcraft_xfa::export_data(&cos, format == DataFormat::Xdp, &doc.name).map(String::into_bytes).map_err(|e| e.to_string())
             }
+            #[cfg(not(feature = "xfa"))]
+            DataFormat::Xml | DataFormat::Xdp if xfa => Err("feature 'xfa' is not supported in this build".to_string()),
             other => Ok(pdfcraft_xfdf::export_data(&cos, other).into_bytes()),
         })
         .map_err(EditError::Write)?
@@ -4763,12 +5187,12 @@ impl Session {
     }
 
     /// The certificates trusted for signing.
-    pub fn trusted_certificates(&self) -> &[pdfcraft_sign::Certificate] {
+    pub fn trusted_certificates(&self) -> &[sign::Certificate] {
         &self.trust.certs
     }
 
     /// Replace the trusted certificates and revalidate every open document's signatures.
-    pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
+    pub fn set_trusted_certificates(&mut self, certs: Vec<sign::Certificate>) {
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
             doc.trust = self.trust.clone();
@@ -4786,21 +5210,29 @@ impl Session {
         if offset == 0 {
             return format!("{stamp}Z");
         }
-        let (sign, m) = if offset < 0 { ('-', -offset / 60) } else { ('+', offset / 60) };
-        format!("{stamp}{sign}{:02}'{:02}'", m / 60, m % 60)
+        let (sign_char, m) = if offset < 0 { ('-', -offset / 60) } else { ('+', offset / 60) };
+        format!("{stamp}{sign_char}{:02}'{:02}'", m / 60, m % 60)
     }
 
     /// Sign the document's current state with `id` (Use a certificate ▸ Digitally sign). Returns
     /// the signed file; the caller saves it and then calls [`Session::mark_signed`]. An empty
     /// `opts.date` takes the session clock.
-    pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
-        let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        // Encrypted documents are signed under their permissions (the signer checks them).
-        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
-        if opts.date.is_empty() {
-            opts.date = self.signing_date();
+    pub fn sign(&self, doc: DocId, id: &sign::DigitalId, #[allow(unused_mut)] mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
+        #[cfg(feature = "sign")]
+        {
+            let d = self.get(doc).ok_or(EditError::NoDocument)?;
+            // Encrypted documents are signed under their permissions (the signer checks them).
+            let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+            if opts.date.is_empty() {
+                opts.date = self.signing_date();
+            }
+            Ok(Arc::new(pdfcraft_sign::sign(&editor.cos, id, &opts)?))
         }
-        Ok(Arc::new(pdfcraft_sign::sign(&editor.cos, id, &opts)?))
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (doc, id, opts);
+            Err(EditError::Unsupported("sign"))
+        }
     }
 
     /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by
@@ -4808,40 +5240,64 @@ impl Session {
     pub fn sign_with_timestamp(
         &self,
         doc: DocId,
-        id: &pdfcraft_sign::DigitalId,
-        mut opts: SignOptions,
-        tsa: &dyn pdfcraft_sign::TimestampAuthority,
+        id: &sign::DigitalId,
+        #[allow(unused_mut)] mut opts: SignOptions,
+        tsa: &dyn sign::TimestampAuthority,
     ) -> Result<Arc<Vec<u8>>, EditError> {
-        let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
-        if opts.date.is_empty() {
-            opts.date = self.signing_date();
+        #[cfg(feature = "sign")]
+        {
+            let d = self.get(doc).ok_or(EditError::NoDocument)?;
+            let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+            if opts.date.is_empty() {
+                opts.date = self.signing_date();
+            }
+            let signed = Arc::new(pdfcraft_sign::sign_with_timestamp(&editor.cos, id, &opts, tsa)?);
+            // Checked like a save before anyone writes it (#2166).
+            self.check_save(doc, &signed)?;
+            Ok(signed)
         }
-        let signed = Arc::new(pdfcraft_sign::sign_with_timestamp(&editor.cos, id, &opts, tsa)?);
-        // Checked like a save before anyone writes it (#2166).
-        self.check_save(doc, &signed)?;
-        Ok(signed)
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (doc, id, opts, tsa);
+            Err(EditError::Unsupported("sign"))
+        }
     }
 
     /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
     /// current state. An empty `date` takes the session clock; the transport is the caller's.
-    pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
-        let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
-        let date = if date.is_empty() { self.signing_date() } else { date };
-        let stamped = Arc::new(pdfcraft_sign::timestamp_document(&editor.cos, tsa, &date)?);
-        self.check_save(doc, &stamped)?;
-        Ok(stamped)
+    pub fn timestamp_document(&self, doc: DocId, tsa: &dyn sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
+        #[cfg(feature = "sign")]
+        {
+            let d = self.get(doc).ok_or(EditError::NoDocument)?;
+            let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+            let date = if date.is_empty() { self.signing_date() } else { date };
+            let stamped = Arc::new(pdfcraft_sign::timestamp_document(&editor.cos, tsa, &date)?);
+            self.check_save(doc, &stamped)?;
+            Ok(stamped)
+        }
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (doc, tsa, date);
+            Err(EditError::Unsupported("sign"))
+        }
     }
 
     /// Embed revocation evidence into the catalog's `/DSS` with `/VRI` entries per signature
     /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
-    pub fn embed_ltv(&self, doc: DocId, evidence: &pdfcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
-        let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
-        let embedded = Arc::new(pdfcraft_sign::dss::embed(&editor.cos, evidence)?);
-        self.check_save(doc, &embedded)?;
-        Ok(embedded)
+    pub fn embed_ltv(&self, doc: DocId, evidence: &sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
+        #[cfg(feature = "sign")]
+        {
+            let d = self.get(doc).ok_or(EditError::NoDocument)?;
+            let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+            let embedded = Arc::new(pdfcraft_sign::dss::embed(&editor.cos, evidence)?);
+            self.check_save(doc, &embedded)?;
+            Ok(embedded)
+        }
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (doc, evidence);
+            Err(EditError::Unsupported("sign"))
+        }
     }
 
     /// Record that the signed file `bytes` was saved (to `path`): like [`Session::mark_saved`],

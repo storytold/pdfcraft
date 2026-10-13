@@ -1,3 +1,4 @@
+#![cfg(feature = "ocr")]
 use pdfcraft_ffi::{Engine, FfiOcrWord, FfiRect, FfiRenderRequest};
 use tempfile::tempdir;
 

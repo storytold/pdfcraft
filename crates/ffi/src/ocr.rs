@@ -29,6 +29,7 @@ pub struct FfiOcrPageResult {
 }
 
 /// Helper to convert a PlacedWord from user coordinates to view-space FfiOcrWord.
+#[allow(dead_code)]
 pub(crate) fn placed_word_to_ffi(w: &pdfcraft_engine::ocr::PlacedWord, page: &pdfcraft_render::PageInfo) -> FfiOcrWord {
     // w.origin is bottom-left in user coords, w.across is width vector, w.up is height vector
     let (ux0, uy0) = (w.origin[0] as f32, w.origin[1] as f32);

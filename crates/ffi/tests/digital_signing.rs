@@ -1,3 +1,4 @@
+#![cfg(feature = "sign")]
 use pdfcraft_ffi::{Engine, FfiPoint, FfiRect, FfiSignOptions};
 
 const SAMPLE_PDF: &str = "%PDF-1.7\n\

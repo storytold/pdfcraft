@@ -14,18 +14,18 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [features]
-default = []
+default = ["full"]
 full = ["js", "ocr", "xfa", "sign", "export", "preflight"]
-js = []
-ocr = []
-xfa = []
-sign = []
+js = ["pdfcraft-engine/js", "pdfcraft-automation/js"]
+ocr = ["pdfcraft-engine/ocr", "pdfcraft-automation/ocr"]
+xfa = ["pdfcraft-engine/xfa", "pdfcraft-automation/xfa"]
+sign = ["pdfcraft-engine/sign", "pdfcraft-automation/sign"]
 export = []
-preflight = []
+preflight = ["pdfcraft-engine/preflight", "pdfcraft-automation/preflight"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-pdfcraft-engine = { path = "../engine", version = "0.8.0" }
+pdfcraft-engine = { path = "../engine", version = "0.8.0", default-features = false }
 pdfcraft-render = { path = "../render", version = "0.8.0" }
 pdfcraft-automation = { path = "../automation", version = "0.8.0", default-features = false }
 pdfcraft-model = { path = "../model", version = "0.8.0" }

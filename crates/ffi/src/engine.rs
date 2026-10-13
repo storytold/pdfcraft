@@ -1722,11 +1722,19 @@ impl Engine {
 
     /// Inspects a PKCS#12 (.p12 / .pfx) digital identity bundle and returns its certificate details.
     pub fn inspect_digital_id(&self, p12_bytes: Vec<u8>, password: Option<String>) -> Result<crate::signing::FfiDigitalIdInfo, FfiError> {
-        let id = pdfcraft_engine::sign::pkcs12::open(&p12_bytes, password.as_deref().unwrap_or("")).map_err(|e| match e {
-            pdfcraft_engine::sign::SignError::WrongPassword => FfiError::InvalidArgs { reason: "the digital ID password is incorrect".into() },
-            e => FfiError::EditFailed { reason: e.to_string() },
-        })?;
-        Ok(crate::signing::parse_digital_id_info(&id))
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (p12_bytes, password);
+            Err(FfiError::Unsupported { reason: "Digital signatures feature not enabled".into() })
+        }
+        #[cfg(feature = "sign")]
+        {
+            let id = pdfcraft_engine::sign::pkcs12::open(&p12_bytes, password.as_deref().unwrap_or("")).map_err(|e| match e {
+                pdfcraft_engine::sign::SignError::WrongPassword => FfiError::InvalidArgs { reason: "the digital ID password is incorrect".into() },
+                e => FfiError::EditFailed { reason: e.to_string() },
+            })?;
+            Ok(crate::signing::parse_digital_id_info(&id))
+        }
     }
 
     /// Generates a self-signed digital ID certificate and private key, packaging them into PKCS#12 bytes.
@@ -1742,54 +1750,72 @@ impl Engine {
         country: Option<String>,
         validity_years: u32,
     ) -> Result<Vec<u8>, FfiError> {
-        let name_trimmed = name.trim();
-        if name_trimmed.is_empty() {
-            return Err(FfiError::InvalidArgs { reason: "name must not be empty".into() });
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (name, password, key_type, organization, unit, email, country, validity_years);
+            Err(FfiError::Unsupported { reason: "Digital signatures feature not enabled".into() })
         }
-        if password.chars().count() < 6 {
-            return Err(FfiError::InvalidArgs { reason: "password must have at least 6 characters".into() });
-        }
-        let key = match key_type.to_lowercase().as_str() {
-            "rsa2048" | "rsa_2048" | "rsa" => pdfcraft_engine::sign::PrivateKey::generate_rsa(2048),
-            "rsa3072" | "rsa_3072" => pdfcraft_engine::sign::PrivateKey::generate_rsa(3072),
-            "rsa4096" | "rsa_4096" => pdfcraft_engine::sign::PrivateKey::generate_rsa(4096),
-            "p256" | "ecdsa_p256" | "ecdsa" => pdfcraft_engine::sign::PrivateKey::generate_p256(),
-            other => {
-                return Err(FfiError::InvalidArgs { reason: format!("unsupported key type: {other} (supported: rsa2048, rsa3072, rsa4096, p256)") });
+        #[cfg(feature = "sign")]
+        {
+            let name_trimmed = name.trim();
+            if name_trimmed.is_empty() {
+                return Err(FfiError::InvalidArgs { reason: "name must not be empty".into() });
             }
-        }
-        .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
-
-        let dn = pdfcraft_engine::sign::Name::build(
-            name_trimmed,
-            unit.as_deref().unwrap_or(""),
-            organization.as_deref().unwrap_or(""),
-            email.as_deref().unwrap_or(""),
-            country.as_deref().unwrap_or(""),
-        );
-        let years = validity_years.clamp(1, 50);
-        let now = {
-            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-            inner.session.now_secs()
-        };
-        let serial = pdfcraft_engine::sign::DigestAlg::Sha256.digest(&[name_trimmed.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
-        let cert = pdfcraft_engine::sign::Certificate::self_signed(&dn, &key, pdfcraft_engine::sign::der::Time::from_unix(now), years, &serial)
+            if password.chars().count() < 6 {
+                return Err(FfiError::InvalidArgs { reason: "password must have at least 6 characters".into() });
+            }
+            let key = match key_type.to_lowercase().as_str() {
+                "rsa2048" | "rsa_2048" | "rsa" => pdfcraft_engine::sign::PrivateKey::generate_rsa(2048),
+                "rsa3072" | "rsa_3072" => pdfcraft_engine::sign::PrivateKey::generate_rsa(3072),
+                "rsa4096" | "rsa_4096" => pdfcraft_engine::sign::PrivateKey::generate_rsa(4096),
+                "p256" | "ecdsa_p256" | "ecdsa" => pdfcraft_engine::sign::PrivateKey::generate_p256(),
+                other => {
+                    return Err(FfiError::InvalidArgs {
+                        reason: format!("unsupported key type: {other} (supported: rsa2048, rsa3072, rsa4096, p256)"),
+                    });
+                }
+            }
             .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
 
-        let id = pdfcraft_engine::sign::DigitalId { key, certificate: cert, chain: Vec::new(), friendly_name: Some(name_trimmed.to_string()) };
-        pdfcraft_engine::sign::pkcs12::write(&id, &password).map_err(|e| FfiError::EditFailed { reason: e.to_string() })
+            let dn = pdfcraft_engine::sign::Name::build(
+                name_trimmed,
+                unit.as_deref().unwrap_or(""),
+                organization.as_deref().unwrap_or(""),
+                email.as_deref().unwrap_or(""),
+                country.as_deref().unwrap_or(""),
+            );
+            let years = validity_years.clamp(1, 50);
+            let now = {
+                let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+                inner.session.now_secs()
+            };
+            let serial = pdfcraft_engine::sign::DigestAlg::Sha256.digest(&[name_trimmed.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
+            let cert = pdfcraft_engine::sign::Certificate::self_signed(&dn, &key, pdfcraft_engine::sign::der::Time::from_unix(now), years, &serial)
+                .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
+
+            let id = pdfcraft_engine::sign::DigitalId { key, certificate: cert, chain: Vec::new(), friendly_name: Some(name_trimmed.to_string()) };
+            pdfcraft_engine::sign::pkcs12::write(&id, &password).map_err(|e| FfiError::EditFailed { reason: e.to_string() })
+        }
     }
 
     /// Lists digital signatures in the document along with their validation verdict.
     pub fn list_digital_signatures(&self, doc_id: u64) -> Result<Vec<crate::signing::FfiDigitalSignature>, FfiError> {
-        let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let pages = &doc.info.pages;
-        let mut result = Vec::new();
-        for sig in doc.signatures.iter() {
-            result.push(crate::signing::signature_info_to_ffi(sig, pages));
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = doc_id;
+            Err(FfiError::Unsupported { reason: "Digital signatures feature not enabled".into() })
         }
-        Ok(result)
+        #[cfg(feature = "sign")]
+        {
+            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let pages = &doc.info.pages;
+            let mut result = Vec::new();
+            for sig in doc.signatures.iter() {
+                result.push(crate::signing::signature_info_to_ffi(sig, pages));
+            }
+            Ok(result)
+        }
     }
 
     /// Cryptographically signs a document using a PKCS#12 digital identity (PAdES B-B).
@@ -1800,110 +1826,128 @@ impl Engine {
         password: Option<String>,
         options: crate::signing::FfiSignOptions,
     ) -> Result<crate::signing::FfiSignResult, FfiError> {
-        let id = pdfcraft_engine::sign::pkcs12::open(&p12_bytes, password.as_deref().unwrap_or("")).map_err(|e| match e {
-            pdfcraft_engine::sign::SignError::WrongPassword => FfiError::InvalidArgs { reason: "the digital ID password is incorrect".into() },
-            e => FfiError::EditFailed { reason: e.to_string() },
-        })?;
+        #[cfg(not(feature = "sign"))]
+        {
+            let _ = (doc_id, p12_bytes, password, options);
+            Err(FfiError::Unsupported { reason: "digital signing is not supported in this build".into() })
+        }
+        #[cfg(feature = "sign")]
+        {
+            let id = pdfcraft_engine::sign::pkcs12::open(&p12_bytes, password.as_deref().unwrap_or("")).map_err(|e| match e {
+                pdfcraft_engine::sign::SignError::WrongPassword => FfiError::InvalidArgs { reason: "the digital ID password is incorrect".into() },
+                e => FfiError::EditFailed { reason: e.to_string() },
+            })?;
 
-        let graphic = if let Some(txt) = &options.graphic_text {
-            if let Some(c) = pdfcraft_engine::script_missing(txt) {
-                return Err(FfiError::InvalidArgs { reason: format!("signature script font cannot render '{txt}' (missing U+{:04X})", c as u32) });
-            }
-            Some(
-                pdfcraft_engine::typed_signature_graphic(txt)
-                    .ok_or_else(|| FfiError::InvalidArgs { reason: "cannot generate script graphic".into() })?,
-            )
-        } else if let Some(strokes) = &options.graphic_strokes {
-            let mut stroke_vecs: Vec<Vec<[f64; 2]>> = Vec::new();
-            for stroke in strokes {
-                let pts: Vec<[f64; 2]> = stroke.iter().map(|p| [p.x as f64, p.y as f64]).collect();
-                if pts.len() >= 2 {
-                    stroke_vecs.push(pts);
+            let graphic = if let Some(txt) = &options.graphic_text {
+                if let Some(c) = pdfcraft_engine::script_missing(txt) {
+                    return Err(FfiError::InvalidArgs {
+                        reason: format!("signature script font cannot render '{txt}' (missing U+{:04X})", c as u32),
+                    });
                 }
-            }
-            if !stroke_vecs.is_empty() { Some(pdfcraft_engine::sign::Graphic::Strokes(stroke_vecs)) } else { None }
-        } else {
-            None
-        };
-
-        let (signed_bytes, saved_path, signer_name, field_name, revision) = {
-            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-            let (field, page_idx, user_rect) = if let Some(field_name) = &options.field_name {
-                (Some(field_name.clone()), 0, None)
-            } else {
-                let p_idx = options.page.unwrap_or(0) as usize;
-                let page = doc.info.pages.get(p_idx).ok_or(FfiError::InvalidArgs { reason: format!("page {p_idx} does not exist") })?;
-                let u_rect = if let Some(vr) = options.rect {
-                    let [u0_x, u0_y] = page.view_to_user(vr.x, vr.y);
-                    let [u1_x, u1_y] = page.view_to_user(vr.x + vr.width, vr.y + vr.height);
-                    let u = [u0_x.min(u1_x) as f64, u0_y.min(u1_y) as f64, u0_x.max(u1_x) as f64, u0_y.max(u1_y) as f64];
-                    if u[2] - u[0] < 4.0 || u[3] - u[1] < 4.0 {
-                        return Err(FfiError::InvalidArgs { reason: "signature rectangle is too small (must be at least 4x4 points)".into() });
+                Some(
+                    pdfcraft_engine::typed_signature_graphic(txt)
+                        .ok_or_else(|| FfiError::InvalidArgs { reason: "cannot generate script graphic".into() })?,
+                )
+            } else if let Some(strokes) = &options.graphic_strokes {
+                let mut stroke_vecs: Vec<Vec<[f64; 2]>> = Vec::new();
+                for stroke in strokes {
+                    let pts: Vec<[f64; 2]> = stroke.iter().map(|p| [p.x as f64, p.y as f64]).collect();
+                    if pts.len() >= 2 {
+                        stroke_vecs.push(pts);
                     }
-                    Some(u)
-                } else {
-                    None
-                };
-                (None, p_idx, u_rect)
-            };
-
-            let sign_opts = pdfcraft_engine::SignOptions {
-                field,
-                page: page_idx,
-                rect: user_rect,
-                reason: options.reason,
-                location: options.location,
-                contact: options.contact,
-                certify: options.certify_level,
-                graphic,
-                ..Default::default()
-            };
-
-            let signed_bytes =
-                inner.session.sign(pdfcraft_engine::DocId(doc_id), &id, sign_opts).map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
-
-            let saved_path = if let Some(out_p) = &options.out_path {
-                let p = std::path::Path::new(out_p);
-                if let Some(parent) = p.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| FfiError::Io { reason: e.to_string() })?;
                 }
-                std::fs::write(p, signed_bytes.as_ref()).map_err(|e| FfiError::Io { reason: e.to_string() })?;
-                Some(out_p.clone())
+                if !stroke_vecs.is_empty() { Some(pdfcraft_engine::sign::Graphic::Strokes(stroke_vecs)) } else { None }
             } else {
                 None
             };
 
-            inner
-                .session
-                .mark_signed(pdfcraft_engine::DocId(doc_id), signed_bytes.clone(), saved_path.clone())
-                .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
-            inner.doc_bytes.insert(doc_id, signed_bytes.clone());
+            let (signed_bytes, saved_path, signer_name, field_name, revision) = {
+                let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+                let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+                let (field, page_idx, user_rect) = if let Some(field_name) = &options.field_name {
+                    (Some(field_name.clone()), 0, None)
+                } else {
+                    let p_idx = options.page.unwrap_or(0) as usize;
+                    let page = doc.info.pages.get(p_idx).ok_or(FfiError::InvalidArgs { reason: format!("page {p_idx} does not exist") })?;
+                    let u_rect = if let Some(vr) = options.rect {
+                        let [u0_x, u0_y] = page.view_to_user(vr.x, vr.y);
+                        let [u1_x, u1_y] = page.view_to_user(vr.x + vr.width, vr.y + vr.height);
+                        let u = [u0_x.min(u1_x) as f64, u0_y.min(u1_y) as f64, u0_x.max(u1_x) as f64, u0_y.max(u1_y) as f64];
+                        if u[2] - u[0] < 4.0 || u[3] - u[1] < 4.0 {
+                            return Err(FfiError::InvalidArgs { reason: "signature rectangle is too small (must be at least 4x4 points)".into() });
+                        }
+                        Some(u)
+                    } else {
+                        None
+                    };
+                    (None, p_idx, u_rect)
+                };
 
-            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-            let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision);
-            let (s_name, f_name, rev) = if let Some(s) = newest {
-                (s.signer.clone().unwrap_or_else(|| id.certificate.display_name()), s.field.clone(), s.revision as u32)
-            } else {
-                (id.certificate.display_name(), "Signature".into(), 1)
+                let sign_opts = pdfcraft_engine::SignOptions {
+                    field,
+                    page: page_idx,
+                    rect: user_rect,
+                    reason: options.reason,
+                    location: options.location,
+                    contact: options.contact,
+                    certify: options.certify_level,
+                    graphic,
+                    ..Default::default()
+                };
+
+                let signed_bytes =
+                    inner.session.sign(pdfcraft_engine::DocId(doc_id), &id, sign_opts).map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
+
+                let saved_path = if let Some(out_p) = &options.out_path {
+                    let p = std::path::Path::new(out_p);
+                    if let Some(parent) = p.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| FfiError::Io { reason: e.to_string() })?;
+                    }
+                    std::fs::write(p, signed_bytes.as_ref()).map_err(|e| FfiError::Io { reason: e.to_string() })?;
+                    Some(out_p.clone())
+                } else {
+                    None
+                };
+
+                inner
+                    .session
+                    .mark_signed(pdfcraft_engine::DocId(doc_id), signed_bytes.clone(), saved_path.clone())
+                    .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
+                inner.doc_bytes.insert(doc_id, signed_bytes.clone());
+
+                let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+                let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision);
+                let (s_name, f_name, rev) = if let Some(s) = newest {
+                    (s.signer.clone().unwrap_or_else(|| id.certificate.display_name()), s.field.clone(), s.revision as u32)
+                } else {
+                    (id.certificate.display_name(), "Signature".into(), 1)
+                };
+
+                (signed_bytes, saved_path, s_name, f_name, rev)
             };
 
-            (signed_bytes, saved_path, s_name, f_name, rev)
-        };
-
-        Ok(crate::signing::FfiSignResult { success: true, bytes: (*signed_bytes).clone(), saved_path, signer_name, field_name, revision })
+            Ok(crate::signing::FfiSignResult { success: true, bytes: (*signed_bytes).clone(), saved_path, signer_name, field_name, revision })
+        }
     }
 
     // MARK: - Scan & OCR
 
     /// Overrides or sets the directory containing the text-detection.rten and text-recognition.rten models.
     pub fn set_ocr_models_dir(&self, dir_path: String) -> Result<(), FfiError> {
-        let p = std::path::Path::new(&dir_path);
-        if !p.is_dir() {
-            return Err(FfiError::InvalidArgs { reason: format!("OCR models directory does not exist: {dir_path}") });
+        #[cfg(not(feature = "ocr"))]
+        {
+            let _ = dir_path;
+            Err(FfiError::Unsupported { reason: "OCR is not supported in this build".into() })
         }
-        pdfcraft_engine::ocr::set_models_dir(p);
-        Ok(())
+        #[cfg(feature = "ocr")]
+        {
+            let p = std::path::Path::new(&dir_path);
+            if !p.is_dir() {
+                return Err(FfiError::InvalidArgs { reason: format!("OCR models directory does not exist: {dir_path}") });
+            }
+            pdfcraft_engine::ocr::set_models_dir(p);
+            Ok(())
+        }
     }
 
     /// Checks if text recognition models are installed and accessible.
@@ -1913,9 +1957,16 @@ impl Engine {
 
     /// Queries OCR model status, search directories, and supported language codes.
     pub fn ocr_status(&self) -> Result<crate::ocr::FfiOcrStatus, FfiError> {
-        let dirs: Vec<String> = pdfcraft_engine::ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
-        let langs: Vec<String> = pdfcraft_engine::ocr::LANGUAGES.iter().map(|(c, n)| format!("{c}: {n}")).collect();
-        Ok(crate::ocr::FfiOcrStatus { available: pdfcraft_engine::ocr::available(), search_dirs: dirs, languages: langs })
+        #[cfg(not(feature = "ocr"))]
+        {
+            Err(FfiError::Unsupported { reason: "OCR is not supported in this build".into() })
+        }
+        #[cfg(feature = "ocr")]
+        {
+            let dirs: Vec<String> = pdfcraft_engine::ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
+            let langs: Vec<String> = pdfcraft_engine::ocr::LANGUAGES.iter().map(|(c, n)| format!("{c}: {n}")).collect();
+            Ok(crate::ocr::FfiOcrStatus { available: pdfcraft_engine::ocr::available(), search_dirs: dirs, languages: langs })
+        }
     }
 
     /// Runs text recognition on a document page and writes the recognized words into an invisible searchable text layer.
@@ -1926,201 +1977,299 @@ impl Engine {
         dpi: Option<f32>,
         skip_text_pages: bool,
     ) -> Result<crate::ocr::FfiOcrPageResult, FfiError> {
-        if !pdfcraft_engine::ocr::available() {
-            return Err(FfiError::Unsupported { reason: "OCR models are not installed (set PDFCRAFT_MODELS or call set_ocr_models_dir)".into() });
+        #[cfg(not(feature = "ocr"))]
+        {
+            let _ = (doc_id, page, dpi, skip_text_pages);
+            Err(FfiError::Unsupported { reason: "OCR is not supported in this build".into() })
         }
+        #[cfg(feature = "ocr")]
+        {
+            if !pdfcraft_engine::ocr::available() {
+                return Err(FfiError::Unsupported { reason: "OCR models are not installed (set PDFCRAFT_MODELS or call set_ocr_models_dir)".into() });
+            }
 
-        let settings = pdfcraft_engine::ocr::OcrSettings { dpi: dpi.unwrap_or(300.0), language: "en".into(), skip_text_pages };
+            let settings = pdfcraft_engine::ocr::OcrSettings { dpi: dpi.unwrap_or(300.0), language: "en".into(), skip_text_pages };
 
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let page_idx = page as usize;
-        let found =
-            inner.session.recognize_text(pdfcraft_engine::DocId(doc_id), &[page_idx], settings).map_err(|e| FfiError::EditFailed { reason: e })?;
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let page_idx = page as usize;
+            let found = inner
+                .session
+                .recognize_text(pdfcraft_engine::DocId(doc_id), &[page_idx], settings)
+                .map_err(|e| FfiError::EditFailed { reason: e })?;
 
-        if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
-            inner.doc_bytes.insert(doc_id, bytes);
-            let ver = inner.doc_versions.entry(doc_id).or_insert(1);
-            *ver += 1;
-            inner.tile_cache.evict_page(doc_id, page);
+            if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
+                inner.doc_bytes.insert(doc_id, bytes);
+                let ver = inner.doc_versions.entry(doc_id).or_insert(1);
+                *ver += 1;
+                inner.tile_cache.evict_page(doc_id, page);
+            }
+
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let page_info = doc.info.pages.get(page_idx).ok_or(FfiError::PageOutOfBounds { page, total: doc.info.pages.len() as u32 })?;
+
+            let first = found.into_iter().next().unwrap_or(pdfcraft_engine::ocr::OcrPage {
+                page: page_idx,
+                words: Vec::new(),
+                already_on_page: 0,
+                skipped: None,
+            });
+
+            let ffi_words: Vec<crate::ocr::FfiOcrWord> = first.words.iter().map(|w| crate::ocr::placed_word_to_ffi(w, page_info)).collect();
+            let text = first.text();
+            let word_count = ffi_words.len() as u32;
+
+            Ok(crate::ocr::FfiOcrPageResult {
+                page,
+                words: ffi_words,
+                text,
+                word_count,
+                already_on_page: first.already_on_page as u32,
+                skipped: first.skipped,
+            })
         }
-
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let page_info = doc.info.pages.get(page_idx).ok_or(FfiError::PageOutOfBounds { page, total: doc.info.pages.len() as u32 })?;
-
-        let first = found.into_iter().next().unwrap_or(pdfcraft_engine::ocr::OcrPage {
-            page: page_idx,
-            words: Vec::new(),
-            already_on_page: 0,
-            skipped: None,
-        });
-
-        let ffi_words: Vec<crate::ocr::FfiOcrWord> = first.words.iter().map(|w| crate::ocr::placed_word_to_ffi(w, page_info)).collect();
-        let text = first.text();
-        let word_count = ffi_words.len() as u32;
-
-        Ok(crate::ocr::FfiOcrPageResult {
-            page,
-            words: ffi_words,
-            text,
-            word_count,
-            already_on_page: first.already_on_page as u32,
-            skipped: first.skipped,
-        })
     }
 
     /// Injects an invisible searchable text layer into a page using externally recognized words (e.g. from platform OCR like Apple Vision or Android ML Kit).
     pub fn apply_ocr_text_layer(&self, doc_id: u64, page: u32, words: Vec<crate::ocr::FfiOcrWord>) -> Result<u32, FfiError> {
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let page_idx = page as usize;
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let page_info = doc.info.pages.get(page_idx).ok_or(FfiError::PageOutOfBounds { page, total: doc.info.pages.len() as u32 })?;
-
-        let mut placed = Vec::new();
-        for w in &words {
-            let [u_bl_x, u_bl_y] = page_info.view_to_user(w.rect.x, w.rect.y + w.rect.height);
-            let [u_br_x, u_br_y] = page_info.view_to_user(w.rect.x + w.rect.width, w.rect.y + w.rect.height);
-            let [u_tl_x, u_tl_y] = page_info.view_to_user(w.rect.x, w.rect.y);
-            let origin = [u_bl_x as f64, u_bl_y as f64];
-            let across = [(u_br_x - u_bl_x) as f64, (u_br_y - u_bl_y) as f64];
-            let up = [(u_tl_x - u_bl_x) as f64, (u_tl_y - u_bl_y) as f64];
-            placed.push(pdfcraft_engine::ocr::PlacedWord { text: w.text.clone(), origin, across, up });
+        #[cfg(not(feature = "ocr"))]
+        {
+            let _ = (doc_id, page, words);
+            Err(FfiError::Unsupported { reason: "OCR is not supported in this build".into() })
         }
+        #[cfg(feature = "ocr")]
+        {
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let page_idx = page as usize;
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let page_info = doc.info.pages.get(page_idx).ok_or(FfiError::PageOutOfBounds { page, total: doc.info.pages.len() as u32 })?;
 
-        let count = placed.len() as u32;
-        let ocr_page = pdfcraft_engine::ocr::OcrPage { page: page_idx, words: placed, already_on_page: 0, skipped: None };
+            let mut placed = Vec::new();
+            for w in &words {
+                let [u_bl_x, u_bl_y] = page_info.view_to_user(w.rect.x, w.rect.y + w.rect.height);
+                let [u_br_x, u_br_y] = page_info.view_to_user(w.rect.x + w.rect.width, w.rect.y + w.rect.height);
+                let [u_tl_x, u_tl_y] = page_info.view_to_user(w.rect.x, w.rect.y);
+                let origin = [u_bl_x as f64, u_bl_y as f64];
+                let across = [(u_br_x - u_bl_x) as f64, (u_br_y - u_bl_y) as f64];
+                let up = [(u_tl_x - u_bl_x) as f64, (u_tl_y - u_bl_y) as f64];
+                placed.push(pdfcraft_engine::ocr::PlacedWord { text: w.text.clone(), origin, across, up });
+            }
 
-        inner.session.apply_ocr(pdfcraft_engine::DocId(doc_id), &[ocr_page]).map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
+            let count = placed.len() as u32;
+            let ocr_page = pdfcraft_engine::ocr::OcrPage { page: page_idx, words: placed, already_on_page: 0, skipped: None };
 
-        if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
-            inner.doc_bytes.insert(doc_id, bytes);
-            let ver = inner.doc_versions.entry(doc_id).or_insert(1);
-            *ver += 1;
-            inner.tile_cache.evict_page(doc_id, page);
+            inner.session.apply_ocr(pdfcraft_engine::DocId(doc_id), &[ocr_page]).map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
+
+            if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
+                inner.doc_bytes.insert(doc_id, bytes);
+                let ver = inner.doc_versions.entry(doc_id).or_insert(1);
+                *ver += 1;
+                inner.tile_cache.evict_page(doc_id, page);
+            }
+
+            Ok(count)
         }
-
-        Ok(count)
     }
 
     // MARK: - Form JavaScript (MOB-6.5)
 
     /// Sets whether Acrobat Form JavaScript execution is enabled.
     pub fn set_form_javascript_enabled(&self, enabled: bool) -> Result<(), FfiError> {
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        inner.session.set_javascript(enabled);
-        Ok(())
+        #[cfg(not(feature = "js"))]
+        {
+            let _ = enabled;
+            Err(FfiError::Unsupported { reason: "Form JavaScript feature not enabled".into() })
+        }
+        #[cfg(feature = "js")]
+        {
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            inner.session.set_javascript(enabled);
+            Ok(())
+        }
     }
 
     /// Checks if Acrobat Form JavaScript execution is enabled.
     pub fn is_form_javascript_enabled(&self) -> Result<bool, FfiError> {
-        let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        Ok(inner.session.javascript())
+        #[cfg(not(feature = "js"))]
+        {
+            Err(FfiError::Unsupported { reason: "Form JavaScript feature not enabled".into() })
+        }
+        #[cfg(feature = "js")]
+        {
+            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            Ok(inner.session.javascript())
+        }
     }
 
     /// Runs a JavaScript snippet in the context of the document.
     pub fn run_form_javascript(&self, doc_id: u64, script: String, target: Option<String>) -> Result<crate::advanced::FfiJsResult, FfiError> {
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let outcome = inner
-            .session
-            .run_javascript(pdfcraft_engine::DocId(doc_id), &script, target.as_deref())
-            .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
-
-        if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
-            inner.doc_bytes.insert(doc_id, bytes);
-            let ver = inner.doc_versions.entry(doc_id).or_insert(1);
-            *ver += 1;
-            inner.tile_cache.evict_for_doc(doc_id);
+        #[cfg(not(feature = "js"))]
+        {
+            let _ = (doc_id, script, target);
+            Err(FfiError::Unsupported { reason: "Form JavaScript feature not enabled".into() })
         }
+        #[cfg(feature = "js")]
+        {
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let outcome = inner.session.run_javascript(pdfcraft_engine::DocId(doc_id), &script, target.as_deref()).map_err(|e| match e {
+                pdfcraft_engine::EditError::Unsupported(reason) => FfiError::Unsupported { reason: reason.to_string() },
+                _ => FfiError::EditFailed { reason: e.to_string() },
+            })?;
 
-        let output = outcome.console.join("\n");
-        Ok(crate::advanced::FfiJsResult { success: outcome.rc, output, error: outcome.error })
+            if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
+                inner.doc_bytes.insert(doc_id, bytes);
+                let ver = inner.doc_versions.entry(doc_id).or_insert(1);
+                *ver += 1;
+                inner.tile_cache.evict_for_doc(doc_id);
+            }
+
+            let output = outcome.console.join("\n");
+            Ok(crate::advanced::FfiJsResult { success: outcome.rc, output, error: outcome.error })
+        }
     }
 
     /// Retrieves and clears any pending JavaScript output (alerts, console messages, errors) for the document.
     pub fn take_form_javascript_output(&self, doc_id: u64) -> Result<crate::advanced::FfiJsOutput, FfiError> {
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let out = inner.session.take_js_output(pdfcraft_engine::DocId(doc_id));
-        Ok(crate::advanced::FfiJsOutput { alerts: out.alerts, console: out.console, errors: out.errors })
+        #[cfg(not(feature = "js"))]
+        {
+            let _ = doc_id;
+            Err(FfiError::Unsupported { reason: "Form JavaScript feature not enabled".into() })
+        }
+        #[cfg(feature = "js")]
+        {
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let out = inner.session.take_js_output(pdfcraft_engine::DocId(doc_id));
+            Ok(crate::advanced::FfiJsOutput { alerts: out.alerts, console: out.console, errors: out.errors })
+        }
     }
 
     // MARK: - XFA Forms (MOB-6.5)
 
     /// Inspects XFA form status and layout information.
     pub fn get_xfa_status(&self, doc_id: u64) -> Result<crate::advanced::FfiXfaStatus, FfiError> {
-        let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let kind = match doc.info.xfa {
-            Some(pdfcraft_render::Xfa::Dynamic) => "dynamic",
-            Some(pdfcraft_render::Xfa::Static) => "static",
-            None => "none",
+        #[cfg(not(feature = "xfa"))]
+        {
+            let _ = doc_id;
+            Err(FfiError::Unsupported { reason: "XFA forms feature not enabled".into() })
         }
-        .to_string();
-        let (layout_pages, layout_fields) = doc.xfa.as_ref().map(|x| (x.pages as u32, x.fields as u32)).unwrap_or((0, 0));
-        let warnings = doc.xfa_warnings.clone();
-        Ok(crate::advanced::FfiXfaStatus { kind, layout_pages, layout_fields, warnings })
+        #[cfg(feature = "xfa")]
+        {
+            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let kind = match doc.info.xfa {
+                Some(pdfcraft_render::Xfa::Dynamic) => "dynamic",
+                Some(pdfcraft_render::Xfa::Static) => "static",
+                None => "none",
+            }
+            .to_string();
+            let (layout_pages, layout_fields) = doc.xfa.as_ref().map(|x| (x.pages as u32, x.fields as u32)).unwrap_or((0, 0));
+            let warnings = doc.xfa_warnings.clone();
+            Ok(crate::advanced::FfiXfaStatus { kind, layout_pages, layout_fields, warnings })
+        }
     }
 
     /// Exports the XFA form datasets XML.
     pub fn export_xfa_datasets(&self, doc_id: u64) -> Result<String, FfiError> {
-        let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let xml_bytes = inner
-            .session
-            .export_data(pdfcraft_engine::DocId(doc_id), pdfcraft_engine::DataFormat::Xml, false, true)
-            .map_err(|e| FfiError::EditFailed { reason: e.to_string() })?;
-        String::from_utf8(xml_bytes).map_err(|e| FfiError::Internal { reason: format!("invalid UTF-8 in XFA datasets: {e}") })
+        #[cfg(not(feature = "xfa"))]
+        {
+            let _ = doc_id;
+            Err(FfiError::Unsupported { reason: "XFA forms feature not enabled".into() })
+        }
+        #[cfg(feature = "xfa")]
+        {
+            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let xml_bytes =
+                inner.session.export_data(pdfcraft_engine::DocId(doc_id), pdfcraft_engine::DataFormat::Xml, false, true).map_err(|e| match e {
+                    pdfcraft_engine::EditError::Unsupported(reason) => FfiError::Unsupported { reason: reason.to_string() },
+                    _ => FfiError::EditFailed { reason: e.to_string() },
+                })?;
+            String::from_utf8(xml_bytes).map_err(|e| FfiError::Internal { reason: format!("invalid UTF-8 in XFA datasets: {e}") })
+        }
     }
 
     /// Imports XFA datasets XML, updating form data and recalculating dependent fields.
     pub fn import_xfa_datasets(&self, doc_id: u64, datasets_xml: String) -> Result<(), FfiError> {
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        inner.apply_edit(
-            doc_id,
-            pdfcraft_engine::Edit::ImportData { name: "datasets.xml".into(), bytes: std::sync::Arc::new(datasets_xml.into_bytes()) },
-        )
+        #[cfg(not(feature = "xfa"))]
+        {
+            let _ = (doc_id, datasets_xml);
+            Err(FfiError::Unsupported { reason: "XFA forms feature not enabled".into() })
+        }
+        #[cfg(feature = "xfa")]
+        {
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            inner.apply_edit(
+                doc_id,
+                pdfcraft_engine::Edit::ImportData { name: "datasets.xml".into(), bytes: std::sync::Arc::new(datasets_xml.into_bytes()) },
+            )
+        }
     }
 
     // MARK: - PDF/A Preflight & Conversion (MOB-6.5)
 
     /// Verifies compliance against a target PDF/A specification level ("pdfa2b", "pdfa3b").
     pub fn verify_pdfa(&self, doc_id: u64, level: String) -> Result<Vec<crate::advanced::FfiPreflightIssue>, FfiError> {
-        let lvl = pdfcraft_engine::pdfa::Level::from_id(&level)
-            .ok_or_else(|| FfiError::InvalidArgs { reason: format!("unsupported PDF/A level: '{level}' (supported: 'pdfa2b', 'pdfa3b')") })?;
-        let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let issues = doc.pdfa_verify(lvl);
-        Ok(issues
-            .into_iter()
-            .map(|i| crate::advanced::FfiPreflightIssue {
-                clause: i.clause.to_string(),
-                message: i.message,
-                page: i.page.map(|p| p as u32),
-                fixable: i.fixable,
-            })
-            .collect())
+        #[cfg(not(feature = "preflight"))]
+        {
+            let _ = (doc_id, level);
+            Err(FfiError::Unsupported { reason: "PDF/A preflight feature not enabled".into() })
+        }
+        #[cfg(feature = "preflight")]
+        {
+            let lvl = pdfcraft_engine::pdfa::Level::from_id(&level)
+                .ok_or_else(|| FfiError::InvalidArgs { reason: format!("unsupported PDF/A level: '{level}' (supported: 'pdfa2b', 'pdfa3b')") })?;
+            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let issues = doc.pdfa_verify(lvl);
+            Ok(issues
+                .into_iter()
+                .map(|i| crate::advanced::FfiPreflightIssue {
+                    clause: i.clause.to_string(),
+                    message: i.message,
+                    page: i.page.map(|p| p as u32),
+                    fixable: i.fixable,
+                })
+                .collect())
+        }
     }
 
     /// Returns standards declared in document XMP metadata and output intents.
     pub fn declared_standards(&self, doc_id: u64) -> Result<crate::advanced::FfiPreflightDeclared, FfiError> {
-        let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let d = doc.standards();
-        Ok(crate::advanced::FfiPreflightDeclared {
-            pdfa_part: d.pdfa.as_ref().map(|(p, _)| *p as u32),
-            pdfa_conformance: d.pdfa.as_ref().map(|(_, c)| c.clone()),
-            pdfua_part: d.pdfua.map(|p| p as u32),
-            output_intents: d.output_intents,
-        })
+        #[cfg(not(feature = "preflight"))]
+        {
+            let _ = doc_id;
+            Err(FfiError::Unsupported { reason: "PDF/A preflight feature not enabled".into() })
+        }
+        #[cfg(feature = "preflight")]
+        {
+            let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let d = doc.standards();
+            Ok(crate::advanced::FfiPreflightDeclared {
+                pdfa_part: d.pdfa.as_ref().map(|(p, _)| *p as u32),
+                pdfa_conformance: d.pdfa.as_ref().map(|(_, c)| c.clone()),
+                pdfua_part: d.pdfua.map(|p| p as u32),
+                output_intents: d.output_intents,
+            })
+        }
     }
 
     /// Converts document to the requested PDF/A standard level, returning the number of remaining unfixable issues.
     pub fn convert_to_pdfa(&self, doc_id: u64, level: String) -> Result<u32, FfiError> {
-        let lvl = pdfcraft_engine::pdfa::Level::from_id(&level)
-            .ok_or_else(|| FfiError::InvalidArgs { reason: format!("unsupported PDF/A level: '{level}' (supported: 'pdfa2b', 'pdfa3b')") })?;
-        let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-        inner.apply_edit(doc_id, pdfcraft_engine::Edit::ConvertPdfA { level: lvl })?;
+        #[cfg(not(feature = "preflight"))]
+        {
+            let _ = (doc_id, level);
+            Err(FfiError::Unsupported { reason: "PDF/A preflight feature not enabled".into() })
+        }
+        #[cfg(feature = "preflight")]
+        {
+            let lvl = pdfcraft_engine::pdfa::Level::from_id(&level)
+                .ok_or_else(|| FfiError::InvalidArgs { reason: format!("unsupported PDF/A level: '{level}' (supported: 'pdfa2b', 'pdfa3b')") })?;
+            let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
+            inner.apply_edit(doc_id, pdfcraft_engine::Edit::ConvertPdfA { level: lvl })?;
 
-        let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
-        let remaining = doc.pdfa_verify(lvl);
-        Ok(remaining.len() as u32)
+            let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;
+            let remaining = doc.pdfa_verify(lvl);
+            Ok(remaining.len() as u32)
+        }
     }
 
     // MARK: - Document Compare (MOB-6.5)

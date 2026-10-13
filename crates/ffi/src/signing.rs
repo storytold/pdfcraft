@@ -75,6 +75,7 @@ pub struct FfiSignResult {
 }
 
 /// Helper to parse a `DigitalId` into `FfiDigitalIdInfo`.
+#[allow(dead_code)]
 pub(crate) fn parse_digital_id_info(id: &pdfcraft_engine::sign::DigitalId) -> FfiDigitalIdInfo {
     let cert = &id.certificate;
     FfiDigitalIdInfo {
@@ -93,6 +94,7 @@ pub(crate) fn parse_digital_id_info(id: &pdfcraft_engine::sign::DigitalId) -> Ff
 }
 
 /// Helper to convert engine `SignatureInfo` to `FfiDigitalSignature`.
+#[allow(dead_code)]
 pub(crate) fn signature_info_to_ffi(s: &pdfcraft_engine::SignatureInfo, pages: &[pdfcraft_render::PageInfo]) -> FfiDigitalSignature {
     let status_str = if !s.signed {
         "unsigned"

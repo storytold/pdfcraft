@@ -29,6 +29,7 @@ fn sample_pdf_with_text(text: &str) -> Vec<u8> {
 }
 
 #[test]
+#[cfg(feature = "js")]
 fn test_form_javascript_controls_and_execution() {
     let engine = Engine::new();
     let bytes = sample_pdf_with_text("Document for JavaScript testing\n");
@@ -59,6 +60,7 @@ fn test_form_javascript_controls_and_execution() {
 }
 
 #[test]
+#[cfg(feature = "xfa")]
 fn test_xfa_status_and_datasets() {
     let engine = Engine::new();
     let standard_bytes = sample_pdf_with_text("Standard non-XFA PDF\n");
@@ -73,6 +75,7 @@ fn test_xfa_status_and_datasets() {
 }
 
 #[test]
+#[cfg(feature = "preflight")]
 fn test_pdfa_preflight_and_conversion() {
     let engine = Engine::new();
     let bytes = sample_pdf_with_text("PDF/A Preflight Document\n");
