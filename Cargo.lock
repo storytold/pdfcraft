@@ -4413,6 +4413,7 @@ dependencies = [
  "pdfcraft-organize",
  "pdfcraft-preflight",
  "pdfcraft-print",
+ "pdfcraft-ps-export",
  "pdfcraft-redact",
  "pdfcraft-render",
  "pdfcraft-sign",
@@ -4592,6 +4593,16 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-render",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-ps-export"
+version = "0.18.1"
+dependencies = [
+ "hayro",
+ "kurbo 0.13.1",
+ "pdfcraft-filters",
+ "skrifa 0.47.0",
 ]
 
 [[package]]

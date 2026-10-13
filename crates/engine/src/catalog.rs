@@ -91,7 +91,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("HTML web page", "file-symlink", "export.html", Ready),
                 item("Rich Text Format (.rtf)", "file-text", "export.rtf", Ready),
                 item("Text (plain)", "type", "export.text", Ready),
-                item("PostScript / EPS", "file-down", "export.ps", Planned("M10")),
+                item("PostScript / EPS", "file-down", "export.ps", Ready),
             ],
         }],
     },

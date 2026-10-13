@@ -7312,11 +7312,11 @@ title = "Export to PostScript"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["export.ps"]
+tools = ["doc_export_postscript"]
+evidence = ["crates/ps-export/src/lib.rs::export_two_pages_has_pages_trailer_and_page_comments", "crates/ps-export/src/lib.rs::blend_mode_produces_note_not_ops", "crates/automation/tests/automation.rs::exporting_to_postscript_and_eps", "crates/automation/tests/automation.rs::postscript_warnings_surface"]
+notes = "Headless (doc_export_postscript tool): pages redrawn as a DSC-structured PostScript program via the same interpreter drive as page_render; text as vector outlines (Type 42 pending cmap synthesis), images, shadings and annotations; degradations reported as warnings and %%PdfCraftNote comments. Not yet: the export dialog in the UI, Type 42 embedded fonts."
 
 [[feature]]
 id = "create.export-eps"
@@ -7324,11 +7324,11 @@ title = "Export to EPS"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["export.ps"]
+tools = ["doc_export_postscript"]
+evidence = ["crates/ps-export/src/lib.rs::eps_requires_exactly_one_page", "crates/automation/tests/automation.rs::exporting_to_postscript_and_eps"]
+notes = "Headless (doc_export_postscript tool, .eps path): EPSF-3.0 header, no showpage, %%BoundingBox approximated from the CropBox (disclosed as a warning); more than one page is refused with the rule. Not yet: the export dialog in the UI."
 
 [[feature]]
 id = "create.export-ocr"
