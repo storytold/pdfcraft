@@ -30,10 +30,6 @@ android {
             jniLibs.srcDirs("src/main/jniLibs")
         }
     }
-
-    lint {
-        disable.addAll(listOf("NewApi"))
-    }
 }
 
 dependencies {

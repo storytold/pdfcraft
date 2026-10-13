@@ -29,43 +29,61 @@ rustup target add x86_64-linux-android
 cargo check -p pdfcraft-engine -p pdfcraft-render -p pdfcraft-automation --target aarch64-apple-ios
 cargo check -p pdfcraft-engine -p pdfcraft-render -p pdfcraft-automation --target aarch64-apple-ios-sim
 
-# Android (arm64-v8a and x86_64) via cargo-ndk
-export ANDROID_NDK_HOME="/opt/homebrew/share/android-ndk"
-cargo ndk -t arm64-v8a check -p pdfcraft-engine -p pdfcraft-render -p pdfcraft-automation
-cargo ndk -t x86_64 check -p pdfcraft-engine -p pdfcraft-render -p pdfcraft-automation
-```
+## Environment Setup
 
-## Structure
-
-```text
-mobile/
-  README.md         Toolchain pins, build, and test instructions
-  fixtures/         Synthetic test PDFs only
-  benchmarks/       Benchmark scenarios and committed baselines
-  ios/
-    PdfCraft/       Native SwiftUI application
-    PdfCraftKit/    Swift Package (wraps libpdfcraft_ffi via UniFFI)
-  android/
-    app/            Native Jetpack Compose application
-    pdfcraft-kit/   Android library module (AAR with 16KB-aligned JNI libs)
-```
-
-## Common Mobile Commands
+Set these paths in your shell or CI environment:
 
 ```bash
-# Build XCFramework & update Swift Package
-cargo xtask mobile-xcframework
+# JDK 17 (required for Gradle and Android build tools)
+export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
 
-# Run Swift Package test suite
-cd mobile/ios/PdfCraftKit && swift test
+# Android NDK r30
+export ANDROID_NDK_HOME="/opt/homebrew/Caskroom/android-ndk/30/AndroidNDK16248370.app/Contents/NDK"
 
-# Build Android 16KB page-aligned libraries & Kotlin bindings
-cargo xtask mobile-android
-
-# Verify mobile native library size against Budget B10 (≤ 25.0 MB)
-cargo xtask mobile-size
-
-# Verify API surface contract between FFI and committed snapshots
-cargo xtask mobile-bindings --check
+# Android SDK & Platform-Tools (adb)
+export ANDROID_HOME="/Users/ritvikpinjala/Library/Android/sdk"
+export PATH="$ANDROID_HOME/platform-tools:$PATH"
 ```
+
+### Android Emulator & Target Device Specs
+
+- **Emulator Device:** Pixel 10 Pro AVD (`emulator-5554`)
+- **System Image:** `sdk_gphone16k_arm64` (Android 17 / `emu64a16k`)
+- **Architecture:** `arm64-v8a` (16KB page-size aligned)
+- **Physical Device:** Not connected during headless CI runs; physical metrics are reported as `"not measured (no physical phone attached)"`.
+
+To run Android tests on the attached emulator:
+
+```bash
+cd mobile/android
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./gradlew test lint
+ANDROID_SERIAL=emulator-5554 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./gradlew connectedAndroidTest
+```
+
+---
+
+## Decision O6: CJK Font Strategy & Binary Size Trade-offs
+
+Per AGENTS.md §1.4, Japanese and CJK fonts live in `storytold/craft-fonts` and are never committed directly. On mobile platforms, bundling full CJK font files heavily impacts download and library size (a typical CJK font face is 15–25 MiB uncompressed, or 8–14 MiB compressed).
+
+### Evaluated Options:
+
+1. **Option A: Static Compilation Embedding (`CRAFT_FONTS_DIR`)**
+   - *Mechanism:* Compile `pdfcraft-fonts` with `CRAFT_FONTS_DIR` embedding `CRAFT_FONTS`.
+   - *Pros:* Fully offline, 100% deterministic visual rendering across all devices, zero runtime network dependencies.
+   - *Cons:* Binary size increases by ~12–18 MiB, causing the stripped `.so` to exceed Budget B10 ($\le 25.0$ MiB for all features or $\le 12.0$ MiB for viewer-only).
+   - *Recommended Use:* Dedicated enterprise or desktop distributions.
+
+2. **Option B: Dynamic Download-on-Demand (Play Feature Delivery / Asset Pack)**
+   - *Mechanism:* Deliver CJK font resources as an optional downloadable language pack upon first encounter of CJK content.
+   - *Pros:* Keeps base app installation small ($\le 12.0$ MiB viewer); guarantees licensed OFL font fidelity once downloaded.
+   - *Cons:* Requires network access on first render of Japanese documents; adds download management UI and storage caching logic.
+   - *Recommended Use:* Standard mobile consumer release track.
+
+3. **Option C: Platform System Font Fallback (Runtime OS Fallback)**
+   - *Mechanism:* Query system-installed CJK fonts via Android `FontMatcher` / `SystemFonts` at runtime.
+   - *Pros:* Zero additional download, 0 MiB added to binary size.
+   - *Cons:* Visual rendering varies across Android OS versions and vendor skins (Samsung vs Pixel vs Xiaomi); per AGENTS.md §1.4, system fonts may never be embedded back into saved PDFs.
+   - *Recommended Use:* Read-only viewing fallback when downloadable packs are absent.
+
 
