@@ -202,6 +202,15 @@ update the numbers.
   patterns fall back to flat gray.
 - **Evidence:** `create.export-docx` partial; [#773](https://github.com/storytold/pdfcraft/issues/773)
   (an invoice converted to Word loses its layout, gains table borders and duplicates pages);
+  done (Layer A + Layer B W1, #1561): geometry, images, shadings, Type 1 text, embedded TrueType
+  as Type 42 text and annotations redraw as a DSC-structured program whose Ghostscript-rasterized
+  output matches PdfCraft's own render within a mean per-channel delta of 2/255 and whose text
+  Ghostscript's txtwrite extracts — transparency is unflattened and CFF/CID fonts vectorized,
+  both recorded as warnings; tiling patterns fall back to flat gray.
+- **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
+  [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
+  floating watermark text and per-page section sizes. Exact font matching, vector rules and
+  broader layout fidelity remain incomplete;
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned;
   `create.export-ps`/`create.export-eps` partial (the `crates/ps-export/tests/oracle.rs` corpus).
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.

@@ -326,7 +326,7 @@ fn ttf_program() -> Vec<u8> {
 }
 
 /// A text page over the Layer A/B strategies: embedded Type 1 (`show` text through the
-/// prolog font), embedded TrueType (Type 42 `show` text through the synthesized cmap)
+/// prolog font), embedded TrueType (Type 42 `show` text through the emitted dictionary)
 /// and a non-embedded font (vectorized substitute outlines). Each draws at 72 pt
 /// so the boxes cover real area at the oracle's dpi.
 fn text_pdf() -> Vec<u8> {
@@ -349,9 +349,9 @@ fn text_pdf() -> Vec<u8> {
 }
 
 /// A page of real-font TrueType text (Inter Regular, the repo's OFL asset, read at test
-/// time — never committed as bytes): the vectorized outlines gs draws must be the same
-/// ones the raster renderer draws, since the Type 42 arm is disabled (gs maps Type 42
-/// codes through the font's own cmap, so assigned codes drew nothing).
+/// time — never committed as bytes): the Type 42 arm draws it through the exported
+/// dictionary, and gs's FreeType-rendered outlines must match the ones the raster
+/// renderer draws from the same sfnts.
 fn inter_pdf() -> Option<Vec<u8>> {
     let path = format!("{}/../../assets/fonts/Inter-Regular.ttf", env!("CARGO_MANIFEST_DIR"));
     let inter = std::fs::read(path).ok()?;
@@ -549,6 +549,29 @@ fn dump_png(path: std::path::PathBuf, width: u32, height: u32, rgb: &[u8]) {
     let _ = file.sync_all();
 }
 
+/// The exported PS's extractable text via gs's txtwrite device (the ps2ascii
+/// engine). `None` (after a skip message) when gs is not installed. `-q` keeps
+/// gs's banner out of the capture, so the string is exactly what txtwrite
+/// wrote (CRLF line endings included — assert with `contains`, not equality).
+/// Task 6's CFF/CJK gates reuse this.
+fn gs_text(ps: &[u8], tag: &str) -> Option<String> {
+    let base = std::env::temp_dir().join(format!("pdfcraft-ps-oracle-{}-{tag}-txt", std::process::id()));
+    let ps_path = base.with_extension("ps");
+    std::fs::write(&ps_path, ps).expect("writing the oracle's temp .ps cannot fail");
+    let run = Command::new("gs").args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=txtwrite", "-sOutputFile=-"]).arg(&ps_path).output();
+    let output = match run {
+        Ok(output) => output,
+        Err(why) => {
+            eprintln!("skipping the {tag} text oracle: gs could not be spawned ({why})");
+            let _ = std::fs::remove_file(&ps_path);
+            return None;
+        }
+    };
+    assert!(output.status.success(), "gs rejected the exported {tag} program for text extraction:\n{}", String::from_utf8_lossy(&output.stderr));
+    let _ = std::fs::remove_file(&ps_path);
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Geometry: fills (both rules), strokes, dashes, Bézier fills and round joins — the same
 /// image from both rasterizers. Observed delta ≈ 0.7 (edge coverage quantization; under
 /// matched gs policy the exported program is pixel-identical to the source PDF's).
@@ -585,27 +608,20 @@ fn fax_page_matches_ghostscript() {
 /// vectorized outlines. Observed delta ≈ 0.2.
 /// Text over the Layer A/B strategies: Type 1 as `show` (gs's FreeType against skrifa's
 /// outlines of the same box charstrings), embedded TrueType as Type 42 `show` (gs resolving
-/// the assigned codes through the synthesized cmap), and a non-embedded font as vectorized
-/// outlines. Observed delta ≈ 0.2.
-// Task 3 flips this gate: this environment's gs (10.08.0, 2026-09-08) silently
-// substitutes Courier for every definefont-built Type 42 font — including the
-// repo's own Layer A emission shape and a real Inter payload — so the Type 42
-// text cannot rasterize until Task 3's gs verification resolves how this build
-// wants embedded TrueType fonts served (details in the Layer B W1 commit).
-#[ignore]
+/// the assigned codes through the font's `/Encoding` names and `/CharStrings`), and a
+/// non-embedded font as vectorized outlines. Observed delta ≈ 0.2.
 #[test]
 fn text_page_matches_ghostscript() {
     assert_matches_oracle("text", &text_pdf());
 }
 
-/// Real-font TrueType (Inter): the vectorized outlines gs rasterizes are the same ones
-/// the raster renderer draws, proving the removed Type 42 arm lost no fidelity. Observed
-/// delta ≈ 0.9 (the densest edge coverage in the corpus). Skips (with a message) if the
-/// asset is absent.
-// Task 3 flips this gate: cmap synthesis landed (Layer B W1), and this oracle's
-// vectorization expectations now contradict it until Task 3 verifies the Type 42
-// arm's raster against gs and flips the assertions.
-#[ignore]
+/// Real-font TrueType (Inter) as a live Type 42 font: gs's FreeType renders the
+/// embedded sfnts through the exported `/FontType 42` dictionary (the
+/// `fonts.rs` module docs record the emission shape this gs build requires),
+/// and the raster must match PdfCraft's own render of the same page. Observed
+/// delta ≈ 1.4 (FreeType hinting against vello analytic AA on the densest
+/// edge coverage in the corpus). Skips (with a message) if the asset is
+/// absent.
 #[test]
 fn real_truetype_page_matches_ghostscript() {
     let Some(pdf) = inter_pdf() else {
@@ -613,6 +629,42 @@ fn real_truetype_page_matches_ghostscript() {
         return;
     };
     assert_matches_oracle("real-truetype", &pdf);
+}
+
+/// The W1 merge gate (real font, extraction half): embedded Inter leaves as a
+/// Type 42 font — `/FontType 42` in the program, `show`-shaped text on the
+/// page, no degradation note — and the drawn text is recoverable: gs's
+/// txtwrite reads `HAMBURGEFONSTIV` back out of the exported PostScript,
+/// proving the `/Encoding` and `/CharStrings` names carry the glyphs' semantic
+/// identities (the ps2write shape). The raster halves of the gate are
+/// [`real_truetype_page_matches_ghostscript`] (parity, real Inter) and
+/// [`text_page_matches_ghostscript`] (the strategy mix). Skips when the asset
+/// is absent or gs is not installed.
+#[test]
+fn embedded_real_truetype_draws_and_extracts_as_type42() {
+    let path = format!("{}/../../assets/fonts/Inter-Regular.ttf", env!("CARGO_MANIFEST_DIR"));
+    let Ok(inter) = std::fs::read(&path) else {
+        eprintln!("skipping the real-font extraction gate: assets/fonts/Inter-Regular.ttf is absent");
+        return;
+    };
+    let pdf = assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 400 200] >>".to_vec(),
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /Inter-Regular /Encoding /WinAnsiEncoding /FontDescriptor 5 0 R >>".to_vec(),
+        stream_obj("", b"BT /F1 12 Tf 20 100 Td (HAMBURGEFONSTIV) Tj ET"),
+        b"<< /Type /FontDescriptor /FontName /Inter-Regular /Flags 32 /FontBBox [0 -200 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
+        stream_obj("", &inter),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+    ]);
+    let out = export(Arc::new(pdf), &[0], PsFormat::Ps).expect("real-font page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("/FontType 42"), "a Type 42 dictionary is emitted: {s}");
+    assert!(s.contains("xyshow"), "the text draws through the font, not vectorized paths: {s}");
+    assert!(out.warnings.iter().all(|n| !n.text.contains("Type 42 pending cmap synthesis")), "no pending-synthesis note: {:?}", out.warnings);
+    let Some(text) = gs_text(&out.bytes, "inter-extract") else {
+        return;
+    };
+    assert!(text.contains("HAMBURGEFONSTIV"), "the drawn text is extractable: {text:?}");
 }
 
 /// Axial and radial shadings: gs's `shfill` interpolation against the raster renderer's
