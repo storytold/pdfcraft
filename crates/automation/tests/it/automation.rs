@@ -648,7 +648,11 @@ fn tool_table_is_well_formed() {
     let mut names = std::collections::HashSet::new();
     for t in &all {
         assert!(names.insert(t.name), "duplicate tool {}", t.name);
-        assert!(t.name.len() <= 64 && t.name.chars().all(|c| c.is_ascii_lowercase() || c == '_'), "bad MCP tool name {}", t.name);
+        assert!(
+            t.name.len() <= 64 && t.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "bad MCP tool name {}",
+            t.name
+        );
         assert_eq!(t.input_schema["type"], "object", "{}", t.name);
         let props = t.input_schema["properties"].as_object().unwrap();
         for r in t.input_schema["required"].as_array().unwrap() {
@@ -6565,6 +6569,17 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     assert!(unusable.iter().all(|u| u["subject"].is_string() && !u["reason"].as_str().unwrap().is_empty() && u["no_private_key"].is_boolean()));
     #[cfg(not(windows))]
     assert!(ids.is_empty() && unusable.is_empty());
+    // PKCS #11: an unknown reference fails everywhere; the tool reports the tokens' identities
+    // (with the reason any other certificate can't sign) when a module and a token are present.
+    assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:No Such Signer", "out": "p.pdf" })), Err(ToolError::Failed(_))));
+    let tokens = ok(a, "sign_pkcs11_ids", json!({}));
+    let token_ids = tokens["ids"].as_array().unwrap();
+    assert_eq!(tokens["count"].as_u64().unwrap(), token_ids.len() as u64);
+    assert!(token_ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("pkcs11:")));
+    let token_unusable = tokens["unusable"].as_array().unwrap();
+    assert!(token_unusable.iter().all(|u| u["reason"].as_str().is_some_and(|r| !r.is_empty()) && u["no_private_key"].is_boolean()));
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    assert!(token_ids.is_empty() && token_unusable.is_empty());
     assert!(matches!(
         a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "wrong!", "out": "signed.pdf" })),
         Err(ToolError::InvalidArgs(_))
@@ -6696,6 +6711,93 @@ fn signing_with_translated_labels_through_tools() {
     ok(&mut a, "sign_document", args(doc, json!({ "appearance": { "reason": true, "labels": false } }), "bare.pdf"));
     let stamped = signature_appearances(&dir.join("bare.pdf"));
     assert!(stamped.contains("(Genehmigt)") && !stamped.contains("Reason") && !stamped.contains("Date"), "{stamped}");
+}
+
+/// A SoftHSM2 token for the PKCS #11 automation test, set up from `PDFCRAFT_PKCS11_MODULES` and
+/// `SOFTHSM2_CONF` (like `pdfcraft-sign`'s own test). Returns the token's label, or `None` to skip.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn pkcs11_token() -> Option<String> {
+    fn run(args: &[&str]) -> Option<std::process::Output> {
+        let out = std::process::Command::new(args.first()?).args(&args[1..]).output().ok()?;
+        out.status.success().then_some(out)
+    }
+    let module = std::env::var("PDFCRAFT_PKCS11_MODULES").ok()?;
+    let module = module.split(':').next()?.to_string();
+    let conf = PathBuf::from(std::env::var("SOFTHSM2_CONF").ok()?);
+    let dir = conf.parent()?.to_path_buf();
+    let tokens = dir.join(format!("tokens-{}", std::process::id()));
+    std::fs::create_dir_all(&tokens).ok()?;
+    std::fs::write(&conf, format!("directories.tokendir = {}\nobjectstore.backend = file\nlog.level = ERROR\n", tokens.display())).ok()?;
+    let label = format!("PdfCraftAuto{}", std::process::id());
+    run(&["softhsm2-util", "--init-token", "--free", "--label", &label, "--so-pin", "12345678", "--pin", "1234"])?;
+    let signer =
+        pdfcraft_engine::sign::pkcs12::open(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12")).ok()?, "test")
+            .ok()?;
+    let key = dir.join(format!("key-{}.pem", std::process::id()));
+    {
+        use base64::Engine as _;
+        let body = base64::engine::general_purpose::STANDARD.encode(signer.key.pkcs8());
+        let mut pem = String::from("-----BEGIN PRIVATE KEY-----\n");
+        for chunk in body.as_bytes().chunks(64) {
+            pem.push_str(&String::from_utf8_lossy(chunk));
+            pem.push('\n');
+        }
+        pem.push_str("-----END PRIVATE KEY-----\n");
+        std::fs::write(&key, pem).ok()?;
+    }
+    run(&["softhsm2-util", "--import", key.to_str()?, "--token", &label, "--label", "signing", "--id", "01", "--pin", "1234"])?;
+    let cert = dir.join(format!("cert-{}.der", std::process::id()));
+    std::fs::write(&cert, &signer.certificate.raw).ok()?;
+    run(&[
+        "pkcs11-tool",
+        "--module",
+        &module,
+        "--token-label",
+        &label,
+        "--login",
+        "--pin",
+        "1234",
+        "--write-object",
+        cert.to_str()?,
+        "--type",
+        "cert",
+        "--id",
+        "01",
+        "--label",
+        "signing",
+    ])?;
+    Some(label)
+}
+
+/// Signing through a PKCS #11 token with the headless tools: the tool lists the identity, an
+/// unknown reference fails, and signing with the token's PIN produces a signature. Ignored
+/// (needs a module and SoftHSM2); skips when they aren't configured.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "needs a PKCS #11 module and SoftHSM2; set PDFCRAFT_PKCS11_MODULES and SOFTHSM2_CONF"]
+fn signing_with_a_pkcs11_token_through_tools() {
+    let Some(_label) = pkcs11_token() else { return };
+    let dir = workdir("pkcs11");
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let listed = ok(&mut a, "sign_pkcs11_ids", json!({}));
+    let ids = listed["ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 1, "{listed}");
+    let reference = ids[0]["id"].as_str().unwrap();
+    assert!(reference.starts_with("pkcs11:"), "{reference}");
+    assert_eq!(ids[0]["certificate"]["subject"], "CN=Test Signer RSA, O=PrintCraft Tests, C=US");
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // An unknown reference fails; no PIN is a clear tool error; the right PIN signs.
+    assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:nope", "out": "x.pdf" })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": reference, "out": "x.pdf" })), Err(ToolError::Failed(_))));
+    let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": reference, "password": "1234", "out": "signed.pdf" }));
+    assert_eq!(r["signature"]["signer"], "Test Signer RSA");
+    assert_eq!(r["signature"]["status"], "unknown");
+    assert!(dir.join("signed.pdf").exists());
+    // A wrong PIN is reported.
+    assert!(matches!(
+        a.call("sign_document", &json!({ "doc": doc, "id": reference, "password": "9999", "out": "y.pdf" })),
+        Err(ToolError::Failed(_))
+    ));
 }
 
 #[test]

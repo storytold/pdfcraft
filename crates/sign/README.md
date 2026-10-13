@@ -52,9 +52,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   signer's chain and a verified revocation invalidates the signature.
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
-configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.
-macOS Keychain and Windows Current User Personal (My) store identities sign through
-`ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
+configuration, FieldMDP locks, certificate security.
+macOS Keychain, Windows Current User Personal (My) store and Unix PKCS #11 tokens/cards sign
+through `ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
 ECDSA P-256/P-384; the store integration is tested with software-backed keys. A smart card
 or token whose driver registers a CNG key storage provider is such an identity too: the key
 is opened for signing without the silent flag, so the provider shows its own PIN dialog
@@ -64,6 +64,13 @@ sign (no private key, another key type, a key CNG can't open) are returned by
 `windows::list` as `unusable` with the reason and the Windows error code, shown greyed in
 the Sign dialog and by `sign_windows_ids`, instead of being left out silently; a key that
 needs a prompt to open is listed and asks at signing (issue #179).
+A PKCS #11 token or smart card (Unix; the CV cryptovision card, PIV/CAC, SoftHSM) signs the
+same way through `pkcs11`: the module is loaded at run time (`PDFCRAFT_PKCS11_MODULES`, else the
+p11-kit proxy), certificates are read pre-login, and only signing logs in with the PIN (prompted
+once per session, never guessed). RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384; a token
+certificate that can't sign (no key, another key type, a key usage without
+digitalSignature/nonRepudiation) is greyed with the reason. Tested end to end with a throwaway
+SoftHSM2 token (`--ignored`, with the module and `SOFTHSM2_CONF` set).
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form

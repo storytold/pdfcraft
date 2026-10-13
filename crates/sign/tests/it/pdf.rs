@@ -1066,6 +1066,152 @@ fn keychain_identities_carry_their_issuers() {
     result.unwrap();
 }
 
+/// A SoftHSM2 token with the fixture signing key and certificates loaded into it, for the
+/// PKCS #11 test. Set up from the environment so the test needs no `unsafe` `set_var`:
+/// `PDFCRAFT_PKCS11_MODULES` must point at a module and `SOFTHSM2_CONF` at a writable config
+/// path; without either, the test skips.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+struct P11Token {
+    label: String,
+    pin: &'static str,
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+impl P11Token {
+    fn set_up() -> Option<P11Token> {
+        let module = std::env::var("PDFCRAFT_PKCS11_MODULES").ok()?;
+        let module = module.split(':').next()?.to_string();
+        if !std::path::Path::new(&module).exists() {
+            eprintln!("skipped: PKCS #11 module {module} not found");
+            return None;
+        }
+        let conf = std::path::PathBuf::from(std::env::var("SOFTHSM2_CONF").ok()?);
+        let dir = conf.parent()?.to_path_buf();
+        let tokens = dir.join(format!("tokens-{}", std::process::id()));
+        std::fs::create_dir_all(&tokens).ok()?;
+        std::fs::write(&conf, format!("directories.tokendir = {}\nobjectstore.backend = file\nlog.level = ERROR\n", tokens.display())).ok()?;
+        let pin = "1234";
+        let label = format!("PdfCraftTest{}", std::process::id());
+        run(&["softhsm2-util", "--init-token", "--free", "--label", &label, "--so-pin", "12345678", "--pin", pin])?;
+        // The signer's key and certificate (id 01), a CA-only certificate carrying the same key
+        // (id 02) and a certificate with no key (id 03).
+        let signer = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+        let key = dir.join(format!("key-{}.pem", std::process::id()));
+        std::fs::write(&key, pem("PRIVATE KEY", signer.key.pkcs8())).ok()?;
+        let key = key.to_str()?;
+        run(&["softhsm2-util", "--import", key, "--token", &label, "--label", "signing", "--id", "01", "--pin", pin])?;
+        write_cert(&module, &label, "signing", "01", &signer.certificate.raw)?;
+        let ca = pkcs12::open(&data("chain.p12"), "test").unwrap().chain.into_iter().find(|c| c.is_self_signed())?;
+        run(&["softhsm2-util", "--import", key, "--token", &label, "--label", "ca", "--id", "02", "--pin", pin])?;
+        write_cert(&module, &label, "ca", "02", &ca.raw)?;
+        let keyless = pkcs12::open(&data("ec-p256.p12"), "test").unwrap().certificate;
+        write_cert(&module, &label, "keyless", "03", &keyless.raw)?;
+        Some(P11Token { label, pin })
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+impl Drop for P11Token {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("softhsm2-util").args(["--delete-token", "--token", &self.label]).output();
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn run(args: &[&str]) -> Option<std::process::Output> {
+    let out = std::process::Command::new(args.first()?).args(&args[1..]).output().ok()?;
+    if !out.status.success() {
+        eprintln!("{}: {}", args[0], String::from_utf8_lossy(&out.stderr));
+        return None;
+    }
+    Some(out)
+}
+
+/// Write a DER certificate onto a token as a `CKO_CERTIFICATE` object (via `pkcs11-tool`).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn write_cert(module: &str, token: &str, label: &str, id: &str, der: &[u8]) -> Option<()> {
+    let path = std::env::temp_dir().join(format!("pdfcraft-p11-{}-{id}.der", std::process::id()));
+    std::fs::write(&path, der).ok()?;
+    let path = path.to_str()?;
+    run(&[
+        "pkcs11-tool",
+        "--module",
+        module,
+        "--token-label",
+        token,
+        "--login",
+        "--pin",
+        "1234",
+        "--write-object",
+        path,
+        "--type",
+        "cert",
+        "--id",
+        id,
+        "--label",
+        label,
+    ])?;
+    Some(())
+}
+
+/// A PKCS#8/PKCS#1 DER as PEM (`softhsm2-util --import` reads only PEM).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn pem(kind: &str, der: &[u8]) -> String {
+    use base64::Engine as _;
+    let body = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut out = format!("-----BEGIN {kind}-----\n");
+    for chunk in body.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(chunk).unwrap());
+        out.push('\n');
+    }
+    out.push_str(&format!("-----END {kind}-----\n"));
+    out
+}
+
+/// Signing through a PKCS #11 token: listing, the certificate filters, reference resolution and
+/// a real RSA signature the validator accepts. Ignored by default: it needs a module and
+/// SoftHSM2 (see [`P11Token::set_up`]), and skips when they aren't configured.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "needs a PKCS #11 module and SoftHSM2; set PDFCRAFT_PKCS11_MODULES and SOFTHSM2_CONF"]
+fn signing_with_a_pkcs11_token() {
+    let Some(token) = P11Token::set_up() else { return };
+    let listing = pdfcraft_sign::pkcs11::identities().unwrap();
+    let signer =
+        listing.ids.iter().find(|i| i.id.certificate.subject.common_name() == Some("Test Signer RSA")).expect("the token's signer is listed");
+    assert!(signer.id.key.is_external());
+    assert_eq!(signer.id.friendly_name.as_deref(), Some(format!("Test Signer RSA ({})", token.label).as_str()));
+    assert!(listing.ids.iter().all(|i| i.id.certificate.subject.common_name() == Some("Test Signer RSA")), "{:?}", listing.ids.len());
+    // A CA certificate (its key usage is keyCertSign) and a key-less certificate are greyed with
+    // why, not dropped.
+    let ca = listing.unusable.iter().find(|u| u.subject == "PrintCraft Test Root CA").expect("the CA certificate is reported");
+    assert!(!ca.no_private_key && ca.reason.contains("key usage"), "{ca:?}");
+    let keyless = listing.unusable.iter().find(|u| u.no_private_key).expect("the key-less certificate is reported");
+    assert!(keyless.reason.contains("no matching private key"), "{keyless:?}");
+
+    // The reference round-trips, and a bare label and the common name both resolve.
+    let reference = signer.reference.clone();
+    assert_eq!(pdfcraft_sign::pkcs11::find(&reference).unwrap().certificate.raw, signer.id.certificate.raw);
+    assert_eq!(pdfcraft_sign::pkcs11::find("Test Signer RSA").unwrap().certificate.raw, signer.id.certificate.raw);
+    assert_eq!(pdfcraft_sign::pkcs11::find(&format!("pkcs11:{}:signing", token.label)).unwrap().certificate.raw, signer.id.certificate.raw);
+    assert!(pdfcraft_sign::pkcs11::find("pkcs11:no such signer").is_err());
+
+    // Without a PIN the token is asked for one; with the right one it signs and the signature
+    // validates; a wrong one is reported as such.
+    let id = pdfcraft_sign::pkcs11::find(&reference).unwrap();
+    assert!(matches!(pdfcraft_sign::sign(&open(&fixture()), &id, &opts()), Err(SignError::PinRequired)));
+    pdfcraft_sign::pkcs11::set_pin(&reference, token.pin);
+    let id = pdfcraft_sign::pkcs11::find(&reference).unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let trusted = signatures(&open(&signed), &signed, &TrustStore { certs: vec![id.certificate.clone()] });
+    let s = trusted.iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.signer.as_deref(), Some("Test Signer RSA"));
+    pdfcraft_sign::pkcs11::set_pin(&reference, "9999");
+    let id = pdfcraft_sign::pkcs11::find(&reference).unwrap();
+    assert!(matches!(pdfcraft_sign::sign(&open(&fixture()), &id, &opts()), Err(SignError::WrongPin)));
+}
+
 /// `fixture()` plus a Form XObject (object 7) that the page draws.
 fn fixture_with_xobject() -> Vec<u8> {
     let objs: Vec<&[u8]> = vec![

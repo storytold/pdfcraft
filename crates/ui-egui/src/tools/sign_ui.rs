@@ -263,6 +263,17 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
+/// A PKCS #11 token identity by its `pkcs11:` reference, signing with the token `pin`.
+fn pkcs11_id(reference: &str, pin: &str) -> Result<DigitalId, String> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    return {
+        sign::pkcs11::set_pin(reference, pin);
+        sign::pkcs11::find(reference).map_err(|e| e.to_string())
+    };
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    Err(format!("{reference}: PKCS#11 identities are only available on Unix"))
+}
+
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
@@ -279,6 +290,19 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
 fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
     DigitalIdEntry {
         path: format!("windows:{}", u.fingerprint.split(' ').collect::<String>().to_ascii_lowercase()),
+        name: u.subject.clone(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: Some(u.reason.clone()),
+    }
+}
+
+/// A greyed entry for a token certificate that can't sign, with the reason.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn entry_unusable_pkcs11(u: &sign::pkcs11::Unusable) -> DigitalIdEntry {
+    DigitalIdEntry {
+        path: if u.reference.is_empty() { "pkcs11:".to_string() } else { u.reference.clone() },
         name: u.subject.clone(),
         issuer: String::new(),
         email: String::new(),
@@ -311,7 +335,7 @@ impl PdfCraftApp {
 
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"));
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -344,6 +368,24 @@ impl PdfCraftApp {
                 Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        if self.os_key_store_ids {
+            match sign::pkcs11::identities() {
+                Ok(listing) => {
+                    for identity in listing.ids {
+                        let mut entry = entry_for(&identity.reference, &identity.id.certificate);
+                        if let Some(name) = identity.id.friendly_name {
+                            entry.name = name;
+                        }
+                        self.digital_ids.push(entry);
+                    }
+                    for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
+                        self.digital_ids.push(entry_unusable_pkcs11(u));
+                    }
+                }
+                Err(e) => self.notify_fmt("The PKCS #11 tokens' digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+            }
+        }
     }
 
     /// Add a digital ID file to the list (or select it if it's there).
@@ -360,7 +402,11 @@ impl PdfCraftApp {
     /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
     /// signing, so they can't be removed here. The open dialog's selection follows the list.
     pub fn remove_digital_id(&mut self, index: usize) -> bool {
-        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+        if self
+            .digital_ids
+            .get(index)
+            .is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:") || e.path.starts_with("pkcs11:"))
+        {
             return false;
         }
         self.digital_ids.remove(index);
@@ -442,6 +488,8 @@ impl PdfCraftApp {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
+        } else if entry.path.starts_with("pkcs11:") {
+            pkcs11_id(&entry.path, &d.password)?
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {

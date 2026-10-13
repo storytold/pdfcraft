@@ -6064,11 +6064,11 @@ title = "Sign with PKCS#11 tokens and smart cards"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["sign.digital"]
+tools = ["sign_pkcs11_ids", "sign_document"]
+evidence = ["crates/sign/tests/it/pdf.rs::signing_with_a_pkcs11_token", "crates/automation/tests/it/automation.rs::signing_with_a_pkcs11_token_through_tools", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/ui-egui/tests/it/signing.rs::pkcs11_token_identity_asks_for_a_pin"]
+notes = "Unix: sign with a PKCS #11 token or smart card (the CV cryptovision card, a PIV or CAC token), loaded through a module at run time (PDFCRAFT_PKCS11_MODULES, else the p11-kit proxy). The private key never leaves the card; the PIN is prompted once per signing session and passed to C_Login (never guessed, never cached across sessions). RSA PKCS #1 v1.5 and DER-encoded ECDSA P-256/P-384 with SHA-256/384/512; pkcs11:<token label>:<fingerprint> reference for agents and a PKCS #11 label in the desktop ID picker. Certificates that can't sign (no private key, another key type, a key usage without digitalSignature/nonRepudiation) are reported with the reason (greyed in the picker, `unusable` in sign_pkcs11_ids) rather than dropped. Tested end to end with a throwaway SoftHSM2 token that signs a PDF and validates (run with --ignored, PDFCRAFT_PKCS11_MODULES and SOFTHSM2_CONF set). A card-side .p12 can't be written (the key isn't exportable), which pkcs12::write refuses clearly"
 
 [[feature]]
 id = "sign.self-signed-id"

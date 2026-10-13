@@ -852,6 +852,26 @@ impl Automation {
                 let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
                 json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
+            "sign_pkcs11_ids" => {
+                #[cfg(all(unix, not(target_arch = "wasm32")))]
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = {
+                    let listing = pdfcraft_engine::sign::pkcs11::identities().map_err(failed)?;
+                    let ids = listing
+                        .ids
+                        .iter()
+                        .map(|i| json!({ "id": i.reference, "certificate": super::signing::cert_json(&i.id.certificate) }))
+                        .collect();
+                    let unusable = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "reference": u.reference, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable)
+                };
+                #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,

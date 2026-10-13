@@ -574,7 +574,7 @@ fn the_signature_labels_follow_the_interface_language() {
 fn os_store_identities_are_not_persisted() {
     let mut app = PdfCraftApp::new();
     app.set_option("language", "en").unwrap();
-    for path in ["windows:Store signer", "keychain:Store signer", "file-id.p12"] {
+    for path in ["windows:Store signer", "keychain:Store signer", "pkcs11:Store signer", "file-id.p12"] {
         app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: path.into(),
             name: "Signer".into(),
@@ -621,6 +621,35 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::Sign));
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
+}
+
+/// A token identity asks for its PIN rather than a file password, and signing with an unknown
+/// reference reports it (a real token needs hardware, so the picker entry is synthetic).
+#[test]
+fn pkcs11_token_identity_asks_for_a_pin() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "pkcs11:No Such Token:00".into(),
+        name: "Token signer".into(),
+        issuer: "Test issuer".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+    });
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    h.get_by_label("Sign as \"Token signer\"");
+    h.get_by_label("Token PIN");
+    assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.as_ref().unwrap().error.is_some());
 }
 
 /// Certificate names are as long as their owners made them: the picker cuts both lines of a
