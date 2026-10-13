@@ -23,6 +23,9 @@ impl CacheKey for ClipPath {
 }
 
 /// A stencil image.
+// PdfCraft patch (ps-export): `Clone` so the PostScript exporter's replay log can
+// capture images by value (`Paint` and `ImageXObject` already are `Clone`).
+#[derive(Clone)]
 pub struct StencilImage<'a, 'b> {
     pub(crate) paint: Paint<'a>,
     pub(crate) image_xobject: ImageXObject<'b>,
@@ -66,6 +69,9 @@ impl CacheKey for StencilImage<'_, '_> {
 }
 
 /// A raster image.
+// PdfCraft patch (ps-export): `Clone` so the PostScript exporter's replay log can
+// capture images by value (`ImageXObject` already is `Clone`).
+#[derive(Clone)]
 pub struct RasterImage<'a>(pub(crate) ImageXObject<'a>);
 
 impl RasterImage<'_> {
@@ -118,6 +124,18 @@ pub enum Image<'a, 'b> {
     Stencil(StencilImage<'a, 'b>),
     /// A normal raster image.
     Raster(RasterImage<'b>),
+}
+
+// PdfCraft patch (ps-export): `Image` is cloned by value into the PostScript exporter's
+// replay log; both variants are `Clone` (see the derives above — `ImageXObject` and
+// `Stream` derive it upstream).
+impl Clone for Image<'_, '_> {
+    fn clone(&self) -> Self {
+        match self {
+            Image::Stencil(s) => Image::Stencil(s.clone()),
+            Image::Raster(r) => Image::Raster(r.clone()),
+        }
+    }
 }
 
 impl Image<'_, '_> {

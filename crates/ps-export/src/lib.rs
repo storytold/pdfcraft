@@ -16,6 +16,7 @@ mod cid;
 mod color;
 mod device;
 mod dsc;
+mod flatten;
 mod fonts;
 mod images;
 mod pattern;
