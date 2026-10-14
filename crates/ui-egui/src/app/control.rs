@@ -56,6 +56,10 @@ impl PdfCraftApp {
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }
+            // Applies at the next start, like the Preferences choice.
+            ("renderer", _) => {
+                self.renderer = renderer::RendererPreference::parse(value).ok_or("renderer must be auto or gl")?;
+            }
             ("panel", _) => {
                 self.right = match value {
                     "comments" => Some(RightPanel::Comments),

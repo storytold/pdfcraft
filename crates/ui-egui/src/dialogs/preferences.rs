@@ -653,6 +653,30 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     });
     ui.add_space(6.0);
 
+    // The browser draws the web build. Chosen before the window exists, so it applies at the
+    // next start (crate::renderer explains the flicker it works around).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.horizontal(|ui| {
+            ctx.label_primary(ui, tl!("Graphics"), t);
+            // "OpenGL" is a name, not translated.
+            ctx.pill_choice(
+                ui,
+                t,
+                &mut app.renderer,
+                &[(crate::renderer::RendererPreference::Auto, tl!("Auto")), (crate::renderer::RendererPreference::Gl, crate::renderer::RendererPreference::Gl.label())],
+            );
+        });
+        ui.label(
+            egui::RichText::new(tl!(
+                "Applies the next time PdfCraft starts. Choose OpenGL if the window flickers on a display with G-SYNC, FreeSync or another variable refresh rate."
+            ))
+            .small()
+            .color(t.text_muted),
+        );
+        ui.add_space(6.0);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"), t);
     #[cfg(not(target_arch = "wasm32"))]
