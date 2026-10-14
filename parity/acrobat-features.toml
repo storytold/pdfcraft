@@ -6236,7 +6236,7 @@ status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
 evidence = ["crates/engine/tests/it/envelope.rs::detached_pair_opens_read_only_verified", "crates/automation/tests/it/automation.rs::detached_pair_opens_verified_via_tools"]
-notes = "beyond Acrobat parity: a detached CAdES signature (.pdf.p7s) opens as the sibling PDF beside it, read-only, with the signer shown and the signature verified over the sibling's bytes; a missing or unreadable sibling is one error naming the expected file. v1 limits: forward direction only (the .p7s resolves its sibling; opening a PDF never looks for a signature), a single sibling found by the exact stripped name, no trust-chain validation, and no .p7s writing"
+notes = "beyond Acrobat parity: a detached CAdES signature (.pdf.p7s) opens as the sibling PDF beside it, read-only, with the signer shown and the signature verified over the sibling's bytes; a missing or unreadable sibling is one error naming the expected file. v1 limits: forward direction only (the .p7s resolves its sibling), no reverse notice (opening a PDF never looks for a signature), a single sibling found by the exact stripped name, no trust-chain validation, and no .p7s writing"
 
 [[feature]]
 id = "sign.hash-algorithms"

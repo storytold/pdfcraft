@@ -202,8 +202,8 @@ fn seeds() -> Vec<(String, Vec<u8>)> {
         out.push(("cades-envelope.pdf.p7m".into(), b));
     }
     // A detached CAdES signature (issue #2129): DER bytes a user can hand the CLI beside their
-    // signed PDF. Mutated or whole, they go through open, parse, render and the edit round trip
-    // without a crash. Skipped when the fixture is absent.
+    // signed PDF. Mutated or whole, it is refused cleanly (open-error) without a crash.
+    // Skipped when the fixture is absent.
     if let Ok(b) = std::fs::read(root().join("crates/sign/tests/data/openssl-signed.pdf.p7s")) {
         out.push(("openssl-signed.pdf.p7s".into(), b));
     }
