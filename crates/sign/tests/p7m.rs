@@ -74,6 +74,34 @@ fn detached_fixture_reads_with_none_content() {
 }
 
 #[test]
+fn verify_detached_accepts_the_committed_pair() {
+    let bytes = data("openssl-signed.pdf.p7s");
+    let pdf = data("openssl-signed.pdf");
+    let env = p7m::verify_detached(&bytes, &pdf).unwrap();
+    assert!(env.digest_ok, "the signature covers the document beside it");
+    assert_eq!(env.signer_name, "PdfCraft Test");
+    assert_eq!(env.content, None, "detached: the envelope carries nothing");
+    assert_eq!(env.signers, 1);
+}
+
+#[test]
+fn verify_detached_flags_tampered_content() {
+    let bytes = data("openssl-signed.pdf.p7s");
+    let mut pdf = data("openssl-signed.pdf");
+    assert!(pdf.starts_with(b"%PDF-"));
+    // Flip one byte after the %PDF- magic: the document no longer matches what was signed,
+    // and the verdict is a quiet "no" rather than an error or a crash.
+    pdf[10] ^= 0x20;
+    let env = p7m::verify_detached(&bytes, &pdf).unwrap();
+    assert!(!env.digest_ok);
+}
+
+#[test]
+fn verify_detached_rejects_garbage() {
+    assert!(p7m::verify_detached(&[0x30], b"%PDF-not a PDF").is_err(), "an error, never a panic");
+}
+
+#[test]
 fn xml_envelope_content_is_returned() {
     let bytes = data("cades-xml.p7m");
     let env = p7m::read(&bytes).unwrap();

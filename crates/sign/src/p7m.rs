@@ -2,7 +2,8 @@
 //! either wraps the whole document (attached, what a `.pdf.p7m` is) or sits beside it (detached,
 //! a `.p7s`), signed per CAdES (ETSI EN 319 122). Opening one means classifying the file by its
 //! first bytes ([`is_cms_envelope`]) and reading what it carries ([`read`]): the document, who
-//! signed it, and whether the signature still matches the content.
+//! signed it, and whether the signature still matches the content. A detached envelope is
+//! checked against the document it belongs to with [`verify_detached`].
 
 use crate::SignError;
 use crate::cms::SignedData;
@@ -24,8 +25,10 @@ pub struct Envelope {
     pub signer_name: String,
     /// When the signer says they signed (the signing-time attribute), if they said.
     pub signing_time: Option<Time>,
-    /// Whether the signature value still matches the content read here (`false` for a detached
-    /// signature, whose content is not part of the envelope).
+    /// Whether the signature value still matches the content it was checked against — for
+    /// [`read`], the content the envelope carries (`false` for a detached signature, whose
+    /// content is not part of the envelope), for [`verify_detached`] the document given
+    /// beside it.
     pub digest_ok: bool,
     /// How many signers the envelope carries (the children of the signerInfos SET, RFC 5652 §5.1).
     pub signers: usize,
@@ -60,32 +63,53 @@ pub fn is_cms_envelope(bytes: &[u8]) -> bool {
 /// padding) are ignored, as [`SignedData::parse`] does.
 pub fn read(bytes: &[u8]) -> Result<Envelope, SignError> {
     let sd = SignedData::parse(bytes)?;
-    let cert = sd.signer_certificate();
-    let signer_name = cert.map_or_else(|| NO_CERTIFICATE.to_string(), |c| c.display_name());
-    let digest_ok = match cert.zip(sd.content.as_deref()) {
-        Some((cert, content)) => {
-            // The signature commits to a digest of the content. With signed attributes —
-            // CAdES always — what is signed is the message-digest attribute rather than the
-            // content, so the attribute is what ties the content to the signature: it is
-            // compared first (as the PDF validator does), and the signature over it is
-            // checked as well. The attribute is mandatory then (RFC 5652 §11.1); without it
-            // the signature, however valid, commits to nothing, so the content is treated as
-            // not matching. An algorithm that cannot be checked here is "not verified".
-            let digest = sd.signer.digest.digest(&[content]);
-            (sd.signer.signed_attrs.is_none() || sd.signer.message_digest.as_ref().is_some_and(|md| md == &digest))
-                && matches!(sd.verify_signature(cert, &digest), Ok(true))
-        }
-        // Detached (nothing carried to check against), or no certificate to check with.
-        None => false,
-    };
+    let signer_name = sd.signer_certificate().map_or_else(|| NO_CERTIFICATE.to_string(), |c| c.display_name());
     Ok(Envelope {
+        digest_ok: digest_ok(&sd, sd.content.as_deref()),
         content: sd.content,
         signer_name,
         signing_time: sd.signer.signing_time,
-        digest_ok,
         signers: signerinfos_count(bytes)?,
         quirks: sd.quirks,
     })
+}
+
+/// Verify a detached signature (a `.p7s`) against the document it signs, given separately:
+/// parse the envelope and check the signature over `content`. The envelope reports
+/// `content: None` — nothing is carried, the document is the caller's — and `digest_ok` as
+/// computed over the given content.
+pub fn verify_detached(bytes: &[u8], content: &[u8]) -> Result<Envelope, SignError> {
+    let sd = SignedData::parse(bytes)?;
+    let signer_name = sd.signer_certificate().map_or_else(|| NO_CERTIFICATE.to_string(), |c| c.display_name());
+    Ok(Envelope {
+        digest_ok: digest_ok(&sd, Some(content)),
+        content: None,
+        signer_name,
+        signing_time: sd.signer.signing_time,
+        signers: signerinfos_count(bytes)?,
+        quirks: sd.quirks,
+    })
+}
+
+/// Whether the signature still checks against `content` — the content the envelope carries,
+/// or the document given beside a detached one. The signature commits to a digest of the
+/// content. With signed attributes — CAdES always — what is signed is the message-digest
+/// attribute rather than the content, so the attribute is what ties the content to the
+/// signature: it is compared first (as the PDF validator does), and the signature over it is
+/// checked as well. An algorithm that cannot be checked here is "not verified", as is having
+/// no content to check against or no certificate to check with.
+fn digest_ok(sd: &SignedData, content: Option<&[u8]>) -> bool {
+    let Some((cert, content)) = sd.signer_certificate().zip(content) else { return false };
+    // The signature commits to a digest of the content. With signed attributes — CAdES always —
+    // what is signed is the message-digest attribute rather than the content, so the attribute
+    // is what ties the content to the signature: it is compared first (as the PDF validator
+    // does), and the signature over it is checked as well. The attribute is mandatory then
+    // (RFC 5652 §11.1); without it the signature, however valid, commits to nothing, so the
+    // content is treated as not matching. An algorithm that cannot be checked here is "not
+    // verified".
+    let digest = sd.signer.digest.digest(&[content]);
+    (sd.signer.signed_attrs.is_none() || sd.signer.message_digest.as_ref().is_some_and(|md| md == &digest))
+        && matches!(sd.verify_signature(cert, &digest), Ok(true))
 }
 
 /// How many SignerInfos the envelope carries: the children of the signerInfos SET, the last
