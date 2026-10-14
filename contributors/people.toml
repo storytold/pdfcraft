@@ -40,6 +40,9 @@ real_name = "James Locke"
 display_name = "James Locke"
 sync_github_name = false
 
+[people.edurbs]
+sync_github_name = true
+
 [people.switch87]
 real_name = "Gert Pellin"
 display_name = "Gert Pellin"
