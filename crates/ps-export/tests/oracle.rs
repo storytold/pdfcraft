@@ -6,14 +6,15 @@
 //! PDF by `pdfcraft_render` at the same effective dpi, and the mean per-channel delta of
 //! the two rasters must sit under [`TOLERANCE`]. gs runs as an observed oracle process,
 //! never linked; where it is not installed the raster fixtures skip with a message (the
-//! CUPS-test precedent). Transparency is flattened (Wave 2; blend modes and the
-//! interaction gates — nested groups, a tiling pattern, an image and a text run
-//! inside one group, and a shading pattern with its `/BBox` clip — join in Wave
-//! 3): a real-transparency group's region — sub-unit
-//! opacity, a soft mask, or a non-Normal blend mode — leaves as one opaque 300-dpi
-//! raster (the blend composites inside the scene through vello), and those pages
-//! enter the raster comparison too — under their own [`FLATTEN_TOLERANCE`], because
-//! gs resamples the region raster while `pdfcraft_raster` renders the source vectors.
+//! CUPS-test precedent). Transparency is flattened (Layer C, Waves 2–3: opacity
+//! groups and soft masks, then blend modes and the interaction gates — nested
+//! groups, a tiling pattern, an image and a text run inside one group, and a
+//! shading pattern with its `/BBox` clip): a real-transparency group's region —
+//! sub-unit opacity, a soft mask, or a non-Normal blend mode — leaves as one
+//! opaque 300-dpi raster (the blend composites inside the scene through vello),
+//! and those pages enter the raster comparison too — under their own
+//! [`FLATTEN_TOLERANCE`], because gs resamples the region raster while
+//! `pdfcraft_raster` renders the source vectors.
 //!
 //! Fixture pages are 288×360 pt, a whole multiple of the 1.44 pt pixel at 50 dpi, so both
 //! rasters are exactly 200×250 px and the pixel grids coincide without rounding luck.
