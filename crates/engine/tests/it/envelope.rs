@@ -1,7 +1,9 @@
-//! CAdES envelope files (`.pdf.p7m`, issue #1449) at the engine open path: one opens as the
-//! PDF it wraps, read-only, with the signer identified and an extraction action; a detached
-//! signature or a non-PDF content is an actionable error. Fixtures are the OpenSSL-made files
-//! in pdfcraft-sign (tests/data/README.md there).
+//! CAdES envelope files (`.pdf.p7m`, issue #1449; `.p7s`, issue #2129) at the engine open
+//! path: an attached one opens as the PDF it wraps, read-only, with the signer identified and
+//! an extraction action; a detached one opened from disk resolves the document beside it and
+//! is verified over that file's bytes; a detached signature without its document, or a non-PDF
+//! document, is an actionable error. Fixtures are the OpenSSL-made files in pdfcraft-sign
+//! (tests/data/README.md there).
 
 use std::sync::Arc;
 
@@ -12,6 +14,20 @@ use pdfcraft_sign::pkcs12;
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/../sign/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+/// The on-disk path of a sign fixture, for tests where the engine itself reads beside a `.p7s`.
+fn data_path(name: &str) -> String {
+    format!("{}/../sign/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// A scratch directory for tests that place a detached signature and its document beside each
+/// other on disk. Emptied first, so reruns start clean.
+fn scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-engine-envelope-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 /// The test digital ID the fixtures were made with (see sign/tests/data/README.md).
@@ -229,4 +245,107 @@ fn extracted_original_opened_with_the_owner_password_keeps_owner_rights() {
     assert!(summary.owner, "the copy opens with the owner's rights: {:?}", summary);
     assert!(d.allows_modification(), "the withheld permissions are the owner's to lift: {:?}", summary);
     assert_eq!(&d.bytes[..], &inner[..], "byte-identical to the encrypted PDF that was signed");
+}
+
+/// A detached signature runtime-made over `content` with the test ID, its content digest
+/// computed the way the caller of `sign_detached` does.
+fn detached_signature_over(content: &[u8]) -> Vec<u8> {
+    let id = test_id();
+    let alg = id.key.preferred_digest();
+    pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &alg.digest(&[content])).unwrap()
+}
+
+#[test]
+fn detached_pair_opens_read_only_verified() {
+    let mut s = Session::new();
+    // The pair is the committed fixture: the .p7s and the PDF beside it, both on disk.
+    let path = data_path("openssl-signed.pdf.p7s");
+    let id = s.open("openssl-signed.pdf.p7s", Some(path), Arc::new(data("openssl-signed.pdf.p7s")), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert!(!d.editable(), "the pair opens read-only");
+    assert!(d.path.is_none(), "the signature's path never attaches: {:?}", d.path);
+    assert_eq!(d.name, "openssl-signed.pdf", "the document is the sibling beside the signature");
+    assert!(d.repair_log().is_empty(), "the sibling is opened as it is: {:?}", d.repair_log());
+    let env = d.envelope.as_ref().expect("a detached pair carries EnvelopeInfo");
+    assert!(env.detached, "opened from the sibling, not from inside the envelope");
+    assert!(env.digest_ok, "the signature is verified over the sibling's bytes");
+    assert_eq!(env.signer, "PdfCraft Test");
+    assert_eq!(env.signers, 1);
+    // Edits are refused through the same read-only path the attached envelope uses.
+    let err = s.apply(id, Edit::SetInfo { key: "Title".into(), value: "x".into() }).unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly(ref reason) if reason.contains("detached CAdES")), "{err}");
+}
+
+#[test]
+fn missing_sibling_error_names_the_expected_file() {
+    let mut s = Session::new();
+    let path = data_path("cades-detached.p7s");
+    let err = s.open("cades-detached.p7s", Some(path), Arc::new(data("cades-detached.p7s")), None).unwrap_err();
+    // One message for a missing and an unreadable sibling alike, so opening a .p7s cannot be
+    // used to probe the directory around it.
+    assert!(matches!(err, OpenError::Unsupported(ref m) if m == "cades-detached.p7s signs cades-detached, which was not found beside it"), "{err}");
+}
+
+#[test]
+fn misnamed_detached_envelope_does_not_read_itself() {
+    let dir = scratch("misnamed");
+    let bytes = data("cades-detached.p7s");
+    std::fs::write(dir.join("odd-name.p7m"), &bytes).unwrap();
+    let path = dir.join("odd-name.p7m").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    // A detached signature that is not named .p7s is not looking for a sibling at all, even
+    // when it was opened from disk.
+    let err = s.open("odd-name.p7m", Some(path), Arc::new(bytes), None).unwrap_err();
+    assert!(
+        matches!(err, OpenError::Unsupported(ref m) if m == "this is a detached CAdES signature; the signed document is not inside the file"),
+        "{err}"
+    );
+}
+
+#[test]
+fn sibling_that_is_not_a_pdf_is_refused() {
+    let dir = scratch("not-a-pdf");
+    let payload: &[u8] = b"<?xml version=\"1.0\"?><note/>";
+    let sig = detached_signature_over(payload);
+    std::fs::write(dir.join("signed-xml.p7s"), &sig).unwrap();
+    std::fs::write(dir.join("signed-xml"), payload).unwrap();
+    let path = dir.join("signed-xml.p7s").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let err = s.open("signed-xml.p7s", Some(path), Arc::new(sig), None).unwrap_err();
+    assert!(matches!(err, OpenError::Unsupported(ref m) if m == "the detached signature's document is XML data, not a PDF"), "{err}");
+}
+
+#[test]
+fn tampered_sibling_reports_digest_mismatch() {
+    let dir = scratch("tampered");
+    let pdf = data("openssl-signed.pdf");
+    // Flip the version digit after the %PDF- magic: still an openable document, but no longer
+    // the bytes that were signed.
+    let mut tampered = pdf.clone();
+    tampered[7] = b'8';
+    let sig = detached_signature_over(&pdf);
+    std::fs::write(dir.join("openssl-signed.pdf.p7s"), &sig).unwrap();
+    std::fs::write(dir.join("openssl-signed.pdf"), &tampered).unwrap();
+    let path = dir.join("openssl-signed.pdf.p7s").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let id = s.open("openssl-signed.pdf.p7s", Some(path), Arc::new(sig), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert!(!d.editable(), "a pair with a tampered sibling is still read-only");
+    assert!(d.path.is_none());
+    let env = d.envelope.as_ref().expect("a detached pair carries EnvelopeInfo");
+    assert!(env.detached);
+    assert!(!env.digest_ok, "the flipped byte is caught");
+    let err = s.apply(id, Edit::SetInfo { key: "Title".into(), value: "x".into() }).unwrap_err();
+    assert!(matches!(err, EditError::ReadOnly(_)), "{err}");
+}
+
+#[test]
+fn bytes_only_detached_open_keeps_today_error() {
+    let mut s = Session::new();
+    // Without a path there is nowhere to look for the sibling: the plain detached error stands.
+    let err = s.open("cades-detached.p7s", None, Arc::new(data("cades-detached.p7s")), None).unwrap_err();
+    assert!(
+        matches!(err, OpenError::Unsupported(ref m) if m == "this is a detached CAdES signature; the signed document is not inside the file"),
+        "{err}"
+    );
 }

@@ -10954,7 +10954,9 @@ fn detached_envelope_error_is_actionable() {
     let e = a.call("doc_open", &json!({ "path": "cades-detached.p7s" })).unwrap_err();
     let m = e.to_string();
     assert!(m.contains("detached"), "{m}");
-    assert!(m.contains("not inside the file"), "says why the file won't open: {m}");
+    // A .p7s opened from disk looks for its document beside it (#2129): the error names the
+    // file it expected, so an agent can provide it or point at where it is.
+    assert!(m.contains("signs cades-detached, which was not found beside it"), "says which file is missing: {m}");
     // Nothing opened.
     assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
 }
