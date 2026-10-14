@@ -86,6 +86,20 @@ impl<'a> Pattern<'a> {
         if let Self::Shading(p) = self {
             p.opacity = alpha;
         }
+    /// PdfCraft patch (ps-export): a copy of the pattern re-rooted onto another
+    /// device space — `pre` pre-concatenated onto the pattern's matrix (and a
+    /// shading's derived clip path), the `SoftMask::re_rooted` counterpart. The
+    /// renderer's pattern algebra (`path_transform⁻¹ × pattern.matrix`, and the
+    /// tiling cell's pixel density taken from `pattern.matrix` alone) assumes the
+    /// matrix lives in the *device* space of the draws it paints beside; a
+    /// replay log that renders in a different space than the interpreter
+    /// captured (PdfCraft's 300-dpi flatten replay over a page-points drive)
+    /// must re-root the pattern the same way it pre-composes every recorded
+    /// draw transform.
+    pub fn re_rooted(&self, pre: Affine) -> Self {
+        let mut re_rooted = self.clone();
+        re_rooted.pre_concat_transform(pre);
+        re_rooted
     }
 
     pub(crate) fn set_transfer_function(&mut self, tf: ActiveTransferFunction) {

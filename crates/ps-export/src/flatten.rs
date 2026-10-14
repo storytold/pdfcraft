@@ -13,8 +13,13 @@
 //! glyph outlines come from the scene's own cache, [`ShadowScene::outline_of`], keyed
 //! like the rasterizer's). Recorded soft masks re-root onto the scene's pixel space
 //! (`SoftMask::re_rooted`, the vendor patch): the interpreter captured them in device
-//! page points (y up), while the replay renders in 300-dpi pixels (y down). Each
-//! [`ShadowScene::flatten`] builds a fresh page-sized
+//! page points (y up), while the replay renders in 300-dpi pixels (y down). Recorded
+//! pattern paints re-root the same way (`Pattern::re_rooted` through
+//! [`re_rooted_paint`]): the renderer's pattern algebra takes the pattern's matrix to
+//! live in the device space of the draws beside it — true under `page_render`, whose
+//! interpreter root transform carries the render scale, but not for a pattern captured
+//! by this crate's page-points drive (the tiling-inside-group oracle gate caught the
+//! difference). Each [`ShadowScene::flatten`] builds a fresh page-sized
 //! renderer at 300 dpi, paints the white page base first (the same base `page_render`
 //! starts from, and what makes the emitted raster opaque), replays the log through the
 //! balanced prefix, pops any wrappers still open in reverse, finishes, and crops the
@@ -412,6 +417,23 @@ impl<'a> ShadowScene<'a> {
 /// test `Rect::intersects` of newer kurbo versions.
 fn boxes_touch(a: Rect, b: Rect) -> bool {
     a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1
+}
+
+/// Clone `paint` for the replay log, re-rooting a pattern's geometry onto the
+/// scene's pixel space (`matrix` pre-concatenated, the `Pattern::re_rooted`
+/// vendor patch — the same re-rooting `record_push_group` gives a soft mask).
+/// The renderer's pattern algebra assumes the pattern's matrix lives in the
+/// *device* space of the draws it paints beside: under `page_render` the
+/// interpreter's root transform already carries the render scale, but this
+/// crate's export drive runs in page points, so a pattern recorded verbatim
+/// would tile its cell at one pixel per *point* in the 300-dpi replay — the
+/// wrong size, phase and sharpness (the bug the tiling-inside-group oracle
+/// gate caught at a mean delta of ≈ 11.9). Colours pass through untouched.
+pub(crate) fn re_rooted_paint<'a>(paint: &Paint<'a>, matrix: Affine) -> Paint<'a> {
+    match paint {
+        Paint::Pattern(p) => Paint::Pattern(Box::new(p.re_rooted(matrix))),
+        other => other.clone(),
+    }
 }
 
 /// Crop `w × h` pixels at (`x0`, `y0`) out of a finished page pixmap into straight
