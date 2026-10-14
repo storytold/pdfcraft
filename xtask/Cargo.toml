@@ -18,3 +18,4 @@ toml = "1"
 # The demo-PDF time stamp goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
 roxmltree = "0.20"
+base64 = "0.22"
