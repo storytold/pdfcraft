@@ -244,8 +244,16 @@ impl<'a> ShadowScene<'a> {
     /// (the unit rect × its transform); [`ShadowScene::flatten`] declines whenever a
     /// region intersects a hole, so the raster either replays every draw it crops or
     /// is not produced at all — never a gap where an image was.
+    ///
+    /// A non-finite `bbox` (a NaN or infinite transform — hostile input) is
+    /// *unplaceable*: the inclusive touch test compares with `<=`, and every
+    /// comparison against NaN (and a one-sided infinity) is false, so such a hole
+    /// would never decline any flatten while the caller's vector path repairs the
+    /// transform and still paints — the raster would silently drop the image's ink.
+    /// The image's true placement is unknowable, so the hole covers the whole page:
+    /// every flatten declines, never a guess.
     pub(crate) fn record_image_hole(&mut self, bbox: Rect) {
-        self.holes.push(bbox);
+        self.holes.push(if bbox.is_finite() { bbox } else { self.page });
     }
 
     /// A real-transparency group opens: starts at an empty box, widened by
@@ -788,6 +796,36 @@ mod tests {
         assert!(scene.flatten().is_none(), "the budget is spent");
     }
 
+    /// The per-page flatten budget through **real recorded groups** (the device's
+    /// own shape): every iteration records a balanced
+    /// push-group/draw/pop-group entry — so each flatten's replay also unwinds a
+    /// growing balanced log — and the 129th pop (one over
+    /// [`MAX_FLATTENS_PER_PAGE`]) declines before any render, without poisoning
+    /// anything: the decline is the budget alone. The end-to-end export variant
+    /// (`tests/oracle.rs::flattens_cap_declines`) proves the caller side — the
+    /// 129th group's vector bytes flush back with today's note.
+    #[test]
+    fn flattens_cap_declines() {
+        let page = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let matrix = page_matrix(page);
+        let rect = Rect::new(2.0, 2.0, 4.0, 4.0);
+        let mut scene = ShadowScene::new(page);
+        for i in 0..=MAX_FLATTENS_PER_PAGE {
+            let blue = Paint::Color(Color::from_rgba(AlphaColor::new([0.0, 0.0, 1.0, 1.0])));
+            scene.record_push_group(0.5, None, BlendMode::Normal);
+            scene.push_frame();
+            scene.record(move |r| r.draw_rect(&rect, matrix, &blue, &PathDrawMode::Fill(FillRule::NonZero)));
+            scene.extend(rect);
+            scene.record_pop_group();
+            scene.pop_frame().expect("every push has its pop");
+            if i < MAX_FLATTENS_PER_PAGE {
+                assert!(scene.flatten().is_some(), "flatten {} of {} is inside the budget", i + 1, MAX_FLATTENS_PER_PAGE);
+            } else {
+                assert!(scene.flatten().is_none(), "flatten {} (one over the cap) declines", i + 1);
+            }
+        }
+    }
+
     /// A hole (an image draw the log cannot carry — a transient stream) declines only
     /// the flattens whose region touches it; a region clear of holes still flattens,
     /// and the decline spends no budget (the check runs before the render).
@@ -812,6 +850,42 @@ mod tests {
         scene.extend(Rect::new(0.0, 0.0, 20.0, 20.0));
         scene.pop_frame().expect("a frame was pushed");
         assert!(scene.flatten().is_some(), "the hole decline burned no flatten budget");
+    }
+
+    /// A hole whose box is not finite (a NaN or infinite image transform) is
+    /// *unplaceable*: every comparison against NaN is false, so `boxes_touch`
+    /// could never see it and a flatten would happily crop the region while the
+    /// replay log cannot paint that image — the raster would drop the image's
+    /// ink (the vector path repairs the transform and still paints) with no
+    /// decline and no note. Such a hole instead covers the whole page: every
+    /// flatten declines, the caller keeps the vector, and the disclosure note
+    /// stands. Regression test for the Task 10 review hole.
+    #[test]
+    fn non_finite_image_hole_forces_decline() {
+        // A finite first draw gives the frame a real box; the hole that follows
+        // is the hostile one (a NaN-transform inline image recorded after it).
+        let mut scene = ShadowScene::new(Rect::new(0.0, 0.0, 100.0, 100.0));
+        scene.push_frame();
+        scene.extend(Rect::new(10.0, 10.0, 90.0, 90.0));
+        scene.record_image_hole(Rect::new(f64::NAN, 0.0, f64::NAN, 60.0));
+        scene.pop_frame().expect("a frame was pushed");
+        assert!(scene.flatten().is_none(), "an unplaceable hole declines the flatten whose region it may touch");
+
+        // The placement is unknowable, so even a later region far from the
+        // image's nominal box declines — a raster must never guess.
+        scene.push_frame();
+        scene.extend(Rect::new(0.0, 0.0, 5.0, 5.0));
+        scene.pop_frame().expect("a frame was pushed");
+        assert!(scene.flatten().is_none(), "an unplaceable hole declines every later flatten too");
+
+        // An infinite box is unplaceable the same way (its comparisons can also
+        // never establish "clear of the region").
+        let mut scene = ShadowScene::new(Rect::new(0.0, 0.0, 100.0, 100.0));
+        scene.push_frame();
+        scene.extend(Rect::new(10.0, 10.0, 90.0, 90.0));
+        scene.record_image_hole(Rect::new(f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::INFINITY));
+        scene.pop_frame().expect("a frame was pushed");
+        assert!(scene.flatten().is_none(), "an infinite box is unplaceable: no raster may crop it");
     }
 
     /// The log survives a flatten and replays with content the next time: the second
