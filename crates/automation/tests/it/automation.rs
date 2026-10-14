@@ -108,7 +108,13 @@ fn doc_extract_original_out_writes_the_inner_pdf() {
     let copy = ok(&mut a, "doc_extract_original", json!({ "doc": env, "out": "inner/original.pdf" }));
     let expected = openssl_signed_pdf();
     assert_eq!(std::fs::read(dir.join("inner/original.pdf")).unwrap(), expected, "byte-identical to the embedded PDF");
-    assert_eq!(copy["written"].as_str().unwrap(), dir.join("inner/original.pdf").to_string_lossy(), "{copy}");
+    // The tool reports the canonical path (on Windows: `\\?\` prefix and long names, not the
+    // 8.3 short form a joined temp dir may carry) — compare like with like.
+    assert_eq!(
+        std::fs::canonicalize(copy["written"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(dir.join("inner/original.pdf")).unwrap(),
+        "{copy}"
+    );
     assert!(copy["doc"].as_u64().is_some(), "the editable copy is opened too: {copy}");
 
     // A path outside the root is refused, and nothing is written there.
