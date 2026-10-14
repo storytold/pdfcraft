@@ -3085,6 +3085,17 @@ usage = "Inner content signed into cades-xml.p7m; lets tests check a non-PDF emb
 sha256 = "934f3fd21df73bc2632f4ad4bdc791d736f3ed99866141c415a26115138382f8"
 
 [[asset]]
+path = "crates/sign/tests/data/openssl-signed.pdf.p7s"
+title = "CAdES detached signature beside openssl-signed.pdf (sibling-by-name pairing)"
+author = "PdfCraft contributors"
+source = "Contributor-original: DER CMS made with `openssl cms -sign -binary -cades -md sha256` over openssl-signed.pdf (see crates/sign/tests/data/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "document"
+usage = "Detached signature pairing tests (issue #2129): the .p7s a reader finds beside openssl-signed.pdf by name"
+sha256 = "5ea35e958ded330669b89d35ad0d20eb19a30b9755480c6def62067fa980c0fb"
+
+[[asset]]
 path = "assets/icons/clipboard-paste.svg"
 title = "Lucide icon \"clipboard-paste\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

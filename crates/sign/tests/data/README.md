@@ -59,6 +59,21 @@ openssl cms -sign -binary -nodetach -cades -md sha256 -in cades-inner.xml -signe
 
 The key is throw-away and each signature embeds its signing time, so regenerating changes every file's bytes.
 
+### Detached signature beside its file (issue #2129)
+
+`openssl-signed.pdf.p7s` is a detached (`-cades`, without `-nodetach`) DER CAdES-BES signature over
+the exact bytes of `openssl-signed.pdf`, made with its own throw-away RSA key
+(`-subj "/CN=PdfCraft Test"`); the sibling-by-name pairing with `openssl-signed.pdf` is the point.
+`openssl cms -verify -noverify -binary -inform DER -in openssl-signed.pdf.p7s -content openssl-signed.pdf -out x.pdf`
+extracts content byte-identical to the input. Regenerate with:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -subj "/CN=PdfCraft Test" -days 3650
+openssl cms -sign -binary -cades -md sha256 -in openssl-signed.pdf -signer cert.pem -inkey key.pem -outform DER -out openssl-signed.pdf.p7s
+```
+
+The key is throw-away and the signature embeds its signing time, so regenerating changes the bytes.
+
 ### `x509-rsa-sha1.pdf`
 
 A synthetic one-page PDF signed the legacy way (`/SubFilter /adbe.x509.rsa_sha1`, `/Cert` = `rsa.crt.pem`,
