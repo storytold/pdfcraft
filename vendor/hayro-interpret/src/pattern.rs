@@ -87,18 +87,36 @@ impl<'a> Pattern<'a> {
             p.opacity = alpha;
         }
     /// PdfCraft patch (ps-export): a copy of the pattern re-rooted onto another
-    /// device space — `pre` pre-concatenated onto the pattern's matrix (and a
-    /// shading's derived clip path), the `SoftMask::re_rooted` counterpart. The
-    /// renderer's pattern algebra (`path_transform⁻¹ × pattern.matrix`, and the
-    /// tiling cell's pixel density taken from `pattern.matrix` alone) assumes the
-    /// matrix lives in the *device* space of the draws it paints beside; a
-    /// replay log that renders in a different space than the interpreter
-    /// captured (PdfCraft's 300-dpi flatten replay over a page-points drive)
-    /// must re-root the pattern the same way it pre-composes every recorded
-    /// draw transform.
+    /// device space — `pre` pre-concatenated onto the pattern's matrix — the
+    /// `SoftMask::re_rooted` counterpart. The renderer's pattern algebra
+    /// (`path_transform⁻¹ × pattern.matrix`, and a tiling cell's pixel density
+    /// taken from `pattern.matrix` alone) assumes the matrix lives in the
+    /// *device* space of the draws it paints beside; a replay log that renders
+    /// in a different space than the interpreter captured (PdfCraft's 300-dpi
+    /// flatten replay over a page-points drive) must re-root the pattern the
+    /// same way it pre-composes every recorded draw transform.
+    ///
+    /// The shading arm's stored clip is **rebased through `pre` alone**: by the
+    /// time a device records the paint, `get_paint` has already mapped the clip
+    /// once (through `root ∘ matrix`), so re-deriving it from the new full
+    /// matrix — what `pre_concat_transform` does for its raw-pattern caller —
+    /// would apply the captured matrix twice. The tiling arm folds `pre` into
+    /// the instance's cache key (the `SoftMask::re_rooted` rule):
+    /// `TilingPattern`'s key is the construction-time stream key, and an
+    /// original and its re-rooted copy must never alias in a future cache.
     pub fn re_rooted(&self, pre: Affine) -> Self {
         let mut re_rooted = self.clone();
-        re_rooted.pre_concat_transform(pre);
+        match &mut re_rooted {
+            Self::Shading(p) => {
+                p.matrix = pre * p.matrix;
+                let clip = p.shading.clip_path.clone().map(|path| pre * path);
+                Arc::make_mut(&mut p.shading).clip_path = clip;
+            }
+            Self::Tiling(p) => {
+                p.matrix = pre * p.matrix;
+                p.cache_key = hash128(&(p.cache_key, pre.cache_key()));
+            }
+        }
         re_rooted
     }
 
