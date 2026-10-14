@@ -133,6 +133,21 @@ pub struct SignaturePhoto {
 }
 
 impl SignaturePhoto {
+    /// Composite imported alpha on white before estimating paper. Transparent RGB is undefined;
+    /// treating it as ink would turn low-alpha scanner noise into a rectangular background.
+    pub(crate) fn from_signature(image: &SignatureImage, light_ink: bool) -> Self {
+        let [w, h] = image.size();
+        let mut rgb = RgbImage::new(w as u32, h as u32);
+        for (pixel, &[r, g, b, a]) in rgb.pixels_mut().zip(image.rgba().as_chunks::<4>().0) {
+            let composite = |c: u8| {
+                let value = ((u32::from(c) * u32::from(a) + 255 * (255 - u32::from(a)) + 127) / 255) as u8;
+                if light_ink { 255 - value } else { value }
+            };
+            *pixel = image::Rgb([composite(r), composite(g), composite(b)]);
+        }
+        Self { rgb: Arc::new(rgb) }
+    }
+
     /// Read at most the file limit plus one byte, even if the file grows while being read.
     pub fn read(reader: impl Read) -> Result<Self, ScanError> {
         let mut bytes = Vec::new();

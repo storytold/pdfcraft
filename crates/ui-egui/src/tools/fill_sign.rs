@@ -4,6 +4,7 @@
 //! can be moved, deleted and undone like any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
+use pdfcraft_engine::signature_image::{SignatureCleanup, SignatureInk};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
 use pdfcraft_render::{DocInfo, PageInfo};
@@ -85,6 +86,8 @@ pub struct SigDraft {
     pub image_mode: bool,
     /// The Image or Scan tab's result.
     pub image: Option<SignatureImage>,
+    /// Original import and reversible cleanup settings, separate from the Scan tab.
+    pub image_import: Option<ImageImportDraft>,
     /// The Scan tab: a photo of a signature on paper, cleaned into `image`.
     pub scan_mode: bool,
     pub scan: Option<ScanDraft>,
@@ -105,7 +108,14 @@ impl SigDraft {
         match saved {
             SavedSig::Drawn(strokes) => Self { strokes: strokes.clone(), drawing: true, initials, editing: true, ..Default::default() },
             SavedSig::Typed(text) => Self { text: text.clone(), initials, editing: true, ..Default::default() },
-            SavedSig::Image(image) => Self { image: Some(image.clone()), image_mode: true, initials, editing: true, ..Default::default() },
+            SavedSig::Image(image) => Self {
+                image: Some(image.clone()),
+                image_import: Some(ImageImportDraft::saved(image.clone())),
+                image_mode: true,
+                initials,
+                editing: true,
+                ..Default::default()
+            },
         }
     }
 
@@ -130,7 +140,7 @@ impl SigDraft {
             // A preview made while the frame or slider is still moving is not the result.
             self.scan.as_ref().is_some_and(|s| s.drag.is_none() && s.full && !s.scanning()) && self.image.is_some()
         } else if self.image_mode {
-            self.image.is_some()
+            self.image.is_some() && self.image_import.as_ref().is_none_or(|d| d.worker.running.is_none())
         } else if self.drawing {
             self.strokes.iter().any(|s| s.len() > 1)
         } else {
@@ -143,11 +153,122 @@ impl SigDraft {
         if self.scan_mode {
             self.ready().then(|| self.image.clone().map(SavedSig::Image)).flatten()
         } else if self.image_mode {
-            self.image.clone().map(SavedSig::Image)
+            self.ready().then(|| self.image.clone().map(SavedSig::Image)).flatten()
         } else if self.drawing {
             Some(SavedSig::Drawn(self.strokes.clone()))
         } else {
             Some(SavedSig::Typed(self.text.trim().to_string()))
+        }
+    }
+}
+
+/// Rebuild from the immutable original; never clean an already cleaned preview again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageImportDraft {
+    pub original: SignatureImage,
+    pub options: SignatureCleanup,
+    pub problem: Option<String>,
+    worker: ImageCleanupWorker,
+}
+
+type CleanupAnswer = Result<SignatureImage, String>;
+
+#[derive(Default)]
+struct ImageCleanupWorker {
+    running: Option<(SignatureCleanup, std::sync::mpsc::Receiver<CleanupAnswer>)>,
+}
+
+impl Clone for ImageCleanupWorker {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for ImageCleanupWorker {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for ImageCleanupWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageCleanupWorker").field("running", &self.running.is_some()).finish()
+    }
+}
+
+impl ImageImportDraft {
+    fn new(original: SignatureImage) -> Self {
+        Self { original, options: SignatureCleanup::default(), problem: None, worker: Default::default() }
+    }
+
+    fn saved(original: SignatureImage) -> Self {
+        Self { options: SignatureCleanup { remove_background: false, ..Default::default() }, ..Self::new(original) }
+    }
+
+    fn run(original: &SignatureImage, options: SignatureCleanup) -> CleanupAnswer {
+        pdfcraft_engine::guard(|| original.clean_background(options))?.map_err(|e| e.to_string())
+    }
+
+    fn apply(&mut self, image: &mut Option<SignatureImage>, result: CleanupAnswer) {
+        match result {
+            Ok(cleaned) => {
+                *image = Some(cleaned);
+                self.problem = None;
+            }
+            Err(e) => {
+                *image = None;
+                self.problem = Some(e);
+            }
+        }
+    }
+
+    fn rebuild(&mut self, image: &mut Option<SignatureImage>, ctx: Option<&egui::Context>) {
+        *image = None; // Apply cannot accept an older preview while the latest settings run.
+        self.problem = None;
+        if self.worker.running.is_some() {
+            return;
+        }
+        if cfg!(target_arch = "wasm32") || ctx.is_none() {
+            return self.apply(image, Self::run(&self.original, self.options));
+        }
+        let original = self.original.clone();
+        let options = self.options;
+        let ctx = ctx.cloned();
+        let (tx, rx) = std::sync::mpsc::channel();
+        if std::thread::Builder::new()
+            .name("signature-cleanup".into())
+            .spawn(move || {
+                let _ = tx.send(Self::run(&original, options));
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            })
+            .is_ok()
+        {
+            self.worker.running = Some((options, rx));
+        } else {
+            self.apply(image, Self::run(&self.original, self.options));
+        }
+    }
+
+    fn poll(&mut self, image: &mut Option<SignatureImage>, ctx: &egui::Context) {
+        let Some((options, rx)) = &self.worker.running else {
+            return;
+        };
+        let answer = match rx.try_recv() {
+            Ok(answer) => answer,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Signature cleanup stopped unexpectedly.".into()),
+        };
+        let options = *options;
+        self.worker.running = None;
+        if options == self.options {
+            self.apply(image, answer);
+        } else {
+            self.rebuild(image, Some(ctx));
         }
     }
 }
@@ -616,9 +737,12 @@ pub(crate) fn signature_pad(
             d.image_mode = false;
             d.scan_mode = false;
         }
-        if crate::widgets::pill_button(ui, tl!("Image"), d.image_mode).clicked() {
+        if crate::widgets::pill_button(ui, tl!("Image"), d.image_mode).clicked() && !d.image_mode {
             d.image_mode = true;
             d.scan_mode = false;
+            if let Some(import) = &mut d.image_import {
+                import.rebuild(&mut d.image, Some(ui.ctx()));
+            }
         }
         if crate::widgets::pill_button(ui, tl!("Scan"), d.scan_mode).clicked() && !d.scan_mode {
             d.scan_mode = true;
@@ -638,11 +762,52 @@ pub(crate) fn signature_pad(
     if d.image_mode {
         ui.label(egui::RichText::new(tl!("Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.")).color(t.text_muted));
         let browse = crate::widgets::ghost_button(ui, "folder", tl!("Browse…")).clicked();
+        if let Some(import) = &mut d.image_import {
+            import.poll(&mut d.image, ui.ctx());
+            let before = import.options;
+            ui.add(crate::widgets::checkbox(&mut import.options.remove_background, tl!("Remove background")));
+            ui.add_enabled_ui(import.options.remove_background, |ui| {
+                ui.horizontal(|ui| {
+                    let ink_label = ui.label(tl!("Ink"));
+                    egui::ComboBox::from_id_salt("signature-ink")
+                        .selected_text(match import.options.ink {
+                            SignatureInk::Auto => tl!("Auto"),
+                            SignatureInk::Dark => tl!("Dark ink"),
+                            SignatureInk::Light => tl!("Light ink"),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut import.options.ink, SignatureInk::Auto, tl!("Auto"));
+                            ui.selectable_value(&mut import.options.ink, SignatureInk::Dark, tl!("Dark ink"));
+                            ui.selectable_value(&mut import.options.ink, SignatureInk::Light, tl!("Light ink"));
+                        })
+                        .response
+                        .labelled_by(ink_label.id);
+                    let label = ui.label(tl!("Ink sensitivity"));
+                    ui.add(egui::Slider::new(&mut import.options.sensitivity, 0..=100)).labelled_by(label.id);
+                });
+            });
+            if import.options != before {
+                import.rebuild(&mut d.image, Some(ui.ctx()));
+            }
+        }
         let (rect, _) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
+        // A visible checkerboard makes residual opaque paper apparent before placement.
+        for y in 0..15 {
+            for x in 0..46 {
+                if (x + y) % 2 == 0 {
+                    let square = egui::Rect::from_min_size(rect.min + vec2(x as f32 * 10.0, y as f32 * 10.0), vec2(10.0, 10.0));
+                    ui.painter().rect_filled(square, CornerRadius::ZERO, t.divider);
+                }
+            }
+        }
         ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
         if let Some(image) = &d.image {
             image_preview(ui, rect.shrink(8.0), image, preview);
+        } else if let Some(problem) = d.image_import.as_ref().and_then(|d| d.problem.as_ref()) {
+            ui.put(rect.shrink(12.0), egui::Label::new(problem).wrap());
+        } else if d.image_import.as_ref().is_some_and(|d| d.worker.running.is_some()) {
+            ui.put(rect.shrink(12.0), egui::Spinner::new());
         }
         let (apply, cancel) = pad_buttons(ui, d);
         return (apply, cancel, browse);
@@ -740,6 +905,7 @@ fn pad_buttons(ui: &mut egui::Ui, d: &mut SigDraft) -> (bool, bool) {
             d.strokes.clear();
             d.text.clear();
             d.image = None;
+            d.image_import = None;
             if d.scan_mode {
                 d.scan = None;
             }
@@ -865,10 +1031,11 @@ impl crate::PdfCraftApp {
     }
 
     fn use_signature_image(&mut self, result: Result<SignatureImage, String>) {
-        let cleaned = result.and_then(|image| image.remove_white_background(245, 35).map_err(|e| e.to_string()));
-        match cleaned {
+        match result {
             Ok(image) => {
-                self.signature_draft.image = Some(image);
+                let mut import = ImageImportDraft::new(image);
+                import.rebuild(&mut self.signature_draft.image, self.ctx.as_ref());
+                self.signature_draft.image_import = Some(import);
                 self.toast = None;
             }
             Err(e) => self.notify_fmt("Couldn't import the signature image: {e}", &[("e", &e)]),
@@ -931,6 +1098,34 @@ mod tests {
         assert!(d.undo_stroke());
         assert!(d.strokes.is_empty());
         assert!(!d.undo_stroke());
+    }
+
+    #[test]
+    fn stale_image_cleanup_cannot_replace_the_latest_preview() {
+        use super::*;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(20, 10, image::Rgba([0, 0, 0, 128])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let source = SignatureImage::from_bytes(&bytes.into_inner()).unwrap();
+        let mut draft = ImageImportDraft::new(source.clone());
+        let old = draft.options;
+        let (tx, rx) = std::sync::mpsc::channel();
+        draft.worker.running = Some((old, rx));
+        draft.options.remove_background = false;
+        let mut result = Some(source.clone());
+        draft.rebuild(&mut result, Some(&egui::Context::default()));
+        assert!(result.is_none(), "Apply must wait for the newest settings");
+        tx.send(Err("an obsolete failure".into())).unwrap();
+        let ctx = egui::Context::default();
+        draft.poll(&mut result, &ctx);
+        for _ in 0..100 {
+            draft.poll(&mut result, &ctx);
+            if draft.worker.running.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(result, Some(source));
+        assert!(draft.problem.is_none());
     }
 
     #[test]
