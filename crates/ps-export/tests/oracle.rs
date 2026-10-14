@@ -6,8 +6,10 @@
 //! PDF by `pdfcraft_render` at the same effective dpi, and the mean per-channel delta of
 //! the two rasters must sit under [`TOLERANCE`]. gs runs as an observed oracle process,
 //! never linked; where it is not installed the raster fixtures skip with a message (the
-//! CUPS-test precedent). Transparency is asserted only as "completes + note" — flattening
-//! is Layer C, so a transparent page never enters the raster comparison.
+//! CUPS-test precedent). Transparency is flattened (Wave 2): a real-transparency group's
+//! region leaves as one opaque 300-dpi raster, and those pages enter the raster comparison
+//! too — under their own [`FLATTEN_TOLERANCE`], because gs resamples the region raster while
+//! `pdfcraft_raster` renders the source vectors.
 //!
 //! Fixture pages are 288×360 pt, a whole multiple of the 1.44 pt pixel at 50 dpi, so both
 //! rasters are exactly 200×250 px and the pixel grids coincide without rounding luck.
@@ -53,6 +55,27 @@ const TOLERANCE: f64 = 2.0;
 /// to fail loudly on a mis-emitted colour: a swapped CMYK pair was measured at ≈ 33, and a
 /// dropped fill or wrong component moves whole regions by tens of levels.
 const CMYK_TOLERANCE: f64 = 1.5;
+/// Mean per-channel delta, in 0–255 byte levels, below which a *flattened*
+/// transparency fixture's two rasters count as the same image (the Wave 2 gates:
+/// the `/ca 0.5` group page and the `/SMask` alpha-mask page). A flattened region
+/// is a photograph: the exporter replays the page at 300 dpi and emits it as one
+/// opaque raster, which gs *resamples* onto the oracle's 50-dpi grid (nearest by
+/// default — the emitted dictionaries carry no `/Interpolate`), while
+/// `pdfcraft_raster` renders the source vectors at that grid directly. The
+/// asymmetry is why this is its own bound and not [`TOLERANCE`]: the whole region
+/// is gs's resample of a raster, not its rasterization of geometry. On gs 10.08.0
+/// both fixtures measure a stable 0.000 across repeated runs — their geometry sits
+/// on the oracle's 1.44 pt pixel grid and their fills are flat, so a 6:1
+/// nearest-neighbour downsample of the 300-dpi raster reproduces vello's analytic
+/// coverage byte for byte (pixel-identical rasters, verified: zero differing
+/// pixels on the soft-mask fixture). The value keeps a small absolute margin over
+/// that measurement for a build that interpolates images differently (a level or
+/// two per channel on resampled edges) — while staying far below a wrong
+/// flattening: a mask recorded in the wrong device space (the bug this gate
+/// caught; the mask's ink landed unscaled in the renderer's corner and masked the
+/// whole draw out) measured ≈ 44.9, and a dropped mask or ignored opacity moves
+/// whole regions by tens of levels per channel.
+const FLATTEN_TOLERANCE: f64 = 1.5;
 
 // ----------------------------------------------------------------- fixture PDFs
 
@@ -495,16 +518,54 @@ fn shading_pdf() -> Vec<u8> {
     ])
 }
 
-/// A page with a `/BM /Multiply` ExtGState: transparency degrades to a note (Layer A
-/// policy), so this fixture never enters the raster comparison — it must export to
-/// completion with the note recorded.
+/// A page that sets `/ca 0.5` and then draws a form XObject carrying a real
+/// transparency group: the interpreter forwards the half opacity into the group
+/// push, so the exporter withholds the form's vector bytes and flattens the region
+/// into one opaque 300-dpi raster (Wave 2). The group's two half-opacity fills
+/// overlap, so the flattened raster must composite *stacked* alpha exactly as
+/// `page_render` composites it, and the black backdrop beneath the group proves the
+/// raster carries the content it covers (the replay log repaints the backdrop under
+/// the group's region). A blend mode outside any group keeps its note-only policy —
+/// the `lib.rs` unit gate covers that edge rule; this fixture is the flattening arm.
 fn transparency_pdf() -> Vec<u8> {
     assemble(vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> >> >>".to_vec(),
-        stream_obj("", b"q /GS1 gs 1 0 0 rg 20 40 160 60 re f Q\nq /GS1 gs 0 1 0 rg 20 240 160 60 re f Q"),
-        b"<< /Type /ExtGState /BM /Multiply >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"0 0 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 0 1 rg 43.2 172.8 201.6 158.4 re f\n1 0 0 rg 43.2 43.2 201.6 158.4 re f",
+        ),
+    ])
+}
+
+/// A page drawing a fill through an `/SMask` alpha mask: the ExtGState's `/G` form
+/// (itself a transparency group) paints opaque black over exactly half the draw's
+/// width — x 28.8–144 of the draw's 28.8–259.2 — so the masked blue fill shows its
+/// left half only. The mask is taken from the graphics state at the form entry and
+/// forwarded into the group push, so the region flattens into one raster whose
+/// replay draws the mask through hayro's own `draw_soft_mask` — the same pixels
+/// `page_render` composites. The yellow backdrop beneath makes the mask's effect
+/// (and its absence, yesterday's note-only behaviour) visible either way: with the
+/// mask dropped the blue would cover the whole rect and the raster comparison
+/// would fail by tens of levels.
+fn soft_mask_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 72 259.2 216 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        b"<< /Type /ExtGState /SMask << /S /Alpha /G 7 0 R >> >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 0 1 rg 28.8 100.8 230.4 158.4 re f",
+        ),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 g 28.8 0 115.2 360 re f",
+        ),
     ])
 }
 
@@ -1131,15 +1192,63 @@ fn tiling_page_matches_ghostscript() {
     assert_matches_oracle("tiling", &tiling_pdf(), TOLERANCE);
 }
 
-/// Transparency degrades to a note (Layer A policy; flattening is Layer C): the export
-/// completes, both draws emit and the degradation is recorded — never raster-compared.
+/// Transparency flattens (Wave 2): a real-transparency group's vector ops are
+/// withheld and replaced by exactly one opaque raster, the flattening is disclosed
+/// in the notes and in the file, and the program stays balanced. The raster half of
+/// the gate is [`transparency_page_matches_ghostscript`].
 #[test]
 fn transparency_page_exports_with_note() {
     let out = export(Arc::new(transparency_pdf()), &[0], PsFormat::Ps).expect("transparent content exports");
     let s = String::from_utf8_lossy(&out.bytes).into_owned();
-    assert_eq!(s.matches("fill\n").count(), 2, "both draws still emit: {s}");
-    assert!(out.warnings.iter().any(|n| n.text.contains("transparency ignored (blend Multiply)")), "the degradation is recorded: {:?}", out.warnings);
-    assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
+    assert!(s.contains("0 setgray\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster replaces the group: {s}");
+    assert!(!s.contains("0 0 1 setrgbcolor"), "the group's own vector bytes were withheld and discarded: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+}
+
+/// The flattened `/ca 0.5` group page against gs: the export is backdrop vectors
+/// plus one 300-dpi region raster, gs resamples that raster onto its 50-dpi grid,
+/// and PdfCraft renders the source's half-opacity stacked fills directly — the mean
+/// per-channel delta must sit under [`FLATTEN_TOLERANCE`] (see its doc for the
+/// resampling asymmetry). The stacked-alpha overlap of the group's two fills and
+/// the black backdrop beneath the region are what the comparison composites through.
+/// Observed delta 0.000 (grid-aligned flat regions; see [`FLATTEN_TOLERANCE`]).
+#[test]
+fn transparency_page_matches_ghostscript() {
+    assert_matches_oracle("transparency", &transparency_pdf(), FLATTEN_TOLERANCE);
+}
+
+/// The `/SMask` alpha-mask page: byte level, one raster carries the masked fill —
+/// the mask form's own black rect never leaks as vector ops, the backdrop's vectors
+/// survive, the disclosure travels, the program stays balanced — then the raster
+/// comparison under [`FLATTEN_TOLERANCE`]: gs's rendering of the masked source
+/// (its own soft-mask machinery) against the flattened region, whose replay drew
+/// the mask through hayro's `draw_soft_mask`. A dropped mask — yesterday's
+/// note-only behaviour — paints the blue across the whole rect and fails by tens
+/// of levels. Observed delta 0.000 (the hard mask edge sits on the pixel grid;
+/// see [`FLATTEN_TOLERANCE`], whose doc records the mis-placed-mask bug this
+/// gate caught at ≈ 44.9).
+///
+/// The page also carries `transparency ignored (soft mask)` beside the flattening
+/// disclosure: the interpreter restores the graphics state after the form and
+/// re-announces the mask it still holds, and the note fires at announcement time
+/// (Task 10's once-per-page policy) even though no draw ever used it outside the
+/// group — the raster carried it. The gate asserts the flattening note (what the
+/// export did), not the absence of the announcement note.
+#[test]
+fn soft_mask_page_matches_ghostscript() {
+    let pdf = soft_mask_pdf();
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the soft-mask page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("1 1 0 setrgbcolor\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster carries the masked draw: {s}");
+    assert!(!s.contains("0 0 1 setrgbcolor"), "the masked fill's vector bytes were withheld and discarded: {s}");
+    assert!(!s.contains("0 setgray"), "the mask form's black rect never leaks as vector ops: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+    assert_matches_oracle("soft-mask", &pdf, FLATTEN_TOLERANCE);
 }
 
 /// A degraded shading paints ink: the oversized-mesh fixture degrades to the flat

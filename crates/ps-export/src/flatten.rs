@@ -11,7 +11,10 @@
 //! every draw the PostScript device emits is recorded as a closure over cloned paths,
 //! paints and transforms (images are cloned by value — the vendor `Clone` patch — and
 //! glyph outlines come from the scene's own cache, [`ShadowScene::outline_of`], keyed
-//! like the rasterizer's). Each [`ShadowScene::flatten`] builds a fresh page-sized
+//! like the rasterizer's). Recorded soft masks re-root onto the scene's pixel space
+//! (`SoftMask::re_rooted`, the vendor patch): the interpreter captured them in device
+//! page points (y up), while the replay renders in 300-dpi pixels (y down). Each
+//! [`ShadowScene::flatten`] builds a fresh page-sized
 //! renderer at 300 dpi, paints the white page base first (the same base `page_render`
 //! starts from, and what makes the emitted raster opaque), replays the log through the
 //! balanced prefix, pops any wrappers still open in reverse, finishes, and crops the
@@ -185,9 +188,26 @@ impl<'a> ShadowScene<'a> {
 
     /// Record a `push_transparency_group` (page wrappers and real groups alike — the
     /// scene does not distinguish them; only `push_frame` opens a flattening frame).
-    /// The mask is cloned per replay. No geometry, so no matrix applies.
+    /// The mask re-roots onto the scene's pixel space inside the closure, once per
+    /// replay: the interpreter captured it in device page points (y up), while the
+    /// offscreen renderer draws in 300-dpi pixels (y down) — the same page matrix
+    /// every recorded path bakes in (`SoftMask::re_rooted`, the vendor patch).
     pub(crate) fn record_push_group(&mut self, opacity: f32, mask: Option<SoftMask<'a>>, blend: BlendMode) {
-        self.log.push(Entry { op: Box::new(move |r| r.push_transparency_group(opacity, mask.clone(), blend)), balance: Balance::PushGroup });
+        let matrix = self.matrix;
+        self.log.push(Entry {
+            op: Box::new(move |r| r.push_transparency_group(opacity, mask.clone().map(|m| m.re_rooted(matrix)), blend)),
+            balance: Balance::PushGroup,
+        });
+    }
+
+    /// Record a `set_soft_mask` (the interpreter re-announces the graphics state's
+    /// mask before every draw). The mask re-roots onto the scene's pixel space at
+    /// replay time exactly as [`ShadowScene::record_push_group`]'s does, so a draw
+    /// masked outside any group composites through the same mask a later flatten of
+    /// the region replays.
+    pub(crate) fn record_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
+        let matrix = self.matrix;
+        self.log.push(Entry { op: Box::new(move |r| r.set_soft_mask(mask.clone().map(|m| m.re_rooted(matrix)))), balance: Balance::Draw });
     }
 
     /// Record the `pop_transparency_group` closing the innermost group still open.
