@@ -10834,6 +10834,7 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
 }
 
 // ---- CAdES envelopes (.pdf.p7m, issue #1449) ----------------------------------------------------
+// ---- CAdES envelopes (.pdf.p7m, issue #1449; detached .p7s pairs, issue #2129) -------------------
 
 /// A fresh root with the named CAdES fixtures from pdfcraft-sign (OpenSSL-made;
 /// tests/data/README.md there) copied in, beside the usual `a.pdf`/`b.pdf`.
@@ -10957,6 +10958,60 @@ fn detached_envelope_error_is_actionable() {
     // A .p7s opened from disk looks for its document beside it (#2129): the error names the
     // file it expected, so an agent can provide it or point at where it is.
     assert!(m.contains("signs cades-detached, which was not found beside it"), "says which file is missing: {m}");
+    // Nothing opened.
+    assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
+}
+
+#[test]
+fn detached_pair_opens_verified_via_tools() {
+    let dir = envelope_dir("detached-pair", &["openssl-signed.pdf.p7s", "openssl-signed.pdf"]);
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }));
+    assert_eq!(opened["envelope"]["detached"], true, "opened from the sibling, not from inside: {opened}");
+    assert_eq!(opened["envelope"]["digest_ok"], true, "the signature is verified over the sibling's bytes: {opened}");
+    assert_eq!(opened["envelope"]["signer"], "PdfCraft Test", "{opened}");
+    assert_eq!(opened["envelope"]["signers"], 1, "{opened}");
+    assert_eq!(opened["editable"], false);
+    let doc = opened["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["repairs"], json!([]), "the sibling PDF opens as it is: {info}");
+    assert_eq!(info["document"]["envelope"]["detached"], true, "doc_info reports the pair too: {info}");
+}
+
+#[test]
+fn doc_extract_original_refuses_detached() {
+    let dir = envelope_dir("extract-detached", &["openssl-signed.pdf.p7s", "openssl-signed.pdf"]);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }))["doc"].as_u64().unwrap();
+    let e = err(&mut a, "doc_extract_original", json!({ "doc": doc }));
+    assert!(matches!(&e, ToolError::Failed(m) if m.contains("a detached signature has nothing to extract; open the PDF itself to edit it")), "{e}");
+    // The refusal opened nothing: only the pair is in the session.
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"].as_array().unwrap().len(), 1, "{list}");
+}
+
+#[test]
+fn detached_tampered_sibling_reports_mismatch() {
+    let dir = envelope_dir("detached-tampered", &["openssl-signed.pdf.p7s"]);
+    // Flip the version digit after the %PDF- magic, the way the engine test does: still an
+    // openable document, but no longer the bytes that were signed.
+    let mut tampered = openssl_signed_pdf();
+    tampered[7] = b'8';
+    std::fs::write(dir.join("openssl-signed.pdf"), &tampered).unwrap();
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }));
+    assert_eq!(opened["envelope"]["detached"], true, "{opened}");
+    assert_eq!(opened["envelope"]["digest_ok"], false, "the flipped byte is caught: {opened}");
+    assert_eq!(opened["editable"], false, "a mismatching pair is still read-only: {opened}");
+}
+
+#[test]
+fn detached_without_sibling_is_actionable() {
+    let dir = envelope_dir("detached-alone", &["openssl-signed.pdf.p7s"]);
+    let mut a = auto(&dir);
+    let e = err(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }));
+    // The pair's naming: the document is the signature's name without the .p7s suffix.
+    assert!(matches!(&e, ToolError::Failed(m) if m == "openssl-signed.pdf.p7s signs openssl-signed.pdf, which was not found beside it"), "{e}");
     // Nothing opened.
     assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
 }
