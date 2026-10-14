@@ -6,12 +6,13 @@
 //! PDF by `pdfcraft_render` at the same effective dpi, and the mean per-channel delta of
 //! the two rasters must sit under [`TOLERANCE`]. gs runs as an observed oracle process,
 //! never linked; where it is not installed the raster fixtures skip with a message (the
-//! CUPS-test precedent). Transparency is flattened (Wave 2; blend modes join the
-//! comparison in Wave 3): a real-transparency group's region — sub-unit opacity, a
-//! soft mask, or a non-Normal blend mode — leaves as one opaque 300-dpi raster (the
-//! blend composites inside the scene through vello), and those pages enter the
-//! raster comparison too — under their own [`FLATTEN_TOLERANCE`], because gs
-//! resamples the region raster while `pdfcraft_raster` renders the source vectors.
+//! CUPS-test precedent). Transparency is flattened (Wave 2; blend modes and the
+//! interaction gates — nested groups, a tiling pattern, an image and a text run
+//! inside one group — join in Wave 3): a real-transparency group's region — sub-unit
+//! opacity, a soft mask, or a non-Normal blend mode — leaves as one opaque 300-dpi
+//! raster (the blend composites inside the scene through vello), and those pages
+//! enter the raster comparison too — under their own [`FLATTEN_TOLERANCE`], because
+//! gs resamples the region raster while `pdfcraft_raster` renders the source vectors.
 //!
 //! Fixture pages are 288×360 pt, a whole multiple of the 1.44 pt pixel at 50 dpi, so both
 //! rasters are exactly 200×250 px and the pixel grids coincide without rounding luck.
@@ -59,26 +60,33 @@ const TOLERANCE: f64 = 2.0;
 const CMYK_TOLERANCE: f64 = 1.5;
 /// Mean per-channel delta, in 0–255 byte levels, below which a *flattened*
 /// transparency fixture's two rasters count as the same image (the Wave 2 gates:
-/// the `/ca 0.5` group page and the `/SMask` alpha-mask page; the Wave 3 gate: the
-/// `/BM /Multiply` group page). A flattened region
+/// the `/ca 0.5` group page and the `/SMask` alpha-mask page; the Wave 3 gates:
+/// the `/BM /Multiply` group page, the nested-groups page, the tiling-in-group
+/// page and the image+glyph-in-group page). A flattened region
 /// is a photograph: the exporter replays the page at 300 dpi and emits it as one
 /// opaque raster, which gs *resamples* onto the oracle's 50-dpi grid (nearest by
 /// default — the emitted dictionaries carry no `/Interpolate`), while
 /// `pdfcraft_raster` renders the source vectors at that grid directly. The
 /// asymmetry is why this is its own bound and not [`TOLERANCE`]: the whole region
 /// is gs's resample of a raster, not its rasterization of geometry. On gs 10.08.0
-/// all three fixtures measure a stable 0.000 across repeated runs — their geometry sits
+/// every fixture measures a stable 0.000 across repeated runs — their geometry sits
 /// on the oracle's 1.44 pt pixel grid and their fills are flat, so a 6:1
 /// nearest-neighbour downsample of the 300-dpi raster reproduces vello's analytic
 /// coverage byte for byte (pixel-identical rasters, verified: zero differing
-/// pixels on the soft-mask fixture). The value keeps a small absolute margin over
-/// that measurement for a build that interpolates images differently (a level or
-/// two per channel on resampled edges) — while staying far below a wrong
-/// flattening: a mask recorded in the wrong device space (the bug this gate
+/// pixels on the soft-mask fixture; the tiling-in-group page's tiles step on the
+/// same grid, 36 black of every 60 raster pixels). The value keeps a small absolute
+/// margin over that measurement for a build that interpolates images differently
+/// (a level or two per channel on resampled edges) — while staying far below a
+/// wrong flattening: a mask recorded in the wrong device space (the bug this gate
 /// caught; the mask's ink landed unscaled in the renderer's corner and masked the
 /// whole draw out) measured ≈ 44.9, a blend dropped from the replay's group layer
-/// (the non-vacuity probe for the blend gate) measured ≈ 21.4, and a dropped mask
-/// or ignored opacity moves whole regions by tens of levels per channel.
+/// (the non-vacuity probe for the blend gate) measured ≈ 21.4, a tiling pattern
+/// recorded without the 300-dpi re-root (the bug the tiling-in-group gate caught:
+/// tiles at one pixel per *point*, the wrong size and phase) measured ≈ 11.9, a
+/// nested region cropped to the innermost frame only (the probe for the
+/// nested-groups gate: the inner group's protruding fill missing) ≈ 12.0, and a
+/// dropped mask, opacity or tile set moves whole regions by tens of levels per
+/// channel.
 const FLATTEN_TOLERANCE: f64 = 1.5;
 
 // ----------------------------------------------------------------- fixture PDFs
@@ -598,6 +606,104 @@ fn blend_pdf() -> Vec<u8> {
             "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
             b"0 0 1 rg 43.2 43.2 201.6 273.6 re f",
         ),
+    ])
+}
+
+/// A page drawing **nested** real-transparency groups: a backdrop band, then a form
+/// (`/ca 0.5` at entry) whose own content paints a blue fill and then draws a second
+/// form under `/ca 0.9` whose content paints a red fill that **protrudes** beyond the
+/// blue box (over the white page on the right, x 230.4–273.6). The inner group's pop
+/// flattens its own region and its raster lands in the *outer* group's withheld
+/// buffer; the outer's pop re-flattens the **union** — `extend` widens every open
+/// frame, so the outer's frame covers the inner's protruding red — and discards the
+/// withheld bytes (inner raster included): the final stream carries exactly the
+/// outer's one raster, placed over the union region. The black band beneath the blue
+/// fill proves the raster repaints the backdrop under the region, and the white page
+/// beneath the protrusion makes a region that missed it fail loudly — a raster
+/// cropped to the blue box alone would leave the 0.45-opacity red missing over white
+/// (a whole-band, tens-of-levels failure; see the gate's doc for the probe that
+/// measured it).
+fn nested_groups_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"0 0 0 rg 28.8 57.6 201.6 244.8 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /ExtGState << /GS2 7 0 R >> /XObject << /Fm2 8 0 R >> >>",
+            b"0 0 1 rg 43.2 72 172.8 216 re f\nq /GS2 gs /Fm2 Do Q",
+        ),
+        b"<< /Type /ExtGState /ca 0.9 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"1 0 0 rg 187.2 43.2 86.4 288 re f",
+        ),
+    ])
+}
+
+/// A page painting a W1 tiling pattern inside an opacity group — and, on the same
+/// page, the combination Task 12 deferred: **entry-state `/ca 0.5` with an in-form
+/// `/BM`**. The form (real via the entry `/ca 0.5`) first paints a red fill, then —
+/// under `/GS2` (`/BM /Multiply`, announced *inside* the open real group, where the
+/// edge rule correctly notes nothing) — fills the same rect through the Task 4
+/// tiling pattern (one blue square per 14.4 pt cell). The whole form's vector bytes
+/// (both fills *and* the `makepattern setpattern` use site) are withheld and
+/// discarded; the flattened raster carries the multiply: the blue tiles multiply
+/// against the red under-fill to black squares inside the isolated group, then the
+/// group composites at half opacity over the yellow backdrop. A dropped blend would
+/// paint blue squares instead — a tens-of-levels failure. The pattern resource
+/// itself is interned into the prolog at draw time and may still ride there
+/// unreferenced — harmless legal PostScript, disclosed by the gate.
+fn tiling_inside_group_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /ExtGState << /GS2 7 0 R >> /Pattern << /P1 8 0 R >> >>",
+            b"1 0 0 rg 28.8 43.2 230.4 273.6 re f\nq /GS2 gs /Pattern cs /P1 scn 28.8 43.2 230.4 273.6 re f Q",
+        ),
+        b"<< /Type /ExtGState /BM /Multiply >>".to_vec(),
+        stream_obj(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 14.4 14.4] /XStep 14.4 /YStep 14.4 /Resources << >>",
+            b"0 0 1 rg 2.88 2.88 8.64 8.64 re f",
+        ),
+    ])
+}
+
+/// A page drawing a JPEG image and an embedded-TrueType text run inside one opacity
+/// group: the form (real via `/ca 0.5` at entry) draws the `image_pdf` JPEG 1:1 at
+/// the oracle grid (`/Im1`, DCTDecode, XObject — recorded by value, no hole), then a
+/// green `(AB)` text run through the synthetic TrueType (`ttf_program`, a Type 42
+/// `xyshow` run — the font dict rides the page resources so the device's table knows
+/// it and the run batches instead of vectorizing; the same object is on the form's
+/// resources for the interpreter's resolution). The text run stays pending across
+/// the image draw and flushes at the form's `/BBox` clip pop — still inside the
+/// group — into the **withheld** buffer, where the raster replaces it: if the flush
+/// landed outside (the bug class this gate pins), the `xyshow` and the JPEG's DCT
+/// invocation would leak into the final program and the byte checks catch it. The
+/// glyph boxes (x 21.6–43.2 and 64.8–86.4, y 100.8–129.6) sit partly over the image
+/// (x 28.8–172.8, y 72–252), so the raster must composite draw order — glyphs over
+/// image — exactly as `pdfcraft_raster` composites the source.
+fn image_and_glyph_inside_group_pdf() -> Vec<u8> {
+    let jpeg = jpeg_gradient(100, 125);
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> /Font << /F1 7 0 R >> >> >>".to_vec(),
+        stream_obj("", b"0 0 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /XObject << /Im1 8 0 R >> /Font << /F1 7 0 R >> >>",
+            b"q 144 0 0 180 28.8 72 cm /Im1 Do Q\n0 1 0 rg\nBT /F1 72 Tf 14.4 100.8 Td (AB) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /PdfCraftTT /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 9 0 R >>".to_vec(),
+        stream_obj("/Type /XObject /Subtype /Image /Width 100 /Height 125 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", &jpeg),
+        b"<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 10 0 R >>".to_vec(),
+        stream_obj("", &ttf_program()),
     ])
 }
 
@@ -1307,6 +1413,141 @@ fn blend_mode_page_matches_ghostscript() {
     assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
     assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
     assert_matches_oracle("blend", &pdf, FLATTEN_TOLERANCE);
+}
+
+/// Nested real-transparency groups (W3): byte level, the final stream carries
+/// **exactly one** raster — the inner group's pop flattens its own region and its
+/// raster lands in the *outer* group's withheld buffer, which the outer's pop
+/// discards on success, so the outer's union raster is the only survivor — placed
+/// over the **union** region (`extend` widens every open frame, so the outer's
+/// frame covers the inner group's protruding red fill): the placement concat and
+/// the raster's pixel dimensions pin it (x 42.22–274.58, y 42.22–332.18 pt — the
+/// union of both fills' reach, grown by the flattener's slack). The backdrop's
+/// vector ops survive, neither group's colour ops leak, the flattening is
+/// disclosed once, nothing declined (no `transparency ignored` note), and the
+/// program stays balanced. Then the raster comparison under
+/// [`FLATTEN_TOLERANCE`]: gs resamples the flattened union (whose replay
+/// composited the 0.5-opacity blue fill and the nested 0.9-opacity red fill
+/// through vello's stacked group layers) onto its 50-dpi grid while
+/// `pdfcraft_raster` composites the source's nested groups directly. Observed
+/// delta 0.000 (grid-aligned flat regions; see [`FLATTEN_TOLERANCE`]).
+///
+/// Non-vacuity, both halves measured: a probe widening only the innermost frame
+/// (`extend` touching just `frames.last_mut()`) crops the outer's region to the
+/// blue box — the placement and width assertions fail and the raster comparison
+/// measures **12.043** (the protruding red missing over the white page); and a
+/// probe spending the flatten budget on the inner group alone (the outer forced
+/// to decline) flushes the withheld bytes back — the blue fill *and the inner
+/// group's raster* leak into the program, and the leak assertions fail, proving
+/// the inner raster really was produced into the withheld buffer.
+#[test]
+fn nested_groups_page_matches_ghostscript() {
+    let pdf = nested_groups_pdf();
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the nested-group page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("0 setgray\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster survives - the outer pop discarded the inner's: {s}");
+    assert!(!s.contains("0 0 1 setrgbcolor"), "the outer group's blue fill never leaks as vector ops: {s}");
+    assert!(!s.contains("1 0 0 setrgbcolor"), "the inner group's red fill never leaks as vector ops: {s}");
+    // The union coverage: the raster is placed over the union of both fills' reach
+    // (each grown by the flattener's 0.5-unit + 2-px slack), and its pixel grid is
+    // the snapped union - 970x1210 px at 300 dpi over x 42.22-274.58, y 42.22-332.18 pt.
+    assert!(s.contains("[0.24 0 0 -0.24 42.22 332.18] concat\n"), "the raster is placed over the union region: {s}");
+    assert!(s.contains("/Width 970 /Height 1210"), "the raster covers the union's snapped pixel grid: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(out.warnings.iter().all(|n| !n.text.starts_with("transparency ignored")), "nothing declined: {:?}", out.warnings);
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+    assert_matches_oracle("nested-groups", &pdf, FLATTEN_TOLERANCE);
+}
+
+/// A tiling pattern inside an opacity group, with the Task 12 deferred combination
+/// on the same page (entry-state `/ca 0.5` + in-form `/BM /Multiply`): byte level,
+/// one raster carries the whole group — the red under-fill, the Multiply and the
+/// tiles alike; the `makepattern setpattern` use site never leaks (those bytes were
+/// withheld with the draw and discarded), the yellow backdrop's vector ops survive,
+/// no blend note fires (the Multiply was announced inside the open real group —
+/// the edge rule's in-group side; the raster carries it), and the program stays
+/// balanced. The pattern resource itself still rides the prolog unreferenced:
+/// interned at draw time into the emitter's table, which the withhold cannot
+/// unwind — harmless legal PostScript (the font prolog does the same for the
+/// glyph gate below), disclosed here so nobody mistakes it for a leak. Then the
+/// raster comparison under [`FLATTEN_TOLERANCE`]: the flattened raster's replay
+/// multiplied the blue tiles against the red under-fill inside the isolated group
+/// (black squares) and composited the group at half opacity over the yellow
+/// backdrop, exactly what `pdfcraft_raster` composites. Observed delta 0.000 —
+/// the tiles step on the oracle's own grid (36 black of every 60 raster pixels;
+/// see [`FLATTEN_TOLERANCE`]).
+///
+/// **This gate caught a real bug on its first run, at a measured 11.870**: the
+/// flattener recorded the pattern paint verbatim, but the renderer's tiling
+/// algebra takes the pattern's matrix (and its cell pixel density) to live in the
+/// *device* space of the draws beside it — under `page_render` the interpreter's
+/// root transform carries the render scale, while this crate's export drive runs
+/// in page points, so the replay tiled its cell at one pixel per *point*: the
+/// wrong size, phase and sharpness (a moiré of 14-px tiles where 60-px ones
+/// belong). The fix re-roots the pattern onto the scene's pixel space at record
+/// time (`Pattern::re_rooted`, the `SoftMask::re_rooted` counterpart;
+/// `flatten::re_rooted_paint`). A dropped-tile probe (skipping the pattern
+/// draw's scene recording) fails at a measured **9.339** — the red under-fill
+/// shows where the black squares belong.
+#[test]
+fn tiling_inside_group_matches_ghostscript() {
+    let pdf = tiling_inside_group_pdf();
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the tiling-in-group page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("1 1 0 setrgbcolor\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster carries the group's draws: {s}");
+    assert!(!s.contains("makepattern"), "the tiling use site was withheld and discarded: {s}");
+    assert!(!s.contains("1 0 0 setrgbcolor"), "the red under-fill never leaks as vector ops: {s}");
+    assert!(s.contains("%%BeginResource: pattern "), "the pattern resource may still ride the prolog (harmless interning): {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(out.warnings.iter().all(|n| !n.text.contains("blend")), "no blend note inside the flattened region: {:?}", out.warnings);
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+    assert_matches_oracle("tiling-group", &pdf, FLATTEN_TOLERANCE);
+}
+
+/// A JPEG image and an embedded-TrueType text run inside one opacity group: byte
+/// level, one raster carries both — the text run stays pending across the image
+/// draw and flushes (at the form's BBox clip pop, still inside the group) into the
+/// **withheld** buffer, where the raster replaces it, so neither the flushed
+/// `xyshow` nor the JPEG's DCT passthrough invocation leaks into the final
+/// program. The black backdrop's vector ops survive, the disclosure travels, the
+/// program stays balanced, and the raster's placement pins the union (the glyph
+/// boxes' reach joins the image's: the region starts at x 13.884 pt, left of the
+/// image's 27.6, and its 668-px width covers out past the image's right edge).
+/// The Type 42 font dictionary still rides the prolog unreferenced — the same
+/// harmless interning as the tiling gate's pattern resource. Then the raster
+/// comparison under [`FLATTEN_TOLERANCE`]: the raster must carry the JPEG
+/// (decoded by the same hayro machinery both sides use) *under* the green glyph
+/// boxes (draw order), at the same half-opacity the source's group applies.
+/// Observed delta 0.000 (grid-aligned flat regions and an exact 6:1 image
+/// resample; see [`FLATTEN_TOLERANCE`]).
+///
+/// Non-vacuity, both halves: a probe forcing the run's flush outside the withheld
+/// buffer (deferring it past the parent restore) leaks the `xyshow` and the DCT
+/// invocation into the program and the byte assertions fail; a probe skipping the
+/// glyph's scene recording drops the boxes from the raster's region — the
+/// placement/width assertions fail while the raster comparison measures only
+/// **0.446** (the glyph boxes are small), which is exactly why the byte-level
+/// union assertion is the gate's discriminator, not the delta alone.
+#[test]
+fn image_and_glyph_inside_group_matches_ghostscript() {
+    let pdf = image_and_glyph_inside_group_pdf();
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the image+glyph page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("0 setgray\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster carries the group's draws: {s}");
+    assert!(!s.contains("xyshow"), "the flushed text run never leaks outside the withheld buffer: {s}");
+    assert!(!s.contains("/DCTDecode filter"), "the JPEG's own image invocation never leaks: {s}");
+    assert!(s.contains("/FontType 42"), "the Type 42 dictionary may still ride the prolog (harmless interning): {s}");
+    assert!(s.contains("[0.24 0 0 -0.24 13.884 253.2] concat\n"), "the raster is placed over the image-glyph union: {s}");
+    assert!(s.contains("/Width 668 /Height 760"), "the raster covers the union's snapped pixel grid: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+    assert_matches_oracle("img-glyph-group", &pdf, FLATTEN_TOLERANCE);
 }
 
 /// A degraded shading paints ink: the oversized-mesh fixture degrades to the flat
