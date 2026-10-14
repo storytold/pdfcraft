@@ -1,7 +1,8 @@
 //! `cargo xtask fuzz`: a mutation fuzzer that runs on stable Rust (M1.10).
 //!
 //! Seeds are small hostile inputs (synthetic PDFs, the CAdES signature envelope
-//! `crates/sign/tests/data/cades-envelope.pdf.p7m`, plus pdf.js corpus files under 64 KB when
+//! `crates/sign/tests/data/cades-envelope.pdf.p7m`, the detached CAdES signature
+//! `crates/sign/tests/data/openssl-signed.pdf.p7s`, plus pdf.js corpus files under 64 KB when
 //! `corpus/` is present). Each iteration mutates a seed, writes it to `fuzz-out/work/`, and runs
 //! `pdfcraft-cli check-one <file> --edit` in a child process with a timeout. That opens,
 //! inspects, renders and extracts text from every page (the bootstrap renderer), then runs our
@@ -199,6 +200,12 @@ fn seeds() -> Vec<(String, Vec<u8>)> {
     // Skipped when the fixture is absent.
     if let Ok(b) = std::fs::read(root().join("crates/sign/tests/data/cades-envelope.pdf.p7m")) {
         out.push(("cades-envelope.pdf.p7m".into(), b));
+    }
+    // A detached CAdES signature (issue #2129): DER bytes a user can hand the CLI beside their
+    // signed PDF. Mutated or whole, they go through open, parse, render and the edit round trip
+    // without a crash. Skipped when the fixture is absent.
+    if let Ok(b) = std::fs::read(root().join("crates/sign/tests/data/openssl-signed.pdf.p7s")) {
+        out.push(("openssl-signed.pdf.p7s".into(), b));
     }
     // Seeds the corpus sweep already knows to hang only rediscover that hang.
     let known_hangs: std::collections::HashSet<String> = std::fs::read_to_string(root().join("xtask/baselines/pdfjs.json"))
