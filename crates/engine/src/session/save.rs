@@ -233,11 +233,40 @@ impl Session {
         &self.trust.certs
     }
 
-    /// Replace the trusted certificates, revalidate every open document's signatures,
-    /// and rebuild its display copy and renderer to match (working file untouched,
-    /// generation/dirty unchanged: trust alone is not an edit).
+    /// Change the trust store, revalidate every open document's signatures, and rebuild its
+    /// display copy and renderer to match (working file untouched, generation/dirty unchanged:
+    /// trust alone is not an edit). This happens once, however many changes `change` makes:
+    /// revalidating runs chain building and signature verification for every signature, against
+    /// every certificate of every trust list.
+    pub fn update_trust(&mut self, change: impl FnOnce(&mut TrustStore)) {
+        let mut trust = (*self.trust).clone();
+        change(&mut trust);
+        self.trust = Arc::new(trust);
+        self.revalidate_signatures();
+    }
+
+    /// Replace the trusted certificates (see [`Session::update_trust`]).
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
-        self.trust = Arc::new(TrustStore { certs });
+        self.update_trust(|trust| trust.certs = certs);
+    }
+
+    /// The trust lists the user loaded (e.g. the EU Trusted Lists' qualified CAs), none by default.
+    /// They are not part of [`Session::trusted_certificates`].
+    pub fn trust_lists(&self) -> &[pdfcraft_sign::trust::TrustList] {
+        &self.trust.lists
+    }
+
+    /// Load `list` (replacing a list of the same name), or with `None` remove the list called
+    /// `name`, and revalidate every open document.
+    pub fn set_trust_list(&mut self, name: &str, list: Option<pdfcraft_sign::trust::TrustList>) {
+        self.update_trust(|trust| trust.set_list(name, list));
+    }
+
+    fn revalidate_signatures(&mut self) {
+        #[cfg(test)]
+        {
+            self.revalidations += 1;
+        }
         for doc in &mut self.docs {
             doc.trust = self.trust.clone();
             let Some(editor) = doc.editor.as_mut() else { continue };

@@ -6357,11 +6357,11 @@ title = "EU Trusted Lists"
 area = "H"
 tier = "P2"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["sign_trust"]
+evidence = ["crates/sign/src/trust.rs::a_list_reads_concatenated_der_and_rejects_garbage", "crates/sign/tests/chain.rs::a_trust_list_is_off_by_default_and_named_when_it_vouches", "crates/sign/tests/chain.rs::a_list_vouches_for_a_signer_whose_file_carries_only_its_leaf_and_never_for_a_time_stamp_authority", "crates/automation/tests/automation.rs::a_trust_list_is_off_until_loaded_through_sign_trust"]
+notes = "A trust list is a file of CA certificates (DER one after the other, or PEM) that the user loads with sign_trust eu_trusted_list: nothing is embedded, it is off until loaded and kept apart from the user's own certificates, a damaged file is refused, and the details name the list that vouched. Chains through it still need CA certificates all the way (basicConstraints, keyCertSign, path length, validity) and the signer's own certificate must allow signing. A list vouches for signers, never for a time-stamp authority. Missing: building the EU file from the Trusted Lists (planned as an xtask), qualified time-stamp services (TSA/QTST), withdrawn services at the signing time, XML signature checks of the lists, a UI switch and keeping the choice between sessions. Adobe's AATL is not used (Adobe-authored data outside the closed list in AGENTS.md section 1.1 needs the owner's approval)"
 
 [[feature]]
 id = "sign.os-trust"
