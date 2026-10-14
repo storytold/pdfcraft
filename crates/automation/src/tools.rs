@@ -1467,6 +1467,10 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "image", "action"],
             )),
+        t("doc_extract_original", "Extract the original PDF", "Take the PDF out of a CAdES signature envelope (.p7m): it opens as a new, editable, unsaved document. With out, the PDF is also written there, atomically. The envelope itself is never changed. Refuses plain documents.")
+            .destructive()
+            .cmd("file.extract_original")
+            .with(schema(json!({ "doc": doc(), "out": { "type": "string", "description": "Also write the PDF to this file (relative to --root when set)." } }), &["doc"])),
         t("image_save", "Save image as", "Write one of a page's raster images (number from page_images; forms are refused) to path: JPEG images unchanged, others as PNG (the extension is added when missing).")
             .destructive()
             .cmd("edit.edit_text")

@@ -64,6 +64,18 @@ impl Automation {
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
+            "doc_extract_original" => {
+                let id = self.doc(&a)?.id;
+                let copy = self.session.extract_original(id).map_err(failed)?;
+                let mut out = summary(self.session.get(copy).ok_or_else(|| failed("the document vanished"))?);
+                if let Some(p) = a.opt_str("out")? {
+                    let bytes = self.session.get(copy).ok_or_else(|| failed("the document vanished"))?.bytes.clone();
+                    let path = self.resolve(p, true)?;
+                    write_atomic(&path, &bytes)?;
+                    out["written"] = json!(path.to_string_lossy().into_owned());
+                }
+                out
+            }
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
