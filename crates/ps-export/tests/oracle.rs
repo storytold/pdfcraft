@@ -746,6 +746,115 @@ fn shading_inside_group_pdf() -> Vec<u8> {
     ])
 }
 
+// **Hostile-geometry fixtures (Task 14, the never-crash proofs).** The four
+// fixtures below are deliberately hostile — off-the-scale coordinates, a
+// non-finite `/BBox`, a self-referencing tiling cell, more real groups than
+// the flatten budget — and none of them is raster-compared: their whole point
+// is *graceful decline or disclosed flattening*, so the gates assert
+// completion, balance and the note set, never pixel parity.
+
+/// A real-transparency group (`/ca 0.5` at the form's entry) whose only draw
+/// sits at ~1e7 pt, entirely outside the 288×360 page: the frame's box is huge
+/// but finite, so no cap misfires — the region ∩ page is empty and the
+/// flattener's empty-region contract applies (Task 8: the group painted
+/// nothing on the page, so the withheld vector is discarded and the
+/// flattening still discloses itself, rather than today's decline note the
+/// task brief predicted — pinned as the implementation behaves; see the gate
+/// `huge_group_bbox_flattens_to_an_empty_region`).
+fn huge_group_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 0 1 rg\n10000000 10000000 100 100 re f",
+        ),
+    ])
+}
+
+/// 129 real-transparency groups on one page (`/GS1 gs` + the same group form
+/// drawn 129 times): the per-page flatten budget ([`MAX_FLATTENS_PER_PAGE`],
+/// 128) spends one flatten per pop, so the first 128 groups each leave as one
+/// opaque raster and the 129th **declines** — its withheld vector bytes flush
+/// back into the program with today's note. The never-silent proof: some
+/// rasters, some vector, both notes, one balanced program.
+fn groups_budget_pdf() -> Vec<u8> {
+    let mut content = Vec::new();
+    for _ in 0..129 {
+        content.extend_from_slice(b"q /GS1 gs /Fm1 Do Q\n");
+    }
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", &content),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 0 1 rg 20 20 30 30 re f",
+        ),
+    ])
+}
+
+/// A real-transparency group whose form carries a `/BBox` entry beyond the f32
+/// range (1e40 digits, the `pattern.rs::hostile_tiling_geometry_degrades`
+/// magnitude): the interpreter parses it to infinity and pushes the form's
+/// clip with an infinite x1, which is the one route non-finite geometry
+/// reaches the device through `export()` — content-stream operands that
+/// overflow the parse are dropped by the interpreter before any draw (observed
+/// in this task's probes), so the clip is what exercises the emitter's
+/// non-finite repair. The draw itself is an ordinary on-page fill, so the
+/// region is finite and the group flattens — the replay pushes the infinite
+/// clip through vello under the panic guard, and the emitted clip path
+/// coordinates are repaired (`0`, with the fidelity note).
+fn non_finite_group_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 10000000000000000000000000000000000000000 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 0 1 rg 20 20 100 100 re f",
+        ),
+    ])
+}
+
+/// The nested-budget interaction (Task 14): a tiling cell that names **itself**
+/// in its own resources (the `pattern.rs::hostile_tiling_geometry_degrades`
+/// self-reference shape), painted *inside* a real-transparency group. The
+/// vendor's paint budget stops the recursion — `interpret` returns `None` at
+/// the bound and every level above it collects a usable cell that fills
+/// through the nested pattern — so the exporter interns a chain of pattern
+/// resources in the prolog and notes the deepest decline ("cell undecodable")
+/// while the fill declines to its flat stand-in *inside the withheld group
+/// buffer*. The group's pop then flattens the region: the replay's renderer
+/// meets the same budget refusal (the same machinery `page_render` uses, so
+/// the raster composites exactly what the reference renders), the withheld
+/// bytes — flat-gray fill included — are discarded, and the note survives
+/// because fidelity notes accumulate globally, never in a withheld buffer.
+fn self_referencing_cell_group_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /Pattern << /P1 7 0 R >> >>",
+            b"/Pattern cs /P1 scn 28.8 43.2 230.4 273.6 re f",
+        ),
+        stream_obj(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 20 /YStep 20 /Resources << /Pattern << /P1 7 0 R >> >>",
+            b"/Pattern cs /P1 scn 1 1 8 8 re f",
+        ),
+    ])
+}
+
 /// A page of `/Separation` spot colours: three colorants over each alternate device
 /// space (CMYK, RGB, Gray), each tint transform an exponential function, plus a
 /// calculator transform whose outputs exceed its `/Range` (1.5 and -0.2 clamp to 1 and
@@ -1619,6 +1728,150 @@ fn shading_inside_group_matches_ghostscript() {
     assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
     assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
     assert_matches_oracle("shading-group", &pdf, FLATTEN_TOLERANCE);
+}
+
+/// A huge but finite group box (Task 14's hostile-geometry gate): the group's
+/// only draw sits at ~1e7 pt, entirely off the page, so the frame's box is
+/// enormous yet finite — no cap misfires, no panic, and the region ∩ page is
+/// empty. What that empty region does is Task 8's reviewed contract, pinned
+/// here end-to-end: the flattener returns an empty raster (not a decline), the
+/// withheld vector bytes are discarded — they painted nothing on the page, and
+/// the bbox over-approximates the draw's reach, so nothing visible is lost —
+/// and the flattening still discloses itself. The task brief predicted a
+/// decline with today's "transparency ignored (transparency group)" note; the
+/// implementation's empty-region arm is the deliberate behaviour (the unit
+/// side is `flatten.rs::empty_region_yields_empty_raster`), so this gate pins
+/// it as it is: completes, balanced, zero rasters, no group ink leaked, the
+/// flattening note, no decline note.
+#[test]
+fn huge_group_bbox_flattens_to_an_empty_region() {
+    let out = export(Arc::new(huge_group_pdf()), &[0], PsFormat::Ps).expect("the huge-bbox group page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("1 1 0 setrgbcolor\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 0, "an empty region emits no raster: {s}");
+    assert!(!s.contains("0 0 1 setrgbcolor"), "the off-page draw's vector bytes were withheld and discarded: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the empty flattening is disclosed: {:?}", out.warnings);
+    assert!(
+        out.warnings.iter().all(|n| n.text != "transparency ignored (transparency group)"),
+        "an empty region is not a decline: {:?}",
+        out.warnings
+    );
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+}
+
+/// The per-page flatten budget, end-to-end (Task 14): 129 real groups on one
+/// page spend the budget of 128 — the first 128 pops each flatten (their
+/// vector bytes replaced by one opaque raster each) and the 129th declines,
+/// flushing its withheld vector back into the program with today's note.
+/// Never silent, never lost: exactly 128 rasters, exactly one surviving group
+/// fill (the 129th's), both disclosure notes exactly once each (the
+/// once-per-page policy), and a balanced program. The scene-level side
+/// (`flatten.rs::flattens_cap_declines`) proves the budget check itself
+/// through real recorded group entries.
+#[test]
+fn flattens_cap_declines() {
+    let out = export(Arc::new(groups_budget_pdf()), &[0], PsFormat::Ps).expect("the 129-group page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert_eq!(s.matches(">> image").count(), 128, "the first 128 groups each leave one raster: {s}");
+    assert_eq!(s.matches("0 0 1 setrgbcolor").count(), 1, "the 129th group's vector fill flushes back, and only it: {s}");
+    assert_eq!(
+        out.warnings.iter().filter(|n| n.text == "transparency flattened to raster").count(),
+        1,
+        "the flattening is disclosed once per page: {:?}",
+        out.warnings
+    );
+    assert_eq!(
+        out.warnings.iter().filter(|n| n.text == "transparency ignored (transparency group)").count(),
+        1,
+        "the budget decline is disclosed once per page: {:?}",
+        out.warnings
+    );
+    assert!(s.contains("%%PdfCraftNote: transparency ignored (transparency group)\n"), "the decline note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+}
+
+/// The program with raster payloads stripped: an ASCII85 stream can contain
+/// any printable triple by chance (a `nan`/`inf` inside image data is bytes,
+/// not an operand), so token scans over operators must not read it. Payloads
+/// run from each `>> image`/`>> imagemask` line to the `~>` terminator (the
+/// `images.rs` dictionary-form emission).
+fn without_image_payloads(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_payload = false;
+    for line in s.lines() {
+        if in_payload {
+            in_payload = !line.trim_end().ends_with("~>");
+            continue;
+        }
+        in_payload = line.contains(">> image");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Non-finite geometry inside a group (Task 14): the form's `/BBox` carries an
+/// f32-overflowing entry, so the interpreter pushes the form's clip with an
+/// infinite x1 — the one route non-finite coordinates reach the emitter
+/// through `export()` (overflowing content operands are dropped by the
+/// interpreter before any draw; observed in this task's probes). The clip's
+/// path coordinates are repaired to `0` with the fidelity note, the group's
+/// own draw is an ordinary on-page fill, and the group flattens: the replay
+/// pushes the infinite clip through vello under the panic guard and produces
+/// the raster. No panic, no non-finite operand in the program, checked math
+/// intact, export completes balanced — the never-crash contract under
+/// deep-hostile input. (The repair-note count is the interpreter's clip-push
+/// count — observed 4, a vendor internal — so the gate pins presence, not the
+/// exact figure.)
+#[test]
+fn non_finite_group_geometry() {
+    let out = export(Arc::new(non_finite_group_pdf()), &[0], PsFormat::Ps).expect("the non-finite-geometry page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(
+        out.warnings.iter().filter(|n| n.text == "non-finite coordinate replaced with 0").count() >= 1,
+        "the infinite clip coordinate is repaired with a note: {:?}",
+        out.warnings
+    );
+    let lowered = without_image_payloads(&s).to_lowercase();
+    assert!(!lowered.contains("nan") && !lowered.contains("inf"), "no non-finite operand in the program: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "the finite draw inside the hostile clip still flattens: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(out.warnings.iter().all(|n| n.text != "transparency ignored (transparency group)"), "nothing declined: {:?}", out.warnings);
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+}
+
+/// The nested-budget interaction (Task 14): a tiling cell that names itself,
+/// painted inside a real-transparency group. The vendor's paint budget stops
+/// the recursion — the deepest `interpret` returns `None` ("cell undecodable")
+/// and the levels above it collect cells that fill through the nested pattern,
+/// so a chain of pattern resources rides the prolog unreferenced (the same
+/// harmless interning the tiling-in-group gate discloses). The group's pop
+/// then flattens: one raster carries the region — the replay's renderer meets
+/// the same budget refusal the reference renderer meets, so the composite is
+/// faithful by construction — and the flat-gray stand-in drawn inside the
+/// withheld buffer is discarded with it, while the fidelity notes (recorded
+/// globally, never in a withheld buffer) disclose both the cell decline and
+/// the flattening. The decline path composes: a nested refusal never sinks
+/// the group, never panics, never loses output, and the program stays
+/// balanced with no pattern use site leaking into the page body.
+#[test]
+fn self_referencing_tiling_cell_inside_group_composes() {
+    let out = export(Arc::new(self_referencing_cell_group_pdf()), &[0], PsFormat::Ps).expect("the self-referencing-cell page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("1 1 0 setrgbcolor\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "the group flattens - the nested refusal does not sink it: {s}");
+    assert_eq!(
+        out.warnings.iter().filter(|n| n.text == "tiling pattern approximated (cell undecodable)").count(),
+        1,
+        "the budget-bound decline is disclosed once per page: {:?}",
+        out.warnings
+    );
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    let (_, page_body) = s.split_once("%%Page: 1 1").expect("the program has a page body");
+    assert!(!page_body.contains("makepattern"), "no pattern use site leaks into the page body: {s}");
+    assert!(s.contains("%%BeginResource: pattern "), "the collected cell chain may ride the prolog (harmless interning): {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
 }
 
 /// A degraded shading paints ink: the oversized-mesh fixture degrades to the flat
