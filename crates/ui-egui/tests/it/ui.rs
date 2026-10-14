@@ -749,6 +749,9 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
     // Content starts after the three lights (the last one ends 62 pt in) with a gap.
     let home = h.get_by_label("Home").rect();
     assert!(home.left() >= 62.0 + 4.0, "Home {home:?} clears the traffic lights");
+    // Home is the first tab, as tall as the document's.
+    let home = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Home").rect();
+    assert_eq!(home.bottom(), h.get_by_label("band.pdf").rect().bottom(), "Home {home:?} sits on the mode bar like the tabs");
 }
 
 #[test]
@@ -1773,6 +1776,55 @@ fn combine_tab_uses_tab_interaction_without_changing_close_or_document_state() {
     close_named_tab(&mut h, "Combine files");
     assert!(h.query_by_role_and_label(Role::Tab, "Combine files").is_none());
     assert_eq!(h.state().views.iter().map(|v| v.id).collect::<Vec<_>>(), document_ids);
+}
+
+/// Home is the first tab, pinned: selected exactly while Home shows, activated like the document
+/// tabs (click, Enter), and never moved, closed or scrolled.
+#[test]
+fn home_is_a_pinned_tab_selected_only_while_home_shows() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let selected = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).accesskit_node().is_selected();
+    assert_eq!(selected(&h, "Home"), Some(false), "a document is showing");
+    h.get_by_role_and_label(Role::Tab, "Home").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, None);
+    assert_eq!(selected(&h, "Home"), Some(true));
+    assert_eq!(selected(&h, "last.pdf"), Some(false));
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    assert_eq!(selected(&h, "Home"), Some(false), "Combine files is showing");
+    assert_eq!(selected(&h, "Combine files"), Some(true));
+    // The keyboard reaches it as it reaches the document tabs.
+    h.get_by_role_and_label(Role::Tab, "Home").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().combine_showing());
+    assert_eq!(selected(&h, "Home"), Some(true));
+    // Dragged onto a document tab, it moves and closes nothing.
+    let to = h.get_by_role_and_label(Role::Tab, "middle.pdf").rect().center();
+    drag_named_tab(&mut h, "Home", to, true);
+    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), ids);
+}
+
+/// Home looks like the tab it is: as tall as the document tabs (so, active, it sits on the mode
+/// bar as they do), narrow, and the same gap from the first tab as the tabs keep between them.
+#[test]
+fn the_home_tab_has_the_document_tabs_height_and_gap() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let rect = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+    for state in ["inactive", "active"] {
+        let (home, first, middle) = (rect(&h, "Home"), rect(&h, "first.pdf"), rect(&h, "middle.pdf"));
+        assert_eq!((home.top(), home.bottom()), (first.top(), first.bottom()), "{state} Home {home:?} spans the strip like {first:?}");
+        assert!(home.width() <= 40.0, "{state} Home {home:?} stays narrow");
+        let (gap, between) = (first.left() - home.right(), middle.left() - first.right());
+        assert!((gap - between).abs() < 0.5, "{state}: Home's gap {gap} matches the tabs' {between}");
+        h.get_by_role_and_label(Role::Tab, "Home").click();
+        h.run_steps(3);
+    }
 }
 
 /// Presses the named tab, drags it to `to` in a few steps and, unless `release` is false, lets go.

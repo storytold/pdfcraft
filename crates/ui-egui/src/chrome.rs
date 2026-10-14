@@ -68,7 +68,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
-                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
+                if home_tab(ui, &t, tab_h, app.active.is_none() && !app.combine_showing()).clicked() {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
@@ -429,6 +429,41 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
     }
 }
 
+/// A tab's top corners; the bottom stays square so an active tab runs into the mode bar.
+const TAB_CORNERS: CornerRadius = CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 };
+/// Home's tab: its icon alone, with room for the rounded corners either side.
+const HOME_TAB_WIDTH: f32 = 36.0;
+
+/// The fill every tab shares: the mode bar's colour when active, a hover and press wash otherwise.
+fn tab_background(ui: &egui::Ui, t: &Tokens, rect: Rect, resp: &egui::Response, active: bool) {
+    let press = theme::Press::track(ui, resp);
+    let bg = if active {
+        press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
+    } else {
+        press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
+    };
+    if bg.a() > 0 {
+        ui.painter().rect_filled(rect, TAB_CORNERS, bg);
+    }
+}
+
+/// Home, pinned as the first tab: drawn as the document tabs are, so while it shows it is the
+/// active tab sitting on the mode bar, never closed, dragged or scrolled away.
+fn home_tab(ui: &mut egui::Ui, t: &Tokens, height: f32, active: bool) -> egui::Response {
+    // Full strip height, as the document tabs.
+    let height = ui.available_height().max(height);
+    let (rect, _) = ui.allocate_exact_size(vec2(HOME_TAB_WIDTH, height), Sense::hover());
+    let resp = craft_ui::tabs::Tab::new(egui::Id::unique("home-tab"), tl!("Home"), active).focus_stroke(Stroke::new(1.0, t.accent)).show_at(
+        ui,
+        rect,
+        |ui, resp| {
+            tab_background(ui, t, rect, resp, active);
+            icons::paint(ui, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), "house", 15.0, if active { t.accent } else { t.text_muted });
+        },
+    );
+    theme::hand(resp).on_hover_text(tl!("Home"))
+}
+
 /// A tab's chrome around its name: the icon on the left, the close button on the right.
 const TAB_CHROME: f32 = 64.0;
 /// The narrowest a tab shrinks to before the strip scrolls: room for most of a name.
@@ -542,15 +577,7 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
     let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
     let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
     let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
-        let press = theme::Press::track(ui, resp);
-        let bg = if active {
-            press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
-        } else {
-            press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
-        };
-        if bg.a() > 0 {
-            ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
-        }
+        tab_background(ui, t, rect, resp, active);
         icons::paint(
             ui,
             Rect::from_min_size(rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
