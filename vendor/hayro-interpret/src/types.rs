@@ -4,7 +4,7 @@ use crate::pattern::Pattern;
 use crate::util::hash128;
 use crate::x_object::ImageXObject;
 use hayro_syntax::object::Stream;
-use kurbo::{BezPath, Cap, Join};
+use kurbo::{Affine, BezPath, Cap, Join};
 use smallvec::{SmallVec, smallvec};
 
 /// A clip path.
@@ -32,6 +32,20 @@ pub struct StencilImage<'a, 'b> {
 }
 
 impl<'a, 'b> StencilImage<'a, 'b> {
+    /// PdfCraft patch (ps-export): a copy of the stencil whose embedded paint's
+    /// pattern (a stencil is painted in the current colour, and that can be a
+    /// pattern colorspace) is re-rooted onto another device space
+    /// (`Pattern::re_rooted`) — the recorded counterpart of the re-rooting every
+    /// other recorded paint gets. Colour paints pass through unchanged.
+    pub fn re_rooted_paint(&self, pre: Affine) -> Self {
+        let mut re_rooted = self.clone();
+        re_rooted.paint = match &self.paint {
+            Paint::Pattern(p) => Paint::Pattern(Box::new(p.re_rooted(pre))),
+            other => other.clone(),
+        };
+        re_rooted
+    }
+
     /// Perform some operation with the stencil data of the image.
     ///
     /// The second argument allows you to give the image decoder a hint for

@@ -8,7 +8,8 @@
 //! never linked; where it is not installed the raster fixtures skip with a message (the
 //! CUPS-test precedent). Transparency is flattened (Wave 2; blend modes and the
 //! interaction gates — nested groups, a tiling pattern, an image and a text run
-//! inside one group — join in Wave 3): a real-transparency group's region — sub-unit
+//! inside one group, and a shading pattern with its `/BBox` clip — join in Wave
+//! 3): a real-transparency group's region — sub-unit
 //! opacity, a soft mask, or a non-Normal blend mode — leaves as one opaque 300-dpi
 //! raster (the blend composites inside the scene through vello), and those pages
 //! enter the raster comparison too — under their own [`FLATTEN_TOLERANCE`], because
@@ -62,24 +63,33 @@ const CMYK_TOLERANCE: f64 = 1.5;
 /// transparency fixture's two rasters count as the same image (the Wave 2 gates:
 /// the `/ca 0.5` group page and the `/SMask` alpha-mask page; the Wave 3 gates:
 /// the `/BM /Multiply` group page, the nested-groups page, the tiling-in-group
-/// page and the image+glyph-in-group page). A flattened region
+/// page, the image+glyph-in-group page and the shading-in-group page). A flattened
+/// region
 /// is a photograph: the exporter replays the page at 300 dpi and emits it as one
 /// opaque raster, which gs *resamples* onto the oracle's 50-dpi grid (nearest by
 /// default — the emitted dictionaries carry no `/Interpolate`), while
 /// `pdfcraft_raster` renders the source vectors at that grid directly. The
 /// asymmetry is why this is its own bound and not [`TOLERANCE`]: the whole region
 /// is gs's resample of a raster, not its rasterization of geometry. On gs 10.08.0
-/// every fixture measures a stable 0.000 across repeated runs — their geometry sits
-/// on the oracle's 1.44 pt pixel grid and their fills are flat, so a 6:1
-/// nearest-neighbour downsample of the 300-dpi raster reproduces vello's analytic
-/// coverage byte for byte (pixel-identical rasters, verified: zero differing
-/// pixels on the soft-mask fixture; the tiling-in-group page's tiles step on the
-/// same grid, 36 black of every 60 raster pixels). The value keeps a small absolute
-/// margin over that measurement for a build that interpolates images differently
-/// (a level or two per channel on resampled edges) — while staying far below a
-/// wrong flattening: a mask recorded in the wrong device space (the bug this gate
+/// every flat-region fixture measures a stable 0.000 across repeated runs — their
+/// geometry sits on the oracle's 1.44 pt pixel grid and their fills are flat, so a
+/// 6:1 nearest-neighbour downsample of the 300-dpi raster reproduces vello's
+/// analytic coverage byte for byte (pixel-identical rasters, verified: zero
+/// differing pixels on the soft-mask fixture; the tiling-in-group page's tiles
+/// step on the same grid, 36 black of every 60 raster pixels) — and the one
+/// smooth-gradient fixture (shading-in-group) measures 0.024: a gradient
+/// resampled 6:1 nearest against a direct 50-dpi evaluation differs by the
+/// gradient's slope over a sub-pixel, not byte-for-byte like the flat regions.
+/// The value keeps a small absolute
+/// margin over those measurements for a build that interpolates images
+/// differently (a level or two per channel on resampled edges) — while staying
+/// far below a wrong
+/// flattening: a mask recorded in the wrong device space (the bug this gate
 /// caught; the mask's ink landed unscaled in the renderer's corner and masked the
-/// whole draw out) measured ≈ 44.9, a blend dropped from the replay's group layer
+/// whole draw out) measured ≈ 44.9, a shading clip rebased through the new full
+/// matrix instead of `pre` alone (the review bug the shading gate caught: the
+/// captured matrix applied twice, the clip box doubled and shifted) ≈ 37.2, a
+/// blend dropped from the replay's group layer
 /// (the non-vacuity probe for the blend gate) measured ≈ 21.4, a tiling pattern
 /// recorded without the 300-dpi re-root (the bug the tiling-in-group gate caught:
 /// tiles at one pixel per *point*, the wrong size and phase) measured ≈ 11.9, a
@@ -704,6 +714,35 @@ fn image_and_glyph_inside_group_pdf() -> Vec<u8> {
         stream_obj("/Type /XObject /Subtype /Image /Width 100 /Height 125 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", &jpeg),
         b"<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 10 0 R >>".to_vec(),
         stream_obj("", &ttf_program()),
+    ])
+}
+
+/// A page painting a shading **pattern** inside an opacity group — the end-to-end
+/// proof of the review fix for `Pattern::re_rooted`'s shading arm: the pattern
+/// carries **both** a non-identity `/Matrix` (doubling, translating to 28.8, 43.2)
+/// and a shading `/BBox` (which is what becomes the paint's clip — without either
+/// the gate would pass vacuously). The gradient runs red→blue along shading x 0–72
+/// → page x 28.8–172.8; the `/BBox` clip [0 0 72 129.6] cuts it to x 28.8–172.8,
+/// y 43.2–302.4, while the fill rect runs to x 259.2 and y 316.8 — so the right
+/// band and the top strip of the fill must show the yellow backdrop, exactly where
+/// a double-transformed clip (the pre-fix `re_rooted` re-derived the stored clip
+/// through the new full matrix, applying the captured matrix twice: the clip box
+/// became x 86.4–374.4, y 129.6–647) would let the extended blue tail paint on.
+/// The form's group (real via the entry `/ca 0.5`) withholds the `shfill` route
+/// and the flatten raster carries the gradient — at 300-dpi density through the
+/// re-rooted matrix, clipped through the pre-only-rebased clip.
+fn shading_inside_group_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 14.4 259.2 331.2 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << /Pattern << /P1 7 0 R >> >>",
+            b"/Pattern cs /P1 scn 28.8 43.2 230.4 273.6 re f",
+        ),
+        b"<< /PatternType 2 /Matrix [2 0 0 2 28.8 43.2] /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 72 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /BBox [0 0 72 129.6] /Extend [true true] >> >>".to_vec(),
     ])
 }
 
@@ -1548,6 +1587,38 @@ fn image_and_glyph_inside_group_matches_ghostscript() {
     assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
     assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
     assert_matches_oracle("img-glyph-group", &pdf, FLATTEN_TOLERANCE);
+}
+
+/// A shading pattern inside an opacity group (W3 review gate): byte level, one
+/// raster carries the gradient — the `shfill` route's operators were withheld
+/// with the draw and discarded, the yellow backdrop's vector ops survive, the
+/// disclosure travels, and the program stays balanced — then the raster
+/// comparison under [`FLATTEN_TOLERANCE`]: the flattened raster replays the
+/// shading through the re-rooted pattern matrix (300-dpi density) with its
+/// `/BBox` clip rebased through the page matrix **alone**, so the gradient
+/// spans x 28.8–172.8 and the clip's right edge and top strip show the yellow
+/// backdrop exactly as `pdfcraft_raster` composites the source. The
+/// pre-fix double-transformed clip (the captured matrix applied twice) moved
+/// the clip box to x 86.4–374.4, y 129.6–647: the gradient's left band
+/// vanished and its extended blue tail painted past the true edge — the unit
+/// gate `device.rs::shading_pattern_clip_flatten_keeps_the_bbox_placed` pins
+/// those pixels; this gate is the end-to-end gs proof. Observed delta **0.024**
+/// (a smooth gradient resampled 6:1 nearest against a direct 50-dpi evaluation
+/// differs by the gradient's slope over a sub-pixel — the flat fixtures'
+/// byte-identity does not apply here; see [`FLATTEN_TOLERANCE`], whose doc also
+/// records the pre-fix failure this gate measured at ≈ 37.2).
+#[test]
+fn shading_inside_group_matches_ghostscript() {
+    let pdf = shading_inside_group_pdf();
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the shading-in-group page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("1 1 0 setrgbcolor\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster carries the shaded draw: {s}");
+    assert!(!s.contains("shfill"), "the shading route's operators were withheld and discarded: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+    assert_matches_oracle("shading-group", &pdf, FLATTEN_TOLERANCE);
 }
 
 /// A degraded shading paints ink: the oversized-mesh fixture degrades to the flat

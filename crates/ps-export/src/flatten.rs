@@ -15,7 +15,9 @@
 //! (`SoftMask::re_rooted`, the vendor patch): the interpreter captured them in device
 //! page points (y up), while the replay renders in 300-dpi pixels (y down). Recorded
 //! pattern paints re-root the same way (`Pattern::re_rooted` through
-//! [`re_rooted_paint`]): the renderer's pattern algebra takes the pattern's matrix to
+//! [`re_rooted_paint`], and a stencil's embedded paint through the vendor's
+//! `StencilImage::re_rooted_paint` at the image record site): the renderer's
+//! pattern algebra takes the pattern's matrix to
 //! live in the device space of the draws beside it — true under `page_render`, whose
 //! interpreter root transform carries the render scale, but not for a pattern captured
 //! by this crate's page-points drive (the tiling-inside-group oracle gate caught the
