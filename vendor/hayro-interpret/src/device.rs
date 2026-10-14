@@ -41,6 +41,18 @@ pub trait Device<'a> {
     );
     /// Draw an image.
     fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine);
+    /// PdfCraft patch (ps-export): the [`Device::draw_image`] entry for an image whose
+    /// stream data provably lives as long as the device's `'a` — every XObject image:
+    /// the object, the page resources and the device all borrow the same document. A
+    /// device that retains draws for later replay (the PostScript exporter's shadow
+    /// scene) can only capture an image by value through this entry; `draw_image`
+    /// remains for images whose bytes are transient (an inline image borrows the
+    /// content window it was parsed from) and must not be retained by such devices.
+    /// The default forwards to `draw_image` (`Image<'a, 'a>` coerces), so immediate-mode
+    /// devices are unaffected.
+    fn draw_retained_image(&mut self, image: Image<'a, 'a>, transform: Affine) {
+        self.draw_image(image, transform);
+    }
     /// Pop the last clip path from the clip stack.
     fn pop_clip_path(&mut self);
     /// Pop the last transparency group from the blend stack.
