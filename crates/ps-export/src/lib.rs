@@ -156,9 +156,12 @@ pub fn export_with_config(
         // that transform — axis-aligned, PDF rotations being multiples of 90°.
         let crop = page.intersected_crop_box().to_kurbo();
         let bbox = transformed_bbox(crop, initial);
+        // The page's device-space box: the shadow scene's page (its regions clip to
+        // it) and the 300-dpi page matrix both come from it.
+        let page_rect = Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]);
         let mut state = Context::new(
             initial,
-            Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]),
+            page_rect,
             &cache,
             page.xref(),
             // The same font-resolver wiring the raster renderer's `RenderConfig`
@@ -171,7 +174,7 @@ pub fn export_with_config(
             // interpreter's `Context` and reset with this fresh per-page context.
             interpreter_settings(config),
         );
-        let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts));
+        let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts), page_rect);
         // Seed the page's emitter with the document's colorspace and pattern
         // tables (the same carry the fonts take): resource names stay stable
         // and repeats stay single across pages.
@@ -690,6 +693,38 @@ mod tests {
         assert!(s.contains("fill\n"), "content after the form drew: {s}");
         assert!(s.ends_with("%%EOF\n"), "document closed: {s}");
         assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balance: {s}");
+    }
+
+    /// A one-page PDF drawing a backdrop, then a form XObject with a
+    /// `/Group << /S /Transparency >>` under an ExtGState with `/ca 0.5`: the
+    /// interpreter pushes a real-transparency group around the form's content, so
+    /// the flattening runs on the real drive path.
+    fn transparency_group_pdf() -> Vec<u8> {
+        assemble(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+            stream_obj("", b"1 0 0 rg 10 250 180 40 re f\nq /GS1 gs /Fm1 Do Q"),
+            b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+            stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 200 300] /Group << /S /Transparency >>", b"0 0 1 rg 20 20 100 50 re f"),
+        ])
+    }
+
+    /// The transparency flattening is format-independent: the opacity fixture exports
+    /// as PS and as EPS with the same single raster image (the group's vector ops
+    /// withheld and replaced) and the same disclosure note.
+    #[test]
+    fn eps_and_ps_share_flattening() {
+        let bytes = std::sync::Arc::new(transparency_group_pdf());
+        for format in [PsFormat::Ps, PsFormat::Eps] {
+            let out = export(std::sync::Arc::clone(&bytes), &[0], format).expect("the fixture exports");
+            let s = text(&out);
+            assert_eq!(s.matches(">> image").count(), 1, "exactly one raster image, in both flavours ({format:?}): {s}");
+            assert!(s.contains("/DeviceRGB setcolorspace\n"), "the opaque-raster pipeline ({format:?}): {s}");
+            assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "disclosed ({format:?}): {:?}", out.warnings);
+            assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "the note travels in the file ({format:?}): {s}");
+            assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balance ({format:?}): {s}");
+        }
     }
 
     /// An empty page selection yields the header and trailer only — still complete,

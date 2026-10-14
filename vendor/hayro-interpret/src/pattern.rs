@@ -379,6 +379,15 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
         }
     }
 
+    // PdfCraft patch (ps-export): forward the retained-image entry like `draw_image`
+    // (only stencil masks are allowed here; the paint is substituted).
+    fn draw_retained_image(&mut self, image: Image<'a, 'a>, transform: Affine) {
+        if let Image::Stencil(mut s) = image {
+            s.paint = self.paint.clone();
+            self.inner.draw_retained_image(Image::Stencil(s), transform);
+        }
+    }
+
     fn pop_clip_path(&mut self) {
         self.inner.pop_clip_path();
     }

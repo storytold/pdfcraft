@@ -87,9 +87,6 @@ const DRAIN: &str = "PdfCraftImgSrc flushfile";
 /// exceeds [`MAX_PIXELS`] (note "image skipped (exceeds 100 megapixel cap)") or when
 /// the buffer is not exactly `width × height × 3` bytes long (note
 /// "image skipped (undecodable)", the module's wording for malformed image data).
-// Task 10 (`device.rs` owning a `ShadowScene`) is the only production caller this
-// Wave has — until it lands, only the tests below drive this. Drop the attribute then.
-#[allow(dead_code)]
 pub(crate) fn opaque_raster(emit: &mut Emitter, width: u32, height: u32, rgb: &[u8]) {
     let pixels = u64::from(width).checked_mul(u64::from(height));
     if !pixels.is_some_and(|p| p <= MAX_PIXELS) {

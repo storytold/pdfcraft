@@ -24,11 +24,15 @@
 //! replay poisons the scene — that flatten and every later one declines, so the caller
 //! falls back to today's vector output plus its disclosure note, and the process never
 //! crashes twice on the same page.
-
-// Everything in this module is the consumption surface of the Wave-2/3 flattener:
-// until Task 10 reworks `device.rs` to own a `ShadowScene` per page, only this
-// module's tests drive it. Drop this attribute when the device wires the scene in.
-#![allow(dead_code)]
+//!
+//! One draw cannot be recorded at all: an image whose stream bytes are transient
+//! (the interpreter hands inline images over with a borrow of the content window it
+//! parsed them from, a lifetime no `'a`-bounded closure can capture). Such a draw
+//! records as a *hole* — its device-space box, no closure — and any flatten whose
+//! region intersects a hole declines: a raster either replays every draw it crops or
+//! is not produced at all, never with a gap where an image was. XObject images (every
+//! stream that borrows the document) record by value through the vendor's
+//! `draw_retained_image` entry and are not holes.
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -148,6 +152,9 @@ pub(crate) struct ShadowScene<'a> {
     /// Glyph outlines by the rasterizer's own key (`OutlineGlyph::identifier`'s
     /// cache key, font + glyph id) — the `Renderer::outline_cache` precedent.
     outline_cache: HashMap<u128, Rc<BezPath>>,
+    /// Boxes of the draws that could not be recorded (transient-stream images): a
+    /// flatten whose region intersects one declines (see [`ShadowScene::record_image_hole`]).
+    holes: Vec<Rect>,
 }
 
 impl<'a> ShadowScene<'a> {
@@ -163,6 +170,7 @@ impl<'a> ShadowScene<'a> {
             flattens: 0,
             poisoned: false,
             outline_cache: HashMap::new(),
+            holes: Vec::new(),
         }
     }
 
@@ -200,6 +208,17 @@ impl<'a> ShadowScene<'a> {
     /// Record the `pop_clip_path` closing the innermost clip still open.
     pub(crate) fn record_pop_clip(&mut self) {
         self.log.push(Entry { op: Box::new(|r| r.pop_clip_path()), balance: Balance::PopClip });
+    }
+
+    /// Record one image draw the replay log cannot carry: the interpreter hands such
+    /// an image over as `Image<'a, '_>` whose stream bytes borrow something shorter
+    /// than `'a` (an inline image borrows the content window it was parsed from), and
+    /// no `'a`-bounded closure can capture it. `bbox` is the draw's device-space box
+    /// (the unit rect × its transform); [`ShadowScene::flatten`] declines whenever a
+    /// region intersects a hole, so the raster either replays every draw it crops or
+    /// is not produced at all — never a gap where an image was.
+    pub(crate) fn record_image_hole(&mut self, bbox: Rect) {
+        self.holes.push(bbox);
     }
 
     /// A real-transparency group opens: starts at an empty box, widened by
@@ -247,7 +266,8 @@ impl<'a> ShadowScene<'a> {
     /// An empty region is a `width: 0, height: 0` raster (the caller emits nothing).
     /// `None` means *declined*: the scene is poisoned, the page or region exceeds
     /// [`MAX_FLATTEN_AREA_PX`] or vello's u16 pixmap sides, [`MAX_FLATTENS_PER_PAGE`]
-    /// is spent, no frame was ever popped, or the replay panicked (which poisons the
+    /// is spent, no frame was ever popped, the region touches a recorded image hole
+    /// ([`ShadowScene::record_image_hole`]), or the replay panicked (which poisons the
     /// scene) — the caller flushes the withheld vector and keeps today's note.
     pub(crate) fn flatten(&mut self) -> Option<FlattenRaster> {
         if self.poisoned || self.flattens >= MAX_FLATTENS_PER_PAGE {
@@ -273,7 +293,6 @@ impl<'a> ShadowScene<'a> {
         }
 
         let frame = self.last_frame?;
-        self.flattens = self.flattens.saturating_add(1);
 
         // The region: the frame's box clipped to the page, snapped out to whole
         // pixels through the page matrix. A non-finite box declines.
@@ -281,6 +300,15 @@ impl<'a> ShadowScene<'a> {
             return None;
         }
         let region = frame.bbox.intersect(self.page);
+        // A region that touches a hole (an image draw the log cannot carry) declines
+        // before any budget is spent: its replay could not paint that image, so the
+        // raster would show a gap — the caller falls back to the vector instead.
+        // Touching edges count (inclusive): the region snaps out to whole pixels,
+        // so a draw exactly on its boundary reaches the snapped pixel.
+        if self.holes.iter().any(|hole| boxes_touch(*hole, region)) {
+            return None;
+        }
+        self.flattens = self.flattens.saturating_add(1);
         let px = self.matrix.transform_rect_bbox(region);
         let (x0, x1) = (px.x0.floor().clamp(0.0, f64::from(pw)), px.x1.ceil().clamp(0.0, f64::from(pw)));
         let (y0, y1) = (px.y0.floor().clamp(0.0, f64::from(ph)), px.y1.ceil().clamp(0.0, f64::from(ph)));
@@ -358,6 +386,12 @@ impl<'a> ShadowScene<'a> {
         self.outline_cache.insert(key, Rc::clone(&path));
         path
     }
+}
+
+/// Whether two boxes touch at all (a shared edge counts): the inclusive overlap
+/// test `Rect::intersects` of newer kurbo versions.
+fn boxes_touch(a: Rect, b: Rect) -> bool {
+    a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1
 }
 
 /// Crop `w × h` pixels at (`x0`, `y0`) out of a finished page pixmap into straight
@@ -708,6 +742,32 @@ mod tests {
         scene.extend(Rect::new(1.0, 1.0, 9.0, 9.0));
         scene.pop_frame();
         assert!(scene.flatten().is_none(), "the budget is spent");
+    }
+
+    /// A hole (an image draw the log cannot carry — a transient stream) declines only
+    /// the flattens whose region touches it; a region clear of holes still flattens,
+    /// and the decline spends no budget (the check runs before the render).
+    #[test]
+    fn image_hole_declines_only_intersecting_flattens() {
+        let mut scene = ShadowScene::new(Rect::new(0.0, 0.0, 100.0, 100.0));
+        scene.record_image_hole(Rect::new(40.0, 40.0, 60.0, 60.0));
+
+        scene.push_frame();
+        scene.extend(Rect::new(10.0, 10.0, 50.0, 50.0));
+        scene.pop_frame().expect("a frame was pushed");
+        assert!(scene.flatten().is_none(), "the region overlaps the hole: declined");
+
+        scene.push_frame();
+        scene.extend(Rect::new(10.0, 10.0, 30.0, 30.0));
+        scene.pop_frame().expect("a frame was pushed");
+        let raster = scene.flatten().expect("a region clear of the hole flattens");
+        assert!(raster.width > 0 && raster.height > 0, "the clear region renders: {}×{}", raster.width, raster.height);
+
+        // The decline spent no budget: a small page still flattens afterwards.
+        scene.push_frame();
+        scene.extend(Rect::new(0.0, 0.0, 20.0, 20.0));
+        scene.pop_frame().expect("a frame was pushed");
+        assert!(scene.flatten().is_some(), "the hole decline burned no flatten budget");
     }
 
     /// The log survives a flatten and replays with content the next time: the second

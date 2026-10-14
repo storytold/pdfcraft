@@ -268,5 +268,14 @@ impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
         }
     }
 
+    // PdfCraft patch (ps-export): forward the retained-image entry like `draw_image`
+    // (only stencil masks are allowed inside a Type 3 glyph; the paint is substituted).
+    fn draw_retained_image(&mut self, image: Image<'a, 'a>, transform: Affine) {
+        if let Image::Stencil(mut s) = image {
+            s.paint = self.paint.clone();
+            self.inner.draw_retained_image(Image::Stencil(s), transform);
+        }
+    }
+
     fn set_blend_mode(&mut self, _: BlendMode) {}
 }

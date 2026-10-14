@@ -1949,7 +1949,7 @@ mod tests {
         let page = pdf.pages().first().expect("fixture has a page");
         let cache = InterpreterCache::new();
         let mut state = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 200.0, 300.0), &cache, page.xref(), InterpreterSettings::default());
-        let mut device = PsDevice::from_table(None, page.resources(), FontTable::default());
+        let mut device = PsDevice::from_table(None, page.resources(), FontTable::default(), Rect::new(0.0, 0.0, 200.0, 300.0));
         interpret_page(page, &mut state, &mut device);
         device.finish();
         (
