@@ -708,7 +708,7 @@ impl PdfCraftApp {
     pub(super) fn open_picker() -> rfd::AsyncFileDialog {
         rfd::AsyncFileDialog::new()
             .add_filter_any_case("PDF", &["pdf"])
-            .add_filter_any_case(tl!("CAdES signature envelope"), &["p7m"])
+            .add_filter_any_case(tl!("CAdES signature (.p7m, .p7s)"), &["p7m", "p7s"])
             .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
     }
 
@@ -719,7 +719,7 @@ impl PdfCraftApp {
             pickers::PickFor::Open,
             rfd::AsyncFileDialog::new()
                 .add_filter_any_case("PDF", &["pdf"])
-                .add_filter_any_case(tl!("CAdES signature envelope"), &["p7m"])
+                .add_filter_any_case(tl!("CAdES signature (.p7m, .p7s)"), &["p7m", "p7s"])
                 .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
             true,
         );
@@ -731,7 +731,7 @@ impl PdfCraftApp {
             wasm_bindgen_futures::spawn_local(async move {
                 if let Some(h) = rfd::AsyncFileDialog::new()
                     .add_filter_any_case("PDF", &["pdf"])
-                    .add_filter_any_case(tl!("CAdES signature envelope"), &["p7m"])
+                    .add_filter_any_case(tl!("CAdES signature (.p7m, .p7s)"), &["p7m", "p7s"])
                     .add_filter_any_case(tl!("Images and text"), &create_ui::CONVERTIBLE)
                     .pick_file()
                     .await

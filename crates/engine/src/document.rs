@@ -14,7 +14,7 @@ use crate::{
 use crate::{record_link_scan, record_marker_scan};
 
 /// What the CAdES envelope a document was opened from says about it (issue #1449). Present
-/// only on documents opened from a `.p7m`; see [`Session::open`] and [`Session::extract_original`].
+/// only on documents opened from a `.p7m` or a `.p7s` pair; see [`Session::open`] and [`Session::extract_original`].
 #[derive(Clone, Debug)]
 pub struct EnvelopeInfo {
     /// The signer's name as their certificate shows it.
@@ -28,6 +28,9 @@ pub struct EnvelopeInfo {
     pub signers: usize,
     /// Encoding irregularities that were tolerated while reading the envelope.
     pub quirks: Vec<String>,
+    /// Whether the envelope is a detached signature (a `.p7s`) whose document was read from
+    /// the file beside it, rather than carried inside the envelope.
+    pub detached: bool,
 }
 
 pub struct Document {

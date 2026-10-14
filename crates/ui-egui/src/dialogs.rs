@@ -898,6 +898,12 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 for (k, v) in envelope_rows(doc) {
                     row(ui, &k, v);
                 }
+                if doc.envelope.as_ref().is_some_and(|env| env.detached) {
+                    // The signature is a file of its own, beside the document: name it
+                    // (issue #2129). The engine keeps the sibling as the document's name, so
+                    // the signature is that name plus .p7s.
+                    row(ui, "Detached signature file", format!("{}.p7s", doc.name));
+                }
                 // What was repaired while reading a damaged file (fidelity: never silent).
                 let repairs = doc.repair_log();
                 row(ui, "Repairs", if repairs.is_empty() { tl!("None").to_string() } else { repairs.len().to_string() });

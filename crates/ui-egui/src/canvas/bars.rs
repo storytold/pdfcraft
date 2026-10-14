@@ -100,7 +100,14 @@ pub(super) fn notices(
                 &[("signer", signer)],
             ),
         };
-        let mut text = format!("{} {detail}", tl!("Opened from a CAdES signature envelope — read-only."));
+        // A detached signature (.p7s, issue #2129) says the same thing about its pair, minus
+        // Extract: nothing is carried inside, and the signed PDF beside the signature is
+        // already the editable copy.
+        let mut text = if env.detached {
+            format!("{} {detail}", tl!("Opened from a detached CAdES signature — read-only."))
+        } else {
+            format!("{} {detail}", tl!("Opened from a CAdES signature envelope — read-only."))
+        };
         if !info.warnings.is_empty() {
             // Damage of the PDF inside surfaces on the same bar (an envelope never "repairs").
             text.push(' ');
@@ -112,7 +119,7 @@ pub(super) fn notices(
             if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
                 view.notice_dismissed = true;
             }
-            if crate::widgets::pill_button(ui, tl!("Extract the original PDF…"), false).clicked() {
+            if !env.detached && crate::widgets::pill_button(ui, tl!("Extract the original PDF…"), false).clicked() {
                 extract = true;
             }
         });

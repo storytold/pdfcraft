@@ -50,7 +50,7 @@ impl OpenContext {
         // DER object is structurally disjoint from any PDF (a PDF starts with `%`, DER with a
         // SEQUENCE), so this one sniff decides which reader sees the bytes.
         if pdfcraft_sign::p7m::is_cms_envelope(&bytes) {
-            return guard(|| Session::prepare_envelope(self, name, bytes, password))
+            return guard(|| Session::prepare_envelope(self, name, path, bytes, password))
                 .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))));
         }
         guard(|| Session::prepare_open_unguarded(self, name, path, bytes, password))
@@ -91,38 +91,73 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
-    /// Prepare the document a CMS envelope wraps: read-only, with the signer identified.
-    /// Detached signatures and non-PDF content are actionable errors (never a repair).
-    fn prepare_envelope(context: &OpenContext, name: String, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<PreparedDocument, OpenError> {
-        let env = pdfcraft_sign::p7m::read(&bytes).map_err(|e| OpenError::Invalid(e.to_string()))?;
-        let content = match env.content {
-            Some(c) => c,
-            // A detached signature has its document beside it, not inside: opening the file
-            // alone has nothing to show (and nothing to verify the signature against).
-            None => return Err(OpenError::Unsupported("this is a detached CAdES signature; the signed document is not inside the file".into())),
+    /// Prepare the document a CMS envelope signs: read-only, with the signer identified. An
+    /// attached envelope (`.p7m`) carries the document inside; a detached one (`.p7s`) opened
+    /// from disk has it beside it, and the signature is verified over those bytes. A detached
+    /// signature without its document and non-PDF content are actionable errors (never a repair).
+    fn prepare_envelope(
+        context: &OpenContext,
+        name: String,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        password: Option<&str>,
+    ) -> Result<PreparedDocument, OpenError> {
+        let mut env = pdfcraft_sign::p7m::read(&bytes).map_err(|e| OpenError::Invalid(e.to_string()))?;
+        let mut detached = false;
+        let (content, doc_name, reason, envelope_file) = match env.content.take() {
+            Some(content) => {
+                if !content.starts_with(b"%PDF-") {
+                    let kind = if content.starts_with(b"<?xml") || content.starts_with(b"<") { "XML data" } else { "non-PDF data" };
+                    return Err(OpenError::Unsupported(format!("the CAdES envelope contains {kind}, not a PDF")));
+                }
+                (
+                    content,
+                    strip_p7m(&name),
+                    "This document is inside a CAdES signature envelope (.p7m); extracting the original PDF makes an editable copy.".to_string(),
+                    Some(bytes.clone()),
+                )
+            }
+            // A detached signature has its document beside it, not inside: opened from disk as
+            // a `.p7s`, that document is the like-named file in the same directory, and the
+            // signature is verified over its bytes.
+            None => {
+                let Some((sibling_path, doc_name, sig_name)) = path.as_deref().and_then(detached_sibling) else {
+                    return Err(OpenError::Unsupported(DETACHED_ALONE.into()));
+                };
+                // Every way the read can fail — missing, unreadable, not a file — says the
+                // same thing, so opening a `.p7s` cannot be used to probe the directory around it.
+                let sibling = std::fs::read(&sibling_path)
+                    .map_err(|_| OpenError::Unsupported(format!("{sig_name} signs {doc_name}, which was not found beside it")))?;
+                if !sibling.starts_with(b"%PDF-") {
+                    let kind = if sibling.starts_with(b"<?xml") || sibling.starts_with(b"<") { "XML data" } else { "non-PDF data" };
+                    return Err(OpenError::Unsupported(format!("the detached signature's document is {kind}, not a PDF")));
+                }
+                env = pdfcraft_sign::p7m::verify_detached(&bytes, &sibling).map_err(|e| OpenError::Invalid(e.to_string()))?;
+                detached = true;
+                // The signature's own bytes are what Save writes: saving over the `.p7s` leaves
+                // it as it is, and there is no carried content to extract.
+                (sibling, doc_name, "This document was opened from a detached CAdES signature (.p7s); open the PDF itself to edit it.".to_string(), Some(bytes))
+            }
         };
-        if !content.starts_with(b"%PDF-") {
-            let kind = if content.starts_with(b"<?xml") || content.starts_with(b"<") { "XML data" } else { "non-PDF data" };
-            return Err(OpenError::Unsupported(format!("the CAdES envelope contains {kind}, not a PDF")));
-        }
-        // `path` stays None: Save writes a read-only document in full to its path, and that
-        // file is the envelope, which is never rewritten.
         let content = Arc::new(content);
-        let mut prepared = Self::prepare_open_unguarded(context, strip_p7m(&name), None, content.clone(), password)?;
-        // The user's file is the envelope, not the PDF inside it: the document keeps the
-        // envelope's bytes (what Extract hands out) and no editor of its own.
+        // `path` stays None for the document: the user's file is the envelope or the
+        // signature, which is never rewritten.
+        let mut prepared = Self::prepare_open_unguarded(context, doc_name, None, content.clone(), password)?;
+        // The user's file is not the PDF (it is the envelope, or the signature beside it): the
+        // document keeps the opened file's bytes and no editor of its own; only an attached
+        // envelope carries the exact signed PDF that extraction hands out.
         prepared.document.editor = None;
-        prepared.document.read_only_reason =
-            Some("This document is inside a CAdES signature envelope (.p7m); extracting the original PDF makes an editable copy.".into());
+        prepared.document.read_only_reason = Some(reason);
         prepared.document.envelope = Some(EnvelopeInfo {
             signer: env.signer_name,
             signing_time: env.signing_time.map(|t| format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", t.year, t.month, t.day, t.hour, t.minute)),
             digest_ok: env.digest_ok,
             signers: env.signers,
             quirks: env.quirks.iter().map(|q| (*q).to_string()).collect(),
+            detached,
         });
-        prepared.document.envelope_file = Some(bytes);
-        prepared.document.envelope_content = Some(content);
+        prepared.document.envelope_file = envelope_file;
+        prepared.document.envelope_content = if detached { None } else { Some(content) };
         prepared.document.dirty = false;
         Ok(prepared)
     }
@@ -412,4 +447,34 @@ fn strip_p7m(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// The document a detached signature (a `.p7s`) signs: the file name without one trailing
+/// `.p7s` (any case). `None` when the name does not end in `.p7s`, so no sibling is looked
+/// for at all — a detached signature is only a pair under that name.
+fn strip_p7s(name: &str) -> Option<String> {
+    // The matched suffix is ASCII, so cutting it off stays on a char boundary.
+    if name.len() >= 4 && name.as_bytes()[name.len() - 4..].eq_ignore_ascii_case(b".p7s") {
+        // A file literally called ".p7s" signs no document.
+        let stripped = &name[..name.len() - 4];
+        (!stripped.is_empty()).then(|| stripped.to_string())
+    } else {
+        None
+    }
+}
+
+/// The plain error for a detached signature whose document is not at hand (issue #2129):
+/// nothing is carried inside the file, and without a path there is nowhere to look for it.
+const DETACHED_ALONE: &str = "this is a detached CAdES signature; the signed document is not inside the file";
+
+/// Where the document of a detached signature lives (issue #2129): beside the `.p7s` it was
+/// opened from, under the same name without the suffix. `None` when `path` does not name a
+/// `.p7s` file, so no sibling is looked for at all. Gives the sibling's path, its file name
+/// (the document's display name) and the signature's file name (for the error messages).
+fn detached_sibling(path: &str) -> Option<(std::path::PathBuf, String, String)> {
+    let path = std::path::Path::new(path);
+    let file_name = path.file_name()?.to_str()?;
+    let doc_name = strip_p7s(file_name)?;
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new(""));
+    Some((dir.join(&doc_name), doc_name, file_name.to_string()))
 }
