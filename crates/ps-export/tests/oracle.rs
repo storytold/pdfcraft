@@ -6,10 +6,12 @@
 //! PDF by `pdfcraft_render` at the same effective dpi, and the mean per-channel delta of
 //! the two rasters must sit under [`TOLERANCE`]. gs runs as an observed oracle process,
 //! never linked; where it is not installed the raster fixtures skip with a message (the
-//! CUPS-test precedent). Transparency is flattened (Wave 2): a real-transparency group's
-//! region leaves as one opaque 300-dpi raster, and those pages enter the raster comparison
-//! too — under their own [`FLATTEN_TOLERANCE`], because gs resamples the region raster while
-//! `pdfcraft_raster` renders the source vectors.
+//! CUPS-test precedent). Transparency is flattened (Wave 2; blend modes join the
+//! comparison in Wave 3): a real-transparency group's region — sub-unit opacity, a
+//! soft mask, or a non-Normal blend mode — leaves as one opaque 300-dpi raster (the
+//! blend composites inside the scene through vello), and those pages enter the
+//! raster comparison too — under their own [`FLATTEN_TOLERANCE`], because gs
+//! resamples the region raster while `pdfcraft_raster` renders the source vectors.
 //!
 //! Fixture pages are 288×360 pt, a whole multiple of the 1.44 pt pixel at 50 dpi, so both
 //! rasters are exactly 200×250 px and the pixel grids coincide without rounding luck.
@@ -57,14 +59,15 @@ const TOLERANCE: f64 = 2.0;
 const CMYK_TOLERANCE: f64 = 1.5;
 /// Mean per-channel delta, in 0–255 byte levels, below which a *flattened*
 /// transparency fixture's two rasters count as the same image (the Wave 2 gates:
-/// the `/ca 0.5` group page and the `/SMask` alpha-mask page). A flattened region
+/// the `/ca 0.5` group page and the `/SMask` alpha-mask page; the Wave 3 gate: the
+/// `/BM /Multiply` group page). A flattened region
 /// is a photograph: the exporter replays the page at 300 dpi and emits it as one
 /// opaque raster, which gs *resamples* onto the oracle's 50-dpi grid (nearest by
 /// default — the emitted dictionaries carry no `/Interpolate`), while
 /// `pdfcraft_raster` renders the source vectors at that grid directly. The
 /// asymmetry is why this is its own bound and not [`TOLERANCE`]: the whole region
 /// is gs's resample of a raster, not its rasterization of geometry. On gs 10.08.0
-/// both fixtures measure a stable 0.000 across repeated runs — their geometry sits
+/// all three fixtures measure a stable 0.000 across repeated runs — their geometry sits
 /// on the oracle's 1.44 pt pixel grid and their fills are flat, so a 6:1
 /// nearest-neighbour downsample of the 300-dpi raster reproduces vello's analytic
 /// coverage byte for byte (pixel-identical rasters, verified: zero differing
@@ -73,8 +76,9 @@ const CMYK_TOLERANCE: f64 = 1.5;
 /// two per channel on resampled edges) — while staying far below a wrong
 /// flattening: a mask recorded in the wrong device space (the bug this gate
 /// caught; the mask's ink landed unscaled in the renderer's corner and masked the
-/// whole draw out) measured ≈ 44.9, and a dropped mask or ignored opacity moves
-/// whole regions by tens of levels per channel.
+/// whole draw out) measured ≈ 44.9, a blend dropped from the replay's group layer
+/// (the non-vacuity probe for the blend gate) measured ≈ 21.4, and a dropped mask
+/// or ignored opacity moves whole regions by tens of levels per channel.
 const FLATTEN_TOLERANCE: f64 = 1.5;
 
 // ----------------------------------------------------------------- fixture PDFs
@@ -565,6 +569,34 @@ fn soft_mask_pdf() -> Vec<u8> {
         stream_obj(
             "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
             b"0 g 28.8 0 115.2 360 re f",
+        ),
+    ])
+}
+
+/// A page drawing a form XObject under a `/BM /Multiply` ExtGState: the form carries
+/// a real transparency group, so the blend the interpreter forwards into the group
+/// push composites the group's content — one blue fill spanning both backdrop bands —
+/// onto the backdrop with Multiply, and the exporter flattens the group into one
+/// opaque 300-dpi raster whose pixels are that composite. The yellow band makes the
+/// blend non-optional: Multiply turns the blue fill black there (1,1,0)×(0,0,1),
+/// where a dropped blend would leave the blue covering the yellow — a whole-band,
+/// tens-of-levels failure the raster comparison catches (the cyan band multiplies
+/// to blue either way and carries no signal). No `transparency ignored (blend …)`
+/// note may fire: the page's own backdrop draws are announced at `Normal`, and the
+/// `Multiply` set by `/GS1 gs` rides the form's group push, whose raster carries it
+/// (the edge rule's in-group side; the note side — a blend announced with no open
+/// real group — is `lib.rs::blend_mode_produces_note_not_ops` and the `device.rs`
+/// unit gate).
+fn blend_pdf() -> Vec<u8> {
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".to_vec(),
+        stream_obj("", b"1 1 0 rg 14.4 14.4 259.2 158.4 re f\n0 1 1 rg 14.4 187.2 259.2 158.4 re f\nq /GS1 gs /Fm1 Do Q"),
+        b"<< /Type /ExtGState /BM /Multiply >>".to_vec(),
+        stream_obj(
+            "/Type /XObject /Subtype /Form /BBox [0 0 288 360] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            b"0 0 1 rg 43.2 43.2 201.6 273.6 re f",
         ),
     ])
 }
@@ -1249,6 +1281,32 @@ fn soft_mask_page_matches_ghostscript() {
     assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
     assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
     assert_matches_oracle("soft-mask", &pdf, FLATTEN_TOLERANCE);
+}
+
+/// The `/BM /Multiply` group page: byte level, one raster carries the blended draw —
+/// the backdrop's vector ops survive, the group's own blue fill never leaks as
+/// vector ops, the disclosure travels, no blend note fires (the raster carries the
+/// blend; the edge rule's in-group side), and the program stays balanced — then the
+/// raster comparison under [`FLATTEN_TOLERANCE`]: gs resamples the flattened raster
+/// (whose replay composited Multiply inside the scene, through vello) onto its
+/// 50-dpi grid while `pdfcraft_raster` composites the source's blend directly. A
+/// dropped blend paints the blue over the yellow band and fails by tens of levels
+/// (the non-vacuity probe, forcing the replay's group layer to `Normal`, measured
+/// 21.420). Observed delta 0.000 (grid-aligned flat regions; see
+/// [`FLATTEN_TOLERANCE`]).
+#[test]
+fn blend_mode_page_matches_ghostscript() {
+    let pdf = blend_pdf();
+    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Ps).expect("the blend page exports");
+    let s = String::from_utf8_lossy(&out.bytes).into_owned();
+    assert!(s.contains("1 1 0 setrgbcolor\n"), "the backdrop's vector ops survive: {s}");
+    assert_eq!(s.matches(">> image").count(), 1, "exactly one raster carries the blended draw: {s}");
+    assert!(!s.contains("0 0 1 setrgbcolor"), "the group's blue fill never leaks as vector ops: {s}");
+    assert!(out.warnings.iter().any(|n| n.text == "transparency flattened to raster"), "the flattening is disclosed: {:?}", out.warnings);
+    assert!(out.warnings.iter().all(|n| !n.text.contains("blend")), "no blend note inside the flattened region: {:?}", out.warnings);
+    assert!(s.contains("%%PdfCraftNote: transparency flattened to raster\n"), "note embedded: {s}");
+    assert_eq!(s.matches("gsave").count(), s.matches("grestore").count(), "gsave/grestore balanced: {s}");
+    assert_matches_oracle("blend", &pdf, FLATTEN_TOLERANCE);
 }
 
 /// A degraded shading paints ink: the oversized-mesh fixture degrades to the flat
