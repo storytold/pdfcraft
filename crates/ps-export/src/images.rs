@@ -76,6 +76,34 @@ pub(crate) fn image_ops(image: &Image<'_, '_>, emit: &mut Emitter) {
 /// source to its end, so `currentfile` is left exactly past the payload whatever `image`
 /// stopped reading at.
 const DRAIN: &str = "PdfCraftImgSrc flushfile";
+/// Emit one opaque RGB raster through the ASCII85/Flate pipeline (`/DeviceRGB
+/// setcolorspace` + the dictionary-form `image` invocation + payload). The caller
+/// wraps it in the gsave/[placement] concat/grestore that maps pixel space onto the
+/// page (the `draw_image` convention: `/ImageMatrix` identity) — this is the sink for
+/// a flattened transparency region (`flatten.rs`), which arrives as raw rows rather
+/// than a PDF XObject.
+///
+/// Declines without emitting any operator — but never silently — when the pixel count
+/// exceeds [`MAX_PIXELS`] (note "image skipped (exceeds 100 megapixel cap)") or when
+/// the buffer is not exactly `width × height × 3` bytes long (note
+/// "image skipped (undecodable)", the module's wording for malformed image data).
+// Task 10 (`device.rs` owning a `ShadowScene`) is the only production caller this
+// Wave has — until it lands, only the tests below drive this. Drop the attribute then.
+#[allow(dead_code)]
+pub(crate) fn opaque_raster(emit: &mut Emitter, width: u32, height: u32, rgb: &[u8]) {
+    let pixels = u64::from(width).checked_mul(u64::from(height));
+    if !pixels.is_some_and(|p| p <= MAX_PIXELS) {
+        emit.note("image skipped (exceeds 100 megapixel cap)");
+        return;
+    }
+    if !samples_complete(pixel_bytes(width, height, 3), rgb) {
+        emit.note("image skipped (undecodable)");
+        return;
+    }
+    emit.op("/DeviceRGB setcolorspace");
+    let line = image_invocation(width, height, 8, "[0 1 0 1 0 1]", A85_FLATE_SOURCE);
+    emit_ascii85(emit, &line, rgb);
+}
 
 /// A raster image: passthrough when PostScript can consume the PDF's own encoded bytes,
 /// decode + re-encode otherwise.
@@ -508,6 +536,170 @@ mod tests {
     fn begin_data_count_matches_the_bytes_it_covers() {
         let pdf = image_pdf(
             "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode",
+            &payload,
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /FlateDecode filter >> image";
+        assert!(out.contains(invocation), "Flate invocation: {out}");
+        assert!(contains_bytes(&raw, &payload), "zlib bytes verbatim: {out:?}");
+        assert!(out.contains("/DeviceRGB setcolorspace\n"), "{out}");
+        assert_eq!(notes, "", "no degradations for a clean passthrough");
+    }
+
+    /// An image that can neither pass through nor decode is skipped with a note, and the
+    /// program continues: the operators after it still land.
+    #[test]
+    fn undecodable_image_notes_and_continues() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode",
+            &[0x01, 0x02, 0x03],
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q\n1 0 0 rg\n40 40 20 20 re f",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        assert_eq!(notes, "image skipped (undecodable)", "the skip is recorded: {notes}");
+        assert!(!out.contains(">> image") && !out.contains("imagemask"), "no image operator: {out}");
+        assert!(out.contains("1 0 0 setrgbcolor\nnewpath\n40 40 moveto\n") && out.contains("fill\n"), "export continues: {out}");
+        assert_eq!(out.matches("gsave").count(), out.matches("grestore").count(), "balanced wrap: {out}");
+    }
+
+    /// A stencil mask (`/ImageMask true`) becomes `imagemask` with its decoded samples
+    /// packed to 1 bit (1 = paint) and `/Decode [1 0]`, painted with the current colour.
+    #[test]
+    fn stencil_uses_imagemask() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ImageMask true /BitsPerComponent 1",
+            &MASK_BITS,
+            &[],
+            b"1 0 0 rg\nq 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 1 /Decode [1 0] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /ASCII85Decode filter /FlateDecode filter >> imagemask";
+        assert!(out.contains(invocation), "imagemask invocation: {out}");
+        // PDF mask sample 0 paints (hayro decodes it to luma 255), so the packed bits
+        // invert the raw samples: row 0 `01`, row 1 `10` → 0x40 0x80.
+        let expected = a85_flate(&[0x40, 0x80]);
+        assert!(contains_bytes(&raw, &expected), "packed+re-encoded samples: {out:?}");
+        let color = out.find("1 0 0 setrgbcolor").unwrap_or(usize::MAX);
+        let mask = out.find("imagemask").unwrap_or(usize::MAX);
+        assert!(color < mask, "the stencil's paint precedes the mask: {out}");
+        assert_eq!(notes, "", "a clean stencil mask degrades nothing");
+    }
+
+    /// An image with an `/SMask` is emitted unmasked and the drop is recorded.
+    #[test]
+    fn smask_note_present() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /SMask 4 0 R",
+            &DCT_PAYLOAD,
+            &[("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8", &[0u8, 4][..])],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        assert_eq!(notes, "image soft mask ignored", "the dropped alpha is recorded: {notes}");
+        assert!(out.contains("/DCTDecode filter >> image"), "the image itself is still emitted: {out}");
+    }
+
+    /// An image with no filter decodes and re-encodes as ASCII85(Flate(samples)) — an
+    /// ASCII-only data section, so no `%%BeginData` bracket is needed.
+    #[test]
+    fn unfiltered_image_reencodes_ascii85_flate() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+            &RGB_SAMPLES,
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /ASCII85Decode filter /FlateDecode filter >> image";
+        assert!(out.contains(invocation), "re-encode invocation: {out}");
+        assert!(contains_bytes(&raw, &a85_flate(&RGB_SAMPLES)), "decoded samples re-encoded: {out:?}");
+        assert!(!out.contains("%%BeginData"), "ASCII section needs no binary bracket: {out}");
+        assert_eq!(notes, "", "no degradations");
+    }
+
+    /// A CCITT fax image passes through with its decode parameters mapped onto the
+    /// PostScript filter's parameter dictionary.
+    #[test]
+    fn ccitt_passthrough_emits_params() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 2 /Rows 2 >>",
+            &CCITT_PAYLOAD,
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 1 /Decode [0 1] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile << /K -1 /Columns 2 /Rows 2 >> /CCITTFaxDecode filter >> image";
+        assert!(out.contains(invocation), "CCITT invocation with params: {out}");
+        assert!(out.contains("0 setgray\n"), "1-component space: {out}");
+        assert!(contains_bytes(&raw, &CCITT_PAYLOAD), "fax bytes verbatim: {out:?}");
+        assert_eq!(notes, "", "no degradations");
+    }
+
+    /// An opaque RGB raster straight from the flattener (no PDF, no interpreter behind
+    /// it) emits the colorspace line, the dictionary-form invocation with the
+    /// ASCII85/Flate chain, and a payload that decodes back to the exact samples.
+    #[test]
+    fn opaque_raster_emits_flate_image() {
+        let mut emit = Emitter::default();
+        opaque_raster(&mut emit, 2, 2, &RGB_SAMPLES);
+        let out = String::from_utf8_lossy(&emit.out).into_owned();
+        assert!(out.contains("/DeviceRGB setcolorspace\n"), "colorspace line: {out}");
+        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /ASCII85Decode filter /FlateDecode filter >> image";
+        assert!(out.contains(invocation), "re-encode invocation: {out}");
+        assert_eq!(out.lines().count(), 3, "colorspace + invocation + payload lines: {out}");
+        // The payload is the last line; run it back through the filters crate.
+        let payload = out.lines().next_back().unwrap_or("");
+        let chain = [(PsFilter::Ascii85, Params::default()), (PsFilter::Flate, Params::default())];
+        let decoded = pdfcraft_filters::decode(&chain, payload.as_bytes(), 1 << 20).expect("payload decodes");
+        assert_eq!(decoded, RGB_SAMPLES, "samples survive the Flate/ASCII85 round trip");
+        assert!(emit.notes.is_empty(), "a clean raster degrades nothing");
+    }
+
+    /// Both declines are never silent and emit no operator at all — not even the
+    /// colorspace line: a buffer whose length is not `width × height × 3`, and a
+    /// pixel count over the cap (which fires first, whatever the buffer holds).
+    #[test]
+    fn opaque_raster_declines_never_silent() {
+        let mut emit = Emitter::default();
+        opaque_raster(&mut emit, 2, 2, &RGB_SAMPLES[..9]);
+        assert!(emit.out.is_empty(), "short buffer emits nothing: {:?}", String::from_utf8_lossy(&emit.out));
+        assert_eq!(
+            emit.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+            ["image skipped (undecodable)"],
+            "the length mismatch is recorded"
+        );
+
+        let mut emit = Emitter::default();
+        opaque_raster(&mut emit, 20000, 20000, &RGB_SAMPLES);
+        assert!(emit.out.is_empty(), "capped raster emits nothing");
+        assert_eq!(
+            emit.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+            ["image skipped (exceeds 100 megapixel cap)"],
+            "the cap is recorded"
+        );
+    }
+
+    /// An image whose declared dimensions exceed the 100-megapixel cap is skipped with a
+    /// note and emits no operator (and never decodes).
+    #[test]
+    fn megapixel_cap_notes_and_skips() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 20000 /Height 20000 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
             &DCT_PAYLOAD,
             &[],
             b"q 20 0 0 20 10 10 cm /Im1 Do Q",
