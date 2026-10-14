@@ -10756,6 +10756,7 @@ dependencies = [
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-oracle",
+ "roxmltree 0.20.0",
  "serde",
  "serde_json",
  "sha2 0.11.1",
