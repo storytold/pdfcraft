@@ -569,7 +569,7 @@ pub fn subject_of(raw: &[u8]) -> Option<Name> {
 /// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
 /// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
 /// too, so an ordinary end-entity certificate must never be accepted as an issuer.
-pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> Vec<&'a Certificate> {
+pub fn build_chain<'a>(leaf: &'a Certificate, pool: impl IntoIterator<Item = &'a Certificate> + Clone, at: Option<Time>) -> Vec<&'a Certificate> {
     build_chain_noted(leaf, pool, at).0
 }
 
@@ -579,7 +579,11 @@ pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Optio
 /// The reason is a whole sentence of ours, listed in [`WORDINGS`](crate::pdf::WORDINGS), with the two
 /// certificates' own names put in afterwards, so an interface reading in another language says it in
 /// it.
-pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<Detail>) {
+pub fn build_chain_noted<'a>(
+    leaf: &'a Certificate,
+    pool: impl IntoIterator<Item = &'a Certificate> + Clone,
+    at: Option<Time>,
+) -> (Vec<&'a Certificate>, Option<Detail>) {
     let mut chain = vec![leaf];
     let mut refused = None;
     while chain.len() < 10 {
@@ -591,7 +595,7 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         let below = chain.len() - 1;
         let mut found = None;
         let mut digest = None;
-        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by_cached(&c.public_key, &mut digest)) {
+        for c in pool.clone().into_iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by_cached(&c.public_key, &mut digest)) {
             // Each reason is a whole sentence, not a phrase stitched into one: a language puts the
             // two names where it needs them.
             let why = if !c.may_issue() {
@@ -622,11 +626,17 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
     (chain, refused)
 }
 
+/// Whether `bytes` hold PEM. PEM may start with explanatory text, even text that begins with a
+/// "0" (0x30), which is also the first byte of every DER certificate.
+pub(crate) fn is_pem(bytes: &[u8]) -> bool {
+    bytes.windows(10).any(|w| w == b"-----BEGIN")
+}
+
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
 /// `.pem`, Acrobat's `.fdf`-free exports), or a PKCS #7 bundle (`.p7b`, `.p7c`) in DER or as a
 /// PEM `PKCS7`/`CMS` block, as Windows, Acrobat and certificate authorities export chains.
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
-    if bytes.first() == Some(&0x30) {
+    if bytes.first() == Some(&0x30) && !is_pem(bytes) {
         // One DER certificate, else a DER bundle; a file that is neither reports the
         // certificate's error, the common case.
         return match Certificate::parse(bytes) {
