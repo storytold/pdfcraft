@@ -13,6 +13,23 @@ use crate::{
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
 
+/// What the CAdES envelope a document was opened from says about it (issue #1449). Present
+/// only on documents opened from a `.p7m`; see [`Session::open`] and [`Session::extract_original`].
+#[derive(Clone, Debug)]
+pub struct EnvelopeInfo {
+    /// The signer's name as their certificate shows it.
+    pub signer: String,
+    /// When the signer says they signed, as "YYYY-MM-DD HH:MM UTC" (an envelope without a
+    /// signing-time attribute has none).
+    pub signing_time: Option<String>,
+    /// Whether the content still matches what was signed. Trust is never checked here.
+    pub digest_ok: bool,
+    /// How many signers the envelope carries (details of the first are shown).
+    pub signers: usize,
+    /// Encoding irregularities that were tolerated while reading the envelope.
+    pub quirks: Vec<String>,
+}
+
 pub struct Document {
     pub id: DocId,
     pub name: String,
@@ -34,6 +51,8 @@ pub struct Document {
     pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
+    /// The CAdES envelope the document was opened from (read-only by nature), if so.
+    pub envelope: Option<EnvelopeInfo>,
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,

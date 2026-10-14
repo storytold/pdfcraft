@@ -203,6 +203,17 @@ impl Session {
         Ok(id)
     }
 
+    /// Extract the original PDF from a CAdES envelope document as a new, editable, unsaved
+    /// copy (the envelope itself is never changed). Refuses plain documents.
+    pub fn extract_original(&mut self, id: DocId) -> Result<DocId, String> {
+        let doc = self.get(id).ok_or("no such document")?;
+        if doc.envelope.is_none() {
+            return Err("this document is not inside a CAdES envelope".into());
+        }
+        let (name, bytes) = (doc.name.clone(), doc.bytes.clone());
+        self.open_new(name, bytes).map_err(|e| e.to_string())
+    }
+
     /// Show or hide a layer (optional content group) for viewing. Returns `true` if it changed;
     /// callers must drop cached rasters and text for the document.
     pub fn set_layer_visible(&mut self, id: DocId, layer: usize, visible: bool) -> bool {
