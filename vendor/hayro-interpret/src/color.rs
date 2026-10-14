@@ -1536,6 +1536,16 @@ impl Color {
         }
     }
 
+    /// PdfCraft patch (ps-export): the colour's opacity — the constant alpha
+    /// the interpreter folds in from the graphics state (`/CA`/`ca`), which
+    /// [`Color::source`] deliberately does not carry. Consumers that batch or
+    /// compare paints by source must compare this alongside it: two colours of
+    /// one source with different alpha render differently, so treating them as
+    /// equal silently repaints at the wrong opacity.
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
     /// Create a color from RGBA.
     pub fn from_rgba(rgba: AlphaColor) -> Self {
         let c = rgba.components();

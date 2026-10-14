@@ -261,11 +261,14 @@ fn clamp_output(out: &mut String, range: Option<&[(f32, f32)]>, count: usize) ->
 
 /// Whether `name` can ride into the emission as a PostScript literal name:
 /// non-empty, short, and free of the delimiters and whitespace the tokenizer
-/// would break on (the `fonts.rs` `usable_ps_name` rules, mirrored here).
+/// would break on, and of `#` — inside a name it introduces a hex escape
+/// (`/Ab#42` re-reads as `AbB`; a `#` not followed by two hex digits is a
+/// scanner error on strict interpreters) — so a colorant like `Spot#1` cannot
+/// ride verbatim (the `fonts.rs` `usable_ps_name` rules, mirrored here).
 fn usable_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 127
-        && name.bytes().all(|b| matches!(b, b'!'..=b'~') && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'))
+        && name.bytes().all(|b| matches!(b, b'!'..=b'~') && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#'))
 }
 
 #[cfg(test)]
@@ -488,6 +491,28 @@ mod tests {
         assert_eq!(
             notes.iter().map(|n| n.text.clone()).collect::<Vec<_>>(),
             vec!["separation color approximated (RGB, unusable colorant name for Sp(ot)".to_string()],
+            "the decline names the colorant as parsed"
+        );
+    }
+
+    /// A colorant whose *parsed* name carries `#` (`Spot#1` — spelled
+    /// `/Spot#231`, whose `#23` unescapes to the `#` itself) declines too:
+    /// inside a PostScript name `#` introduces a hex escape (`/Ab#42`
+    /// re-reads as `AbB`), and a `#` not followed by two hex digits is a
+    /// scanner error on strict interpreters — a colorant named `Spot#1` would
+    /// emit a plate name that mangles or breaks the program.
+    #[test]
+    fn hash_in_colorant_name_declines() {
+        let (s, notes) = exported(separation_pdf(
+            "[/Separation /Spot#231 /DeviceCMYK 5 0 R]",
+            "0.5",
+            vec![b"<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 1 1 0] /N 1 >>".to_vec()],
+        ));
+        assert!(!s.contains("setcolorspace"), "no colorspace resource: {s}");
+        assert!(s.contains("setrgbcolor"), "the RGB approximation paints: {s}");
+        assert_eq!(
+            notes.iter().map(|n| n.text.clone()).collect::<Vec<_>>(),
+            vec!["separation color approximated (RGB, unusable colorant name for Spot#1)".to_string()],
             "the decline names the colorant as parsed"
         );
     }

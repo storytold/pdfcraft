@@ -960,12 +960,15 @@ fn unicode_platform(id: PlatformId) -> bool {
 
 /// Whether `name` can ride into the emission as a PostScript literal name:
 /// non-empty, short, and free of the delimiters and whitespace the tokenizer
-/// would break on (real-world `post` names are, but a hostile font's are not
-/// bound by that).
+/// would break on, and of `#` — inside a name it introduces a hex escape
+/// (`/Ab#42` re-reads as `AbB`; a `#` not followed by two hex digits is a
+/// scanner error on strict interpreters) — so a glyph literally named `Sp#1`
+/// declines to its fallback instead (real-world `post` names are usable, but a
+/// hostile font's are not bound by that).
 fn usable_ps_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 127
-        && name.bytes().all(|b| matches!(b, b'!'..=b'~') && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'))
+        && name.bytes().all(|b| matches!(b, b'!'..=b'~') && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#'))
 }
 
 /// `head.unitsPerEm` of an sfnt, when the program parses and the value is
@@ -1282,7 +1285,7 @@ pub(crate) fn ps_string(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use hayro::hayro_interpret::hayro_syntax::Pdf;
     use hayro::hayro_interpret::{Context, InterpreterCache, InterpreterSettings, interpret_page};
     use kurbo::{Affine, Rect};
@@ -1384,7 +1387,7 @@ mod tests {
     /// 10.08 — the tail (`2 index /CharStrings …`, `readonly put`/`noaccess
     /// put`, `dup /FontName get exch definefont pop`) follows the structure of
     /// real fonts, which the operand stack arithmetic requires.
-    fn t1_program() -> Vec<u8> {
+    pub(crate) fn t1_program() -> Vec<u8> {
         // Type 1 charstrings. `hsbw` takes two operands (sidebearing, width);
         // the box is `0 500 hsbw; 100 hmoveto; 0 400 rlineto; 300 0 rlineto;
         // 0 -400 rlineto; closepath; endchar` (widths as 2-byte encodings).
@@ -2039,9 +2042,11 @@ mod tests {
         None
     }
 
-    const T1_FONT: &str =
+    /// The embedded Type 1 font dict of the fixture family below (shared with
+    /// `device::tests`' run-batching regressions).
+    pub(crate) const T1_FONT: &str =
         "<< /Type /Font /Subtype /Type1 /BaseFont /PdfCraftTest /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R >>";
-    const T1_DESC: &str = "<< /Type /FontDescriptor /FontName /PdfCraftTest /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile 6 0 R >>";
+    pub(crate) const T1_DESC: &str = "<< /Type /FontDescriptor /FontName /PdfCraftTest /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile 6 0 R >>";
     const TT_FONT: &str =
         "<< /Type /Font /Subtype /TrueType /BaseFont /PdfCraftTT /FirstChar 65 /LastChar 66 /Widths [600 700] /FontDescriptor 5 0 R >>";
     const TT_DESC: &str = "<< /Type /FontDescriptor /FontName /PdfCraftTT /Flags 4 /FontBBox [0 -200 700 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>";
@@ -2660,6 +2665,55 @@ mod tests {
         );
         assert!(preamble.contains("/box 1 def\n"), "CharStrings: the shared name maps to the lower gid: {preamble}");
         assert!(preamble.contains("/uni0042 2 def\n"), "CharStrings: the higher gid falls back to its codepoint's AGL name: {preamble}");
+    }
+
+    /// A post 2.0 glyph name containing `#` cannot ride as a PostScript
+    /// literal: inside a name `#` introduces a hex escape (`/Ab#42` re-reads
+    /// as `AbB`) and a `#` not followed by two hex digits is a scanner error
+    /// on strict interpreters. The glyph declines the real name and — unmapped
+    /// by the cmap, so no AGL spelling exists either — falls back to `/gNNNN`.
+    #[test]
+    fn hash_post_name_falls_back_to_gid_name() {
+        // post 2.0 over two glyphs: the 32-byte header, numberOfNewGlyphs,
+        // glyphNameIndex [.notdef(0), 258] and one Pascal-string pool entry
+        // "Sp#1" — so gid 1's real name carries the escape introducer.
+        let mut post = Vec::new();
+        post.extend_from_slice(&0x0002_0000u32.to_be_bytes()); // version 2.0
+        post.extend_from_slice(&0u32.to_be_bytes()); // italicAngle
+        post.extend_from_slice(&(-100i16).to_be_bytes()); // underlinePosition
+        post.extend_from_slice(&50u16.to_be_bytes()); // underlineThickness
+        post.extend_from_slice(&0u32.to_be_bytes()); // isFixedPitch
+        post.extend_from_slice(&[0; 16]); // memory limits
+        post.extend_from_slice(&2u16.to_be_bytes()); // numberOfNewGlyphs
+        post.extend_from_slice(&[0u16, 258].iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<u8>>());
+        post.extend_from_slice(&[4, b'S', b'p', b'#', b'1']); // the "Sp#1" pool string
+        // No cmap mappings: nothing offers the glyph an AGL spelling, so the
+        // fallback it takes is the meaningless `/g0001`.
+        let ttf = ttf_program_over(&[box_glyph()], 2, &[], &post);
+        let mut table = FontTable::default();
+        let key = 42u128;
+        table.order.push(key);
+        table.fonts.insert(
+            key,
+            FontEntry {
+                kind: EmbeddedKind::TrueType(ttf),
+                subtype: Some("TrueType".into()),
+                descendant_subtype: None,
+                base_font: Some("PdfCraftTT".into()),
+                bbox: None,
+                csi: None,
+                w: None,
+                decision: Some(Decision::Type42),
+                slices: Vec::new(),
+                cid_codes: HashMap::new(),
+                composite: None,
+            },
+        );
+        assert_eq!(table.char_code(key, 1), 1, "gid 1 takes code 1");
+        let preamble = String::from_utf8_lossy(&table.preamble()).into_owned();
+        assert!(preamble.contains("/.notdef /g0001 /.notdef"), "Encoding: the hash-named glyph rides the fallback: {preamble}");
+        assert!(preamble.contains("/g0001 1 def\n"), "CharStrings: the fallback maps to the gid: {preamble}");
+        assert!(!preamble.contains("Sp#1"), "the escape-introducer name never rides: {preamble}");
     }
 
     /// A post 3.0 font carries no glyph names, so every name the emission
