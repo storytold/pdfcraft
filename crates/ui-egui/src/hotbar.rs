@@ -506,6 +506,13 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
         // After the text's own controls, so they keep their place in a bar that scrolls.
         fill_text_border_controls(ui, app, selected_fill_text(app), vertical);
     }
+    // #2313: checks, crosses, dots and lines take a colour of their own, for new marks.
+    if current_fill.and_then(crate::fill_sign::FillTool::mark).is_some() {
+        controls_divider(ui, t, vertical);
+        if let Some(color) = comments::quick_bar_colour(ui, app.fill_mark_color) {
+            app.fill_mark_color = color;
+        }
+    }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
         // Text boxes and callouts: the border's own colour, for new ones and the selected one

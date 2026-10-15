@@ -575,8 +575,8 @@ impl Automation {
             return Err(ToolError::InvalidArgs("sensitivity is only for scan: true".into()));
         }
         let requested_color = a.color("color")?;
-        if requested_color.is_some() && !matches!(kind, "text" | "date") {
-            return Err(ToolError::InvalidArgs("color is only for type text or date".into()));
+        if requested_color.is_some() && !matches!(kind, "text" | "date" | "check" | "cross" | "dot" | "line") {
+            return Err(ToolError::InvalidArgs("color is only for type text, date, check, cross, dot or line".into()));
         }
         let requested_size = a.opt_num("font_size")?;
         if requested_size.is_some() && !matches!(kind, "text" | "date") {
