@@ -13,6 +13,7 @@ mod craft;
 pub mod embedding;
 mod encodings;
 pub mod fallback;
+mod outlined;
 pub mod pdf;
 mod script;
 mod shaping;
@@ -21,14 +22,19 @@ mod std14;
 mod std14_metrics;
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
-    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
-    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+    document_japanese_font_for_style, document_japanese_fonts_for_style, document_korean_fonts_for_style, document_latin_fonts, document_thai_font,
+    ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+};
+pub use outlined::{
+    OUTLINE_TEXT_FONT, first_unoutlinable, hoist_font_descriptors, needs_outlines, outline_text_font, outlined_path, outlined_text_layer,
+    outlined_width,
 };
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, korean_has, shape_arabic, shape_hebrew, shape_korean, shape_thai,
+    shaped_glyph, thai_has,
 };
 pub use std14::Std14;
 
@@ -63,6 +69,19 @@ pub fn inter_width(s: &str, size: f64) -> f64 {
     let charmap = font.charmap();
     let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
     s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
+}
+
+/// Hangul: syllables, conjoining jamo (and their extensions A and B), compatibility and
+/// half-width jamo. Korean text written into PDFs takes the `Kore` faces first when it has any.
+pub fn is_hangul(c: char) -> bool {
+    matches!(c,
+        '\u{ac00}'..='\u{d7a3}' // syllables
+        | '\u{1100}'..='\u{11ff}' // conjoining jamo
+        | '\u{3130}'..='\u{318f}' // compatibility jamo
+        | '\u{a960}'..='\u{a97f}' // jamo extended A
+        | '\u{d7b0}'..='\u{d7ff}' // jamo extended B
+        | '\u{ffa0}'..='\u{ffdc}' // half-width jamo
+    )
 }
 
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).

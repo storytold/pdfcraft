@@ -1,4 +1,7 @@
-use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
+use super::{
+    Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, outlined_line, rg, rg_stroke, text_width, win_ansi,
+    with_outline_text_font,
+};
 
 /// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
 /// another program wrote without an appearance. Names are matched byte for byte, as PDF names
@@ -364,6 +367,8 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
     );
     out.extend(literal(&win_ansi(label)));
     out.extend_from_slice(b" Tj\n");
+    // A "By" line in Korean (the author's name) is drawn as outlines after the text object.
+    let mut by_outlined = None;
     if let Some(b) = by {
         let mut s = by_h;
         let bw = text_width(b, s);
@@ -371,13 +376,19 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
             s *= (text_area.1 - text_area.0 - 4.0) / bw;
         }
         let bw = text_width(b, s);
-        out.extend(
-            format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
-        );
-        out.extend(literal(&win_ansi(b)));
-        out.extend_from_slice(b" Tj\n");
+        let (bx, by_y) = (text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0, y0 + h * 0.18);
+        by_outlined = outlined_line(b, s, bx, by_y, &rg(text_col));
+        if by_outlined.is_none() {
+            out.extend(format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(bx), n(by_y)).bytes());
+            out.extend(literal(&win_ansi(b)));
+            out.extend_from_slice(b" Tj\n");
+        }
     }
     out.extend_from_slice(b"ET\n");
+    let outlined = by_outlined.is_some();
+    if let Some(drawing) = by_outlined {
+        out.extend(drawing.bytes());
+    }
     let font = |base: &str| {
         let mut f = Dict::new();
         f.set(b"Type".to_vec(), Object::name("Font"));
@@ -389,7 +400,7 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
     let mut fonts = Dict::new();
     fonts.set(b"HelvB".to_vec(), font("Helvetica-Bold"));
     fonts.set(b"Helv".to_vec(), font("Helvetica"));
-    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    res.set(b"Font".to_vec(), Object::Dict(with_outline_text_font(fonts, outlined)));
     form(rect, &out, res)
 }
 

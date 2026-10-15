@@ -8,7 +8,9 @@
 //! The `/DA` font is used when the form's `/DR` defines it as a simple font that can encode the
 //! displayed text (using its own encoding and Differences), or as a composite font with a
 //! predefined Unicode CMap such as `UniJIS-UTF16-H`, as Japanese forms use. Otherwise (unsupported
-//! characters, other composite fonts, missing resources) Helvetica is used. Text the chosen font
+//! characters, other composite fonts, missing resources) Helvetica is used, and a line Helvetica
+//! can't draw but the craft-fonts Korean face can is drawn as that face's glyph outlines
+//! ([`pdfcraft_fonts::outlined_path`]). Text the chosen font
 //! can't hold (outside WinAnsi in Helvetica, or beyond U+FFFF in a UCS-2 CMap) is drawn as `?`, as
 //! Acrobat keeps a value its field font can't show: the value itself is stored as typed,
 //! [`field_appearance_drawn`] returns the first such character, and the caller marks the widget
@@ -299,12 +301,16 @@ enum FontText {
     Simple(Box<Metrics>),
     /// A composite font with a predefined Unicode CMap.
     Unicode(UnicodeCMap),
+    /// Helvetica, with each line it can't draw (Korean) drawn as glyph outlines of the craft-fonts
+    /// Korean face instead ([`pdfcraft_fonts::outlined_path`]): for a form whose own font can't
+    /// show the value.
+    Outlined,
 }
 
 impl FontText {
     fn encode(&self, s: &str) -> Vec<u8> {
         match self {
-            Self::WinAnsi => win_ansi(s),
+            Self::WinAnsi | Self::Outlined => win_ansi(s),
             // Selection checks every displayed string first; wrapping only removes line breaks.
             Self::Simple(metrics) => metrics.encode(&s.replace('\t', " ")).unwrap_or_default(),
             Self::Unicode(cmap) => cmap.encode(s),
@@ -314,6 +320,7 @@ impl FontText {
     fn can_encode(&self, s: &str) -> bool {
         match self {
             Self::Simple(metrics) => metrics.encode(&s.replace('\t', " ")).is_some(),
+            Self::Outlined => pdfcraft_fonts::first_unoutlinable(s).is_none(),
             _ => true,
         }
     }
@@ -324,6 +331,7 @@ impl FontText {
     fn first_unencodable(&self, s: &str) -> Option<char> {
         match self {
             Self::WinAnsi => pdfcraft_fonts::first_undrawable(s),
+            Self::Outlined => pdfcraft_fonts::first_unoutlinable(s),
             Self::Simple(metrics) => {
                 s.chars().map(|c| if c == '\t' { ' ' } else { c }).find(|c| metrics.encode(c.encode_utf8(&mut [0; 4])).is_none())
             }
@@ -340,6 +348,22 @@ impl FontText {
                 None => helvetica_width(s, size),
             },
             Self::Unicode(_) => cjk_width(s, size),
+            Self::Outlined if pdfcraft_fonts::needs_outlines(s) => {
+                pdfcraft_fonts::outlined_width(s, size).unwrap_or_else(|| helvetica_width(s, size))
+            }
+            Self::Outlined => helvetica_width(s, size),
+        }
+    }
+
+    /// The outline drawing of `s` at baseline (`x`, `y`) when this font draws it as outlines: the
+    /// path to fill, and the invisible text layer that keeps it searchable once flattened.
+    fn outlines(&self, s: &str, size: f64, x: f64, y: f64) -> Option<(String, String)> {
+        match self {
+            Self::Outlined if pdfcraft_fonts::needs_outlines(s) && pdfcraft_fonts::first_unoutlinable(s).is_none() => {
+                let path = pdfcraft_fonts::outlined_path(s, size, x, y).ok()?;
+                Some((path, pdfcraft_fonts::outlined_text_layer(s, size, x, y, self.width(s, size))))
+            }
+            _ => None,
         }
     }
 }
@@ -774,8 +798,16 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             enc.can_encode(&text)
         }
     };
+    // What is drawn: every option label of a list box (not its export value), else the text.
+    let shown_needs_outlines = if f.kind == FieldKind::List {
+        f.options.iter().any(|(_, display)| pdfcraft_fonts::needs_outlines(display))
+    } else {
+        pdfcraft_fonts::needs_outlines(&text)
+    };
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
+        // Korean the form's font can't show: outlines where Helvetica can't draw it.
+        None if can_show(&FontText::Outlined) && shown_needs_outlines => ("Helv".to_string(), helvetica(), FontText::Outlined),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
     let width_of = |text: &str, size: f64| enc.width(text, size);
@@ -786,11 +818,19 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
-    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
+    // Lines drawn as outlines, filled after the text object (path operators can't be inside one).
+    let mut outlined = String::new();
+    let mut layers = String::new();
+    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str, size: f64| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
         if unencodable.is_none() {
             unencodable = enc.first_unencodable(&text);
+        }
+        if let Some((path, layer)) = enc.outlines(&text, size, x, y) {
+            outlined.push_str(&path);
+            layers.push_str(&layer);
+            return;
         }
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
         body.extend(literal(&enc.encode(&text)));
@@ -821,7 +861,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 if values.contains(export) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
-                show(&mut body, pad, y - line + size * 0.25, display);
+                show(&mut body, pad, y - line + size * 0.25, display, size);
                 y -= line;
             }
         }
@@ -842,7 +882,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     if y - 0.207 * size >= bw - 0.01 {
                         room += 1;
                     }
-                    show(&mut body, x_for(line, size), y, line);
+                    show(&mut body, x_for(line, size), y, line, size);
                     y -= size * 1.15;
                 }
                 if room < lines.len() {
@@ -872,14 +912,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     c.push_str(&comb_dividers(doc, &wd, width, height, cells));
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
+                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s, size);
                     }
                 } else {
                     let tw = width_of(&text.replace(['\n', '\r'], " "), size);
                     if overflow.is_none() && tw > inner_w + 0.01 {
                         overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                     }
-                    show(&mut body, x_for(&text, size), y, &text);
+                    show(&mut body, x_for(&text, size), y, &text, size);
                 }
             }
         }
@@ -899,9 +939,18 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     )
     .into_bytes();
     content.extend(body);
-    content.extend_from_slice(b"ET\nQ\nEMC\n");
+    content.extend_from_slice(b"ET\n");
+    if !outlined.is_empty() {
+        content.extend(format!("{}\n{}f\n{}", da.color, outlined, layers).bytes());
+    }
+    content.extend_from_slice(b"Q\nEMC\n");
     let mut fonts = Dict::new();
     fonts.set(font_name.into_bytes(), font_obj);
+    if !outlined.is_empty() {
+        // The invisible text layer's font; its descriptor is made indirect when the field stores
+        // the appearance ([`pdfcraft_fonts::hoist_font_descriptors`]).
+        fonts.set(pdfcraft_fonts::OUTLINE_TEXT_FONT.as_bytes().to_vec(), Object::Dict(pdfcraft_fonts::outline_text_font()));
+    }
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     let mut d = Dict::new();

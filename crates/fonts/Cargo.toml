@@ -15,3 +15,6 @@ skrifa = "0.44"
 # Arabic shaping for text written into PDFs; already in the tree via egui, on the same read-fonts.
 harfrust = "0.12"
 unicode-bidi = "0.3"
+# Predefined CMaps (Adobe's BSD-3 CMap resources, AGENTS.md §1.1) for Type0 fonts named by
+# `/Encoding /KSC-EUC-H` etc.; already in the tree via hayro-interpret, same version and data.
+hayro-cmap = { version = "0.1.0", default-features = false, features = ["embed-cmaps"] }

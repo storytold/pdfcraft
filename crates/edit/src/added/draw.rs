@@ -1,10 +1,10 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, korean_error, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family};
 use super::{
     Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
-    align_code, literal, matrix_number, n, shaped_glyph, win_ansi,
+    align_code, is_hangul, literal, matrix_number, n, shaped_glyph, win_ansi,
 };
 
 fn font_name(base: &str) -> String {
@@ -84,6 +84,7 @@ pub(super) fn draw_laid_shaped(
                     ShapedScript::Arabic => arabic_error(e, &c.text),
                     ShapedScript::Hebrew => hebrew_error(e, &c.text),
                     ShapedScript::Thai => thai_error(e, &c.text),
+                    ShapedScript::Korean { .. } => korean_error(e, &c.text),
                 })?);
             }
         }
@@ -220,6 +221,7 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::Korean { .. } => "Korean",
             },
             |f| f.family,
         ),
@@ -253,9 +255,9 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
 }
 
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
-/// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
-/// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to
-/// move it.
+/// page's font names. `existing`: the item is being replaced, so a build without the Arabic,
+/// Hebrew or Korean face keeps drawing that text as `?`, as before it was supported, rather than
+/// refusing to move it.
 pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing: bool) -> Result<(Vec<u8>, Dict), EditError> {
     let mut res = Dict::new();
     let mut out = format!(
@@ -285,6 +287,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || face_or_new(is_hangul, !pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty())
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));

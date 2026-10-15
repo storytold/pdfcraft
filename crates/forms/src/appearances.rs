@@ -75,6 +75,13 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 }
             };
             let target = copy.get_or_insert_with(|| doc.clone());
+            // The invisible text layer's font descriptor must be indirect (ISO 32000-2 §9.8.1),
+            // in the display copy too.
+            let mut stream = stream;
+            if let Some(Object::Dict(mut res)) = stream.dict.get(b"Resources").cloned() {
+                pdfcraft_fonts::hoist_font_descriptors(target, &mut res);
+                stream.dict.set(b"Resources".to_vec(), Object::Dict(res));
+            }
             let ap = target.add(Object::Stream(stream));
             let mut fresh = Dict::new();
             match &state {
