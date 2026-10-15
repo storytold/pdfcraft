@@ -1,3 +1,5 @@
+use pdfcraft_engine::DocId;
+
 use super::PdfCraftApp;
 use super::save::SaveTarget;
 
@@ -6,11 +8,16 @@ use super::save::SaveTarget;
 pub enum CloseRequest {
     /// Close this document's tab. By id, not tab index: tabs can close and shift while a save
     /// panel is open.
-    Tab(pdfcraft_engine::DocId),
+    Tab(DocId),
     /// Quit the application once every dirty document is resolved.
     Quit,
     /// File ▸ Close all: like Quit, but the application stays open.
     All,
+    /// Close every tab but the anchor one. By id, like `Tab`: the anchor can close while a
+    /// save panel is open, which ends the batch.
+    Others(DocId),
+    /// Close every tab to the right of the anchor one. By id, like `Tab` for the same reason.
+    RightOf(DocId),
 }
 
 impl PdfCraftApp {
@@ -35,6 +42,33 @@ impl PdfCraftApp {
         }
         if self.first_dirty().is_some() {
             self.close_request = Some(CloseRequest::All);
+        }
+    }
+
+    /// Close every tab but `keep` (File ▸ Close all scoped to the anchor): clean tabs close at
+    /// once; each one with unsaved changes asks. The anchor never closes, dirty or not.
+    pub fn close_others(&mut self, keep: DocId) {
+        for i in (0..self.views.len()).rev() {
+            if self.views.get(i).is_some_and(|v| v.id != keep) && !self.has_unsaved_work(i) {
+                self.close_tab(i);
+            }
+        }
+        if self.dirty_target(&CloseRequest::Others(keep)).is_some() {
+            self.close_request = Some(CloseRequest::Others(keep));
+        }
+    }
+
+    /// Close every tab to the right of `after`, which stays: clean ones close at once; each one
+    /// with unsaved changes asks. Tabs left of the anchor are never touched.
+    pub fn close_tabs_right_of(&mut self, after: DocId) {
+        let Some(anchor) = self.views.iter().position(|v| v.id == after) else { return };
+        for i in (anchor + 1..self.views.len()).rev() {
+            if !self.has_unsaved_work(i) {
+                self.close_tab(i);
+            }
+        }
+        if self.dirty_target(&CloseRequest::RightOf(after)).is_some() {
+            self.close_request = Some(CloseRequest::RightOf(after));
         }
     }
 
@@ -66,6 +100,30 @@ impl PdfCraftApp {
         (0..self.views.len()).find(|&i| self.has_unsaved_work(i))
     }
 
+    /// The first dirty tab `req` still has to ask about, in `req`'s own scope: every tab for
+    /// `Quit` and `All`, every tab but the anchor for `Others`, and only the tabs right of the
+    /// anchor for `RightOf`. A batch whose anchor is no longer open asks about nothing.
+    fn dirty_target(&self, req: &CloseRequest) -> Option<usize> {
+        match req {
+            CloseRequest::Tab(id) => self.views.iter().position(|v| v.id == *id).filter(|&i| self.has_unsaved_work(i)),
+            CloseRequest::Quit | CloseRequest::All => self.first_dirty(),
+            CloseRequest::Others(keep) => {
+                let anchor = self.views.iter().position(|v| v.id == *keep)?;
+                (0..self.views.len()).find(|&i| i != anchor && self.has_unsaved_work(i))
+            }
+            CloseRequest::RightOf(after) => {
+                let anchor = self.views.iter().position(|v| v.id == *after)?;
+                (anchor + 1..self.views.len()).find(|&i| self.has_unsaved_work(i))
+            }
+        }
+    }
+
+    /// The tab index the pending `close_request` asks about: the request's anchor decides which
+    /// tabs count, so a finished batch or a gone anchor asks about nothing.
+    pub(crate) fn close_request_target(&self) -> Option<usize> {
+        self.close_request.as_ref().and_then(|r| self.dirty_target(r))
+    }
+
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
@@ -76,7 +134,7 @@ impl PdfCraftApp {
                 Some(i) => i,
                 None => return, // already closed
             },
-            CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
+            CloseRequest::Quit | CloseRequest::All | CloseRequest::Others(_) | CloseRequest::RightOf(_) => match self.dirty_target(&req) {
                 Some(i) => i,
                 None => {
                     if req == CloseRequest::Quit {
@@ -120,8 +178,9 @@ impl PdfCraftApp {
         self.close_tab(index);
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
-        if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
-            match self.first_dirty() {
+        let batch = matches!(req, CloseRequest::Quit | CloseRequest::All | CloseRequest::Others(_) | CloseRequest::RightOf(_));
+        if batch && self.close_request.is_none() {
+            match self.dirty_target(&req) {
                 Some(_) => {
                     // A question about the next document is a new one.
                     self.save_prompt_seen = false;
