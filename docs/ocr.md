@@ -1,13 +1,15 @@
 # Local text recognition
 
 Scan & OCR → Recognize text offers **English** (`en`), **Chinese (Simplified) and English**
-(`zh`) and **Latin (accented)** (`la`). The Chinese recogniser reads Chinese, Latin letters
-and numbers in the same line; the Latin recogniser reads European languages written with
-accented letters — German, French, Spanish, Portuguese, Czech, Polish, the Nordic languages
-and others (see the dictionary in [ATTRIBUTION.toml](../ATTRIBUTION.toml) for the exact
-character set). Choose the document language in the dialog before recognising the current
-page, a range, all pages or multiple files. The interface language and OCR document
-language are independent.
+(`zh`), **Latin (accented)** (`la`), and the individual languages French, German, Spanish,
+Portuguese, Italian, Dutch, Danish, Norwegian, Swedish, Icelandic, Finnish, Czech and Polish.
+The Chinese recogniser reads Chinese, Latin letters and numbers in the same line. `la` and
+those named languages share the Latin recogniser. A named language prefers its own letters
+when two readings are close (`å` rather than `à` for Danish) and still keeps a letter from
+another language when that reading is clearly ahead. The dictionary in
+[ATTRIBUTION.toml](../ATTRIBUTION.toml) lists the exact character set. Choose the document
+language in the dialog before recognising the current page, a range, all pages or multiple
+files. The interface language and OCR document language are independent.
 
 The output is a searchable image: original page images and content stay intact, with an
 invisible text layer for selection, copying, search and text export. Recognition is one
@@ -43,7 +45,8 @@ never uploads a PDF or calls a cloud service.
 
 ## Automation
 
-`ocr_recognize` and `ocr_recognize_files` accept `"language": "zh"` or `"language": "la"`.
+`ocr_recognize` and `ocr_recognize_files` accept `"language": "zh"`, `"language": "la"`, or a
+named language such as `"fr"` or `"es"`.
 `ocr_status` lists each language and its `available` flag. The legacy top-level `available`
 flag continues to report English availability. For example, after `doc_open` returns
 document 1:

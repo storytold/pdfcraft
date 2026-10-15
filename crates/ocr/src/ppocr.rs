@@ -50,7 +50,7 @@ impl PpOcr {
         Ok(Self { model, alphabet })
     }
 
-    pub fn recognize(&self, rgb: &[u8], width: u32, height: u32, rect: [f32; 4]) -> Result<String, OcrError> {
+    pub fn recognize(&self, rgb: &[u8], width: u32, height: u32, rect: [f32; 4], preferred: &str) -> Result<String, OcrError> {
         let [left, top, right, bottom] = rect;
         if !rect.iter().all(|x| x.is_finite()) {
             return Err(OcrError::Recognize("non-finite text box".into()));
@@ -100,11 +100,15 @@ impl PpOcr {
             return Err(OcrError::Recognize("PP-OCR output has an unexpected shape".into()));
         }
         let values: Vec<f32> = output.iter().copied().collect();
-        decode(&values, &self.alphabet)
+        decode(&values, &self.alphabet, preferred)
     }
 }
 
-fn decode(values: &[f32], alphabet: &[char]) -> Result<String, OcrError> {
+/// How close a preferred letter has to be to the top score before it replaces that score.
+/// Far-away letters, including names from another language, stay as read.
+const PREFERENCE_MARGIN: f32 = 1.0;
+
+fn decode(values: &[f32], alphabet: &[char], preferred: &str) -> Result<String, OcrError> {
     if alphabet.is_empty() || !values.len().is_multiple_of(alphabet.len()) {
         return Err(OcrError::Recognize("invalid CTC output".into()));
     }
@@ -115,6 +119,7 @@ fn decode(values: &[f32], alphabet: &[char]) -> Result<String, OcrError> {
             return Err(OcrError::Recognize("non-finite recognition scores".into()));
         }
         let best = row.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map_or(0, |(i, _)| i);
+        let best = preferred_near(row, alphabet, preferred, best);
         if best != 0
             && best != previous
             && let Some(c) = alphabet.get(best)
@@ -124,6 +129,31 @@ fn decode(values: &[f32], alphabet: &[char]) -> Result<String, OcrError> {
         previous = best;
     }
     Ok(text.trim().to_string())
+}
+
+/// If a letter this language writes scores within [`PREFERENCE_MARGIN`] of the winner, use the
+/// strongest such letter. A winner that is already preferred, or that leads by more than the
+/// margin, is unchanged, so a name from another language is kept.
+fn preferred_near(row: &[f32], alphabet: &[char], preferred: &str, best: usize) -> usize {
+    if preferred.is_empty() {
+        return best;
+    }
+    let liked = |i: usize| alphabet.get(i).is_some_and(|c| c.is_ascii_alphabetic() || preferred.contains(*c));
+    // A space, digit or mark that won stays. The preference only separates close letters
+    // (Danish å against à), it does not turn a gap into a letter.
+    if liked(best) || !alphabet.get(best).is_some_and(|c| c.is_alphabetic()) {
+        return best;
+    }
+    let Some(best_v) = row.get(best).copied() else { return best };
+    let mut chosen = None;
+    let mut chosen_v = f32::NEG_INFINITY;
+    for (i, v) in row.iter().copied().enumerate() {
+        if liked(i) && best_v - v <= PREFERENCE_MARGIN && v > chosen_v {
+            chosen = Some(i);
+            chosen_v = v;
+        }
+    }
+    chosen.unwrap_or(best)
 }
 
 #[cfg(test)]
@@ -139,8 +169,22 @@ mod tests {
             row[i] = 1.0;
             scores.extend(row);
         }
-        assert_eq!(decode(&scores, &alphabet).unwrap(), "中中文A");
-        assert!(decode(&[f32::NAN; 4], &alphabet).is_err());
+        assert_eq!(decode(&scores, &alphabet, "").unwrap(), "中中文A");
+        assert!(decode(&[f32::NAN; 4], &alphabet, "").is_err());
+    }
+
+    /// A close preferred letter replaces the winner. A letter that leads by more than the margin stays.
+    #[test]
+    fn a_close_preferred_letter_wins_and_a_clear_other_letter_stays() {
+        let alphabet = ['\0', 'à', 'å'];
+        let close = [0.0, 5.0, 4.2];
+        assert_eq!(decode(&close, &alphabet, "å").unwrap(), "å");
+        let clear = [0.0, 5.0, 3.0];
+        assert_eq!(decode(&clear, &alphabet, "å").unwrap(), "à");
+        assert_eq!(decode(&close, &alphabet, "").unwrap(), "à");
+        // A winning space is a gap, not a letter the language can replace.
+        let gap = [0.0, 5.0, 4.5, 4.4];
+        assert_eq!(preferred_near(&gap, &['\0', ' ', 'à', 'å'], "å", 1), 1);
     }
 
     #[test]

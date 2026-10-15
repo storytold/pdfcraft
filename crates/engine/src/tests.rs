@@ -5471,6 +5471,98 @@ fn latin_ocr_keeps_german_accents_searchable() {
     assert_eq!(page_texts(&s, id), [""]);
 }
 
+/// Draw `lines` in the committed Inter face. `jpeg_quality` re-encodes the page as a JPEG scan.
+fn inter_scan(lines: &[&str], jpeg_quality: Option<u8>) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 64.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let (w, h) = (2000u32, 160 + 120 * lines.len() as u32);
+    let mut image = image::RgbaImage::from_pixel(w, h, image::Rgba([255; 4]));
+    for (row, line) in lines.iter().enumerate() {
+        let mut x = 40.0;
+        let baseline = 110.0 + 120.0 * row as f32;
+        for ch in line.chars() {
+            let id = scaled.glyph_id(ch);
+            assert_ne!(id.0, 0, "fixture font must cover {ch}");
+            let glyph = id.with_scale_and_position(size, point(x, baseline));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let bounds = outline.px_bounds();
+                outline.draw(|gx, gy, coverage| {
+                    let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                    if px >= 0 && py >= 0 && px < w as i32 && py < h as i32 {
+                        let v = (255.0 * (1.0 - coverage)) as u8;
+                        image.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
+                    }
+                });
+            }
+            x += scaled.h_advance(id);
+        }
+    }
+    let mut bytes = Vec::new();
+    if let Some(quality) = jpeg_quality {
+        use image::ImageEncoder;
+        let rgb = image::DynamicImage::ImageRgba8(image).into_rgb8();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality);
+        encoder.write_image(rgb.as_raw(), w, h, image::ExtendedColorType::Rgb8).unwrap();
+    } else {
+        image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    }
+    bytes
+}
+
+/// #524: `ç` and `ù` must come back as themselves. A reading of `facade` or `ou` has no `?` and
+/// would pass a test that only rejects question marks.
+#[test]
+fn latin_ocr_keeps_french_cedilla_and_grave() {
+    if !ocr::available_for("fr") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Réponse à la demande de l'élève, où", "la façade rénovée"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("french.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "fr".into(), ..Default::default() }).unwrap();
+    let text = found[0].text();
+    // `façade` → `facade` and `où` → `ou` drop the accent with no `?`, so the letters themselves
+    // have to be present.
+    assert!(text.contains('ç') && text.contains('ù') && text.contains('é'), "{text}");
+    assert!(!text.contains('?'), "{text}");
+    assert!(page_texts(&s, id)[0].contains('ç') && page_texts(&s, id)[0].contains('ù'), "{:?}", page_texts(&s, id));
+}
+
+/// A JPEG scan, the way a photographed page arrives, still keeps the French accents.
+#[test]
+fn latin_ocr_keeps_french_on_a_jpeg_scan() {
+    if !ocr::available_for("fr") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let jpeg = inter_scan(&["Café été, façade, où"], Some(70));
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("scan.jpg".into(), jpeg)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "fr".into(), ..Default::default() }).unwrap()[0].text();
+    assert!(text.contains('ç') && text.contains('ù') && text.contains('é') && !text.contains('?'), "{text}");
+}
+
+/// Spanish names and an amount, including ñ and the accented vowels.
+#[test]
+fn latin_ocr_keeps_spanish_names_and_amounts() {
+    if !ocr::available_for("es") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["José Muñoz, María Núñez y Óscar Gómez", "México, año. Total: $16,858.66 MXN"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("spanish.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "es".into(), ..Default::default() }).unwrap()[0].text();
+    assert!(text.contains("José") && text.contains("Muñoz") && text.contains("Núñez") && text.contains("Óscar"), "{text}");
+    assert!(text.contains("México") && text.contains("año") && text.contains("16,858.66"), "{text}");
+}
+
 /// A form whose scripts are custom JavaScript: total = price × qty (calculate, through a
 /// document-level function), shown with a custom format; qty is validated; a button script.
 fn scripted_form() -> Vec<u8> {

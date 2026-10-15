@@ -30,15 +30,68 @@ pub const LATIN_DICTIONARY: &str = "latin-keys.txt";
 /// The PP-OCR languages: (code, model file, dictionary file, output classes = CTC blank +
 /// one per dictionary line + the appended space). The class count is pinned per model, so a
 /// wrong or truncated dictionary fails at load instead of decoding garbage.
-const PP_OCR: &[(&str, &str, &str, usize)] = &[("zh", CHINESE_MODEL, CHINESE_DICTIONARY, 6625), ("la", LATIN_MODEL, LATIN_DICTIONARY, 504)];
+const PP_OCR: &[(&str, &str, &str, usize)] = &[
+    ("zh", CHINESE_MODEL, CHINESE_DICTIONARY, 6625),
+    ("la", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("fr", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("de", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("es", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("pt", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("it", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("nl", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("da", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("no", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("sv", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("is", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("fi", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("cs", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("pl", LATIN_MODEL, LATIN_DICTIONARY, 504),
+];
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1).
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("zh", "Chinese (Simplified) and English"), ("la", "Latin (accented)")];
+/// The languages the models read (ISO 639-1). `la` reads every letter in the Latin dictionary.
+/// The named languages use that same model and, when two letters score close together, prefer
+/// the ones that language writes (`å` for Danish, `à` for French) without forbidding the others.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("zh", "Chinese (Simplified) and English"),
+    ("la", "Latin (accented)"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("es", "Spanish"),
+    ("pt", "Portuguese"),
+    ("it", "Italian"),
+    ("nl", "Dutch"),
+    ("da", "Danish"),
+    ("no", "Norwegian"),
+    ("sv", "Swedish"),
+    ("is", "Icelandic"),
+    ("fi", "Finnish"),
+    ("cs", "Czech"),
+    ("pl", "Polish"),
+];
+
+/// Letters a document language prefers when the recogniser is unsure. Empty means no preference.
+pub fn preferred_letters(language: &str) -> &'static str {
+    match language {
+        "fr" => "àâæçéèêëîïôœùûüÿÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸ",
+        "de" => "äöüßÄÖÜ",
+        "es" => "áéíñóúü¿¡ÁÉÍÑÓÚÜ",
+        "pt" => "áàâãçéêíóôõúÁÀÂÃÇÉÊÍÓÔÕÚ",
+        "it" => "àèéìíîòóùÀÈÉÌÍÎÒÓÙ",
+        "nl" => "áéëïóöüÁÉËÏÓÖÜ",
+        "da" | "no" => "åæøÅÆØ",
+        "sv" | "fi" => "åäöÅÄÖ",
+        "is" => "áðéíóúýþæöÁÐÉÍÓÚÝÞÆÖ",
+        "cs" => "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ",
+        "pl" => "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ",
+        _ => "",
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -52,7 +105,7 @@ pub enum OcrError {
     Recognize(String),
     #[error("the image is empty")]
     EmptyImage,
-    #[error("unsupported OCR language {0:?}; choose en, zh or la")]
+    #[error("unsupported OCR language {0:?}; choose a language from ocr_status")]
     Language(String),
 }
 
@@ -62,6 +115,7 @@ pub enum OcrError {
 pub struct Models {
     pub detection: PathBuf,
     pub recognition: PathBuf,
+    pub language: &'static str,
 }
 
 impl Models {
@@ -74,8 +128,9 @@ impl Models {
     /// English keeps a complete ONNX pair ahead of a complete legacy RTEN pair, and never mixes
     /// the two. Other languages use that same detector with their own recognition model and dictionary.
     pub fn in_dir_for(dir: &Path, language: &str) -> Option<Models> {
+        let language = LANGUAGES.iter().find(|l| l.0 == language)?.0;
         let english = [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
-            let m = Models { detection: dir.join(detection), recognition: dir.join(recognition) };
+            let m = Models { detection: dir.join(detection), recognition: dir.join(recognition), language };
             (m.detection.is_file() && m.recognition.is_file()).then_some(m)
         });
         if language == "en" {
@@ -88,7 +143,7 @@ impl Models {
         let detection = english.as_ref().map(|m| m.detection.clone()).or_else(|| {
             [DETECTION_MODEL, "text-detection.rten"].into_iter().map(|name| dir.join(name)).find(|path| path.is_file())
         })?;
-        Some(Models { detection, recognition: dir.join(model) })
+        Some(Models { detection, recognition: dir.join(model), language })
     }
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
@@ -149,6 +204,9 @@ impl Line {
 pub struct Ocr {
     engine: ocrs::OcrEngine,
     ppocr: Option<ppocr::PpOcr>,
+    /// Letters this document language prefers when two readings are close. Empty for English,
+    /// Chinese and the unrestricted Latin choice.
+    preferred: &'static str,
 }
 
 impl Ocr {
@@ -167,7 +225,7 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine, ppocr })
+        Ok(Ocr { engine, ppocr, preferred: preferred_letters(models.language) })
     }
 
     /// Load the models found by [`Models::find`].
@@ -220,7 +278,7 @@ impl Ocr {
                     .fold(None, |rect: Option<rten_imageproc::Rect<f32>>, r| Some(rect.map_or(r, |b| b.union(r))));
                 let Some(r) = rect else { continue };
                 let rect = [r.left(), r.top(), r.right(), r.bottom()];
-                let text = ppocr.recognize(&rgb, width, height, rect)?;
+                let text = ppocr.recognize(&rgb, width, height, rect, self.preferred)?;
                 if !text.is_empty() {
                     result.push(Line { words: vec![Word { text, rect }] });
                 }
@@ -413,7 +471,7 @@ mod tests {
         for file in ["text-detection.onnx", "text-recognition.onnx"] {
             std::fs::write(dir.path().join(file), b"model").unwrap();
         }
-        let expected = Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx") });
+        let expected = Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx"), language: "en" });
         assert_eq!(Models::in_dir(dir.path()), expected, "a complete ONNX pair is sufficient");
         for file in ["text-detection.rten", "text-recognition.rten"] {
             std::fs::write(dir.path().join(file), b"model").unwrap();
@@ -431,7 +489,7 @@ mod tests {
             }
             assert_eq!(
                 Models::in_dir(dir.path()),
-                Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") }),
+                Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten"), language: "en" }),
                 "{current} alone must not hide a complete legacy pair"
             );
         }
@@ -459,7 +517,7 @@ mod tests {
         std::fs::write(dir.path().join("text-recognition.rten"), b"model").unwrap();
         assert_eq!(
             Models::in_dir(dir.path()),
-            Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") })
+            Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten"), language: "en" })
         );
     }
 
@@ -501,6 +559,13 @@ mod tests {
         // The euro sign follows the ASCII punctuation (class 44; 0 is the CTC blank), not a second E.
         assert_eq!(chars.iter().position(|&c| c == '€'), Some(43));
         assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
+    }
+
+    #[test]
+    fn french_prefers_cedilla_and_grave_and_does_not_claim_the_nordic_ring() {
+        assert!(preferred_letters("fr").contains('ç') && preferred_letters("fr").contains('ù'));
+        assert!(preferred_letters("da").contains('å') && !preferred_letters("da").contains('à'));
+        assert!(preferred_letters("la").is_empty() && preferred_letters("en").is_empty());
     }
 
     #[test]
