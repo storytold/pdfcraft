@@ -3,6 +3,8 @@ use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
     Close(DocId),
+    CloseOthers(DocId),
+    CloseRightOf(DocId),
     Reopen,
     Reveal(DocId),
 }
@@ -13,6 +15,17 @@ impl crate::PdfCraftApp {
             Action::Close(id) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id) {
                     self.request_close_tab(i);
+                }
+            }
+            // A gone anchor closes nothing: the tab may have been closed meanwhile.
+            Action::CloseOthers(id) => {
+                if self.views.iter().any(|v| v.id == id) {
+                    self.close_others(id);
+                }
+            }
+            Action::CloseRightOf(id) => {
+                if self.views.iter().any(|v| v.id == id) {
+                    self.close_tabs_right_of(id);
                 }
             }
             Action::Reopen => {
@@ -312,5 +325,94 @@ mod ui_tests {
         h.run_steps(3);
         assert_eq!(h.state().views.len(), 1);
         assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().name, "second.pdf");
+    }
+
+    #[test]
+    fn close_other_tabs_from_the_menu_keeps_only_the_clicked_tab() {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            for name in ["first.pdf", "second.pdf", "third.pdf"] {
+                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            }
+            app
+        });
+        h.run_steps(8);
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Close Other Tabs").click();
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(app.views.len(), 1);
+        assert_eq!(app.session.get(app.views[0].id).unwrap().name, "first.pdf");
+        assert_eq!(app.active, Some(0));
+    }
+
+    #[test]
+    fn close_tabs_to_the_right_prompts_for_dirty_ones_and_cancel_keeps_them() {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            for name in ["first.pdf", "second.pdf", "third.pdf"] {
+                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            }
+            // second.pdf carries an unsaved edit, as the unit tests' close prompts do.
+            app.session.apply(app.views[1].id, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
+            app
+        });
+        h.run_steps(8);
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Close Tabs to the Right").click();
+        h.run_steps(3);
+        // The clean third.pdf closed at once; only the dirty second.pdf asks.
+        assert_eq!(h.state().views.len(), 2);
+        h.get_by_label_contains("Save changes to “second.pdf”");
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        {
+            let app = h.state();
+            assert_eq!(app.views.len(), 2, "cancel keeps second.pdf open");
+            assert!(app.close_request.is_none(), "the prompt is gone");
+            assert!(app.views.iter().any(|v| app.session.get(v.id).is_some_and(|d| d.name == "second.pdf" && d.dirty)), "still dirty");
+        }
+        // The same menu action again, answered with "Don't save" this time: only the anchor stays.
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Close Tabs to the Right").click();
+        h.run_steps(3);
+        h.get_by_label("Don't save").click();
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(app.views.len(), 1);
+        assert_eq!(app.session.get(app.views[0].id).unwrap().name, "first.pdf");
+        assert!(app.close_request.is_none());
+    }
+
+    #[test]
+    fn batch_menu_items_disable_when_they_would_close_nothing() {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            for name in ["first.pdf", "second.pdf"] {
+                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            }
+            app
+        });
+        h.run_steps(8);
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        assert!(!h.get_by_label("Close Tabs to the Right").accesskit_node().is_disabled(), "second.pdf sits to the right");
+        assert!(!h.get_by_label("Close Other Tabs").accesskit_node().is_disabled(), "second.pdf is another tab");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "second.pdf").click_secondary();
+        h.run_steps(2);
+        assert!(h.get_by_label("Close Tabs to the Right").accesskit_node().is_disabled(), "the last tab has nothing to its right");
+        h.get_by_label("Close Tab").click();
+        h.run_steps(3);
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        assert!(h.get_by_label("Close Other Tabs").accesskit_node().is_disabled(), "the only tab has no others");
     }
 }

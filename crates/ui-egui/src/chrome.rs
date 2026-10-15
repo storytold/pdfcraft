@@ -163,6 +163,17 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         action = Some(crate::tab_context::Action::Close(id));
                                         ui.close();
                                     }
+                                    // `views` holds only document tabs, so the Combine tab never counts.
+                                    let others = app.views.len() > 1; // some OTHER document tab exists
+                                    let right = app.views.get(i + 1).is_some(); // not the last document tab
+                                    if ui.add_enabled(others, egui::Button::new(tl!("Close Other Tabs"))).clicked() {
+                                        action = Some(crate::tab_context::Action::CloseOthers(id));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(right, egui::Button::new(tl!("Close Tabs to the Right"))).clicked() {
+                                        action = Some(crate::tab_context::Action::CloseRightOf(id));
+                                        ui.close();
+                                    }
                                     if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
                                         action = Some(crate::tab_context::Action::Reopen);
                                         ui.close();
