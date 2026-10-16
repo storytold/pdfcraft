@@ -839,6 +839,9 @@ fn files_and_quit_from_the_operating_system() {
     let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Open(vec![path.to_string_lossy().into_owned()])]));
     let q = queue.clone();
     let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    // Reading and preparation run on the open worker. Keep its source file until the tab
+    // is ready, regardless of how many UI frames the worker takes.
+    support::wait_until(&mut h, "the file the operating system opened", |app| !app.views.is_empty());
     std::fs::remove_file(&path).ok();
     assert_eq!(h.state().views.len(), 1, "the file opens in a tab");
     h.get_by_label_contains(&name);
