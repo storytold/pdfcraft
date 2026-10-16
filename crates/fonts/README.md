@@ -73,12 +73,35 @@ Generated Japanese Type 3 fonts record the fallback face's family and style in a
 `FontDescriptor`. `pdf::Metrics::base_font` uses its `FontName` when the Type 3 dictionary has
 no `BaseFont`, so text inspection and edit-tool results identify the fallback after save/reopen.
 The descriptor does not change glyph programs or replace the Type 3 `FontBBox` metrics when
-`Ascent`/`Descent` are omitted (PDF Reference 1.7, tables 5.9 and 5.19). The small web input has
+`Ascent`/`Descent` are omitted (PDF Reference 1.7, tables 5.9 and 5.19). The default small web input has
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
-currently has no Chinese face, so Chinese there still shows the replacement glyph.
+By default, wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr`
+`Thai` or `Deva` face, keeping deployment sizes smaller. The optional Simplified Chinese
+manifest is native-only, so it does not supply Chinese fonts to the web build.
+
+Set `CRAFT_FONTS_WEB=all` to embed every otherwise permitted font listed in the configured
+`CRAFT_FONTS_DIR/fonts/manifest.txt`. For example, on Linux:
+
+```bash
+CRAFT_FONTS_DIR=/path/to/craft-fonts \
+CRAFT_FONTS_WEB=all \
+cargo build --release \
+  --target wasm32-unknown-unknown \
+  -p pdfcraft-web
+```
+
+This is a **build-time** option, not runtime font loading: it does not fetch a served manifest
+or persist fonts uploaded in a browser session. Unset keeps the existing default selection;
+any value other than `all` (including an empty value) is a build error. Valid settings do not
+change native Linux, Windows or macOS font selection, optional-input handling, or
+`CRAFT_FONTS_REQUIRED` behavior. All modes keep the prohibited-family exclusions in AGENTS.md
+§1.1 (Source Han/Serif/Sans and Noto CJK). The build filter does not audit arbitrary fonts'
+origins or licenses: custom inputs must comply with the entire asset policy.
+
+Embedding additional fonts increases WASM output size. Self-hosted deployments must verify
+their own hosting limits and font licenses, including any required notices.
 Font files are never
 committed here (`AGENTS.md` §1.4).
 
