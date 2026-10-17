@@ -14,6 +14,8 @@ workspace = true
 aes = "0.9"
 md-5 = "0.11"
 sha2 = "0.11"
+# Public-key security derives the AESV2 / RC4 file key with SHA-1 (ISO 32000-2 §7.6.5.3).
+sha1 = "0.11"
 stringprep = "0.1"
 thiserror.workspace = true
 

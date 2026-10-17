@@ -184,14 +184,24 @@ impl PdfCraftApp {
             "file.word_count" => self.dialog = Some(Dialog::WordCount),
             "protect.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Security)),
             // A restricted document's security changes once its permissions password is entered.
-            "protect.password" | "protect.remove" if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.can_unlock()) => {
-                let then = if id == "protect.password" { "protect.password" } else { "protect.remove" };
+            "protect.password" | "protect.certificate" | "protect.remove"
+                if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.can_unlock()) =>
+            {
+                let then = match id {
+                    "protect.password" => "protect.password",
+                    "protect.certificate" => "protect.certificate",
+                    _ => "protect.remove",
+                };
                 self.request_unlock(Some(then));
             }
             "protect.unlock" => self.request_unlock(None),
             "protect.password" => {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
+            }
+            "protect.certificate" => {
+                self.certificate_draft = Default::default();
+                self.dialog = Some(Dialog::EncryptCertificate);
             }
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {

@@ -350,6 +350,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.background.update", "Update background…", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("edit.background.remove", "Remove background", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("protect.password", "Protect using password…", FILE, None, Security, "lock"),
+    c("protect.certificate", "Encrypt with certificate…", FILE, None, Security, "file-lock-2"),
     c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock-open"),
     c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock-open"),
     c("protect.properties", "Security properties…", FILE, None, Document, "shield-check"),

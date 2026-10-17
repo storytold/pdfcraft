@@ -5473,11 +5473,11 @@ title = "Encrypt with certificates for recipients"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["protect.certificate"]
+tools = ["doc_protect_certificates", "identity_add"]
+evidence = ["crates/ui-egui/tests/ui_group/protect.rs::encrypting_with_certificates_and_opening_with_a_digital_id", "crates/automation/tests/automation.rs::encrypting_with_certificates_through_the_tools", "crates/cos/tests/encryption.rs::public_key_security_round_trips_through_a_file", "crates/sign/src/envelope.rs::an_envelope_opens_only_for_its_recipient"]
+notes = "Encrypt with Certificate dialog (Protect ▸ Encrypt with certificate): recipients from certificate files (.cer, .crt, .pem, .der) or the person's own digital ID files, compatibility AES-256 or AES-128, everything or all but metadata. Writes /Adobe.PubSec with adbe.pkcs7.s5 envelopes (CMS EnvelopedData, RSA PKCS #1 v1.5 key transport, AES-128-CBC content; AES-192/256 and 3DES envelopes are read too), AESV2 or AESV3. Opening such a file asks for a digital ID file and its password; the renderer reads a decrypted copy while saves stay encrypted. Not yet: EC recipients (key agreement), RSA-OAEP, opening with a Keychain or Windows store identity (their keys can't decrypt through PdfCraft yet), picking recipients from a directory or address book."
 
 [[feature]]
 id = "protect.recipient-permissions"
@@ -5485,11 +5485,11 @@ title = "Per-recipient permissions for certificate security"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["protect.certificate"]
+tools = ["doc_protect_certificates"]
+evidence = ["crates/ui-egui/src/certificate_ui.rs::drafts_need_a_recipient_and_give_each_their_permissions", "crates/ui-egui/tests/ui_group/protect.rs::encrypting_with_certificates_and_opening_with_a_digital_id"]
+notes = "Each recipient's envelope carries its own permissions, and the engine takes any per recipient. The dialog offers two levels: All permissions (the default for your own digital IDs) or the shared restrictions (printing, changes, copying, screen readers). Not yet: a different set of restrictions for each recipient in the dialog."
 
 [[feature]]
 id = "protect.recipient-ldap"

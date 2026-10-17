@@ -216,6 +216,58 @@ struct Keys {
     render: Option<String>,
     /// What the editor re-opens a saved file with: the strongest password known (owner if any).
     reopen: Option<String>,
+    /// Certificate security: what the person's envelope held (the file key follows from it).
+    certificate: Option<CertificateKey>,
+}
+
+/// What opens a certificate-protected document (§7.6.5): the seed and permissions one of its
+/// envelopes gave up to one of the session's identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CertificateKey {
+    pub seed: [u8; 20],
+    pub permissions: i32,
+}
+
+impl Keys {
+    /// Open `bytes` the way this state of the document is opened.
+    fn open(&self, bytes: Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, pdfcraft_cos::CosError> {
+        match self.certificate {
+            Some(c) => pdfcraft_cos::Document::open_with_credential(
+                bytes,
+                &pdfcraft_cos::Credential::Certificate { seed: c.seed, permissions: c.permissions },
+            ),
+            None => pdfcraft_cos::Document::open_with_password(bytes, self.reopen.as_deref()),
+        }
+    }
+}
+
+/// Whether the document's next save is certificate security (`/Adobe.PubSec`): its working
+/// bytes cannot be read by the renderer, which gets a decrypted copy instead.
+fn certificate_secured(cos: &pdfcraft_cos::Document) -> bool {
+    cos.output_handler().is_some_and(|h| h.dict().filter == pdfcraft_cos::PUBSEC_FILTER)
+}
+
+/// The document as it is now, with no encryption: what the renderer and inspector read when
+/// the file itself is certificate-protected.
+fn plain_copy(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    let mut plain = cos.clone();
+    plain.remove_encryption();
+    write_full(&plain, &SaveOptions::default()).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+}
+
+/// What one of `identities` makes of the envelopes: the seed and permissions of the first
+/// envelope addressed to it.
+fn unlock_with_identities(identities: &[Arc<pdfcraft_sign::DigitalId>], envelopes: &[Vec<u8>]) -> Option<CertificateKey> {
+    for id in identities {
+        for env in envelopes {
+            if let Ok(Some(content)) = pdfcraft_sign::envelope::open(env, id)
+                && let Some((seed, permissions)) = pdfcraft_cos::permissions_from_envelope(&content)
+            {
+                return Some(CertificateKey { seed, permissions });
+            }
+        }
+    }
+    None
 }
 
 /// What an edit can change, and so what the view data must be rebuilt from.
@@ -787,7 +839,13 @@ impl Document {
         };
         let pending = editor.cos.encryption_changed();
         let permissions = if pending { pdfcraft_cos::Permissions { bits: h.permissions().bits, owner: false } } else { h.permissions() };
-        Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
+        let method = if d.filter == pdfcraft_cos::PUBSEC_FILTER {
+            let n = d.recipients.len();
+            format!("{method} · certificates ({n} recipient{})", if n == 1 { "" } else { "s" })
+        } else {
+            method.to_string()
+        };
+        Some(SecuritySummary { method, owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
     }
 
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).
@@ -1699,6 +1757,8 @@ pub enum Edit {
     FlattenFillSign,
     /// Protect with passwords and permissions (written by the next save, which is a full rewrite).
     Protect(Protection),
+    /// Encrypt for the holders of certificates (Acrobat: Protect ▸ Encrypt with certificate).
+    ProtectWithCertificates(CertificateProtection),
     /// Remove password security (needs the owner password).
     RemoveProtection,
     /// Several edits applied as one undoable step (all or nothing).
@@ -2035,6 +2095,7 @@ impl Edit {
             Edit::Flatten { .. } => Label::of("Flatten"),
             Edit::FlattenFillSign => Label::of("Flatten Fill & Sign"),
             Edit::Protect(_) => Label::of("Protect with password"),
+            Edit::ProtectWithCertificates(p) => plural("Encrypt for recipient", "Encrypt for recipients", p.recipients.len()),
             Edit::RemoveProtection => Label::of("Remove security"),
             // A batch carries its own name, already worded by whoever built it.
             // A batch carries its name as text, so the wording is only the hole (see `BATCH_LABELS`).
@@ -2073,6 +2134,26 @@ fn add_annotation(s: &Shape) -> &'static str {
         Shape::Caret { .. } => "Add inserted text",
         Shape::Attachment { .. } => "Add file attachment",
     }
+}
+
+/// Certificate security to apply (§7.6.5): the file encrypted for `recipients`, each with the
+/// permissions their envelope carries (`-1`: everything, what the author gives themself).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateProtection {
+    pub recipients: Vec<CertificateRecipient>,
+    /// AES-256 (Acrobat X and later) or AES-128 (Acrobat 7 and later).
+    pub algorithm: pdfcraft_cos::Algorithm,
+    pub encrypt_metadata: bool,
+    /// The file key's seed, fresh from [`Session::new_seed`].
+    pub seed: [u8; 20],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateRecipient {
+    /// The certificate, DER.
+    pub certificate: Vec<u8>,
+    /// Permission bits as `/P` (§7.6.4.2, Table 22); `-1` for everything.
+    pub permissions: i32,
 }
 
 /// Opened as owner, or nothing is restricted (no permissions password was set): security may
@@ -2139,7 +2220,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
                 Err(EditError::NotPermitted("filling in form fields"))
             }
         }
-        Edit::Protect(_) | Edit::RemoveProtection => {
+        Edit::Protect(_) | Edit::ProtectWithCertificates(_) | Edit::RemoveProtection => {
             if unrestricted(p) {
                 Ok(())
             } else {
@@ -2675,6 +2756,26 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             };
             doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
         }
+        Edit::ProtectWithCertificates(p) => {
+            if p.recipients.is_empty() {
+                return Err(EditError::Protection("choose at least one recipient".into()));
+            }
+            let mut envelopes = Vec::with_capacity(p.recipients.len());
+            for r in &p.recipients {
+                let cert = pdfcraft_sign::Certificate::parse(&r.certificate)
+                    .map_err(|e| EditError::Protection(format!("a recipient's certificate could not be read: {e}")))?;
+                let content = [&p.seed[..], &pdfcraft_cos::permission_bytes(r.permissions)].concat();
+                envelopes.push(pdfcraft_sign::envelope::envelope(&cert, &content).map_err(|e| EditError::Protection(e.to_string()))?);
+            }
+            let params = pdfcraft_cos::PublicKeyEncryption {
+                algorithm: p.algorithm,
+                recipients: envelopes,
+                seed: p.seed,
+                permissions: -1,
+                encrypt_metadata: p.encrypt_metadata,
+            };
+            doc.set_public_key_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+        }
         Edit::RemoveProtection => {
             if doc.output_handler().is_none() {
                 return Err(EditError::Protection("the document isn't protected".into()));
@@ -2731,8 +2832,14 @@ fn parse_ymd(d: &str) -> Option<(i64, u32, u32)> {
 /// The passwords after `edit`, if it changes them.
 fn keys_after(edit: &Edit) -> Option<Keys> {
     match edit {
-        Edit::Protect(p) => {
-            Some(Keys { render: p.open_password.clone(), reopen: p.permissions_password.clone().or_else(|| p.open_password.clone()) })
+        Edit::Protect(p) => Some(Keys {
+            render: p.open_password.clone(),
+            reopen: p.permissions_password.clone().or_else(|| p.open_password.clone()),
+            certificate: None,
+        }),
+        // The author keeps everything: their envelope says so, and this is what opened it.
+        Edit::ProtectWithCertificates(p) => {
+            Some(Keys { render: None, reopen: None, certificate: Some(CertificateKey { seed: p.seed, permissions: -1 }) })
         }
         Edit::RemoveProtection => Some(Keys::default()),
         Edit::Batch { edits, .. } => edits.iter().rev().find_map(keys_after),
@@ -2897,6 +3004,8 @@ pub struct Session {
     date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
     date_language: Option<String>,
+    /// The person's digital identities, tried on a certificate-protected document's envelopes.
+    identities: Vec<Arc<pdfcraft_sign::DigitalId>>,
 }
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -2905,6 +3014,8 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    /// The session's identities, for a certificate-protected file.
+    identities: Vec<Arc<pdfcraft_sign::DigitalId>>,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -3299,7 +3410,7 @@ impl Session {
 
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone() }
+        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), identities: self.identities.clone() }
     }
 
     /// Prepare a document without adding it to this session.
@@ -3336,7 +3447,36 @@ impl Session {
         bytes: Arc<Vec<u8>>,
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
-        let cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
+        let mut cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
+        // Certificate security: one of the identities opens it; the renderer and inspector get
+        // a decrypted copy, the editor keeps the file as it is (saves stay encrypted).
+        let mut certificate = None;
+        if let Ok(Err(pdfcraft_cos::CosError::NeedsCertificate(envelopes))) = &cos {
+            let key = unlock_with_identities(&context.identities, envelopes).ok_or(OpenError::NeedsCertificate)?;
+            let opened = pdfcraft_cos::Document::open_with_credential(
+                bytes.clone(),
+                &pdfcraft_cos::Credential::Certificate { seed: key.seed, permissions: key.permissions },
+            )
+            .map_err(|e| OpenError::Invalid(e.to_string()))?;
+            let plain = plain_copy(&opened).map_err(|e| OpenError::Invalid(e.to_string()))?;
+            certificate = Some(key);
+            cos = Ok(Ok(opened));
+            return Self::prepare_from(context, name, path, plain, password, cos, certificate);
+        }
+        Self::prepare_from(context, name, path, bytes, password, cos, certificate)
+    }
+
+    /// The rest of opening, from the document as parsed (`bytes` are what the renderer reads).
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_from(
+        context: &OpenContext,
+        name: String,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        password: Option<&str>,
+        cos: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+        certificate: Option<CertificateKey>,
+    ) -> Result<PreparedDocument, OpenError> {
         // The renderer authenticates on its own. It cannot use the owner password of R2–R4
         // files, so give it the user password that owner authentication recovers.
         let (info, render_password) = match inspect(bytes.clone(), password) {
@@ -3491,7 +3631,7 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document = Self::build_document(&context.trust, name, path, bytes, info, cos, render_password, password, xfa);
+        let mut document = Self::build_document(&context.trust, name, path, bytes, info, cos, render_password, password, certificate, xfa);
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -3514,12 +3654,13 @@ impl Session {
         cos: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
         render_password: Option<String>,
         password: Option<&str>,
+        certificate: Option<CertificateKey>,
         xfa: Option<XfaLayout>,
     ) -> Document {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
-                let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
+                let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned), certificate };
                 let saved = cos.bytes().clone();
                 (
                     Some(Editor {
@@ -3858,11 +3999,14 @@ impl Session {
         if matches!(scope, Scope::Comments | Scope::Form) {
             editor.appearances.clear();
         }
-        let bytes = if editor.cos.is_modified() {
+        let file_bytes = if editor.cos.is_modified() {
             Arc::new(write_incremental(&editor.cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
         } else {
             editor.cos.bytes().clone()
         };
+        // A certificate-protected file is read through a decrypted copy; signatures are checked
+        // over the file's own bytes.
+        let bytes = if certificate_secured(&editor.cos) { plain_copy(&editor.cos)? } else { file_bytes.clone() };
         if scope == Scope::Metadata {
             // Read the way the full inspection reads them (NULs and spaces trimmed, empty is
             // none), so editing one entry doesn't change how the others display.
@@ -3875,7 +4019,7 @@ impl Session {
             doc.info.producer = info("Producer");
             doc.info.file_size = bytes.len();
             if !doc.signatures.is_empty() {
-                let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let signatures = signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache);
                 doc.signatures = Arc::new(signatures);
             }
             doc.bytes = bytes;
@@ -3919,7 +4063,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
@@ -3952,11 +4096,14 @@ impl Session {
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
-        let bytes = if editor.cos.is_modified() {
+        let file_bytes = if editor.cos.is_modified() {
             Arc::new(write_incremental(&editor.cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
         } else {
             editor.cos.bytes().clone()
         };
+        // A certificate-protected file is read through a decrypted copy; signatures are checked
+        // over the file's own bytes.
+        let bytes = if certificate_secured(&editor.cos) { plain_copy(&editor.cos)? } else { file_bytes.clone() };
         // The edit must still leave a file the viewer can open; anything else rolls back above.
         pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))?;
         let (touches_added, touches_marks) = Self::content_refresh_lists(edit);
@@ -3964,7 +4111,7 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
@@ -4014,11 +4161,14 @@ impl Session {
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
-        let bytes = if editor.cos.is_modified() {
+        let file_bytes = if editor.cos.is_modified() {
             Arc::new(write_incremental(&editor.cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
         } else {
             editor.cos.bytes().clone()
         };
+        // A certificate-protected file is read through a decrypted copy; signatures are checked
+        // over the file's own bytes.
+        let bytes = if certificate_secured(&editor.cos) { plain_copy(&editor.cos)? } else { file_bytes.clone() };
         let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
         // Keep the user's layer choices where the layers still exist.
         let mut info = info;
@@ -4039,7 +4189,7 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let signatures = signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
@@ -4065,7 +4215,8 @@ impl Session {
             if on_saved || rewrite {
                 write_incremental(&editor.cos, &opts)
             } else {
-                let mut base = pdfcraft_cos::Document::open_with_password(editor.saved.clone(), editor.saved_keys.reopen.as_deref())?;
+                // Opened as it was saved: a certificate-secured file needs its file key.
+                let mut base = editor.saved_keys.open(editor.saved.clone())?;
                 base.overlay_changes_from(&editor.cos)?;
                 write_incremental(&base, &opts)
             }
@@ -4092,7 +4243,14 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        // Reopened the way this state of the document opens (a certificate's key, or a password).
+        let reopened = editor.keys.open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        // The renderer can't open certificate security on its own: its pages are checked on a
+        // decrypted copy of what was just reopened, as the viewer reads them.
+        if certificate_secured(&reopened) {
+            let plain = plain_copy(&reopened)?;
+            return pdfcraft_render::check_pages(plain, None, doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()));
+        }
         pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))
     }
 
@@ -4104,8 +4262,7 @@ impl Session {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
             let keys = editor.keys.clone();
-            editor.cos =
-                pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+            editor.cos = keys.open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
             editor.saved = bytes;
             editor.saved_keys = keys;
         }
@@ -4164,7 +4321,7 @@ impl Session {
         candidates.push(Keys::default());
         let (cos, keys) = candidates
             .into_iter()
-            .find_map(|k| pdfcraft_cos::Document::open_with_password(base.clone(), k.reopen.as_deref()).ok().map(|c| (c, k)))
+            .find_map(|k| k.open(base.clone()).ok().map(|c| (c, k)))
             .ok_or_else(|| EditError::Reopen("the saved file can't be opened".into()))?;
         editor.cos = cos;
         editor.keys = keys;
@@ -4771,6 +4928,32 @@ impl Session {
     /// The certificates trusted for signing.
     pub fn trusted_certificates(&self) -> &[pdfcraft_sign::Certificate] {
         &self.trust.certs
+    }
+
+    /// The identities that open certificate-protected documents (replacing any set before).
+    pub fn set_identities(&mut self, identities: Vec<pdfcraft_sign::DigitalId>) {
+        self.identities = identities.into_iter().map(Arc::new).collect();
+    }
+
+    /// Add one identity (replacing one with the same certificate).
+    pub fn add_identity(&mut self, id: pdfcraft_sign::DigitalId) {
+        self.identities.retain(|i| i.certificate.raw != id.certificate.raw);
+        self.identities.push(Arc::new(id));
+    }
+
+    pub fn clear_identities(&mut self) {
+        self.identities.clear();
+    }
+
+    pub fn identities(&self) -> &[Arc<pdfcraft_sign::DigitalId>] {
+        &self.identities
+    }
+
+    /// A fresh seed for [`CertificateProtection`], from the operating system's random
+    /// generator. It is the file key's only secret, so there is no weaker fallback: without
+    /// randomness nothing is encrypted.
+    pub fn new_seed(&self) -> Result<[u8; 20], EditError> {
+        pdfcraft_sign::envelope::new_seed().map_err(|e| EditError::Protection(format!("no file key: {e}")))
     }
 
     /// Replace the trusted certificates, revalidate every open document's signatures,

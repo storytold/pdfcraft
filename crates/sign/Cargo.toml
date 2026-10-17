@@ -33,6 +33,8 @@ hmac = "0.13"
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc", "block-padding"] }
 des = "0.9"
+# The RSA decryption asks for an optional random source of this trait (none is given).
+rand_core = { version = "0.10", default-features = false }
 rc2 = "0.9"
 sha3 = "0.12.0"
 ripemd = "0.2.0"

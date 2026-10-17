@@ -11,6 +11,7 @@ pub mod cms;
 pub mod der;
 pub mod dss;
 mod ec512;
+pub mod envelope;
 pub mod graphic;
 #[cfg(target_os = "macos")]
 pub mod keychain;

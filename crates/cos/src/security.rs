@@ -20,9 +20,26 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     let int = |k: &[u8], default: i64| d.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(default);
     let name = |k: &[u8]| d.get(k).and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_else(|| b"Identity".to_vec());
     let mut crypt_filters = Vec::new();
+    // Public-key security: the envelopes sit in the crypt filter (V 4+) or at the top level.
+    let strings = |o: &Object| -> Vec<Vec<u8>> {
+        match doc.resolve(o).as_array() {
+            Some(a) => a.iter().filter_map(|s| doc.resolve(s).as_string().map(|s| s.bytes.clone())).collect(),
+            None => Vec::new(),
+        }
+    };
+    let mut recipients = d.get(b"Recipients").map(strings).unwrap_or_default();
+    let mut cf_encrypt_metadata = None;
     if let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) {
         for (k, v) in cf.iter() {
             let Some(f) = doc.resolve(v).as_dict().cloned() else { continue };
+            if recipients.is_empty()
+                && let Some(r) = f.get(b"Recipients")
+            {
+                recipients = strings(r);
+                if let Some(Object::Bool(b)) = f.get(b"EncryptMetadata") {
+                    cf_encrypt_metadata = Some(*b);
+                }
+            }
             let method = match f.name(b"CFM") {
                 Some(b"V2") => Method::Rc4,
                 Some(b"AESV2") => Method::Aes128,
@@ -60,7 +77,9 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         ue: bytes_of(doc, d, b"UE"),
         perms: bytes_of(doc, d, b"Perms"),
         p: int(b"P", -1) as i32,
-        encrypt_metadata: !matches!(d.get(b"EncryptMetadata"), Some(Object::Bool(false))),
+        encrypt_metadata: cf_encrypt_metadata.unwrap_or(!matches!(d.get(b"EncryptMetadata"), Some(Object::Bool(false)))),
+        sub_filter: d.get(b"SubFilter").and_then(|v| v.as_name()).map(|n| n.to_vec()).unwrap_or_default(),
+        recipients,
         crypt_filters,
         stm_f: name(b"StmF"),
         str_f: name(b"StrF"),
