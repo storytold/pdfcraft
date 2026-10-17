@@ -86,7 +86,18 @@ needs a prompt to open is listed and asks at signing (issue #179).
 - **Later changes are classified narrowly.** Only the catalog's own `/Metadata` stream is the
   document's XMP, and only objects reached through the `/DSS` keys above are the security store. A
   `/Type /Metadata` or `/Type /DSS` *label* on any other dictionary or stream (a page's Form
-  XObject, say) makes nothing permitted, at every DocMDP level.
+  XObject, say) makes nothing permitted, at every DocMDP level. A new field or widget is a new
+  annotation (permitted only where comments are) unless it is a signature field that is signed; an
+  existing field is form fill only when nothing but its value and what is regenerated from it
+  changed; a field the signer locked (FieldMDP references, or the signed field's `/Lock`, which
+  signing writes as a reference) may not be filled in at all; defining an object the signed
+  revision already named is page content; and under P=1 the one signature change permitted is a
+  document timestamp.
+- **A signature is its own.** The byte range must exclude exactly the `/Contents` of the object
+  that carries the dictionary, so a second field borrowing a genuine signature's range and
+  contents under its own reason and date is invalid. A timestamp token is trusted time only from
+  a certificate issued for timestamping (id-kp-timeStamping); an OCSP responder carried in a
+  response is a delegate, whatever subject it copies.
 - **Strict in what it checks, tolerant where signers differ.** RSA PKCS #1 signatures are checked
   against the one encoding the digest should have, built here and compared byte for byte; the
   `DigestInfo` may omit its NULL parameter, as older signers write it (RFC 8017 App. B.1), but a

@@ -241,8 +241,11 @@ impl PdfCraftApp {
                 let shown = dir.display().to_string();
                 let lang = crate::i18n::current();
                 let work = move || {
+                    // The names carry the document's name: one safe file name each, directly
+                    // inside the chosen folder.
                     let sink = |name: &str, bytes: Vec<u8>| {
-                        crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
+                        let name = crate::files::safe_file_name(name);
+                        crate::files::write_inside(&dir, &name, &bytes).map_err(|e| format!("{name}: {e}"))
                     };
                     let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st, lang);
                     if let Ok(mut s) = st.lock() {

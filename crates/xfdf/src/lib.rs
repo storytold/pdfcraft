@@ -11,7 +11,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 
@@ -925,14 +925,17 @@ fn find_by_name(doc: &Document, nm: &str) -> Option<ObjRef> {
 }
 
 /// Copy an object out of another document, resolving references (FDF objects are small).
-fn deep(src: &Document, o: &Object, depth: usize) -> Object {
-    if depth > 16 {
+/// `budget` is decremented once per visited node and stops the copy (as `Null`) when spent, so
+/// aliased references cannot fan out into exponential work; a real FDF object is far under it.
+fn deep(src: &Document, o: &Object, depth: usize, budget: &mut u32) -> Object {
+    if depth > 16 || *budget == 0 {
         return Object::Null;
     }
+    *budget -= 1;
     match o {
-        Object::Ref(r) => deep(src, &src.get(*r), depth + 1),
-        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1)).collect()),
-        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), deep(src, v, depth + 1))).collect()),
+        Object::Ref(r) => deep(src, &src.get(*r), depth + 1, budget),
+        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1, budget)).collect()),
+        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), deep(src, v, depth + 1, budget))).collect()),
         Object::Stream(_) => Object::Null,
         other => other.clone(),
     }
@@ -959,11 +962,19 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
     Ok(())
 }
 
-fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) {
+fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize, seen: &mut HashSet<ObjRef>) {
     if depth > 32 {
         return;
     }
     for f in list {
+        // A /Kids entry that references an object already visited is not walked again, so aliased
+        // references (the same field listed many times down the tree) cannot fan out into
+        // exponential work. Inline (direct) field dictionaries cannot alias and are always walked.
+        if let Some(r) = f.as_ref()
+            && !seen.insert(r)
+        {
+            continue;
+        }
         let Some(d) = fdf.resolve(f).as_dict().cloned() else { continue };
         let Some(t) = d.get(b"T").and_then(|t| fdf.resolve(t).as_string().map(|s| s.to_text())) else { continue };
         let full = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
@@ -977,7 +988,7 @@ fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String
             out.push((full.clone(), vals));
         }
         if let Some(kids) = d.get(b"Kids").map(|k| fdf.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            walk_fdf(fdf, &kids, &full, out, depth + 1);
+            walk_fdf(fdf, &kids, &full, out, depth + 1, seen);
         }
     }
 }
@@ -999,7 +1010,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
         let body = fdf_body(&fdf)?;
         let mut values = Vec::new();
         if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-            walk_fdf(&fdf, &list, "", &mut values, 0);
+            walk_fdf(&fdf, &list, "", &mut values, 0, &mut HashSet::new());
         }
         return Ok(values);
     }
@@ -1059,7 +1070,7 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     // Fields (with /Kids for hierarchical names).
     let mut values = Vec::new();
     if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-        walk_fdf(&fdf, &list, "", &mut values, 0);
+        walk_fdf(&fdf, &list, "", &mut values, 0, &mut HashSet::new());
     }
     // Comments: parents first, then replies (whose /IRT needs the parent's new reference).
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
@@ -1070,7 +1081,9 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
         // The parent is another comment: link it below rather than copying it in.
         let irt = src.get(b"IRT").cloned();
         src.remove(b"IRT");
-        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0) else { continue };
+        // A fresh node budget per comment, so one aliased comment cannot starve the others.
+        let mut budget = MAX_NODES;
+        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0, &mut budget) else { continue };
         let Some(page) = d.get(b"Page").and_then(Object::as_int).and_then(|p| usize::try_from(p).ok()).and_then(|p| pages.get(p).copied()) else {
             continue;
         };

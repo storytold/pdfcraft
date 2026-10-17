@@ -1,36 +1,75 @@
 //! Clearing the pixels of an image under redaction regions. The image is decoded, every pixel
 //! whose centre maps into a region is set to zero (no ink for image masks), and the result is
 //! written as a new Flate image; the original object is untouched (other pages may use it).
-//! Images whose codec PdfCraft can't decode (DCT, JPX, JBIG2, CCITT) return `None`, and the
+//! Images whose codec PdfCraft can't decode (DCT, JPX, JBIG2, CCITT), whose separate mask
+//! (`/SMask`, `/Mask`) could keep the original pixels, or whose sample layout is not certain to be
+//! the one the page is drawn with (see [`components`] and [`SHORT_KEYS`]) return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
-use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_cos::{Document, Filter, Object, Stream};
 
 /// Most pixels an image may have to be cleared in place (larger ones are removed).
 const MAX_PIXELS: u64 = 64 << 20;
 
+/// The inline-image abbreviations (ISO 32000-2 Table 92) that stand for the keys read here. They
+/// belong to inline images only, but the renderer reads them before the full keys on any image,
+/// so a dictionary carrying one may be drawn in another layout, or from other data, than the full
+/// keys describe.
+const SHORT_KEYS: [&[u8]; 8] = [b"CS", b"W", b"H", b"BPC", b"IM", b"D", b"F", b"DP"];
+
+/// Components per pixel, only when the renderer cannot arrive at another count: it resolves a
+/// bare name for the Device spaces alone, takes an ICC profile's /Alternate when the profile does
+/// not load (and /N only for 1, 3 or 4 without one), and draws a colour space it cannot resolve
+/// as DeviceGray. `None` when the count is not certain (the caller removes the image).
 fn components(doc: &Document, s: &Stream) -> Option<usize> {
-    let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
-    let cs = &*cs;
-    let name = match cs {
-        Object::Name(n) => n.as_slice(),
-        Object::Array(a) => a.first()?.as_name()?,
-        _ => return None,
+    let device = |n: &[u8]| match n {
+        b"DeviceGray" => Some(1),
+        b"DeviceRGB" => Some(3),
+        b"DeviceCMYK" => Some(4),
+        _ => None,
     };
-    Some(match name {
-        b"DeviceGray" | b"G" | b"CalGray" | b"Indexed" | b"I" | b"Separation" => 1,
-        b"DeviceRGB" | b"RGB" | b"CalRGB" | b"Lab" => 3,
-        b"DeviceCMYK" | b"CMYK" => 4,
+    let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
+    let Object::Array(a) = &*cs else { return device(cs.as_name()?) };
+    let first = doc.resolve(a.first()?);
+    let name = first.as_name()?;
+    if let Some(n) = device(name) {
+        return Some(n);
+    }
+    match name {
+        // One component whether or not the renderer resolves them.
+        b"CalGray" | b"Indexed" | b"I" | b"Separation" => Some(1),
+        // Without their dictionary the renderer resolves nothing and draws DeviceGray.
+        b"CalRGB" | b"Lab" => matches!(&*doc.resolve(a.get(1)?), Object::Dict(_)).then_some(3),
         b"ICCBased" => {
-            // /N lives in the ICC profile stream, and shall be 1, 3 or 4 (ISO 32000-2 §8.6.5.5).
-            match &*doc.resolve(cs.as_array()?.get(1)?) {
-                Object::Stream(icc) => usize::try_from(icc.dict.int(b"N")?).ok().filter(|n| matches!(n, 1 | 3 | 4))?,
+            let icc = doc.resolve(a.get(1)?);
+            let Object::Stream(icc) = &*icc else { return None };
+            let n = match icc.dict.int(b"N")? {
+                1 => 1,
+                3 => 3,
+                4 => 4,
                 _ => return None,
+            };
+            // The alternate is drawn when the profile does not load: only one of the same count.
+            if let Some(alt) = icc.dict.get(b"Alternate") {
+                let alt = doc.resolve(alt);
+                let alt_name = match &*alt {
+                    Object::Name(n) => n.as_slice(),
+                    Object::Array(a) => a.first()?.as_name()?,
+                    _ => return None,
+                };
+                if device(alt_name)? != n {
+                    return None;
+                }
             }
+            // A profile the renderer cannot decode is drawn as DeviceGray.
+            if n != 1 && icc.decoded_strict_in(doc).is_err() {
+                return None;
+            }
+            Some(n)
         }
-        _ => return None,
-    })
+        _ => None,
+    }
 }
 
 /// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel centre is covered,
@@ -45,23 +84,15 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
         return None;
     }
-    let supported = |n: &[u8]| {
-        matches!(
-            n,
-            b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
-        )
-    };
-    let ok = match s.dict.get(b"Filter") {
-        None => true,
-        Some(Object::Name(n)) => supported(n),
-        Some(Object::Array(a)) => a.iter().all(|f| f.as_name().is_some_and(supported)),
-        _ => false,
-    };
-    if !ok {
+    // The chain as the document declares it (indirect entries resolved); only codecs that can be
+    // decoded and re-encoded here.
+    let chain = s.filters_in(doc).ok()?;
+    let supported = |f: &Filter| matches!(f, Filter::Flate | Filter::Lzw | Filter::AsciiHex | Filter::Ascii85 | Filter::RunLength);
+    if !chain.iter().all(|(f, _)| supported(f)) || SHORT_KEYS.iter().any(|k| s.dict.contains(k)) {
         return None;
     }
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
-    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+    if w <= 0 || h <= 0 || (w as u64).checked_mul(h as u64).is_none_or(|n| n > MAX_PIXELS) {
         return None;
     }
     let (w, h) = (w as usize, h as usize);
@@ -77,7 +108,9 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     let bytes = row.checked_mul(h)?;
     let row_bits = row.checked_mul(8)?;
     bytes.checked_mul(8)?;
-    let mut data = s.decoded().ok()?;
+    // Strict: samples a viewer would decode differently (a corrupt or partial stream) are not
+    // cleared in place at offsets of their own.
+    let mut data = s.decoded_strict_in(doc).ok()?;
     if data.len() < bytes {
         return None;
     }
@@ -125,6 +158,8 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     let mut dict = s.dict.clone();
     dict.remove(b"Length");
     dict.remove(b"DecodeParms");
+    // Alternate images and an OPI original hold the same pixels again; the copy does without them.
     dict.remove(b"Alternates");
+    dict.remove(b"OPI");
     Some(Some(Stream::flate(dict, &data)))
 }

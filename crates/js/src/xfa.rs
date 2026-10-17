@@ -15,7 +15,7 @@ use boa_engine::object::builtins::{JsArray, JsProxy};
 use boa_engine::property::Attribute;
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
-use crate::{Limits, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, text};
+use crate::{Limits, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, screened_context, text};
 
 /// What kind of template object a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1449,7 +1449,7 @@ pub(crate) fn warm_up() {
     static WARM: std::sync::Once = std::sync::Once::new();
     // `call_once_force`: a poisoned `Once` (a panic while warming up) only means warming up again.
     WARM.call_once_force(|_| {
-        let mut ctx = Context::default();
+        let mut ctx = screened_context();
         let _ = ctx.eval(Source::from_bytes(b"(function () { return eval('0'); }).call({})"));
     });
 }
@@ -1457,7 +1457,7 @@ pub(crate) fn warm_up() {
 /// `started` is called once the engine is ready: a time limit on the script runs from then.
 pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNode, limits: Limits, started: &dyn Fn()) -> XfaOutcome {
     warm_up();
-    let mut ctx = Context::default();
+    let mut ctx = screened_context();
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     let host_state = XHost::new(root, &event.target, doc);

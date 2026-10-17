@@ -60,6 +60,10 @@ pub struct Parsed {
     pub ops: Vec<Op>,
     /// Bytes that could not be read as operands or operators.
     pub skipped: usize,
+    /// An inline image's data ran to the end of the stream because no `EI` ended it, so its `BI`
+    /// operator holds whatever followed. A consumer that must see every operator a viewer draws
+    /// (redaction) treats such a stream as unreadable.
+    pub unterminated_inline_image: bool,
 }
 
 fn is_ws(b: u8) -> bool {
@@ -72,6 +76,14 @@ fn is_delim(b: u8) -> bool {
 
 /// Parse a (decoded) content stream.
 pub fn parse(data: &[u8]) -> Parsed {
+    parse_capped(data, usize::MAX)
+}
+
+/// Like [`parse`], but stops once `max_ops` operators have been produced, so a caller that must
+/// bound how much a crafted stream can allocate never materialises more than `max_ops` of them.
+/// The rest of the stream is counted in [`Parsed::skipped`]; `out.ops.len() == max_ops` means the
+/// parse was cut short.
+pub fn parse_capped(data: &[u8], max_ops: usize) -> Parsed {
     let mut out = Parsed::default();
     let mut lx = Lexer::new(data, 0);
     let mut operands: Vec<Object> = Vec::new();
@@ -126,9 +138,11 @@ pub fn parse(data: &[u8]) -> Parsed {
                 operands.push(Object::Null);
             }
             b"BI" => match inline_image(data, lx.pos) {
-                Ok((dict, img, end)) => {
-                    lx.pos = end;
-                    out.ops.push(Op { op: b"BI".to_vec(), operands: Vec::new(), inline: Some((dict, img)), span: start.take().unwrap_or(at)..end });
+                Ok(image) => {
+                    lx.pos = image.end;
+                    out.unterminated_inline_image |= !image.terminated;
+                    let span = start.take().unwrap_or(at)..image.end;
+                    out.ops.push(Op { op: b"BI".to_vec(), operands: Vec::new(), inline: Some((image.params, image.data)), span });
                     operands.clear();
                 }
                 Err(end) => {
@@ -143,14 +157,31 @@ pub fn parse(data: &[u8]) -> Parsed {
                 out.ops.push(Op { op: kw.to_vec(), operands: std::mem::take(&mut operands), inline: None, span: s..lx.pos });
             }
         }
+        if out.ops.len() >= max_ops {
+            // Cut short: count the rest of the stream as skipped and stop materialising operators.
+            out.skipped += data.len().saturating_sub(lx.pos);
+            return out;
+        }
     }
     out.skipped += operands.len();
     out
 }
 
-/// Read an inline image starting after `BI`: (parameters, data, position after `EI`). `Err` holds
-/// the position after the `EI` (or the end of the stream) of an image whose parameters can't be read.
-fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize> {
+/// An inline image as [`inline_image`] read it.
+struct InlineImage {
+    /// The entries between `BI` and `ID`.
+    params: Dict,
+    /// The bytes between `ID` and `EI`.
+    data: Vec<u8>,
+    /// The position after `EI`, or the end of the stream when no `EI` ended the data.
+    end: usize,
+    /// Whether an `EI` ended the data.
+    terminated: bool,
+}
+
+/// Read an inline image starting after `BI`. `Err` holds the position after the `EI` (or the end
+/// of the stream) of an image whose parameters can't be read.
+fn inline_image(data: &[u8], pos: usize) -> Result<InlineImage, usize> {
     let mut lx = Lexer::new(data, pos);
     let mut dict = Dict::new();
     loop {
@@ -164,21 +195,22 @@ fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize
             _ => None,
         };
         let Some((k, v)) = entry else {
-            // A stream that ends inside the parameters is cut short, not unreadable: keep what was read.
+            // A stream that ends inside the parameters is cut short, not unreadable: keep what was
+            // read (nothing follows it, so nothing is swallowed).
             if at >= data.len() {
-                return Ok((dict, Vec::new(), data.len()));
+                return Ok(InlineImage { params: dict, data: Vec::new(), end: data.len(), terminated: true });
             }
             // Without an `EI` after it, the image runs to the end of the stream.
-            return Err(end_of_image(data, at).map_or(data.len(), |(_, end)| end));
+            return Err(end_of_image(data, at, &dict).map_or(data.len(), |(_, end)| end));
         };
         dict.set(k, v);
     }
     // One whitespace byte separates ID from the data.
     let begin = (lx.pos + 1).min(data.len());
-    let end = unfiltered_image_end(data, begin, &dict).or_else(|| end_of_image(data, begin));
+    let end = unfiltered_image_end(data, begin, &dict).or_else(|| end_of_image(data, begin, &dict));
     Ok(match end {
-        Some((end_data, end)) => (dict, data[begin..end_data].to_vec(), end),
-        None => (dict, data[begin..].to_vec(), data.len()),
+        Some((end_data, end)) => InlineImage { params: dict, data: data[begin..end_data].to_vec(), end, terminated: true },
+        None => InlineImage { params: dict, data: data[begin..].to_vec(), end: data.len(), terminated: false },
     })
 }
 
@@ -253,17 +285,30 @@ fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize
 }
 
 /// Where inline image data starting at `begin` ends: (end of the data, position after `EI`). The
-/// data ends at whitespace + `EI` + (whitespace, a delimiter or the end).
-fn end_of_image(data: &[u8], begin: usize) -> Option<(usize, usize)> {
+/// data ends at whitespace + `EI` + (whitespace, a delimiter or the end); or, when its first
+/// filter has an end-of-data marker (`>` for ASCIIHexDecode, `~>` for ASCII85Decode), at that
+/// marker + `EI`, since the marker already ends the data (§7.4.2, §7.4.3).
+fn end_of_image(data: &[u8], begin: usize, params: &Dict) -> Option<(usize, usize)> {
+    let first_filter = match params.get(b"F").or_else(|| params.get(b"Filter")) {
+        Some(Object::Name(n)) => Some(n.as_slice()),
+        Some(Object::Array(a)) => a.first().and_then(Object::as_name),
+        _ => None,
+    };
+    let marker: &[u8] = match first_filter {
+        Some(b"AHx" | b"ASCIIHexDecode") => b">",
+        Some(b"A85" | b"ASCII85Decode") => b"~>",
+        _ => b"",
+    };
     let mut i = begin;
     while i + 2 <= data.len() {
-        if data[i] == b'E'
-            && data.get(i + 1) == Some(&b'I')
-            && (i == begin || is_ws(data[i - 1]))
-            && data.get(i + 2).is_none_or(|b| is_ws(*b) || is_delim(*b))
-        {
-            let end_data = if i > begin && is_ws(data[i - 1]) { i - 1 } else { i };
-            return Some((end_data, i + 2));
+        if data[i] == b'E' && data.get(i + 1) == Some(&b'I') && data.get(i + 2).is_none_or(|b| is_ws(*b) || is_delim(*b)) {
+            if i == begin || is_ws(data[i - 1]) {
+                let end_data = if i > begin && is_ws(data[i - 1]) { i - 1 } else { i };
+                return Some((end_data, i + 2));
+            }
+            if !marker.is_empty() && data.get(begin..i).is_some_and(|d| d.ends_with(marker)) {
+                return Some((i, i + 2));
+            }
         }
         i += 1;
     }
@@ -342,6 +387,11 @@ impl Pieces {
     /// Parse the pieces as one stream.
     pub fn parse(&self) -> Parsed {
         parse(&self.data)
+    }
+
+    /// [`Pieces::parse`] with the operator cap of [`parse_capped`].
+    pub fn parse_capped(&self, max_ops: usize) -> Parsed {
+        parse_capped(&self.data, max_ops)
     }
 
     /// The piece holding joined position `at` (the last piece for positions past the end).

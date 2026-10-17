@@ -1185,10 +1185,22 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     Ok(new_name)
 }
 
-/// Delete a field: its widgets leave their pages and the field leaves the form.
+/// Delete a field: its widgets leave their pages and the field leaves the form. With several
+/// fields of one fully qualified name (merged or repeated forms) the first goes; see
+/// [`delete_field_object`] to choose.
 pub fn delete_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
-    let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    delete(doc, &f)
+}
+
+/// Delete the field whose dictionary is `field` (the `obj` of one of [`fields`]), and only that
+/// one: another field of the same name keeps its widgets and value.
+pub fn delete_field_object(doc: &mut Document, field: ObjRef) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.obj == field).ok_or_else(|| FormError::NoSuchField(field.to_string()))?;
+    delete(doc, &f)
+}
+
+fn delete(doc: &mut Document, f: &Field) -> Result<(), FormError> {
     let widgets: std::collections::HashSet<ObjRef> = f.widgets.iter().map(|w| w.obj).collect();
     for p in page_refs(doc) {
         let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };

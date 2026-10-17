@@ -99,6 +99,9 @@ pub struct OcrJob {
     native: Vec<Option<f32>>,
     pub pages: Vec<usize>,
     pub settings: OcrSettings,
+    /// The document's edit generation when this job was captured. The result may only be applied
+    /// to the same state: see [`Session::apply_ocr`].
+    pub generation: u64,
 }
 
 impl OcrJob {
@@ -187,11 +190,31 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
-        Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings })
+        Some(OcrJob {
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            infos: doc.info.pages.clone(),
+            native,
+            pages,
+            settings,
+            generation: doc.edit_generation(),
+        })
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
-    pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
+    ///
+    /// `captured_generation` is the [`Document::edit_generation`] the job was captured at
+    /// ([`OcrJob::generation`]). The result was read from the document as it was then; if the
+    /// document has been edited since (for example Apply Redactions removed the scanned words), the
+    /// result is stale and applying it would stamp the old words back as an invisible, selectable
+    /// text layer. Such a result is refused rather than applied.
+    pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage], captured_generation: u64) -> Result<usize, EditError> {
+        let current = self.get(id).ok_or(EditError::NoDocument)?.edit_generation();
+        if current != captured_generation {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                "the document changed since text recognition started; run Recognize text again".into(),
+            )));
+        }
         let edits: Vec<Edit> =
             found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
         let words = found.iter().map(|p| p.words.len()).sum();
@@ -207,9 +230,10 @@ impl Session {
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
+        let captured = job.generation;
         let ocr = engine()?;
         let found = job.run(&ocr, |_, _| true);
-        self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
+        self.apply_ocr(id, &found, captured).map_err(|e| e.to_string())?;
         Ok(found)
     }
 }
@@ -244,8 +268,9 @@ pub fn recognize_file(
         return Err(why);
     }
     let job = s.ocr_job(id, &[], settings).ok_or("the document could not be read")?;
+    let captured = job.generation;
     let pages = job.run(ocr, progress);
-    if s.apply_ocr(id, &pages).map_err(|e| e.to_string())? == 0 {
+    if s.apply_ocr(id, &pages, captured).map_err(|e| e.to_string())? == 0 {
         return Ok(FileResult { bytes, pages });
     }
     // Checked like a save before the caller writes it (#2166).

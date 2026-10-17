@@ -4,31 +4,37 @@
 //! categories; [`sanitize`] removes all of them. Every removal makes the next save a full
 //! rewrite, so the earlier revision (which still holds the data) leaves the file.
 
+use std::collections::HashSet;
+
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
-use crate::interp::{Mode, Scope, process};
-use crate::{RedactError, Report, annots_of, page_streams};
+use crate::interp::{Mode, Scope, decoded_contents, process, rebuild_resources};
+use crate::{RedactError, Report, annots_of, page_streams, put_annots};
 
 /// The categories of Acrobat's Remove Hidden Information panel that PdfCraft handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hidden {
-    /// Document information (`/Info`) and XMP metadata streams.
+    /// Document information (`/Info`) and XMP metadata streams, on any object.
     Metadata,
-    /// Embedded files and file attachment annotations.
+    /// Embedded files, file attachment annotations, associated files (`/AF`, wherever they
+    /// hang), multimedia annotations (Screen, Movie, RichMedia, 3D: their media, assets, models
+    /// and file paths) and renditions.
     Attachments,
     /// Comments and markup annotations (with their pop-ups).
     Comments,
-    /// Interactive form fields (flattened: their appearance stays as page content).
+    /// Interactive form fields (flattened: their appearance stays as page content; Hidden and
+    /// NoView ones go with nothing drawn).
     FormFields,
     /// Text drawn invisibly (render modes 3 and 7) or wholly off the page.
     HiddenText,
     /// Optional content (layers) that is off: its content, then the layers themselves.
     HiddenLayers,
     Bookmarks,
-    /// Links, actions (open action, additional actions) and document JavaScript.
+    /// Links, actions (open action, additional actions, every annotation's), document
+    /// JavaScript, slideshows (`/AlternatePresentations`) and 3D instantiation scripts.
     LinksActionsScripts,
-    /// Private data of other applications (`/PieceInfo`).
+    /// Private data of other applications (`/PieceInfo`, on any object).
     PrivateData,
 }
 
@@ -113,10 +119,159 @@ fn outline_len(doc: &Document, first: Option<&Object>, depth: usize) -> usize {
     n
 }
 
+/// Every indirect object reachable from the catalog, each once, with its current generation.
+/// Cycles are cut by the seen-set, which holds at most one entry per object number (no more
+/// than the cross-reference table already does); nesting inside one object is bounded by the
+/// parser.
+fn reachable(doc: &Document) -> Vec<ObjRef> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut stack: Vec<ObjRef> = doc.root().into_iter().collect();
+    while let Some(r) = stack.pop() {
+        if !seen.insert(r.num) {
+            continue;
+        }
+        let o = doc.get(r);
+        if matches!(*o, Object::Null) {
+            continue;
+        }
+        refs_in(&o, &mut |x| stack.push(x));
+        out.push(ObjRef::new(r.num, doc.generation(r.num)));
+    }
+    out
+}
+
+fn refs_in(o: &Object, f: &mut impl FnMut(ObjRef)) {
+    match o {
+        Object::Ref(r) => f(*r),
+        Object::Array(a) => a.iter().for_each(|x| refs_in(x, f)),
+        Object::Dict(d) => d.iter().for_each(|(_, v)| refs_in(v, f)),
+        Object::Stream(s) => s.dict.iter().for_each(|(_, v)| refs_in(v, f)),
+        _ => {}
+    }
+}
+
+/// What one occurrence of a key counts for (see [`count_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Count {
+    /// One per dictionary that holds the key.
+    Dicts,
+    /// One per item of the array under the key (one per associated file); a value that is not an
+    /// array, or an empty one, counts as one.
+    Entries,
+}
+
+/// The keys that may sit on any dictionary (the catalog, a page, an XObject, a structure element,
+/// an annotation…) and are counted and stripped wherever they are: the category each belongs to,
+/// and what an occurrence counts for. XMP metadata (ISO 32000-2 §14.3.2), associated files
+/// (§14.13) and the private data of other applications (§14.5).
+const ANYWHERE: [(Hidden, &[u8], Count); 3] =
+    [(Hidden::Metadata, b"Metadata", Count::Dicts), (Hidden::Attachments, b"AF", Count::Entries), (Hidden::PrivateData, b"PieceInfo", Count::Dicts)];
+
+/// How many times `o` (its own dictionary, and the direct ones inside it) holds `key`, each
+/// occurrence counted as `count` says.
+fn count_key(doc: &Document, o: &Object, key: &[u8], count: Count, depth: usize) -> usize {
+    if depth > 64 {
+        return 0;
+    }
+    let in_dict = |d: &Dict| -> usize {
+        let own = match (d.get(key), count) {
+            (None, _) => 0,
+            (Some(v), Count::Entries) => doc.resolve(v).as_array().map_or(1, |a| a.len().max(1)),
+            (Some(_), Count::Dicts) => 1,
+        };
+        d.iter().fold(own, |n, (_, v)| n.saturating_add(count_key(doc, v, key, count, depth + 1)))
+    };
+    match o {
+        Object::Dict(d) => in_dict(d),
+        Object::Stream(s) => in_dict(&s.dict),
+        Object::Array(a) => a.iter().fold(0, |n, x| n.saturating_add(count_key(doc, x, key, count, depth + 1))),
+        _ => 0,
+    }
+}
+
+/// `o` without `keys` in its dictionary or in any direct dictionary inside it (and without the
+/// /LastModified that goes with a removed /PieceInfo); `None` when it holds none of them.
+fn strip_keys(o: &Object, keys: &[&[u8]], depth: usize) -> Option<Object> {
+    if depth > 64 {
+        return None;
+    }
+    match o {
+        Object::Dict(d) => strip_dict(d, keys, depth).map(Object::Dict),
+        Object::Stream(s) => strip_dict(&s.dict, keys, depth).map(|dict| Object::Stream(pdfcraft_cos::Stream { dict, raw: s.raw.clone() })),
+        Object::Array(a) => {
+            let mut changed = false;
+            let mut items = Vec::with_capacity(a.len());
+            for x in a {
+                match strip_keys(x, keys, depth + 1) {
+                    Some(y) => {
+                        changed = true;
+                        items.push(y);
+                    }
+                    None => items.push(x.clone()),
+                }
+            }
+            changed.then_some(Object::Array(items))
+        }
+        _ => None,
+    }
+}
+
+fn strip_dict(d: &Dict, keys: &[&[u8]], depth: usize) -> Option<Dict> {
+    let piece_goes = keys.contains(&&b"PieceInfo"[..]) && d.contains(b"PieceInfo");
+    let mut out = Dict::new();
+    let mut changed = false;
+    for (k, v) in d.iter() {
+        if keys.contains(&k.as_slice()) || (piece_goes && k == b"LastModified") {
+            changed = true;
+            continue;
+        }
+        match strip_keys(v, keys, depth + 1) {
+            Some(y) => {
+                changed = true;
+                out.set(k.clone(), y);
+            }
+            None => out.set(k.clone(), v.clone()),
+        }
+    }
+    changed.then_some(out)
+}
+
 /// A comment as the comments list sees it, less file attachments (removed with Attachments) and
 /// redaction marks.
 fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
+}
+
+/// An annotation that embeds or names media content (ISO 32000-2 §12.5.6.17–19, §13.6–13.7):
+/// removed with Attachments, since what it holds (media, assets, 3D models, file paths) is
+/// embedded content the user cannot see on the page.
+fn is_multimedia(subtype: &[u8]) -> bool {
+    matches!(subtype, b"Screen" | b"Movie" | b"RichMedia" | b"3D")
+}
+
+/// The 3D stream of a 3D annotation: `/3DD` is the stream, or a 3D reference dictionary to it.
+fn three_d_stream(doc: &Document, annot: &Dict) -> Option<ObjRef> {
+    let via_ref = |d: &Dict| d.reference(b"3DD").filter(|s| matches!(&*doc.get(*s), Object::Stream(_)));
+    match annot.get(b"3DD")? {
+        Object::Ref(r) => match &*doc.get(*r) {
+            Object::Stream(_) => Some(*r),
+            Object::Dict(d) => via_ref(d),
+            _ => None,
+        },
+        Object::Dict(d) => via_ref(d),
+        _ => None,
+    }
+}
+
+/// The 3D stream of a 3D annotation when it runs a script as it is instantiated
+/// (`/OnInstantiate`); `None` for a 3D annotation whose stream has no script, and for any other
+/// annotation.
+fn scripted_3d_stream(doc: &Document, annot: &Dict) -> Option<ObjRef> {
+    if annot.name(b"Subtype") != Some(b"3D") {
+        return None;
+    }
+    three_d_stream(doc, annot).filter(|s| doc.get(*s).as_dict().is_some_and(|d| d.contains(b"OnInstantiate")))
 }
 
 /// The layers that are off in the default configuration.
@@ -173,35 +328,23 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         doomed.extend_from_slice(&out.doomed);
         let mut new_list = list.clone();
         let mut changed = false;
-        for (i, new) in out.streams.into_iter().enumerate() {
+        for (i, new) in out.streams.iter().enumerate() {
             let Some(bytes) = new else { continue };
             let mut dict = match &*doc.resolve(&list[i]) {
                 Object::Stream(s) => s.dict.clone(),
                 _ => Dict::new(),
             };
             dict.remove(b"Length");
-            new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, &bytes))));
+            new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, bytes))));
             changed = true;
         }
         if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
+            // A full save keeps whatever is still referenced: the originals this page no longer
+            // draws leave its resources, and so do the off layers' property lists with their blocks
+            // (so the group dictionaries and their names stop being reachable through the page).
+            // The page stores its resources whole, changed or not.
             let mut res = resources;
-            if !out.xobjects.is_empty() || !out.replaced.is_empty() {
-                let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
-                // A full save keeps whatever is still referenced: unlink the originals this page no
-                // longer draws so the removed form or image bytes cannot survive in the saved file.
-                let page_content: Vec<Vec<u8>> = new_list
-                    .iter()
-                    .map(|o| match &*doc.resolve(o) {
-                        Object::Stream(s) => s.decoded().unwrap_or_default(),
-                        _ => Vec::new(),
-                    })
-                    .collect();
-                crate::interp::prune(&mut xo, &out.replaced, &page_content);
-                for (n, r) in &out.xobjects {
-                    xo.set(n.clone(), Object::Ref(*r));
-                }
-                res.set(b"XObject".to_vec(), Object::Dict(xo));
-            }
+            rebuild_resources(doc, &mut res, &out.rewrite(), Some(&decoded_contents(doc, &new_list)), &off);
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -221,17 +364,29 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
     let annots: Vec<Dict> = pages.iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| doc.resolve(&a).as_dict().cloned()).collect();
     let count_sub = |s: &[u8]| annots.iter().filter(|a| a.name(b"Subtype") == Some(s)).count();
     let names = sub(doc, &cat, b"Names").unwrap_or_default();
+    // XMP, associated files and private data can sit on any dictionary (an XObject, a structure
+    // element, an annotation…): count them wherever they are reachable from the catalog.
+    let mut anywhere = [0usize; ANYWHERE.len()];
+    for r in reachable(doc) {
+        let o = doc.get(r);
+        for (n, (_, key, count)) in anywhere.iter_mut().zip(ANYWHERE) {
+            *n = n.saturating_add(count_key(doc, &o, key, count, 0));
+        }
+    }
+    // What a category has under those keys (nothing, for most).
+    let found_anywhere =
+        |h: Hidden| ANYWHERE.iter().zip(anywhere).filter(|((category, ..), _)| *category == h).fold(0usize, |sum, (_, n)| sum.saturating_add(n));
     let mut doc2 = doc.clone();
     HIDDEN
         .into_iter()
         .map(|h| {
             let n = match h {
-                Hidden::Metadata => {
-                    let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().map(|d| d.len())).unwrap_or(0);
-                    let xmp = usize::from(cat.contains(b"Metadata")) + pages.iter().filter(|p| p.dict.contains(b"Metadata")).count();
-                    info + xmp
-                }
-                Hidden::Attachments => sub(doc, &names, b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t, 0)) + count_sub(b"FileAttachment"),
+                Hidden::Metadata => doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().map(|d| d.len())).unwrap_or(0),
+                Hidden::Attachments => sub(doc, &names, b"EmbeddedFiles")
+                    .map_or(0, |t| name_tree_len(doc, &t, 0))
+                    .saturating_add(count_sub(b"FileAttachment"))
+                    .saturating_add(annots.iter().filter(|a| is_multimedia(a.name(b"Subtype").unwrap_or(b""))).count())
+                    .saturating_add(sub(doc, &names, b"Renditions").map_or(0, |t| name_tree_len(doc, &t, 0))),
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
                 Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).unwrap_or(0),
@@ -245,14 +400,62 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
                         + usize::from(cat.contains(b"AA"))
                         + pages.iter().filter(|p| p.dict.contains(b"AA")).count()
-                        + annots.iter().filter(|a| a.contains(b"AA") || (a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A"))).count()
+                        + annots.iter().filter(|a| a.contains(b"AA") || (a.name(b"Subtype") != Some(b"Link") && a.contains(b"A"))).count()
+                        + annots.iter().filter(|a| scripted_3d_stream(doc, a).is_some()).count()
                         + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t, 0))
+                        + sub(doc, &names, b"AlternatePresentations").map_or(0, |t| name_tree_len(doc, &t, 0))
                 }
-                Hidden::PrivateData => usize::from(cat.contains(b"PieceInfo")) + pages.iter().filter(|p| p.dict.contains(b"PieceInfo")).count(),
+                // All of it sits under an `ANYWHERE` key.
+                Hidden::PrivateData => 0,
             };
-            (h, n)
+            // Plus what the category has under the keys that may sit on any dictionary.
+            (h, n.saturating_add(found_anywhere(h)))
         })
         .collect()
+}
+
+/// Remove the interactive form: every field is flattened into its page, one without an
+/// appearance drawn first so its value stays visible; `/AcroForm` leaves the catalog (`root`);
+/// and every widget still on a page goes, undrawn. Returns the objects to retire:
+/// the widgets no longer on a page, and each field none of whose widgets is (its /V would
+/// otherwise stay reachable).
+fn remove_form_fields(doc: &mut Document, root: ObjRef) -> Result<Vec<ObjRef>, RedactError> {
+    let fields = pdfcraft_forms::fields(doc);
+    // Fields without appearances get one first, so their values stay visible.
+    for f in &fields {
+        if f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))) {
+            pdfcraft_forms::redraw_field(doc, &f.name)?;
+        }
+    }
+    let n = pdfcraft_model::pages(doc).len();
+    pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
+    doc.update_dict(root, |d| {
+        d.remove(b"AcroForm");
+    })?;
+    // Flattening leaves Hidden and NoView annotations alone (neither drawn nor removed), which
+    // is right for Flatten but not here: a widget the user cannot see still holds its field's
+    // name and value. Every widget still on a page goes, undrawn; what stays is `on_page`.
+    let mut on_page: HashSet<ObjRef> = HashSet::new();
+    for p in pdfcraft_model::pages(doc) {
+        let list = annots_of(doc, &p.dict);
+        let kept: Vec<Object> =
+            list.iter().filter(|a| doc.resolve(a).as_dict().and_then(|d| d.name(b"Subtype")) != Some(b"Widget")).cloned().collect();
+        on_page.extend(kept.iter().filter_map(Object::as_ref));
+        if kept.len() != list.len() {
+            doc.update_dict(p.obj, |d| put_annots(d, kept))?;
+        }
+    }
+    // The widgets taken off the pages are deleted, and so is a field none of whose widgets is on
+    // a page any more.
+    let mut retired = Vec::new();
+    for f in &fields {
+        let gone: Vec<ObjRef> = f.widgets.iter().map(|w| w.obj).filter(|w| !on_page.contains(w)).collect();
+        if gone.len() == f.widgets.len() {
+            retired.push(f.obj);
+        }
+        retired.extend(gone);
+    }
+    Ok(retired)
 }
 
 /// Remove the chosen categories. Returns what was removed per category.
@@ -266,26 +469,27 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if (text && count(Hidden::HiddenText) > 0) || (layers && count(Hidden::HiddenLayers) > 0) {
         content_pass(doc, text, layers, true)?;
     }
-    if which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0 {
-        // Fields without appearances get one first, so their values stay visible.
-        for f in pdfcraft_forms::fields(doc) {
-            if f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))) {
-                pdfcraft_forms::redraw_field(doc, &f.name)?;
-            }
-        }
-        let n = pdfcraft_model::pages(doc).len();
-        pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
-        doc.update_dict(root, |d| {
-            d.remove(b"AcroForm");
-        })?;
-    }
-    // Annotations: comments, attachments, links, actions.
+    // The annotation, widget and field objects removed: nulled at the end (`retire`), so a
+    // structure element, a reply or anything else that still refers to one cannot carry it into
+    // the saved file.
+    let mut retired: Vec<ObjRef> =
+        if which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0 { remove_form_fields(doc, root)? } else { Vec::new() };
+    // Annotations: comments, attachments (multimedia included), links, actions.
     let drop_annot = |a: &Dict| -> bool {
         let s = a.name(b"Subtype").unwrap_or(b"");
         (which.contains(&Hidden::Comments) && is_comment(s))
-            || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
+            || (which.contains(&Hidden::Attachments) && (s == b"FileAttachment" || is_multimedia(s)))
             || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
     };
+    let actions = which.contains(&Hidden::LinksActionsScripts);
+    // A stored page thumbnail shows the page as it was: it goes whenever a category changes
+    // what the page shows (content, annotations or fields).
+    let thumbs = which.iter().any(|h| {
+        matches!(
+            h,
+            Hidden::HiddenText | Hidden::HiddenLayers | Hidden::Comments | Hidden::Attachments | Hidden::FormFields | Hidden::LinksActionsScripts
+        )
+    });
     for p in pdfcraft_model::pages(doc) {
         let list = annots_of(doc, &p.dict);
         let mut removed: Vec<ObjRef> = Vec::new();
@@ -305,30 +509,27 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             let d = doc.get(r).as_dict().cloned().unwrap_or_default();
             let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
             if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
+                retired.push(r);
                 continue;
             }
-            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
+            // Every annotation's actions: a Screen's rendition or script as much as a widget's.
+            if actions && (d.contains(b"AA") || d.contains(b"A")) {
                 doc.update_dict(r, |d| {
                     d.remove(b"AA");
                     d.remove(b"A");
                 })?;
             }
+            if actions && let Some(s) = scripted_3d_stream(doc, &d) {
+                doc.update_dict(s, |d| {
+                    d.remove(b"OnInstantiate");
+                })?;
+            }
             kept.push(a);
         }
-        let private = which.contains(&Hidden::PrivateData);
-        let metadata = which.contains(&Hidden::Metadata);
-        let actions = which.contains(&Hidden::LinksActionsScripts);
         doc.update_dict(p.obj, |d| {
-            if kept.is_empty() {
-                d.remove(b"Annots");
-            } else {
-                d.set(b"Annots".to_vec(), Object::Array(kept));
-            }
-            if private {
-                d.remove(b"PieceInfo");
-            }
-            if metadata {
-                d.remove(b"Metadata");
+            put_annots(d, kept);
+            if thumbs {
+                d.remove(b"Thumb");
             }
             if actions {
                 d.remove(b"AA");
@@ -341,14 +542,13 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     for &h in which {
         match h {
             Hidden::Metadata => {
-                cat.remove(b"Metadata");
                 doc.trailer_mut().remove(b"Info");
             }
             Hidden::Attachments => {
                 if let Some(n) = names.as_mut() {
                     n.remove(b"EmbeddedFiles");
+                    n.remove(b"Renditions");
                 }
-                cat.remove(b"AF");
             }
             Hidden::Bookmarks => {
                 cat.remove(b"Outlines");
@@ -363,10 +563,8 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                 cat.remove(b"AA");
                 if let Some(n) = names.as_mut() {
                     n.remove(b"JavaScript");
+                    n.remove(b"AlternatePresentations");
                 }
-            }
-            Hidden::PrivateData => {
-                cat.remove(b"PieceInfo");
             }
             Hidden::HiddenLayers if !off.is_empty() => {
                 // The off layers leave the configuration (their content is gone already).
@@ -397,6 +595,19 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
         cat.set(b"Names".to_vec(), Object::Dict(n));
     }
     doc.set(root, Object::Dict(cat));
+    // What was removed is deleted, so no other referrer keeps it in the saved file.
+    crate::retire(doc, &retired)?;
+    // XMP, associated files and private data may sit on any dictionary, the catalog and pages
+    // included: strip them from every object still reachable from the catalog rather than from a
+    // fixed list.
+    let keys: Vec<&[u8]> = ANYWHERE.into_iter().filter(|(h, ..)| which.contains(h)).map(|(_, key, _)| key).collect();
+    if !keys.is_empty() {
+        for r in reachable(doc) {
+            if let Some(stripped) = strip_keys(&doc.get(r), &keys, 0) {
+                doc.set(r, stripped);
+            }
+        }
+    }
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }

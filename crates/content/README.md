@@ -10,7 +10,10 @@ let m = Matrix::from_operands(&op.operands);  // cm / Tm arithmetic, invert, bbo
 ```
 
 The parser is tolerant (unreadable bytes are skipped and counted, never fatal) and never
-panics. `redact` and (later) `edit` build their interpreters on it; the graphics-state tracker
+panics. An inline image whose data no `EI` ends runs to the end of the stream and is reported
+(`Parsed::unterminated_inline_image`), so a consumer that must see every operator a viewer
+draws can fail closed; data that ends in its filter's marker (`>`, `~>`) may run straight into
+`EI`. `redact` and (later) `edit` build their interpreters on it; the graphics-state tracker
 and the `Patch` API of architecture §6 grow here.
 
 Unfiltered inline images with built-in or Indexed colour spaces, and image masks, use their

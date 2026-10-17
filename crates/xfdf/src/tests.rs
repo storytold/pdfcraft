@@ -292,6 +292,40 @@ trailer\n<< /Root 1 0 R >>\n%%EOF\n";
     assert_eq!((parent("cycle-a").as_deref(), parent("cycle-b").as_deref()), (Some("cycle-b"), Some("cycle-a")));
 }
 
+/// FDF field import walked `/Kids` references with a depth cap but no visited set, so a `/Kids`
+/// array that repeats one next-level reference drove branch^levels work: a ~1 KB file hung the
+/// import thread. The walk now skips a reference it has already visited, so a crafted aliased tree
+/// is read in time proportional to its distinct nodes.
+#[test]
+fn fdf_import_bounds_aliased_kids() {
+    let levels = 24;
+    let mut fdf = String::from("%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [2 0 R] >> >>\nendobj\n");
+    for i in 0..levels {
+        let obj = 2 + i;
+        // Each level lists the next level twice; no /V, so the walk is pure traversal (as the
+        // audit measured): on the old code branch^levels, now linear in the distinct nodes.
+        if i + 1 < levels {
+            let next = obj + 1;
+            fdf.push_str(&format!("{obj} 0 obj\n<< /T (a) /Kids [{next} 0 R {next} 0 R] >>\nendobj\n"));
+        } else {
+            fdf.push_str(&format!("{obj} 0 obj\n<< /T (leaf) >>\nendobj\n"));
+        }
+    }
+    fdf.push_str("trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let start = std::time::Instant::now();
+    let values = data_values(fdf.as_bytes()).unwrap();
+    let elapsed = start.elapsed();
+    assert!(values.is_empty(), "no field carries a value");
+    assert!(elapsed.as_millis() < 500, "data_values took {elapsed:?}");
+
+    // A non-aliased tree with a value still reads it, so the dedup did not break ordinary import.
+    let ok = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [2 0 R] >> >>\nendobj\n\
+2 0 obj\n<< /T (parent) /Kids [3 0 R] >>\nendobj\n\
+3 0 obj\n<< /T (child) /V (hello) >>\nendobj\n\
+trailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    assert_eq!(data_values(ok).unwrap(), vec![("parent.child".to_string(), vec!["hello".to_string()])]);
+}
+
 #[test]
 fn xml_field_names_remain_valid_and_round_trip_without_collisions() {
     assert_eq!(xml_name(".Value"), "_.Value");

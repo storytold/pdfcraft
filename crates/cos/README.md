@@ -23,7 +23,8 @@ let root = doc.root();                               // Option<ObjRef> — the c
 let obj  = doc.get(ObjRef { num: 12, gen: 0 });      // load (and cache): Arc<Object>
 let real = doc.resolve(&obj);                        // follow one indirect reference
 let d    = doc.dict(&obj);                           // Option<Dict>, resolving first
-let data = stream.decoded()?;                        // filters applied on demand
+let data = stream.decoded()?;                        // filters applied on demand, tolerant
+let data = stream.decoded_strict_in(&doc)?;          // indirect /Filter, /DecodeParms resolved; any damage an error
 
 doc.set(r, Object::Dict(d));                         // edit: lands in the overlay
 let r = doc.add(obj);                                // append a new object

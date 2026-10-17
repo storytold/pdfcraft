@@ -25,10 +25,13 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
+use boa_engine::context::HostHooks;
 use boa_engine::object::builtins::{JsArray, JsFunction};
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
 use boa_engine::property::Attribute;
+use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 /// The kinds of field, as `field.type` names them.
@@ -1119,8 +1122,39 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
     run_here(script, event, doc, fields, doc_scripts, limits)
 }
 
+/// The host of every script context: source a script builds at run time and hands to `eval()`
+/// or `Function()` is screened as the script itself was ([`refuse`]), since the parser takes
+/// nesting on the thread's stack and a script may not build what it could not carry.
+struct Screened;
+
+impl HostHooks for Screened {
+    fn ensure_can_compile_strings(
+        &self,
+        _realm: Realm,
+        parameters: &[JsString],
+        body: &JsString,
+        _direct: bool,
+        _context: &mut Context,
+    ) -> JsResult<()> {
+        let mut source = body.to_std_string_escaped();
+        for p in parameters {
+            source.push_str(&p.to_std_string_escaped());
+        }
+        match refuse(&source) {
+            Some(why) => Err(JsNativeError::syntax().with_message(why).into()),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A fresh context with [`Screened`] as its host. Building fails only with options this crate
+/// never sets (a custom job queue or allocator), so a plain context is the fallback.
+pub(crate) fn screened_context() -> Context {
+    Context::builder().host_hooks(Rc::new(Screened)).build().unwrap_or_else(|_| Context::default())
+}
+
 fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
-    let mut ctx = Context::default();
+    let mut ctx = screened_context();
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {

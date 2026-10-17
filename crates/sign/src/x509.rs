@@ -171,6 +171,9 @@ const PROCESSED_EXTENSIONS: [&str; 11] = [
 const DOCUMENT_SIGNING_EKUS: [&str; 6] =
     ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.3", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"];
 
+/// id-kp-timeStamping: the purpose a timestamp authority's certificate carries (RFC 3161 §2.3).
+const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
 /// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
 /// extension that does not parse leaves its field at the default instead of failing the
 /// certificate (real-world issuers use encodings with edge cases, e.g. a single-URI CRL
@@ -433,6 +436,27 @@ impl Certificate {
     /// file" makes. Valid from `from` for `years`; usable for signing (digital signature and
     /// non-repudiation).
     pub fn self_signed(name: &Name, key: &PrivateKey, from: Time, years: u32, serial: &[u8]) -> Result<Certificate, SignError> {
+        // extKeyUsage: emailProtection and Adobe's document signing (1.2.840.113583.1.1.5).
+        Self::self_signed_with_purposes(name, key, from, years, serial, &["1.3.6.1.5.5.7.3.4", "1.2.840.113583.1.1.5"])
+    }
+
+    /// Whether this certificate may vouch for the time: its extended key usage names
+    /// id-kp-timeStamping (RFC 3161 §2.3). A certificate trusted for signing is not thereby a
+    /// time authority.
+    pub fn may_timestamp(&self) -> bool {
+        self.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_TIME_STAMPING))
+    }
+
+    /// [`Self::self_signed`] with the given extended key usages (OIDs) instead of the signing
+    /// ones: a timestamp authority's certificate, for one.
+    pub fn self_signed_with_purposes(
+        name: &Name,
+        key: &PrivateKey,
+        from: Time,
+        years: u32,
+        serial: &[u8],
+        purposes: &[&str],
+    ) -> Result<Certificate, SignError> {
         let alg = key.preferred_digest();
         let sig_alg = key.signature_algorithm(alg);
         let until = Time { year: from.year + years, ..from };
@@ -447,11 +471,12 @@ impl Certificate {
         };
         // keyUsage: digitalSignature (bit 0) and nonRepudiation (bit 1) → 0b1100_0000, 6 unused bits.
         let key_usage = der::tlv(tag::BIT_STRING, &[6, 0b1100_0000]);
+        let purposes: Vec<Vec<u8>> = purposes.iter().map(|o| der::oid(o)).collect();
+        let purposes: Vec<&[u8]> = purposes.iter().map(Vec::as_slice).collect();
         let extensions = der::seq(&[
             &ext("2.5.29.15", true, &key_usage),
             &ext("2.5.29.14", false, &der::octets(&ski)),
-            // extKeyUsage: emailProtection and Adobe's document signing (1.2.840.113583.1.1.5).
-            &ext("2.5.29.37", false, &der::seq(&[&der::oid("1.3.6.1.5.5.7.3.4"), &der::oid("1.2.840.113583.1.1.5")])),
+            &ext("2.5.29.37", false, &der::seq(&purposes)),
         ]);
         let tbs = der::seq(&[
             &der::explicit(0, &der::int(2)),

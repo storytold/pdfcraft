@@ -264,6 +264,26 @@ fn repeated_pictures_are_bounded_in_total_bytes() {
     assert!(layout_xml(&ok).is_ok(), "one small picture must lay out");
 }
 
+/// Nested splittable repeating subforms expand to branch^depth instances. The splittable
+/// recursion never reaches `size_of`, so the measurement budget was never charged on the spine and
+/// a handful of nested `<subform layout="tb">` elements made layout run effectively forever,
+/// hanging the opening process. Each visited subform now charges the budget, so such a template is
+/// refused with `TooLarge` instead.
+#[test]
+fn nested_splittable_subforms_are_bounded_by_the_measurement_budget() {
+    fn chain(branch: usize, depth: usize) -> String {
+        let mut body = String::new();
+        for _ in 0..depth {
+            body = format!("<subform layout=\"tb\"><occur min=\"1\" max=\"-1\" initial=\"{branch}\"/>{body}</subform>");
+        }
+        format!("<template>{body}</template>")
+    }
+    // branch^depth = 24^5 ~ 8e6 instances, far past MAX_MEASURES, from a few-hundred-byte template.
+    assert!(matches!(layout_xml(&chain(24, 5)), Err(XfaError::TooLarge(_))), "a nested splittable chain must be refused");
+    // An ordinary small repeating form still lays out.
+    assert!(layout_xml(&chain(3, 2)).is_ok(), "a small repeating form must lay out");
+}
+
 #[test]
 fn the_packets_can_be_one_stream_or_named_parts() {
     // Named parts, with the template split from the rest.

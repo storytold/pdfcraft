@@ -283,3 +283,29 @@ fn pieces_parse_as_one_stream_and_splice_back() {
     assert_eq!(out.len(), 3);
     assert!(Pieces::join::<&[u8]>(&[]).splice([(0..1, b"x".to_vec())]).is_empty());
 }
+
+/// An inline image whose data runs straight into `EI`: with its filter's end-of-data marker (`>`,
+/// `~>`) before it the data ends there, as a viewer reads it; without one the image runs to the end
+/// of the stream, the operators after it are lost, and the parse says so.
+#[test]
+fn an_inline_image_ends_at_its_filter_marker_or_is_reported_unterminated() {
+    let p = parse(b"BI /W 1 /H 1 /CS /G /BPC 8 /F /AHx ID 00>EI Q BT (After) Tj ET");
+    let names: Vec<&[u8]> = p.ops.iter().map(|o| o.op.as_slice()).collect();
+    assert_eq!(names, [&b"BI"[..], b"Q", b"BT", b"Tj", b"ET"]);
+    assert_eq!(p.ops[0].inline.as_ref().map(|(_, d)| d.as_slice()), Some(&b"00>"[..]));
+    assert!(!p.unterminated_inline_image);
+    let p = parse(b"BI /W 1 /H 1 /CS /G /BPC 8 /Filter [/A85 /Fl] ID xyz~>EI Q");
+    assert_eq!(p.ops.len(), 2);
+    assert_eq!(p.ops[0].inline.as_ref().map(|(_, d)| d.as_slice()), Some(&b"xyz~>"[..]));
+    assert!(!p.unterminated_inline_image);
+    // Binary data running into `EI`: where the image ends cannot be told.
+    let p = parse(b"BI /W 1 /H 1 /CS /G /BPC 8 ID \x80EI Q BT (After) Tj ET");
+    assert_eq!(p.ops.len(), 1);
+    assert!(p.unterminated_inline_image);
+    // Nor can it for a `>` that is not a hex terminator, or data cut short without an `EI`.
+    assert!(parse(b"BI /W 1 /H 1 /CS /G /BPC 8 ID 00>EI Q").unterminated_inline_image);
+    assert!(parse(b"BI /W 1 /H 1 /CS /G /BPC 8 ID aa").unterminated_inline_image);
+    // A properly ended image, or a stream that ends inside the parameters, swallows nothing.
+    assert!(!parse(b"BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q").unterminated_inline_image);
+    assert!(!parse(b"BI /W 1").unterminated_inline_image);
+}

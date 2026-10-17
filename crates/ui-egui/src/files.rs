@@ -195,6 +195,35 @@ pub(crate) fn file_stem_from_user(name: &str) -> String {
     if reserved { format!("_{stem}") } else { stem.to_string() }
 }
 
+/// `name` as exactly one safe file name to write into a chosen folder: its stem cleaned by
+/// [`file_stem_from_user`] (separators, `..`, drive prefixes and reserved names can't survive
+/// it), its extension (a short alphanumeric suffix, when it has one) kept, and "document" when
+/// nothing usable is left. Export names its files after the document, so each name goes through
+/// this before it is joined onto the folder, rather than being refused as
+/// [`PdfCraftApp::write_files`] refuses a name that is not plain.
+pub(crate) fn safe_file_name(name: &str) -> String {
+    let split = name.rfind('.').filter(|&i| i > 0).and_then(|i| {
+        let (stem, ext) = (name.get(..i)?, name.get(i + 1..)?);
+        (!ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric())).then_some((stem, ext))
+    });
+    let (stem, ext) = split.unwrap_or((name, ""));
+    let stem = file_stem_from_user(stem);
+    let stem = if stem.is_empty() { "document" } else { stem.as_str() };
+    if ext.is_empty() { stem.to_string() } else { format!("{stem}.{ext}") }
+}
+
+/// Write `bytes` atomically as the file `name` directly inside the chosen folder `dir`. `name` is
+/// one the caller already made safe with [`safe_file_name`] (and shows in its own messages); a
+/// name that is still not a plain file name ([`is_plain_file_name`]) is refused, never written
+/// beside or outside `dir`. The error is the reason, for the caller to report next to the name.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_inside(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    if !is_plain_file_name(name) {
+        return Err("the name is not a plain file name".to_string());
+    }
+    crate::editing::write_atomically(&dir.join(name).to_string_lossy(), bytes).map_err(|e| e.to_string())
+}
+
 /// A plain file name for a PDF-supplied attachment name: the Save suggestion, and the tab name
 /// (which later names files written from that tab). It never changes the stored name or a
 /// destination the user selected.
@@ -1003,6 +1032,76 @@ impl PdfCraftApp {
                 let _ = crate::editing::download(&format!("{stem}.xfdf"), &bytes);
             }
             Err(e) => self.notify_error(e),
+        }
+    }
+}
+
+/// Export names its files after the document and writes them into the folder the user chose:
+/// every file must land directly inside that folder, whatever the document is called. (Writing
+/// through [`PdfCraftApp::write_files`] refuses a name that is not plain; see `stem_tests`.)
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod sink_tests {
+    use std::path::{Path, PathBuf};
+
+    use crate::PdfCraftApp;
+
+    const FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    /// A fresh root folder holding the `chosen` folder the user picks.
+    fn folders(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("pdfcraft-sink-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let chosen = root.join("chosen");
+        std::fs::create_dir_all(&chosen).unwrap();
+        (root, chosen)
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn exported_text_never_leaves_the_chosen_folder() {
+        let (root, chosen) = folders("export");
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("../notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.export_dir_override = Some(chosen.to_string_lossy().into_owned());
+        app.start_export(crate::export_ui::ExportKind::Text);
+        assert_eq!(names(&root), ["chosen"], "nothing lands beside the chosen folder");
+        assert_eq!(names(&chosen), [".._notes.txt"]);
+    }
+
+    #[test]
+    fn safe_file_names_are_one_component_with_the_extension_kept() {
+        use super::{is_plain_file_name, safe_file_name};
+        assert_eq!(safe_file_name("report (page 1).pdf"), "report (page 1).pdf");
+        assert_eq!(safe_file_name("../escaped (page 1).pdf"), ".._escaped (page 1).pdf");
+        assert_eq!(safe_file_name("../evilcert.cer"), ".._evilcert.cer");
+        assert_eq!(safe_file_name("a/b\\c:d Accessibility Report.html"), "a_b_c_d Accessibility Report.html");
+        assert_eq!(safe_file_name("/etc/passwd"), "_etc_passwd");
+        assert_eq!(safe_file_name("C:\\Users\\x\\owned.txt"), "C__Users_x_owned.txt");
+        assert_eq!(safe_file_name("nul.txt"), "_nul.txt");
+        // Nothing usable left: a stable name, the extension kept when there is one.
+        assert_eq!(safe_file_name(".."), "document");
+        assert_eq!(safe_file_name("...pdf"), "document.pdf");
+        assert_eq!(safe_file_name(""), "document");
+        assert_eq!(safe_file_name(".hidden"), ".hidden");
+        // The extension is a short alphanumeric suffix; anything else is part of the stem.
+        assert_eq!(safe_file_name("archive.tar.gz"), "archive.tar.gz");
+        assert_eq!(safe_file_name("odd.ext/../x"), "odd.ext_.._x");
+        for name in ["../a.pdf", "C:\\x.txt", "..", "a/b.html", "/abs", "x/", "résumé.pdf"] {
+            let once = safe_file_name(name);
+            assert_eq!(Path::new(&once).components().count(), 1, "{once:?}");
+            assert_eq!(safe_file_name(&once), once, "stable");
+            assert!(is_plain_file_name(&once), "{once:?}");
         }
     }
 }

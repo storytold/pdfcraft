@@ -717,6 +717,12 @@ impl Layouter<'_> {
             return Ok(());
         }
         let Node::Subform(sf) = node else { return Ok(()) };
+        // Charge one unit of the measurement budget per visited subform and per instance. The
+        // splittable-child recursion never reaches `size_of` (which is the only other place the
+        // budget is charged), so without this a chain of nested splittable repeating subforms
+        // does branch^depth work with nothing to stop it. Charging here makes MAX_MEASURES bound
+        // the total layout work even when every leaf measures nothing.
+        self.measures.set(self.measures.get().saturating_add(1));
         self.check_measures()?;
         if sf.break_before_page && self.page_has_flow() {
             self.new_page()?;
@@ -726,6 +732,8 @@ impl Layouter<'_> {
         self.warn_truncated(node, &ctx.som, instances);
         let ctx_parent = ctx;
         for i in 0..instances {
+            self.measures.set(self.measures.get().saturating_add(1));
+            self.check_measures()?;
             let ctx = ctx_parent.with_som(&sf.common, sib + i);
             let (rect, _, _) = self.cursor();
             let (x, w) = avail.unwrap_or((rect.x, rect.w));

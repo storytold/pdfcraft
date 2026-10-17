@@ -38,6 +38,8 @@ impl TextFilter {
 
 mod search;
 
+use crate::search_fold::{fold_char, search_chars};
+
 /// One glyph on the page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextGlyph {
@@ -62,15 +64,38 @@ pub struct TextGlyph {
 /// four are treated as one letter; this only adds matches where an `ı` or `İ` is involved.
 /// Greek sigma's normal and word-final forms (`σ`/`ς`) both fold to `σ`, as does `Σ`.
 pub fn fold_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            'I' | 'i' | '\u{130}' | '\u{131}' => out.push('i'),
-            'Σ' | 'σ' | 'ς' => out.push('σ'),
-            _ => out.extend(c.to_lowercase()),
+    s.chars().flat_map(fold_char).collect()
+}
+
+/// Calls `push` with what search sees for `c` ([`search_chars`]), case-folded unless
+/// `case_sensitive`. `scratch` is reused between calls.
+fn for_search(c: char, case_sensitive: bool, scratch: &mut Vec<char>, mut push: impl FnMut(char)) {
+    scratch.clear();
+    search_chars(c, scratch);
+    for &s in scratch.iter() {
+        if case_sensitive {
+            push(s);
+        } else {
+            fold_char(s).for_each(&mut push);
         }
     }
-    out
+}
+
+/// Is `c` a space that adds nothing to search text ending in `last`: a leading one, or one after
+/// another space? Leaving these out makes a run of white space read as one space.
+fn is_redundant_space(c: char, last: Option<&char>) -> bool {
+    c == ' ' && last.is_none_or(|k| *k == ' ')
+}
+
+/// The glyphs behind characters `range` of [`PageText::search_text`], given the glyph of each
+/// character: from the first glyph to the last one that produced a character in the range. A
+/// glyph between them that produced none (a soft hyphen) lies inside. `None` for an empty range,
+/// one past the end of the text, or one holding only inserted separators.
+fn glyph_range(owner: &[Option<usize>], range: std::ops::Range<usize>) -> Option<std::ops::Range<usize>> {
+    let glyphs = owner.get(range)?;
+    let start = glyphs.iter().find_map(|g| *g)?;
+    let end = glyphs.iter().rev().find_map(|g| *g)?.checked_add(1)?;
+    (start < end).then_some(start..end)
 }
 
 /// The text of one page, in content order, with line structure.
@@ -122,41 +147,50 @@ impl PageText {
         self.find_opts_limited(needle, case_sensitive, whole_words, usize::MAX)
     }
 
-    /// Search with Acrobat's find options, returning at most `limit` glyph ranges.
+    /// Search with Acrobat's find options, returning at most `limit` glyph ranges. The query and
+    /// the page text are compared the way they read (see [`search_chars`]): ligature glyphs as
+    /// their letters, soft hyphens and zero width characters ignored, composed and decomposed
+    /// accents alike, dash variants as a hyphen, a run of white space as one space.
     pub fn find_opts_limited(&self, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
         search::find(self, needle, case_sensitive, whole_words, limit)
     }
 
     /// Glyph ranges of the matches a character matcher finds in the page text (words and lines
-    /// separated by one space, original case). Used for pattern search (Search & Redact).
+    /// separated by one space, original case, otherwise normalised as [`find_opts`] does: see
+    /// [`search_chars`]). Used for pattern search (Search & Redact).
+    ///
+    /// [`find_opts`]: Self::find_opts
     pub fn find_with(&self, matcher: impl Fn(&[char]) -> Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
+        let (chars, owner) = self.search_text(true);
+        matcher(&chars).into_iter().filter_map(|r| glyph_range(&owner, r)).collect()
+    }
+
+    /// The page text as search compares it, and the glyph each of its characters came from: every
+    /// glyph's characters normalised by [`for_search`], one space between words and between
+    /// lines, a run of white space as one space. The glyph is `None` for a separator inserted
+    /// between two glyphs: it is part of neither, so a match that starts or ends on it does not
+    /// take the neighbouring glyph. The two vectors have the same length.
+    fn search_text(&self, case_sensitive: bool) -> (Vec<char>, Vec<Option<usize>>) {
         let mut chars: Vec<char> = Vec::new();
-        // `None` is a word or line separator inserted between glyphs. It is not part of either
-        // glyph, so a match that starts or ends on it must not take the neighbouring glyph.
         let mut owner: Vec<Option<usize>> = Vec::new();
+        let mut scratch = Vec::new();
         for (i, g) in self.glyphs.iter().enumerate() {
-            let gap = self.space_before.get(i).copied().unwrap_or(false) || self.line_of.get(i) != self.line_of.get(i.saturating_sub(1));
-            if i > 0 && gap && chars.last().is_some_and(|c| *c != ' ') {
+            let line_break = i.checked_sub(1).and_then(|previous| self.line_of.get(previous)).zip(self.line_of.get(i)).is_some_and(|(a, b)| a != b);
+            let gap = self.space_before.get(i).copied().unwrap_or(false) || line_break;
+            if i > 0 && gap && !is_redundant_space(' ', chars.last()) {
                 chars.push(' ');
                 owner.push(None);
             }
             for c in g.text.chars() {
-                chars.push(if c.is_whitespace() { ' ' } else { c });
-                owner.push(Some(i));
+                for_search(c, case_sensitive, &mut scratch, |c| {
+                    if !is_redundant_space(c, chars.last()) {
+                        chars.push(c);
+                        owner.push(Some(i));
+                    }
+                });
             }
         }
-        matcher(&chars)
-            .into_iter()
-            .filter_map(|r| {
-                if r.start >= r.end || r.end > chars.len() {
-                    return None;
-                }
-                let glyphs = owner.get(r.start..r.end)?;
-                let start = glyphs.iter().find_map(|g| *g)?;
-                let end = glyphs.iter().rev().find_map(|g| *g)?.checked_add(1)?;
-                (start < end).then_some(start..end)
-            })
-            .collect()
+        (chars, owner)
     }
 
     /// Index of the glyph nearest to a view-space point (for selection anchors).
@@ -2010,6 +2044,73 @@ mod tests {
             let x0 = x + i as f32 * advance;
             v.push(g(&c.to_string(), x0, y, x0 + 6.0));
         }
+    }
+
+    /// One line of glyphs, one per piece of `pieces` (a ligature, a soft hyphen or a combining
+    /// mark is a glyph of its own when the font draws it so), 6 pt apart.
+    fn glyph_line(pieces: &[&str]) -> PageText {
+        let v: Vec<TextGlyph> = pieces
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let x = 10.0 + i as f32 * 6.0;
+                g(p, x, 10.0, x + 6.0)
+            })
+            .collect();
+        let n = v.len();
+        PageText { glyphs: v, line_of: vec![0; n], space_before: vec![false; n] }
+    }
+
+    /// Search used to compare the glyphs' code points as they are, so text set with a ligature
+    /// glyph, a soft hyphen, a zero width space, a decomposed accent or a typographic dash was
+    /// not found by what the user types (and so not redacted). It now compares text the way it
+    /// reads, on both sides, and every match still covers the glyphs it came from.
+    #[test]
+    fn search_matches_text_the_way_it_reads() {
+        let ligature = glyph_line(&["C", "o", "n", "\u{FB01}", "d", "e", "n", "t", "i", "a", "l"]);
+        assert_eq!(ligature.find("Confidential"), vec![0..11], "fi ligature");
+        assert_eq!(ligature.find_opts("Confidential", true, false), vec![0..11], "case-sensitive");
+        assert!(ligature.find_opts("confidential", true, false).is_empty(), "case-sensitive still is");
+        assert_eq!(ligature.find("Con\u{AD}fidential"), vec![0..11], "a soft hyphen typed in the query is ignored too");
+        assert_eq!(ligature.find("fi"), vec![3..4], "the ligature glyph alone");
+        assert_eq!(glyph_line(&["o", "\u{FB03}", "c", "e"]).find("office"), vec![0..4], "ffi ligature");
+
+        let soft_hyphen = glyph_line(&["S", "e", "c", "\u{AD}", "r", "e", "t"]);
+        assert_eq!(soft_hyphen.find("Secret"), vec![0..7], "the soft-hyphen glyph lies inside the match");
+        assert_eq!(glyph_line(&["P", "a", "s", "s", "\u{200B}", "w", "o", "r", "d"]).find("Password"), vec![0..9], "zero width space");
+
+        let decomposed = glyph_line(&["R", "e", "n", "e", "\u{301}", "e"]);
+        assert_eq!(decomposed.find("Renée"), vec![0..6], "a precomposed query finds decomposed text");
+        assert_eq!(decomposed.find("RENÉE"), vec![0..6]);
+        assert_eq!(decomposed.find("Rene"), vec![0..4]);
+        assert!(decomposed.find_opts("Rene", false, true).is_empty(), "the accent continues the word");
+        assert_eq!(glyph_line(&["R", "e", "n", "é", "e"]).find("Rene\u{301}e"), vec![0..5], "a decomposed query finds precomposed text");
+        assert_eq!(glyph_line(&["Ž", "i", "ž", "e", "k"]).find("Z\u{30C}i\u{17E}ek"), vec![0..5], "Latin Extended-A, either form");
+
+        let dashes = glyph_line(&["1", "2", "3", "\u{2011}", "4", "5", "\u{2013}", "6", "7", "8", "9"]);
+        assert_eq!(dashes.find("123-45-6789"), vec![0..11], "non-breaking hyphen and en dash read as a hyphen");
+        assert_eq!(glyph_line(&["a", "\u{2014}", "b"]).find("a-b"), vec![0..3], "em dash");
+    }
+
+    /// Pattern search (Search & Redact) sees the same normalised text, with runs of white space
+    /// as one space, so the SSN, phone, card and date patterns match typeset numbers; each
+    /// match still maps back to the glyphs it came from.
+    #[test]
+    fn pattern_search_sees_normalised_text() {
+        let find_ascii = |needle: &'static str| {
+            move |chars: &[char]| {
+                let n: Vec<char> = needle.chars().collect();
+                chars.windows(n.len()).enumerate().filter(|(_, w)| *w == n.as_slice()).map(|(i, _)| i..i + n.len()).collect::<Vec<_>>()
+            }
+        };
+        let ssn = glyph_line(&["S", "S", "N", " ", "1", "2", "3", "\u{2011}", "4", "5", "\u{2011}", "6", "7", "8", "9"]);
+        assert_eq!(ssn.find_with(find_ascii("123-45-6789")), vec![4..15]);
+        let phone = glyph_line(&["T", "e", "l", " ", "5", "5", "5", " ", " ", "1", "2", "3", " ", "4", "5", "6", "7"]);
+        assert_eq!(phone.plain_text(), "Tel 555  123 4567", "extraction keeps both spaces");
+        assert_eq!(phone.find_with(find_ascii("555 123 4567")), vec![4..17], "search collapses them");
+        let ligature = glyph_line(&["o", "\u{FB03}", "c", "e", " ", "\u{AD}", "x"]);
+        assert_eq!(ligature.find_with(find_ascii("office x")), vec![0..7], "a glyph that produces nothing stays inside the match");
+        assert_eq!(ligature.find_with(find_ascii("ffi")), vec![1..2]);
     }
 
     #[test]

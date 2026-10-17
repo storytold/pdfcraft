@@ -28,6 +28,7 @@ pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
 };
+pub use pdfcraft_filters::{Filter, Params};
 pub use writer::{SaveOptions, pdf_date, serialize, write_full, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]

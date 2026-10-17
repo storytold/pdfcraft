@@ -13,6 +13,11 @@ pub(crate) fn fixture(n: usize) -> Vec<u8> {
         let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
     }
+    assemble(&objs)
+}
+
+/// A document from `objs`, numbered from 1, object 1 being the catalog.
+fn assemble(objs: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -1906,31 +1911,40 @@ fn mark_shown_text(s: &mut Session, id: DocId, needle: &str) {
     s.apply(id, mark).unwrap();
 }
 
-/// Redaction removes text by the positions its own interpreter works out. Here the font and size
-/// come from an ExtGState /Font entry (`gs`), which the renderer honours and the interpreter does
-/// not model, so it places no glyph under the mark the user drew over the word as displayed: it
-/// used to report success and leave the word in the file. The renderer is asked now, and the edit
-/// is refused.
+/// Redaction removes text by the positions its own interpreter works out, and the marks were
+/// drawn over the page as the renderer shows it, so after applying, the renderer has the last
+/// word (`shown_under_redactions`): a glyph still drawn half under a mark means the edit is
+/// refused with nothing changed. The backstop is asked here about a document whose marked word
+/// was not removed at all. Text whose font and size come from an ExtGState /Font entry (`gs`),
+/// which once reached the backstop because the interpreter did not model it, is placed by both
+/// now and goes, like text set with `Tf`.
 #[test]
 fn redaction_is_refused_when_the_page_still_shows_text_under_a_mark() {
     let line = "Public words then SECRET42 and more";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
-    let by_gs = one_line_page("/ExtGState << /GS1 << /Type /ExtGState /Font [4 0 R 16] >> >>", &format!("BT /GS1 gs 20 150 Td ({line}) Tj ET"));
-    let id = s.open("gs.pdf", None, Arc::new(by_gs), None).unwrap();
-    mark_shown_text(&mut s, id, "SECRET42");
-    let refused = s.apply(id, Edit::ApplyRedactions { pages: None });
-    assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
-    // Nothing was changed: the mark is still pending and the page still shows the line.
-    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
-    assert_eq!(page_texts(&s, id), [line]);
-
-    // The same line with its font set by `Tf`: the mark is applied and the word is gone.
     let by_tf = one_line_page("/Font << /F1 4 0 R >>", &format!("BT /F1 16 Tf 20 150 Td ({line}) Tj ET"));
-    let id = s.open("tf.pdf", None, Arc::new(by_tf), None).unwrap();
+    let id = s.open("kept.pdf", None, Arc::new(by_tf.clone()), None).unwrap();
     mark_shown_text(&mut s, id, "SECRET42");
-    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
-    let shown = page_texts(&s, id).swap_remove(0);
-    assert!(shown.starts_with("Public words then") && shown.ends_with("and more") && !shown.contains("SECRET42"), "{shown}");
+    let doc = s.get(id).unwrap();
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let marks = pdfcraft_redact::marks(cos);
+    assert_eq!(marks.len(), 1);
+    let refused = shown_under_redactions(cos, &marks, &doc.info.pages, None);
+    assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
+    // A mark over nothing drawn is clean.
+    let mut off = marks.clone();
+    off[0].rects = vec![[300.0, 20.0, 400.0, 60.0]];
+    assert!(shown_under_redactions(cos, &off, &doc.info.pages, None).is_ok());
+
+    // The line with its font set by `gs` or by `Tf`: the mark is applied and the word is gone.
+    let by_gs = one_line_page("/ExtGState << /GS1 << /Type /ExtGState /Font [4 0 R 16] >> >>", &format!("BT /GS1 gs 20 150 Td ({line}) Tj ET"));
+    for (name, bytes) in [("gs.pdf", by_gs), ("tf.pdf", by_tf)] {
+        let id = s.open(name, None, Arc::new(bytes), None).unwrap();
+        mark_shown_text(&mut s, id, "SECRET42");
+        s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+        let shown = page_texts(&s, id).swap_remove(0);
+        assert!(shown.starts_with("Public words then") && shown.ends_with("and more") && !shown.contains("SECRET42"), "{name}: {shown}");
+    }
 }
 
 #[test]
@@ -2714,6 +2728,48 @@ fn comment_summary_includes_replies_to_replies() {
     assert!(text.contains("        NESTED_REPLY"), "the nested reply is indented under its parent: {text}");
 }
 
+/// `/NM` values come from the document and need not be unique. When replies at each level share
+/// one name, the summary used to re-select the same replies at every recursion level, writing
+/// 2^(levels+1)-2 reply lines and growing without bound until the process was OOM-killed. Each
+/// reply must now appear once, so the summary is bounded by the number of replies.
+#[test]
+fn comment_summary_bounds_replies_that_reuse_names() {
+    fn ann(name: &str, irt: Option<&str>, contents: &str) -> pdfcraft_render::Annotation {
+        pdfcraft_render::Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: Some("A".into()),
+            contents: Some(contents.into()),
+            modified: None,
+            name: Some(name.into()),
+            in_reply_to: irt.map(str::to_string),
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+        }
+    }
+    // A top comment, then `levels` levels of two replies each. The two replies of a level share one
+    // `/NM`, and the next level replies to that shared name: a finite tree, but one on which the
+    // old recursion did 2^(levels+1)-2 visits.
+    let levels = 16;
+    let mut all = vec![ann("T", None, "top")];
+    for k in 0..levels {
+        let name = format!("N{k}");
+        let parent = if k == 0 { "T".to_string() } else { format!("N{}", k - 1) };
+        all.push(ann(&name, Some(&parent), "r"));
+        all.push(ann(&name, Some(&parent), "r"));
+    }
+    let text = comment_summary("doc.pdf", &all, SummarySort::Page);
+    let reply_lines = text.matches("Subject: Reply").count();
+    // Each of the 2*levels reply annotations appears exactly once.
+    assert_eq!(reply_lines, 2 * levels, "every reply is summarized once, whatever names repeat");
+}
+
 #[test]
 fn reading_colors_set_and_invalidated() {
     let (mut s, id) = session_with(1);
@@ -3322,6 +3378,43 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// A recognition result is bound to the document state it was captured from. If the document is
+/// edited after Recognize text starts but before its result is applied (the GUI runs it on a
+/// worker thread), applying the stale result would stamp the pre-edit words back onto the page as
+/// an invisible, selectable layer -- defeating a redaction applied in that window. The apply step
+/// now refuses a result whose captured generation no longer matches the document. No OCR models
+/// are needed: the worker's word list is supplied directly, as in the audit harness.
+#[test]
+fn ocr_result_is_refused_when_the_document_changed_after_capture() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "Card 4111 1111 1111 1111").unwrap();
+    let id0 = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id0).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    assert_eq!(page_texts(&s, id), [""], "the scan is a picture, with no text");
+
+    // Capture a job, as the GUI does before starting the background worker.
+    let job = s.ocr_job(id, &[], ocr::OcrSettings::default()).expect("a job");
+    let captured = job.generation;
+    let found = vec![ocr::OcrPage {
+        page: 0,
+        words: vec![ocr::PlacedWord { text: "4111 1111 1111 1111".into(), origin: [40.0, 40.0], across: [120.0, 0.0], up: [0.0, 12.0] }],
+        already_on_page: 0,
+        skipped: None,
+    }];
+
+    // The document is edited while recognition "runs", bumping its edit generation.
+    s.apply(id, rect_comment(0, [10.0, 10.0, 50.0, 50.0])).unwrap();
+    let stale = s.apply_ocr(id, &found, captured);
+    assert!(stale.is_err(), "a result captured before the edit must be refused");
+    assert_eq!(page_texts(&s, id), [""], "no OCR text was stamped onto the page");
+
+    // Captured against the current state, the same result applies.
+    let now = s.get(id).unwrap().edit_generation();
+    assert_eq!(s.apply_ocr(id, &found, now).unwrap(), 1, "a fresh result still applies");
+}
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]
@@ -3702,6 +3795,61 @@ fn actions_run_their_steps_on_files() {
     assert_eq!(d.info.title.as_deref(), Some("Q3"));
     assert!(page_texts(&s2, id)[0].contains("DRAFT"));
     assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), |_, _| {}).is_err());
+}
+
+/// A refused confidentiality step (Sanitize, Remove hidden information) must fail the file,
+/// not be logged while the unsanitized file is written and reported done. Only a step with
+/// genuinely nothing to do is a skip.
+#[test]
+fn actions_fail_the_file_when_a_sanitizing_step_is_refused() {
+    let built = actions::builtin();
+    let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
+    let prepare = built.iter().find(|a| a.name == "Prepare for Distribution").unwrap();
+    let run = |action: &actions::Action, bytes: Arc<Vec<u8>>| actions::run_on(action, "in.pdf", bytes, |_, _| {});
+    // The file must fail, never be produced with the refusal only in its log.
+    let refused = |action: &actions::Action, bytes: Arc<Vec<u8>>| match run(action, bytes) {
+        Ok(r) => panic!("{} produced the file as done, log {:?}", action.name, r.log),
+        Err(e) => e,
+    };
+
+    // A signature field with any value makes the file signed: a full rewrite is refused.
+    let page = b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [6 0 R] >>".to_vec();
+    let body = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    let signed = Arc::new(assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        page,
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [0 0 0 0] /P 4 0 R /V << /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >> >>".to_vec(),
+    ]));
+    let err = refused(sanitize, signed.clone());
+    assert!(err.starts_with("Sanitize document:") && err.contains("signed"), "{err}");
+    let err = refused(prepare, signed);
+    assert!(err.starts_with("Remove hidden information:") && err.contains("signed"), "{err}");
+
+    // Permissions that forbid changes refuse it too.
+    let err = refused(sanitize, protected("", "owner", 0b0100));
+    assert!(err.contains("security settings"), "{err}");
+
+    // So does a page whose content can't be read (its /Contents is a number) when there is
+    // hidden text to remove (page 1's is invisible, rendering mode 3).
+    let hidden = "BT /F1 24 Tf 3 Tr 20 150 Td (Hidden) Tj ET";
+    let unreadable = Arc::new(assemble(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{hidden}\nendstream", hidden.len()).into_bytes(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 42 >>".to_vec(),
+    ]));
+    let err = refused(sanitize, unreadable);
+    assert!(err.contains("can't be read"), "{err}");
+
+    // Controls: a plain file is sanitized, and a step with nothing to do is a skip, not a failure.
+    assert_eq!(run(sanitize, Arc::new(fixture(1))).unwrap().log, ["Sanitize document"]);
+    let r = run(prepare, Arc::new(fixture(1))).unwrap();
+    assert_eq!(r.log, ["Remove hidden information: nothing to do", "Flatten comments", "Flatten form fields"]);
 }
 
 #[test]

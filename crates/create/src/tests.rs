@@ -744,6 +744,59 @@ fn damaged_masks_and_sizes_never_panic() {
     }
 }
 
+/// An `/Indexed` colour space whose base refers back to its own array (or to another Indexed
+/// space that refers back) is refused, not followed. Resolving the base used to recurse once per
+/// reference with nothing bounding it, so a 600-byte file overflowed the stack, which aborts the
+/// process: no `catch_unwind` can intercept that.
+#[test]
+fn a_self_referential_indexed_colour_space_is_refused_not_followed() {
+    fn table() -> Object {
+        Object::String(PdfString::literal(vec![0, 0, 0]))
+    }
+    let cycles: [fn(&mut Document) -> ObjRef; 2] = [
+        |doc| {
+            // [/Indexed <itself> 0 <000000>]
+            let cs = doc.add(Object::Null);
+            doc.set(cs, Object::Array(vec![Object::name("Indexed"), Object::Ref(cs), Object::Int(0), table()]));
+            cs
+        },
+        |doc| {
+            // Two spaces, each the other's base.
+            let a = doc.add(Object::Null);
+            let b = doc.add(Object::Array(vec![Object::name("I"), Object::Ref(a), Object::Int(0), table()]));
+            doc.set(a, Object::Array(vec![Object::name("Indexed"), Object::Ref(b), Object::Int(0), table()]));
+            a
+        },
+    ];
+    for cycle in cycles {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        let cs = cycle(&mut doc);
+        with_image(&mut doc, |_| {
+            let mut d = image_dict(1, 1, "DeviceGray", 8);
+            d.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+            Stream::from_raw(d, vec![0])
+        });
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.images.is_empty(), "{:?}", out.images.len());
+        assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+        assert!(out.skipped[0].2.contains("indexed"), "{:?}", out.skipped);
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let r = xo.iter().next().map(|(_, v)| v.as_ref().unwrap()).unwrap();
+        assert!(image_file(&doc, r).is_err(), "Save image as refuses it too");
+    }
+    // The valid shape still exports: one Indexed level over a device space.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    let cs = doc.add(Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(0), table()]));
+    with_image(&mut doc, |_| {
+        let mut d = image_dict(1, 1, "DeviceGray", 8);
+        d.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+        Stream::from_raw(d, vec![0])
+    });
+    assert_eq!(exported_rgba(&doc).1, [0, 0, 0, 255]);
+}
+
 #[test]
 fn indexed_image_export_clamps_samples_to_hival() {
     for palette in [vec![255, 0, 0, 0, 0, 255], vec![255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 255]] {

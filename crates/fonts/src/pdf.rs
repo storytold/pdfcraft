@@ -509,6 +509,19 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// Does an embedded CMap's program select vertical writing (`/WMode 1 def`, ISO 32000-2
+/// §9.7.5.4)? A viewer takes the writing mode from the program, whatever the stream dictionary's
+/// `/WMode` says; a CMap that inherits one through `usecmap` is not followed here.
+pub fn cmap_is_vertical(data: &[u8]) -> bool {
+    let mut toks = Lexer::new(data);
+    while let Some(t) = toks.next() {
+        if t == Tok::Word(b"/WMode") && toks.next().as_ref().and_then(number) == Some(1) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Codespace ranges and CID mappings from an embedded CMap stream, at most
 /// [`MAX_CMAP_RANGES`] of each (every glyph searches them).
 #[allow(clippy::type_complexity)]
@@ -1479,6 +1492,17 @@ mod tests {
         let (spaces, cids) = parse_cmap(b"1 begincodespacerange<00><FF>endcodespacerange 1 begincidrange<20><7E>1 endcidrange");
         assert_eq!(spaces, [(1, vec![0], vec![0xff])]);
         assert_eq!(cids, [(0x20, 0x7e, 1)]);
+    }
+
+    #[test]
+    fn wmode_is_read_from_the_cmap_program() {
+        assert!(cmap_is_vertical(b"/CMapName /V def /WMode 1 def 1 begincidrange <0000> <FFFF> 0 endcidrange"));
+        assert!(cmap_is_vertical(b"/WMode\n1\ndef"));
+        assert!(!cmap_is_vertical(b"/WMode 0 def"));
+        // A comment, a name that only starts like it, a missing value, or no WMode at all.
+        assert!(!cmap_is_vertical(b"% /WMode 1 def\n/WModeX 1 def /WMode"));
+        assert!(!cmap_is_vertical(b"/WMode /One def"));
+        assert!(!cmap_is_vertical(b""));
     }
 
     #[test]

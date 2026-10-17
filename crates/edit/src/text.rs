@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
+use pdfcraft_content::{Matrix, Op, Pieces, parse, parse_capped, serialize_ops};
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
@@ -23,6 +23,20 @@ use crate::EditError;
 #[path = "text_regions.rs"]
 mod regions;
 use regions::{group_blocks, rewrite_styled_block};
+
+/// Per-page aggregate decoded-content budget: a crafted `/Contents` array of several streams,
+/// each within the per-stream decompression cap, must not sum to far more than this. The
+/// group-selection path in `objects.rs` uses the same budget.
+pub(crate) const MAX_CONTENT_BYTES: usize = 128 * 1024 * 1024;
+/// Most `/Contents` array elements one page may list.
+const MAX_CONTENT_STREAMS: usize = 10_000;
+/// Most operators the text interpreters materialise from one page's content. Past this the page
+/// is refused rather than allocating one heap `Op` per operator without bound.
+const MAX_OPS: usize = 1_000_000;
+/// Most graphics-state saves (`q`) the text interpreter keeps at once. Past this, saves are
+/// counted so their matching `Q` still balances, rather than cloning the whole text state per
+/// `q` without bound (as `images.rs` already caps its own `q` stack).
+const MAX_SAVE_DEPTH: usize = 4096;
 
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
@@ -517,7 +531,11 @@ struct Ts {
     render_mode: i64,
 }
 
-fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
+/// A page's content streams and their decoded bytes, in order. The decodes share one per-page
+/// byte budget so a `/Contents` array of many streams (each within the per-stream cap) cannot sum
+/// to unbounded memory; a stream that cannot be decoded within what is left, or an array longer
+/// than [`MAX_CONTENT_STREAMS`], is refused rather than read.
+fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -525,15 +543,24 @@ fn content_streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
             _ => vec![c.clone()],
         },
     };
-    list.into_iter()
-        .map(|o| {
-            let data = match &*doc.resolve(&o) {
-                Object::Stream(s) => s.decoded().unwrap_or_default(),
-                _ => Vec::new(),
-            };
-            (o, data)
-        })
-        .collect()
+    if list.len() > MAX_CONTENT_STREAMS {
+        return Err(EditError::Invalid("this page has too many content streams to read".into()));
+    }
+    let mut remaining = MAX_CONTENT_BYTES;
+    let mut out = Vec::with_capacity(list.len());
+    for o in list {
+        let data = match &*doc.resolve(&o) {
+            Object::Stream(s) => {
+                let bytes =
+                    s.decoded_within(remaining).map_err(|_| EditError::Invalid("the page content can't be read within its size limit".into()))?;
+                remaining = remaining.saturating_sub(bytes.len());
+                bytes
+            }
+            _ => Vec::new(),
+        };
+        out.push((o, data));
+    }
+    Ok(out)
 }
 
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
@@ -744,6 +771,9 @@ fn interpret(
     let mut bt = 0usize;
     let mut marked = std::mem::take(&mut carry.marked);
     let mut actual: Vec<Option<(usize, usize, String)>> = Vec::new();
+    // Saves past [`MAX_SAVE_DEPTH`] are counted, not stored, so their `Q` still balances without
+    // keeping one text-state clone per `q`.
+    let mut saves_over = 0usize;
     for (i, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             b"BMC" | b"BDC" if marked.len() < 256 => {
@@ -790,9 +820,17 @@ fn interpret(
                     }
                 }
             }
-            b"q" => stack.push(ts.clone()),
+            b"q" => {
+                if stack.len() < MAX_SAVE_DEPTH {
+                    stack.push(ts.clone());
+                } else {
+                    saves_over = saves_over.saturating_add(1);
+                }
+            }
             b"Q" => {
-                if let Some(s) = stack.pop() {
+                if saves_over > 0 {
+                    saves_over -= 1;
+                } else if let Some(s) = stack.pop() {
                     ts = s;
                 }
             }
@@ -1001,8 +1039,11 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
     let mut carry = Carry::new();
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
-    let pieces = Pieces::join(&content_streams(doc, &p.dict).into_iter().map(|(_, d)| d).collect::<Vec<_>>());
-    let ops = pieces.parse().ops;
+    let pieces = Pieces::join(&content_streams(doc, &p.dict)?.into_iter().map(|(_, d)| d).collect::<Vec<_>>());
+    let ops = pieces.parse_capped(MAX_OPS).ops;
+    if ops.len() >= MAX_OPS {
+        return Err(EditError::Invalid("this page has too many content operations to read".into()));
+    }
     let shown = interpret(doc, &ops, &fonts_res, &mut cache, &mut carry, None, true);
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
@@ -1258,7 +1299,8 @@ fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError
     }
     fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts) {
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.visits) else { return };
-        let ops = parse(&form.data).ops;
+        // Bound the form's operators as the page's are; a form past the cap is read only that far.
+        let ops = parse_capped(&form.data, MAX_OPS).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
         let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new() };
         let stream = w.next_stream;
@@ -1273,11 +1315,17 @@ fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError
     }
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), visits: 0 };
     let mut carry = Carry::new();
+    let mut total_ops = 0usize;
     for (si, (_, data)) in streams.into_iter().enumerate() {
-        walk(&mut w, &parse(&data).ops, &res, &mut carry, si);
+        let parsed = parse_capped(&data, MAX_OPS.saturating_sub(total_ops).saturating_add(1));
+        total_ops = total_ops.saturating_add(parsed.ops.len());
+        if total_ops > MAX_OPS {
+            return Err(EditError::Invalid("this page has too many content operations to read".into()));
+        }
+        walk(&mut w, &parsed.ops, &res, &mut carry, si);
     }
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.
@@ -1700,7 +1748,7 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
@@ -1850,7 +1898,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let fonts = res.get(b"Font").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &fonts, &mut HashMap::new(), &mut Carry::new(), None, false);
@@ -2047,7 +2095,7 @@ fn rewrite_block_from(
     {
         return rewrite_styled_block(doc, page, &b, &lines, text, style);
     }
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // Explicit line breaks stay (#1443); within a line, runs of white space become one space.
@@ -2398,7 +2446,7 @@ pub(crate) fn selectable_blocks(
     excluded: &std::collections::BTreeSet<pdfcraft_cos::ObjRef>,
 ) -> Result<Vec<(usize, TextBlock)>, EditError> {
     let p = page_dict(doc, page)?;
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let lines = text_lines(doc, page)?;
     Ok(group_blocks(&lines)
         .into_iter()
@@ -2469,7 +2517,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         return Ok(());
     }
     let p = page_dict(doc, page)?;
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
     let mut selected = std::collections::BTreeSet::new();

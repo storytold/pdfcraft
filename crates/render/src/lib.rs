@@ -12,6 +12,7 @@ mod inspect;
 mod pixels;
 mod raster;
 mod reading;
+mod search_fold;
 mod structure;
 pub mod text;
 pub mod transition;

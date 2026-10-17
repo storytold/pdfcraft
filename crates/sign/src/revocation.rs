@@ -199,11 +199,23 @@ impl OcspResponse {
         let mut responder_cert = None;
         for t in it {
             if t.tag == tag::ctx(0) {
+                // `[0] EXPLICIT SEQUENCE OF Certificate` (RFC 6960 §4.2.1): the certificates sit
+                // inside one SEQUENCE under the tag. Some writers put them under the tag
+                // directly; both are read.
                 for c in t.children()? {
-                    if c.tag == tag::SEQUENCE
-                        && let Ok(cert) = Certificate::parse(c.raw)
-                    {
+                    if c.tag != tag::SEQUENCE {
+                        continue;
+                    }
+                    if let Ok(cert) = Certificate::parse(c.raw) {
                         responder_cert.get_or_insert(cert);
+                        continue;
+                    }
+                    for inner in c.children().unwrap_or_default() {
+                        if inner.tag == tag::SEQUENCE
+                            && let Ok(cert) = Certificate::parse(inner.raw)
+                        {
+                            responder_cert.get_or_insert(cert);
+                        }
                     }
                 }
             }
@@ -258,34 +270,27 @@ impl OcspResponse {
     /// issuer; the response signature and CertID must match, and `at` must fall inside the
     /// response window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
-        // Who signed the response? The issuer identified by responderID, or a delegated,
-        // embedded responder identified the same way.
-        let responder: Option<&Certificate> = match &self.responder_id {
-            ResponderId::ByName(name) => {
-                if *name == issuer.subject.raw {
-                    Some(issuer)
-                } else {
-                    self.responder_cert.as_ref().filter(|c| *name == c.subject.raw)
-                }
-            }
-            ResponderId::ByKey(hash) => {
-                if *hash == DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()]) {
-                    Some(issuer)
-                } else {
-                    self.responder_cert.as_ref().filter(|c| *hash == DigestAlg::Sha1.digest(&[&c.public_key.key_bits()]))
-                }
-            }
+        // Who signed the response? The issuer handed in by the caller, when responderID names it;
+        // else the certificate the response carries, found the same way. Only the first may skip
+        // the delegation checks: a carried certificate is vouched for by nothing but those
+        // checks, whatever subject it copies, so the way it was found decides, never its name.
+        let named = |c: &Certificate| match &self.responder_id {
+            ResponderId::ByName(name) => *name == c.subject.raw,
+            ResponderId::ByKey(hash) => *hash == DigestAlg::Sha1.digest(&[&c.public_key.key_bits()]),
         };
-        let Some(responder) = responder else { return RevocationStatus::Unknown };
-        // A delegated responder must carry the OCSP-signing EKU and be issued by the issuer.
-        if responder.subject.raw != issuer.subject.raw {
-            if responder.issuer.raw != issuer.subject.raw || !responder.signed_by(&issuer.public_key) {
+        let responder = if named(issuer) {
+            issuer
+        } else {
+            let Some(delegate) = self.responder_cert.as_ref().filter(|c| named(c)) else { return RevocationStatus::Unknown };
+            // A delegated responder must carry the OCSP-signing EKU and be issued by the issuer.
+            if delegate.issuer.raw != issuer.subject.raw || !delegate.signed_by(&issuer.public_key) {
                 return RevocationStatus::Unknown;
             }
-            if !responder.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_OCSP_SIGNING)) {
+            if !delegate.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_OCSP_SIGNING)) {
                 return RevocationStatus::Unknown;
             }
-        }
+            delegate
+        };
         if !verify_signature(&self.tbs, &self.sig_alg, &self.signature, &responder.public_key) {
             return RevocationStatus::Unknown;
         }

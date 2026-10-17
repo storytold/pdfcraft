@@ -145,6 +145,47 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
     page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
+/// Make `kept` a page's /Annots, or drop the key when nothing is kept.
+pub(crate) fn put_annots(page: &mut Dict, kept: Vec<Object>) {
+    if kept.is_empty() {
+        page.remove(b"Annots");
+    } else {
+        page.set(b"Annots".to_vec(), Object::Array(kept));
+    }
+}
+
+/// Treat removal as deletion: overwrite each removed annotation, widget or field object with
+/// `null`, which a full save skips, so a referrer other than the page's /Annots and the field
+/// tree (a structure element's OBJR kid, a reply's /IRT) cannot carry its content into the saved
+/// file. A surviving annotation that replied to a removed one loses its /IRT (and /RT) rather
+/// than point at nothing.
+///
+/// That is the only referrer edited here: any other is left as it is, pointing at `null`. In
+/// particular the form's calculation order (/AcroForm /CO) still lists a retired field;
+/// [`apply`] takes the deleted fields out of it in a separate step
+/// (`drop_from_calculation_order`).
+pub(crate) fn retire(doc: &mut Document, objects: &[ObjRef]) -> Result<(), pdfcraft_cos::CosError> {
+    if objects.is_empty() {
+        return Ok(());
+    }
+    let gone: HashSet<ObjRef> = objects.iter().copied().collect();
+    for p in pdfcraft_model::pages(doc) {
+        for a in annots_of(doc, &p.dict) {
+            let Some(r) = a.as_ref() else { continue };
+            if !gone.contains(&r) && doc.get(r).as_dict().and_then(|d| d.reference(b"IRT")).is_some_and(|t| gone.contains(&t)) {
+                doc.update_dict(r, |d| {
+                    d.remove(b"IRT");
+                    d.remove(b"RT");
+                })?;
+            }
+        }
+    }
+    for &r in &gone {
+        doc.set(r, Object::Null);
+    }
+    Ok(())
+}
+
 /// Every redaction mark in the document, page by page.
 pub fn marks(doc: &Document) -> Vec<Mark> {
     let mut out = Vec::new();
@@ -192,6 +233,9 @@ pub fn marks(doc: &Document) -> Vec<Mark> {
 }
 
 /// A page's content streams: (the references or inline objects as listed, their decoded data).
+/// The decode is strict and resolves the filter chain through the document: a stream that does
+/// not decode cleanly and completely as the document declares it (which is what a viewer shows,
+/// and the user marks) makes the page unreadable rather than content the interpreter never sees.
 pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<(Vec<Object>, Vec<Vec<u8>>), RedactError> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
@@ -203,7 +247,7 @@ pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<
     let mut data = Vec::new();
     for o in &list {
         match &*doc.resolve(o) {
-            Object::Stream(s) => data.push(s.decoded().map_err(|_| RedactError::Unreadable(index + 1))?),
+            Object::Stream(s) => data.push(s.decoded_strict_in(doc).map_err(|_| RedactError::Unreadable(index + 1))?),
             Object::Null => data.push(Vec::new()),
             _ => return Err(RedactError::Unreadable(index + 1)),
         }
@@ -302,6 +346,126 @@ fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfc
     Ok(())
 }
 
+/// Drop the deleted fields (`gone`) from the form's calculation order (`/AcroForm /CO`).
+fn drop_from_calculation_order(doc: &mut Document, gone: &[ObjRef]) -> Result<(), pdfcraft_cos::CosError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
+    let Some(co) = doc.resolve(&af).as_dict().and_then(|d| d.get(b"CO").cloned()) else { return Ok(()) };
+    let Some(list) = doc.resolve(&co).as_array().cloned() else { return Ok(()) };
+    let kept: Vec<Object> = list.iter().filter(|o| !o.as_ref().is_some_and(|r| gone.contains(&r))).cloned().collect();
+    if kept.len() == list.len() {
+        return Ok(());
+    }
+    match (af, co.as_ref()) {
+        // The array is its own object: replace it where it is.
+        (_, Some(r)) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(kept)),
+        (Object::Ref(af), _) => doc.update_dict(af, |d| d.set(b"CO".to_vec(), Object::Array(kept)))?,
+        (Object::Dict(mut af), _) => {
+            af.set(b"CO".to_vec(), Object::Array(kept));
+            doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af)))?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// What [`remove_covered_annotations`] took off a page.
+struct Removed {
+    /// The annotations removed and their pop-ups, to be retired.
+    objects: Vec<ObjRef>,
+    /// The fields that own a removed widget (once per widget), to be deleted.
+    fields: Vec<ObjRef>,
+}
+
+/// Take off `page` the applied marks (`marks`), every other annotation whose rectangle overlaps
+/// one of `rects` (a pop-up goes only with its parent), and the pop-ups of all of them. An entry
+/// of /Annots may be a reference or a dictionary written directly in the array; both are
+/// annotations, so entries are judged resolved and removed by position. The removed annotations
+/// other than marks and widgets are counted in `report`.
+fn remove_covered_annotations(
+    doc: &mut Document,
+    page: ObjRef,
+    marks: &[&Mark],
+    rects: &[[f64; 4]],
+    widget_owner: &[(ObjRef, ObjRef)],
+    report: &mut Report,
+) -> Result<Removed, RedactError> {
+    let annots = annots_of(doc, &doc.get(page).as_dict().cloned().unwrap_or_default());
+    let mut removed: Vec<ObjRef> = Vec::new();
+    let mut removed_at: Vec<usize> = Vec::new();
+    let mut fields: Vec<ObjRef> = Vec::new();
+    for (i, a) in annots.iter().enumerate() {
+        let obj = doc.resolve(a);
+        let Some(d) = obj.as_dict() else { continue };
+        let r = a.as_ref();
+        let subtype = d.name(b"Subtype").unwrap_or(b"");
+        if subtype == b"Redact" {
+            if r.is_some_and(|r| marks.iter().any(|m| m.obj == r)) {
+                // Removed like any other annotation, so its pop-up goes with it.
+                removed_at.push(i);
+                removed.extend(r);
+            }
+            continue;
+        }
+        if subtype == b"Popup" {
+            continue;
+        }
+        if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
+            removed_at.push(i);
+            removed.extend(r);
+            if subtype == b"Widget" {
+                if let Some((_, field)) = r.and_then(|r| widget_owner.iter().find(|(w, _)| *w == r)) {
+                    fields.push(*field);
+                }
+            } else {
+                report.annotations += 1;
+            }
+        }
+    }
+    // An entry whose /Parent is a removed annotation (its pop-up) goes with it. A reference is
+    // judged the same wherever it is listed, so an entry not removed by position is not one of
+    // `removed` either.
+    let popup_of_removed =
+        |a: &Object| doc.resolve(a).as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref).is_some_and(|p| removed.contains(&p));
+    let mut objects: Vec<ObjRef> = Vec::new();
+    let mut kept: Vec<Object> = Vec::new();
+    for (i, a) in annots.into_iter().enumerate() {
+        if removed_at.contains(&i) {
+            continue;
+        }
+        if popup_of_removed(&a) {
+            objects.extend(a.as_ref());
+            continue;
+        }
+        kept.push(a);
+    }
+    // The removed annotations and their pop-ups are deleted, not merely unlisted.
+    objects.extend_from_slice(&removed);
+    doc.update_dict(page, |d| put_annots(d, kept))?;
+    Ok(Removed { objects, fields })
+}
+
+/// Delete the form fields in `fields` (those that own a widget under a mark), all their widgets
+/// with them, and count them in `report`. Each goes by its object: deleting by name would take
+/// the first field of that name, which with two same-named fields leaves the marked one, and its
+/// value, in the file. Returns the objects to retire: each deleted field and its widgets.
+fn delete_marked_fields(doc: &mut Document, fields: &[ObjRef], report: &mut Report) -> Result<Vec<ObjRef>, RedactError> {
+    let mut retired = Vec::new();
+    for field in fields {
+        // The field and its widgets, retired once the field is out of the tree.
+        let doomed: Option<Vec<ObjRef>> = pdfcraft_forms::fields(doc)
+            .iter()
+            .find(|f| f.obj == *field)
+            .map(|f| std::iter::once(f.obj).chain(f.widgets.iter().map(|w| w.obj)).collect());
+        if let Some(doomed) = doomed {
+            pdfcraft_forms::delete_field_object(doc, *field)?;
+            report.fields += 1;
+            retired.extend(doomed);
+        }
+    }
+    Ok(retired)
+}
+
 /// Apply every redaction mark (or only those on `pages`, 0-based). Irreversible for the saved
 /// file; callers keep the previous document for undo.
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
@@ -331,11 +495,15 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         .collect::<Result<Vec<_>, _>>()?;
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
-    let mut doomed_fields: Vec<String> = Vec::new();
+    // The fields (by object: several fields can share one name) that own a widget under a mark.
+    let mut doomed_fields: Vec<ObjRef> = Vec::new();
     // The original image and form XObjects the rewrite drops or replaces, on any page.
     let mut doomed_xobjects: Vec<ObjRef> = Vec::new();
-    let widget_owner: Vec<(ObjRef, String)> =
-        pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.name.clone())).collect::<Vec<_>>()).collect();
+    // The annotation, widget and field objects removed: nulled at the end (`retire`), so nothing
+    // that still refers to them can carry them into the saved file.
+    let mut retired: Vec<ObjRef> = Vec::new();
+    let widget_owner: Vec<(ObjRef, ObjRef)> =
+        pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
 
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -356,10 +524,16 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         if out.vertical {
             return Err(RedactError::VerticalText(pi + 1));
         }
+        // Content the interpreter could not read the way a viewer draws it (an inline image
+        // with no `EI`, which swallowed everything after it) may hold text under the mark that
+        // was never seen: fail closed.
+        if out.unreadable {
+            return Err(RedactError::Unreadable(pi + 1));
+        }
         doomed_xobjects.extend_from_slice(&out.doomed);
         let mut new_list = list.clone();
         let mut changed = false;
-        for (i, new) in out.streams.into_iter().enumerate() {
+        for (i, new) in out.streams.iter().enumerate() {
             let Some(bytes) = new else { continue };
             let mut dict = match &*doc.resolve(&list[i]) {
                 Object::Stream(s) => s.dict.clone(),
@@ -371,28 +545,17 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             // as plain drawn content but is no longer editable.
             dict.remove(b"PCAdded");
             // A new object: the original may be shared with other pages.
-            new_list[i] = Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &bytes))));
+            new_list[i] = Object::Ref(doc.add(Object::Stream(Stream::flate(dict, bytes))));
             changed = true;
         }
         if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
+            let rewrite = out.rewrite();
+            // A full save keeps whatever is still referenced: the originals this page no longer
+            // draws or names leave its resources, so their bytes cannot survive in the saved file.
+            // The page stores its resources whole, changed or not.
             let mut res = resources.clone();
-            if !out.xobjects.is_empty() || !out.replaced.is_empty() {
-                let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
-                // A full save keeps whatever is still referenced: unlink the originals this page no
-                // longer draws so the removed image or form bytes cannot survive in the saved file.
-                let page_content: Vec<Vec<u8>> = new_list
-                    .iter()
-                    .map(|o| match &*doc.resolve(o) {
-                        Object::Stream(s) => s.decoded().unwrap_or_default(),
-                        _ => Vec::new(),
-                    })
-                    .collect();
-                interp::prune(&mut xo, &out.replaced, &page_content);
-                for (n, r) in &out.xobjects {
-                    xo.set(n.clone(), Object::Ref(*r));
-                }
-                res.set(b"XObject".to_vec(), Object::Dict(xo));
-            }
+            interp::rebuild_resources(doc, &mut res, &rewrite, Some(&interp::decoded_contents(doc, &new_list)), &[]);
+            let tags_res = interp::tag_resources(doc, &resources, &rewrite);
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -400,7 +563,7 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             // Tags must not keep what the page no longer shows.
             let after = doc.get(page.obj).as_dict().cloned().unwrap_or_default();
             let (_, new_data) = page_streams(doc, &after, pi)?;
-            let (changed_ids, empty_ids) = tags::touched(doc, &resources, &data.join(&b'\n'), &new_data.join(&b'\n'));
+            let (changed_ids, empty_ids) = tags::touched(doc, &tags_res, &data.join(&b'\n'), &new_data.join(&b'\n'));
             report.tags += tags::clean(doc, page.obj, None, &changed_ids, &empty_ids)?;
         }
 
@@ -409,63 +572,19 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         }
 
         // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
-        let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
-        let mut removed: Vec<ObjRef> = Vec::new();
-        for a in &annots {
-            let Some(r) = a.as_ref() else { continue };
-            let obj = doc.get(r);
-            let Some(d) = obj.as_dict() else { continue };
-            let subtype = d.name(b"Subtype").unwrap_or(b"");
-            if subtype == b"Redact" {
-                if page_marks.iter().any(|m| m.obj == r) {
-                    removed.push(r);
-                }
-                continue;
-            }
-            if subtype == b"Popup" {
-                continue;
-            }
-            if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
-                removed.push(r);
-                if subtype == b"Widget" {
-                    if let Some((_, name)) = widget_owner.iter().find(|(w, _)| *w == r)
-                        && !doomed_fields.contains(name)
-                    {
-                        doomed_fields.push(name.clone());
-                    }
-                } else {
-                    report.annotations += 1;
-                }
+        let removed = remove_covered_annotations(doc, page.obj, page_marks, &rects, &widget_owner, &mut report)?;
+        retired.extend(removed.objects);
+        for field in removed.fields {
+            if !doomed_fields.contains(&field) {
+                doomed_fields.push(field);
             }
         }
-        let kept: Vec<Object> = annots
-            .into_iter()
-            .filter(|a| {
-                let Some(r) = a.as_ref() else { return true };
-                if removed.contains(&r) {
-                    return false;
-                }
-                // Pop-ups of removed annotations go too.
-                let obj = doc.get(r);
-                !obj.as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref).is_some_and(|p| removed.contains(&p))
-            })
-            .collect();
-        doc.update_dict(page.obj, |d| {
-            if kept.is_empty() {
-                d.remove(b"Annots");
-            } else {
-                d.set(b"Annots".to_vec(), Object::Array(kept));
-            }
-        })?;
     }
 
     // 3. Form fields with a widget under a mark (all their widgets go).
-    for name in &doomed_fields {
-        if pdfcraft_forms::fields(doc).iter().any(|f| &f.name == name) {
-            pdfcraft_forms::delete_field(doc, name)?;
-            report.fields += 1;
-        }
-    }
+    retired.extend(delete_marked_fields(doc, &doomed_fields, &mut report)?);
+    // The calculation order must not keep a deleted field reachable either.
+    drop_from_calculation_order(doc, &retired)?;
 
     // 3b. An XFA form mirrors its field values in the /XFA datasets packet, and a relayout
     // rebuilds fields and pages from that packet, so deleting the AcroForm field alone leaves the
@@ -488,6 +607,8 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
     // A removed image or form must not stay reachable through another resource dictionary (an
     // inherited or shared /Resources): a full save keeps whatever is still referenced.
     interp::unlink_doomed(doc, &doomed_xobjects)?;
+    // Nor a removed annotation or field through a structure element, a reply or /CO.
+    retire(doc, &retired)?;
 
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
@@ -505,7 +626,11 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut scratch = Report::default();
         let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch);
-        residue += process(doc, &mut scope, &original, &resources, pdfcraft_content::Matrix::IDENTITY).residue;
+        let checked = process(doc, &mut scope, &original, &resources, pdfcraft_content::Matrix::IDENTITY);
+        if checked.unreadable {
+            return Err(RedactError::Unreadable(pi + 1));
+        }
+        residue += checked.residue;
     }
     if residue > 0 {
         return Err(RedactError::Residue(residue));

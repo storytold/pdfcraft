@@ -4999,12 +4999,22 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
     // direct parent, so following one level would leave the deeper replies out of the summary.
-    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
+    // `/NM` values come from the document and need not be unique: `seen` (by index into `all`)
+    // writes each reply at most once, so duplicate names cannot make the recursion re-select the
+    // same replies and grow the summary exponentially (2^depth) until memory is exhausted.
+    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize, seen: &mut [bool]) {
         use std::fmt::Write;
         if depth > 64 {
             return;
         }
-        for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
+        for (i, r) in all.iter().enumerate() {
+            if r.state.is_some() || r.in_reply_to.as_deref() != Some(parent) {
+                continue;
+            }
+            match seen.get_mut(i) {
+                Some(s) if !*s => *s = true,
+                _ => continue,
+            }
             let indent = "    ".repeat(depth + 1);
             let _ =
                 writeln!(out, "{indent}Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
@@ -5012,7 +5022,7 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
                 let _ = writeln!(out, "{indent}{line}");
             }
             if let Some(nm) = r.name.as_deref() {
-                write_replies(out, all, nm, depth + 1);
+                write_replies(out, all, nm, depth + 1, seen);
             }
         }
     }
@@ -5053,7 +5063,8 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
             let _ = writeln!(out, "{c}");
         }
         if let Some(nm) = a.name.as_deref() {
-            write_replies(&mut out, all, nm, 0);
+            let mut seen = vec![false; all.len()];
+            write_replies(&mut out, all, nm, 0, &mut seen);
         }
         out.push('\n');
     }

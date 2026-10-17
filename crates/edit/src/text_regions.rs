@@ -606,7 +606,7 @@ pub(super) fn rewrite_styled_block(
         row_ranges.push(row_start..row_start + row.len());
         rows.push(row);
     }
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and

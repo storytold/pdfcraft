@@ -1104,3 +1104,24 @@ mod session {
         assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
     }
 }
+
+/// Nesting a script could not carry may not be built at run time either: the source a script
+/// hands to eval() or Function() is screened as the script itself was, so the parser never
+/// takes it on the thread's stack.
+#[test]
+fn source_built_at_run_time_is_screened_like_the_script() {
+    let n = 20_000;
+    let built = [
+        format!(
+            "var s = '('.repeat({n}) + '1' + ')'.repeat({n}); try {{ eval(s); event.value = 'ran'; }} catch (e) {{ event.value = 'refused: ' + e.message; }}"
+        ),
+        format!(
+            "var s = '['.repeat({n}); try {{ new Function('a', s); event.value = 'ran'; }} catch (e) {{ event.value = 'refused: ' + e.message; }}"
+        ),
+    ];
+    for s in &built {
+        let o = go(s, &Event::field("Calculate", "a", ""));
+        assert_eq!(o.error, None, "{}", &s[..30]);
+        assert!(o.value.starts_with("refused: ") && o.value.contains("nested too deeply"), "{}: {}", &s[..30], o.value);
+    }
+}

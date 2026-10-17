@@ -38,9 +38,10 @@ pub(crate) enum Mode {
 struct Gs {
     ctm: Matrix,
     font: Rc<Metrics>,
-    /// The current font writes vertically (a Type0 font with an `-V` encoding or a CMap whose
-    /// `/WMode` is 1). Glyph layout here is horizontal, so such text cannot be placed under a
-    /// region; apply fails closed when it meets any (see `show`).
+    /// The current font writes vertically (a Type0 font with a predefined vertical CMap or an
+    /// embedded CMap whose `/WMode` is 1, see [`is_vertical`]). Glyph layout here is horizontal,
+    /// so such text cannot be placed under a region; apply fails closed when it meets any (see
+    /// `show`).
     vertical: bool,
     size: f64,
     char_spacing: f64,
@@ -49,6 +50,32 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+}
+
+impl Gs {
+    /// Make `font` the current font, as `Tf` and an ExtGState's `/Font` do.
+    fn select(&mut self, font: CachedFont) {
+        self.font = font.metrics;
+        self.vertical = font.vertical;
+    }
+}
+
+/// The resource category whose name selected a font. The two are separate name spaces (one name
+/// can be a font in one and a graphics state in the other), so a scope's font cache keys on both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum FontSource {
+    /// A `/Font` resource, selected by `Tf`.
+    Resource,
+    /// An `/ExtGState` resource whose `/Font` entry selects the font, set by `gs`.
+    ExtGState,
+}
+
+/// A font as a scope caches it.
+#[derive(Clone)]
+struct CachedFont {
+    metrics: Rc<Metrics>,
+    /// The font writes vertically (see [`is_vertical`]).
+    vertical: bool,
 }
 
 /// What processing a scope produced.
@@ -71,8 +98,23 @@ pub(crate) struct Output {
     /// Apply mode met vertical-writing text (which it cannot remove) while a redaction region was
     /// in force: the operation must fail closed rather than leave that text under the mark.
     pub vertical: bool,
+    /// The content could not be read the way a viewer draws it (an inline image without an `EI`
+    /// swallowed the operators after it, in this scope or a nested form), so what was processed
+    /// is not everything the page shows: apply must fail closed.
+    pub unreadable: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
+    /// Property lists rewritten without their replacement text and added under a fresh name,
+    /// because the named list held indirect references and so could not be written inline.
+    pub properties: Vec<(Vec<u8>, Dict)>,
+    /// `/Properties` names whose `BDC` this scope rewrote (inline, or under a fresh name): the
+    /// caller drops them unless a surviving `BDC` still names them, so the shared original with
+    /// its replacement text does not stay in the file.
+    pub replaced_properties: Vec<Vec<u8>>,
 }
+
+/// The keys of a property list, or a structure element, whose value stands for the content: text
+/// a reader may show, search or read out in place of the glyphs.
+pub(crate) const REPLACEMENT_KEYS: [&[u8]; 3] = [b"ActualText", b"Alt", b"E"];
 
 pub(crate) struct Scope<'a> {
     pub rects: &'a [[f64; 4]],
@@ -85,7 +127,8 @@ pub(crate) struct Scope<'a> {
     pub hidden_layers: Vec<ObjRef>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
-    fonts: HashMap<Vec<u8>, Rc<Metrics>>,
+    /// The fonts this scope has selected, by the resource that named each.
+    fonts: HashMap<(FontSource, Vec<u8>), CachedFont>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
 }
@@ -112,26 +155,7 @@ impl<'a> Scope<'a> {
 
     /// Is this optional-content reference (an OCG or OCMD) hidden?
     fn layer_hidden(&self, doc: &Document, o: &Object) -> bool {
-        if self.hidden_layers.is_empty() {
-            return false;
-        }
-        if let Some(r) = o.as_ref()
-            && self.hidden_layers.contains(&r)
-        {
-            return true;
-        }
-        // A membership dictionary (default policy AnyOn): hidden when all its groups are.
-        let d = doc.resolve(o);
-        let Some(d) = d.as_dict() else { return false };
-        if d.name(b"Type") != Some(b"OCMD") {
-            return false;
-        }
-        let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
-            Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).collect(),
-            Some(_) => d.get(b"OCGs").and_then(Object::as_ref).into_iter().collect(),
-            None => Vec::new(),
-        };
-        !groups.is_empty() && groups.iter().all(|g| self.hidden_layers.contains(g))
+        layer_hidden(doc, &self.hidden_layers, o)
     }
 
     fn hits(&self, b: [f64; 4]) -> bool {
@@ -164,25 +188,64 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default()
 }
 
+/// Is this optional-content reference (an OCG or OCMD) one of the `hidden` layers?
+fn layer_hidden(doc: &Document, hidden: &[ObjRef], o: &Object) -> bool {
+    if hidden.is_empty() {
+        return false;
+    }
+    if let Some(r) = o.as_ref()
+        && hidden.contains(&r)
+    {
+        return true;
+    }
+    // A membership dictionary (default policy AnyOn): hidden when all its groups are.
+    let d = doc.resolve(o);
+    let Some(d) = d.as_dict() else { return false };
+    if d.name(b"Type") != Some(b"OCMD") {
+        return false;
+    }
+    let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
+        Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).collect(),
+        Some(_) => d.get(b"OCGs").and_then(Object::as_ref).into_iter().collect(),
+        None => Vec::new(),
+    };
+    !groups.is_empty() && groups.iter().all(|g| hidden.contains(g))
+}
+
 /// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
-/// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
-/// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
+/// predefined vertical CMap name (ending in `-V`, Identity-V and the like, or the one named
+/// plainly `V`; ISO 32000-2 Table 118), or an embedded CMap stream whose `/WMode` is 1, in its
+/// stream dictionary or, as a viewer reads it, in its program (§9.7.5.4). An embedded CMap that
+/// cannot be decoded counts as vertical, so apply fails closed.
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
     if font.name(b"Subtype") != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
-        Some(Object::Name(n)) => n.ends_with(b"-V"),
-        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
+        Some(Object::Name(n)) => n == b"V" || n.ends_with(b"-V"),
+        Some(Object::Stream(s)) => {
+            s.dict.int(b"WMode") == Some(1)
+                || match s.decoded() {
+                    Ok(program) => pdfcraft_fonts::pdf::cmap_is_vertical(&program),
+                    Err(_) => true,
+                }
+        }
         _ => false,
     }
 }
 
-fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
+/// The prefix of the `/XObject` names given to the cleaned copies of images and forms.
+const XOBJECT_PREFIX: &str = "PCRedacted";
+/// The prefix of the `/Properties` names given to the cleaned copies of property lists.
+const PROPERTY_PREFIX: &str = "PCRedactedP";
+
+/// A resource name, `prefix` and a number, that is neither in `taken` (the resource dictionary it
+/// is for) nor handed out before; it is recorded in the scope so it is not handed out again.
+fn fresh_name(scope: &mut Scope<'_>, taken: &Dict, prefix: &str) -> Vec<u8> {
     let mut i = scope.used_names.len() + 1;
     loop {
-        let n = format!("PCRedacted{i}").into_bytes();
-        if !xobjects.contains(&n) && !scope.used_names.contains(&n) {
+        let n = format!("{prefix}{i}").into_bytes();
+        if !taken.contains(&n) && !scope.used_names.contains(&n) {
             scope.used_names.push(n.clone());
             return n;
         }
@@ -190,19 +253,213 @@ fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
     }
 }
 
+/// The parts of a scope's [`Output`] that its resource dictionary has to follow once the content
+/// is rewritten.
+pub(crate) struct Rewrite<'a> {
+    /// New XObjects the rewritten content draws: (resource name, object).
+    pub xobjects: &'a [(Vec<u8>, ObjRef)],
+    /// XObject names whose `Do` was dropped or pointed at a cleaned copy.
+    pub replaced: &'a [Vec<u8>],
+    /// Cleaned property lists added under fresh names.
+    pub properties: &'a [(Vec<u8>, Dict)],
+    /// Property-list names whose `BDC` was rewritten.
+    pub replaced_properties: &'a [Vec<u8>],
+}
+
+impl Rewrite<'_> {
+    /// Did the rewrite drop, replace or add any resource name?
+    fn names_resources(&self) -> bool {
+        !self.xobjects.is_empty() || !self.replaced.is_empty() || !self.properties.is_empty() || !self.replaced_properties.is_empty()
+    }
+}
+
+impl Output {
+    /// What the scope's resources have to follow (see [`rebuild_resources`]).
+    pub(crate) fn rewrite(&self) -> Rewrite<'_> {
+        Rewrite { xobjects: &self.xobjects, replaced: &self.replaced, properties: &self.properties, replaced_properties: &self.replaced_properties }
+    }
+}
+
+/// Bring a rewritten scope's resource dictionary `res` in line with its new `content` (`None`
+/// when the content itself did not change: then nothing is pruned, only added), so a full-rewrite
+/// save keeps only what the scope still uses:
+/// - `/XObject`: an original whose `Do` was dropped or replaced goes once no surviving `Do` draws
+///   it; the cleaned copies come in;
+/// - `/Properties`: the lists of `hidden_layers` and the originals of the cleaned lists go once
+///   no surviving `BDC` names them; the cleaned copies with references come in.
+///
+/// Each dictionary is written back into `res` (inline) only when an entry went or came. Returns
+/// whether `res` changed.
+pub(crate) fn rebuild_resources(
+    doc: &Document,
+    res: &mut Dict,
+    rewrite: &Rewrite<'_>,
+    content: Option<&[Vec<u8>]>,
+    hidden_layers: &[ObjRef],
+) -> bool {
+    let mut xo = res_dict(doc, res, b"XObject");
+    let before = xo.len();
+    if let Some(content) = content {
+        prune(&mut xo, rewrite.replaced, content);
+    }
+    for (n, r) in rewrite.xobjects {
+        xo.set(n.clone(), Object::Ref(*r));
+    }
+    let xobjects_changed = xo.len() != before || !rewrite.xobjects.is_empty();
+    if xobjects_changed {
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+    }
+    let mut pr = res_dict(doc, res, b"Properties");
+    let before = pr.len();
+    if let Some(content) = content {
+        prune_properties(doc, hidden_layers, &mut pr, content);
+        prune_names(&mut pr, rewrite.replaced_properties, content, "BDC", 1);
+    }
+    for (n, d) in rewrite.properties {
+        pr.set(n.clone(), Object::Dict(d.clone()));
+    }
+    let properties_changed = pr.len() != before || !rewrite.properties.is_empty();
+    if properties_changed {
+        res.set(b"Properties".to_vec(), Object::Dict(pr));
+    }
+    xobjects_changed || properties_changed
+}
+
+/// The resources the tag pass reads for a rewritten scope: `res` as it was before
+/// [`rebuild_resources`], plus the property lists the rewrite added, so the names in the content
+/// before (the originals) and after (the fresh ones) both resolve.
+pub(crate) fn tag_resources(doc: &Document, res: &Dict, rewrite: &Rewrite<'_>) -> Dict {
+    let mut tags_res = res.clone();
+    if !rewrite.properties.is_empty() {
+        let mut pr = res_dict(doc, res, b"Properties");
+        for (n, d) in rewrite.properties {
+            pr.set(n.clone(), Object::Dict(d.clone()));
+        }
+        tags_res.set(b"Properties".to_vec(), Object::Dict(pr));
+    }
+    tags_res
+}
+
+/// The data of a page's content streams as listed in `/Contents`, decoded leniently (an entry
+/// that is not a stream, or does not decode, counts as empty): what a rewritten page's resources
+/// are pruned against.
+pub(crate) fn decoded_contents(doc: &Document, list: &[Object]) -> Vec<Vec<u8>> {
+    list.iter()
+        .map(|o| match &*doc.resolve(o) {
+            Object::Stream(s) => s.decoded().unwrap_or_default(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
 /// so a full-rewrite save stops reaching the original image or form it named. A name that some
 /// surviving `Do` still draws (the same image shown again outside a mark) is kept.
-pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
+fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
+    prune_names(xo, replaced, content, "Do", 0);
+}
+
+/// Drop every `replaced` name of a resource dictionary that no surviving `operator` in `content`
+/// names as its operand `operand` (`Do` and an XObject, `BDC` and a property list), so a
+/// full-rewrite save stops reaching what it named.
+fn prune_names(dict: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>], operator: &str, operand: usize) {
     if replaced.is_empty() {
         return;
     }
     let joined = Pieces::join(content);
     let ops = joined.parse().ops;
-    let still_drawn = |n: &[u8]| ops.iter().any(|op| op.is("Do") && op.name(0) == Some(n));
+    let still_named = |n: &[u8]| ops.iter().any(|op| op.is(operator) && op.name(operand) == Some(n));
     for n in replaced {
-        if !still_drawn(n) {
-            xo.remove(n);
+        if !still_named(n) {
+            dict.remove(n);
+        }
+    }
+}
+
+/// Does this value hold an indirect reference anywhere (which a content stream cannot carry)?
+fn has_ref(o: &Object, depth: usize) -> bool {
+    if depth > 64 {
+        return true; // too deep to tell: treat as not inlinable
+    }
+    match o {
+        Object::Ref(_) => true,
+        Object::Array(a) => a.iter().any(|x| has_ref(x, depth + 1)),
+        Object::Dict(d) => d.iter().any(|(_, v)| has_ref(v, depth + 1)),
+        _ => false,
+    }
+}
+
+/// Strip the replacement text (`REPLACEMENT_KEYS`) from a `BDC`'s property list. An inline
+/// dictionary is edited in place. A named one is resolved and written inline, leaving the shared
+/// original for sequences that were not touched (the caller drops it once nothing names it); one
+/// that holds indirect references is added to `out.properties` under a fresh name instead.
+/// Returns whether the operator changed.
+fn clean_property_list(doc: &Document, scope: &mut Scope<'_>, op: &mut Op, props: &Dict, out: &mut Output) -> bool {
+    let has_text = |d: &Dict| REPLACEMENT_KEYS.iter().any(|k| d.contains(k));
+    let cleaned = |d: &Dict| {
+        let mut d = d.clone();
+        for k in REPLACEMENT_KEYS {
+            d.remove(k);
+        }
+        d
+    };
+    let new = match op.operands.get(1) {
+        Some(Object::Dict(d)) if has_text(d) => Object::Dict(cleaned(d)),
+        Some(Object::Name(n)) => {
+            let Some(list) = props.get(n).map(|o| doc.resolve(o)) else { return false };
+            let Some(d) = list.as_dict() else { return false };
+            if !has_text(d) {
+                return false;
+            }
+            out.replaced_properties.push(n.clone());
+            let d = cleaned(d);
+            if d.iter().any(|(_, v)| has_ref(v, 0)) {
+                let fresh = fresh_name(scope, props, PROPERTY_PREFIX);
+                out.properties.push((fresh.clone(), d));
+                Object::Name(fresh)
+            } else {
+                Object::Dict(d)
+            }
+        }
+        _ => return false,
+    };
+    match op.operands.get_mut(1) {
+        Some(slot) => {
+            *slot = new;
+            true
+        }
+        None => false,
+    }
+}
+
+/// The pieces of a content stream rewritten so far, and the marked-content sequences still open
+/// across them.
+#[derive(Default)]
+struct Built {
+    /// Each finished piece's operators and whether it changed; the piece being built is the next.
+    done: Vec<(Vec<Op>, bool)>,
+    /// The open sequences: where each `BDC` went (piece, index in that piece), `None` for a `BMC`
+    /// or a list cleaned already.
+    open: Vec<Option<(usize, usize)>>,
+}
+
+/// Something inside the open marked-content sequences was removed or cut: the text that stood
+/// for it goes from every enclosing `BDC`'s property list, whether that `BDC` is in the piece
+/// being built (`ops`) or an earlier one. An earlier piece whose `BDC` changed is flagged as
+/// changed here; the piece being built is not, since the caller, which has just removed or cut
+/// something in it, flags it itself. A sequence cleaned once is forgotten (`None`).
+fn clean_enclosing_sequences(doc: &Document, scope: &mut Scope<'_>, built: &mut Built, ops: &mut [Op], props: &Dict, out: &mut Output) {
+    let current = built.done.len();
+    for slot in built.open.iter_mut() {
+        let Some((piece, index)) = *slot else { continue };
+        *slot = None;
+        let op = if piece == current { ops.get_mut(index) } else { built.done.get_mut(piece).and_then(|(v, _)| v.get_mut(index)) };
+        let Some(op) = op else { continue };
+        if clean_property_list(doc, scope, op, props, out)
+            && piece != current
+            && let Some((_, changed)) = built.done.get_mut(piece)
+        {
+            *changed = true;
         }
     }
 }
@@ -227,7 +484,7 @@ fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], de
         if depth >= MAX_DEPTH {
             return None;
         }
-        let Ok(data) = s.decoded() else { return None };
+        let Ok(data) = s.decoded_strict_in(doc) else { return None };
         match content_draws(doc, std::slice::from_ref(&data), xo, name, depth + 1, seen) {
             Some(false) => {}
             other => return other,
@@ -349,13 +606,31 @@ struct Glyph {
     hit: bool,
 }
 
-/// Process a scope's content streams (state flows from one stream to the next).
+/// The font `font_dict` as the layout needs it, cached in the scope under the resource that
+/// selected it (`source` and `name`), so its metrics are read and its writing mode worked out
+/// once per scope; the fallback, written horizontally, when there is no dictionary. Within a
+/// scope a resource name stands for one font dictionary, so the cached answer is the answer.
+fn cached_font(
+    scope: &mut Scope<'_>,
+    doc: &Document,
+    source: FontSource,
+    name: &[u8],
+    font_dict: Option<&Dict>,
+    fallback: &Rc<Metrics>,
+) -> CachedFont {
+    let font = scope.fonts.entry((source, name.to_vec())).or_insert_with(|| CachedFont {
+        metrics: font_dict.map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone()),
+        vertical: font_dict.is_some_and(|d| is_vertical(doc, d)),
+    });
+    font.clone()
+}
+
+/// Process a page's content streams (state flows from one stream to the next) from the initial
+/// graphics state.
 pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, ctm: Matrix) -> Output {
-    let mut out = Output::default();
-    let fallback = Rc::new(Metrics::fallback());
-    let mut gs = Gs {
+    let gs = Gs {
         ctm,
-        font: fallback.clone(),
+        font: Rc::new(Metrics::fallback()),
         vertical: false,
         size: 0.0,
         char_spacing: 0.0,
@@ -365,9 +640,19 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         leading: 0.0,
         rise: 0.0,
     };
+    process_with(doc, scope, streams, resources, gs)
+}
+
+/// Process a scope's content streams starting from `gs`: a form XObject inherits its caller's
+/// graphics state, text state included (ISO 32000-2 §8.10.1), so text it shows without a `Tf` of
+/// its own is in the caller's font and size.
+fn process_with(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, mut gs: Gs) -> Output {
+    let mut out = Output::default();
+    let fallback = Rc::new(Metrics::fallback());
     let mut stack: Vec<Gs> = Vec::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let fonts_res = res_dict(doc, resources, b"Font");
+    let ext_res = res_dict(doc, resources, b"ExtGState");
     let mut xobjects = res_dict(doc, resources, b"XObject");
     // The current path: its operators, its bounding box in user space, and whether it clips.
     let mut path: Vec<Op> = Vec::new();
@@ -380,13 +665,22 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
+    out.unreadable |= parsed.unterminated_inline_image;
+    let props = res_dict(doc, resources, b"Properties");
     if !scope.hidden_layers.is_empty() {
-        let props = res_dict(doc, resources, b"Properties");
-        let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
-        parsed.ops = kept;
-        if removed > 0 {
-            scope.layer_blocks += removed;
+        let stripped = strip_hidden_layers(doc, scope, parsed.ops, &props, &mut out);
+        parsed.ops = stripped.ops;
+        if stripped.blocks > 0 {
+            scope.layer_blocks += stripped.blocks;
             forced_change = true;
+        }
+        // The XObjects the removed blocks drew: unlinked by the caller unless a surviving `Do`
+        // still draws them, so their bytes do not stay reachable in the saved file.
+        for name in stripped.dropped {
+            if let Some(r) = xobjects.get(&name).and_then(Object::as_ref) {
+                out.doomed.push(r);
+            }
+            out.replaced.push(name);
         }
     }
     let mut pieces: Vec<Vec<Op>> = streams.iter().map(|_| Vec::new()).collect();
@@ -405,6 +699,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         }
     }
 
+    // When something inside an open marked-content sequence is removed or cut, the enclosing
+    // property lists lose the text that stood for it (`clean_enclosing_sequences`).
+    let mut built = Built { done: Vec::with_capacity(streams.len()), open: Vec::new() };
     for (piece, mut changed) in pieces.into_iter().zip(rewrite) {
         let mut ops: Vec<Op> = Vec::with_capacity(piece.len());
         for op in piece {
@@ -439,6 +736,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                 }
                 let b = bbox.unwrap_or_default();
                 changed = true;
+                clean_enclosing_sequences(doc, scope, &mut built, &mut ops, &props, &mut out);
                 if scope.covered(b) {
                     scope.report.paths_removed += 1;
                     if clips {
@@ -498,15 +796,24 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                     gs.size = op.num(1).unwrap_or(gs.size);
                     if let Some(name) = op.name(0) {
                         let font_dict = fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
-                        gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-                        gs.font = match scope.fonts.get(name) {
-                            Some(f) => f.clone(),
-                            None => {
-                                let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
-                                scope.fonts.insert(name.to_vec(), m.clone());
-                                m
-                            }
-                        };
+                        gs.select(cached_font(scope, doc, FontSource::Resource, name, font_dict.as_ref(), &fallback));
+                    }
+                }
+                b"gs" => {
+                    // An ExtGState's /Font entry, `[font size]`, selects the font and size as
+                    // `Tf` does (§8.4.5, Table 57); a viewer honours it, so must the layout here.
+                    if let Some(name) = op.name(0)
+                        && let Some(g) = ext_res.get(name).map(|g| doc.resolve(g))
+                        && let Some(pair) = g.as_dict().and_then(|g| g.get(b"Font")).map(|f| doc.resolve(f))
+                        && let Some(pair) = pair.as_array()
+                    {
+                        if let Some(size) = pair.get(1).and_then(|s| doc.resolve(s).as_f64()) {
+                            gs.size = size;
+                        }
+                        if let Some(f) = pair.first() {
+                            let font_dict = doc.resolve(f).as_dict().cloned();
+                            gs.select(cached_font(scope, doc, FontSource::ExtGState, name, font_dict.as_ref(), &fallback));
+                        }
                     }
                 }
                 b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
@@ -571,6 +878,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                     }
                     changed = true;
                     scope.report.glyphs += removed;
+                    clean_enclosing_sequences(doc, scope, &mut built, &mut ops, &props, &mut out);
                     match o {
                         b"\"" => {
                             ops.push(Op::new("Tw", vec![num(gs.word_spacing)]));
@@ -591,6 +899,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                         } else {
                             scope.report.images_removed += 1;
                             changed = true;
+                            clean_enclosing_sequences(doc, scope, &mut built, &mut ops, &props, &mut out);
                             continue;
                         }
                     }
@@ -599,6 +908,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                     // A shading fills the current clip: clip the regions out.
                     if let Some(c) = clip_out(scope.rects, &gs.ctm, [-1e6, -1e6, 1e6, 1e6]) {
                         changed = true;
+                        clean_enclosing_sequences(doc, scope, &mut built, &mut ops, &props, &mut out);
                         ops.push(Op::new("q", vec![]));
                         ops.extend(c);
                         ops.push(op);
@@ -609,11 +919,17 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                 b"Do" => {
                     if let Some(new) = xobject(doc, scope, &op, &gs, resources, &mut xobjects, &mut out) {
                         changed = true;
+                        clean_enclosing_sequences(doc, scope, &mut built, &mut ops, &props, &mut out);
                         if let Some(n) = new {
                             ops.push(n);
                         }
                         continue;
                     }
+                }
+                b"BDC" => built.open.push(Some((built.done.len(), ops.len()))),
+                b"BMC" => built.open.push(None),
+                b"EMC" => {
+                    built.open.pop();
                 }
                 _ => {}
             }
@@ -622,6 +938,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         if !path.is_empty() {
             ops.append(&mut path);
         }
+        built.done.push((ops, changed));
+    }
+    for (ops, changed) in built.done {
         out.streams.push(changed.then(|| serialize_ops(&ops)));
     }
     out
@@ -740,7 +1059,7 @@ fn xobject(
                 Ok(None) => None,
                 Ok(Some(new)) => {
                     let nr = doc.add(Object::Stream(new));
-                    let n = fresh_name(scope, xobjects);
+                    let n = fresh_name(scope, xobjects, XOBJECT_PREFIX);
                     xobjects.set(n.clone(), Object::Ref(nr));
                     out.xobjects.push((n.clone(), nr));
                     out.replaced.push(name);
@@ -778,7 +1097,9 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            let data = match s.decoded() {
+            // Strict, with the chain resolved through the document: a form that does not decode
+            // as a viewer shows it is removed rather than rewritten from other bytes.
+            let data = match s.decoded_strict_in(doc) {
                 Ok(d) => d,
                 Err(_) if scope.mode == Mode::Apply => {
                     scope.report.forms_removed += 1;
@@ -792,44 +1113,45 @@ fn xobject(
             let res = own.clone().unwrap_or_else(|| resources.clone());
             let saved_fonts = std::mem::take(&mut scope.fonts);
             scope.depth += 1;
-            let inner = process(doc, scope, std::slice::from_ref(&data), &res, fctm);
+            // The form inherits the caller's graphics state (its font and size included) under
+            // its own matrix.
+            let mut inner = process_with(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
             scope.depth -= 1;
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
+            out.unreadable |= inner.unreadable;
             out.doomed.extend_from_slice(&inner.doomed);
-            out.tag_changes.extend(inner.tag_changes);
+            out.tag_changes.append(&mut inner.tag_changes);
             if scope.mode == Mode::Verify {
                 return None;
             }
-            let new_data = inner.streams.into_iter().next().flatten();
-            if new_data.is_none() && inner.xobjects.is_empty() && inner.replaced.is_empty() {
+            let new_data = inner.streams.drain(..).next().flatten();
+            let rewrite = inner.rewrite();
+            if new_data.is_none() && rewrite.xobjects.is_empty() && rewrite.replaced.is_empty() {
                 return None;
             }
             let mut dict = s.dict.clone();
             dict.remove(b"Length");
-            // Rebuild the copy's /Resources whenever inner content gained or lost an XObject, so a
-            // `Do` the copy no longer makes stops keeping the original image or form reachable.
-            if !inner.xobjects.is_empty() || !inner.replaced.is_empty() {
-                let mut res = res.clone();
-                let mut xo = res_dict(doc, &res, b"XObject");
-                if let Some(d) = &new_data {
-                    prune(&mut xo, &inner.replaced, std::slice::from_ref(d));
-                }
-                for (n, r) in &inner.xobjects {
-                    xo.set(n.clone(), Object::Ref(*r));
-                }
-                res.set(b"XObject".to_vec(), Object::Dict(xo));
+            let tags_res = tag_resources(doc, &res, &rewrite);
+            // The copy gets /Resources of its own whenever they changed, so a `Do` or `BDC` the copy
+            // no longer makes stops keeping the original reachable, and whenever the rewrite named
+            // a resource at all, even if they came out the same: a form without /Resources of its
+            // own would otherwise draw through its caller's, which the caller prunes for its own
+            // content only.
+            let mut res = res;
+            let resources_changed = rebuild_resources(doc, &mut res, &rewrite, new_data.as_ref().map(std::slice::from_ref), &scope.hidden_layers);
+            if resources_changed || rewrite.names_resources() {
                 dict.set(b"Resources".to_vec(), Object::Dict(res));
             }
-            let (changed, empty) = tags::touched(doc, &res, &data, new_data.as_deref().unwrap_or(&data));
+            let (changed, empty) = tags::touched(doc, &tags_res, &data, new_data.as_deref().unwrap_or(&data));
             let stream = match new_data {
                 Some(d) => Stream::flate(dict, &d),
                 None => Stream { dict, raw: s.raw.clone() },
             };
             let nr = doc.add(Object::Stream(stream));
             out.tag_changes.push((r, nr, changed, empty));
-            let n = fresh_name(scope, xobjects);
+            let n = fresh_name(scope, xobjects, XOBJECT_PREFIX);
             xobjects.set(n.clone(), Object::Ref(nr));
             out.xobjects.push((n.clone(), nr));
             out.replaced.push(name);
@@ -841,15 +1163,34 @@ fn xobject(
     }
 }
 
+/// A marked-content block that is open while the hidden layers are stripped.
+struct Open {
+    /// Its contents go: it is a hidden layer's block, or lies inside one.
+    hidden: bool,
+    /// Where its `BDC` went in the kept operators (when it was kept and not cleaned yet).
+    bdc: Option<usize>,
+}
+
+/// What [`strip_hidden_layers`] left of a scope's operators, and what it took.
+struct Stripped {
+    /// The remaining operators.
+    ops: Vec<Op>,
+    /// How many hidden blocks went (one nested in another counts with it).
+    blocks: usize,
+    /// The XObject names of the `Do` operators that went with them, each once.
+    dropped: Vec<Vec<u8>>,
+}
+
 /// Remove marked-content blocks of hidden layers (`/OC /name BDC … EMC`, nested blocks
-/// included). Returns the remaining operators and how many blocks went.
-fn strip_hidden_layers(doc: &Document, scope: &Scope<'_>, ops: Vec<Op>, props: &Dict) -> (Vec<Op>, usize) {
-    let mut out = Vec::with_capacity(ops.len());
-    // For each open marked-content block: does it hide its contents?
-    let mut stack: Vec<bool> = Vec::new();
-    let mut removed = 0;
+/// included). A kept sequence around a removed block loses the text that stood for its content
+/// (`clean_property_list`).
+fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Vec<Op>, props: &Dict, out: &mut Output) -> Stripped {
+    let mut kept = Vec::with_capacity(ops.len());
+    let mut stack: Vec<Open> = Vec::new();
+    let mut blocks = 0;
+    let mut dropped: Vec<Vec<u8>> = Vec::new();
     for op in ops {
-        let hidden_now = stack.last().copied().unwrap_or(false);
+        let hidden_now = stack.last().is_some_and(|open| open.hidden);
         match op.op.as_slice() {
             b"BDC" | b"BMC" => {
                 let this = op.is("BDC")
@@ -860,25 +1201,51 @@ fn strip_hidden_layers(doc: &Document, scope: &Scope<'_>, ops: Vec<Op>, props: &
                         None => false,
                     };
                 if this && !hidden_now {
-                    removed += 1;
+                    blocks += 1;
+                    if scope.mode == Mode::Apply {
+                        for open in stack.iter_mut() {
+                            let Some(i) = open.bdc.take() else { continue };
+                            if let Some(bdc) = kept.get_mut(i) {
+                                clean_property_list(doc, scope, bdc, props, out);
+                            }
+                        }
+                    }
                 }
-                stack.push(hidden_now || this);
-                if !(hidden_now || this) {
-                    out.push(op);
+                let keep = !(hidden_now || this);
+                stack.push(Open { hidden: hidden_now || this, bdc: (keep && op.is("BDC")).then_some(kept.len()) });
+                if keep {
+                    kept.push(op);
                 }
             }
             b"EMC" => {
-                let was = stack.pop().unwrap_or(false);
-                if !was {
-                    out.push(op);
+                let was_hidden = stack.pop().is_some_and(|open| open.hidden);
+                if !was_hidden {
+                    kept.push(op);
                 }
             }
             _ => {
                 if !hidden_now {
-                    out.push(op);
+                    kept.push(op);
+                } else if op.is("Do")
+                    && let Some(n) = op.name(0)
+                    && !dropped.iter().any(|d| d == n)
+                {
+                    dropped.push(n.to_vec());
                 }
             }
         }
     }
-    (out, removed)
+    Stripped { ops: kept, blocks, dropped }
+}
+
+/// Drop the `/Properties` entries that name a hidden layer (an off OCG, or an OCMD all of whose
+/// groups are off) once no surviving `BDC` in `content` names them, so the group dictionary and
+/// its name leave the file with the content it hid. Entries a surviving `BDC` still names are
+/// kept (a block that was not hidden can name the same property list).
+fn prune_properties(doc: &Document, hidden_layers: &[ObjRef], props: &mut Dict, content: &[Vec<u8>]) {
+    if hidden_layers.is_empty() {
+        return;
+    }
+    let hidden: Vec<Vec<u8>> = props.iter().filter(|(_, v)| layer_hidden(doc, hidden_layers, v)).map(|(n, _)| n.to_vec()).collect();
+    prune_names(props, &hidden, content, "BDC", 1);
 }

@@ -311,6 +311,44 @@ fn flattening_fields_drops_the_ones_on_no_page() {
     assert_eq!(left, [pdfcraft_cos::ObjRef::new(7, 0)], "only the hidden field on the page stays");
 }
 
+/// A field tree may name one node twice in `/Kids` (a tolerated producer fault, so a crafted file
+/// can do it at every level): pruning the form after flattening judges each node once, not once
+/// per path to it, or 24 levels of pairs are sixteen million visits.
+#[test]
+fn flattening_prunes_a_field_tree_with_shared_kids_in_linear_time() {
+    const LEVELS: usize = 24;
+    // 1 catalog, 2 pages, 3 page A (flattened), 4 page B (kept), 5 content, 6 widget on A, 7 its
+    // appearance, then the chain: node k has /Kids [k+1 k+1], and the last node is a widget on B.
+    let first = 8;
+    let last = first + LEVELS;
+    let page = stream("", " ");
+    let mut objs: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R {first} 0 R] >> >>"),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 5 0 R /Annots [6 0 R] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 5 0 R /Annots [{last} 0 R] >>"),
+        page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (flat) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    for k in first..last {
+        let parent = if k == first { String::new() } else { format!("/Parent {} 0 R", k - 1) };
+        objs.push(format!("<< /T (n{k}) {parent} /Kids [{} 0 R {} 0 R] >>", k + 1, k + 1));
+    }
+    objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (deep) /Parent {} 0 R /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>", last - 1));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    let started = std::time::Instant::now();
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "the widget on page A is drawn");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "pruning the form took {:?}", started.elapsed());
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let fields = doc.resolve(af.as_dict().unwrap().get(b"Fields").unwrap());
+    let left: Vec<pdfcraft_cos::ObjRef> = fields.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(left, [pdfcraft_cos::ObjRef::new(first as u32, 0)], "the chain, whose widget is on page B, stays");
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be
@@ -3254,6 +3292,35 @@ fn group_move_budget_refusals_keep_the_original_page_selectable() {
         assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
         assert_eq!(editable_objects(&doc, 0).unwrap(), objects, "refusal retains a usable inventory");
     }
+}
+
+/// A page whose `/Contents` array decodes to millions of operators (a few KB of Flate per million
+/// `q`) used to make text_lines allocate several GiB: each piece was decoded under only the
+/// per-stream cap, every operator was materialised with no count cap, and every `q` saved a copy
+/// of the text state with no depth cap. The page is now refused within its budgets, while saves
+/// past the depth cap are counted rather than kept, so the text after them still reads.
+#[test]
+fn page_content_past_the_budgets_is_refused_not_read() {
+    fn page_with(doc: &mut Document, pieces: Vec<Stream>) {
+        let page = pdfcraft_model::pages(doc)[0].obj;
+        let refs: Vec<Object> = pieces.into_iter().map(|s| Object::Ref(doc.add(Object::Stream(s)))).collect();
+        doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Array(refs))).unwrap();
+    }
+    // Two million operators in two pieces of a million each.
+    let mut doc = text_page("");
+    let piece = Stream::flate(Dict::new(), &b"q\n".repeat(1 << 20));
+    page_with(&mut doc, vec![piece.clone(), piece]);
+    let err = text::text_lines(&doc, 0).unwrap_err().to_string();
+    assert!(err.contains("too many"), "{err}");
+    // 130 MiB of content in two raw pieces, each within the per-stream cap.
+    let mut doc = text_page("");
+    let piece = Stream::from_raw(Dict::new(), vec![b' '; 65 << 20]);
+    page_with(&mut doc, vec![piece.clone(), piece]);
+    let err = text::text_lines(&doc, 0).unwrap_err().to_string();
+    assert!(err.contains("can't be read"), "{err}");
+    // More saves than the depth cap, then text: the saves past the cap are matched, not kept.
+    let doc = text_page(&format!("{}BT /F1 12 Tf 40 400 Td (Hi) Tj ET {}", "q\n".repeat(5000), "Q\n".repeat(5000)));
+    assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hi"]);
 }
 
 #[test]

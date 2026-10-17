@@ -1,30 +1,17 @@
 //! Literal search in normalized page text, retaining the original glyph owners.
-use super::{PageText, fold_case};
+use super::{PageText, for_search, glyph_range, is_redundant_space};
+use crate::search_fold::is_combining;
 use std::ops::Range;
 
 pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
-    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    let needle = needle(query, sensitive);
     if needle.is_empty() {
         return Vec::new();
     }
-    let mut chars: Vec<(char, usize)> = Vec::new();
-    for (i, glyph) in page.glyphs.iter().enumerate() {
-        let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
-        let gap = page.space_before.get(i).copied().unwrap_or(false) || line_break;
-        if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
-            chars.push((' ', i));
-        }
-        for c in fold(&glyph.text).chars() {
-            let c = if c.is_whitespace() { ' ' } else { c };
-            if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
-                chars.push((c, i));
-            }
-        }
-    }
+    let (chars, owner) = page.search_text(sensitive);
     if needle.len() > chars.len() {
         return Vec::new();
     }
@@ -39,9 +26,11 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
     }
     matched = 0;
-    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric());
+    // A combining mark continues the word of the letter before it, so a decomposed accent does
+    // not end a word where its composed spelling would not.
+    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.is_alphanumeric() || is_combining(*c));
     let mut hits = Vec::new();
-    for (i, &(c, owner)) in chars.iter().enumerate() {
+    for (i, &c) in chars.iter().enumerate() {
         matched = advance(&needle, &prefix, matched, c);
         if matched != needle.len() {
             continue;
@@ -50,10 +39,10 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         let start = end.saturating_sub(needle.len());
         let bounded = !whole_words || (!word(start.checked_sub(1)) && !word(Some(end)));
         if bounded {
-            if let Some((_, first)) = chars.get(start)
-                && let Some(last) = owner.checked_add(1)
-            {
-                hits.push(*first..last);
+            // The needle neither starts nor ends with a space, so a match never starts or ends on
+            // an inserted separator: its first and last characters each have a glyph.
+            if let Some(glyphs) = glyph_range(&owner, start..end) {
+                hits.push(glyphs);
                 if hits.len() == limit {
                     break;
                 }
@@ -66,6 +55,24 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
     }
     hits
+}
+
+/// The query as search compares it: each character as [`for_search`] reads it, without leading,
+/// trailing or repeated spaces.
+fn needle(query: &str, sensitive: bool) -> Vec<char> {
+    let mut scratch = Vec::new();
+    let mut needle: Vec<char> = Vec::new();
+    for c in query.chars() {
+        for_search(c, sensitive, &mut scratch, |c| {
+            if !is_redundant_space(c, needle.last()) {
+                needle.push(c);
+            }
+        });
+    }
+    while needle.last() == Some(&' ') {
+        needle.pop();
+    }
+    needle
 }
 
 /// Extend a prefix, falling back through strictly shorter proper prefixes on a mismatch.

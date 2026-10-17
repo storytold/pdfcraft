@@ -191,10 +191,14 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
             return Ok(None);
         }
     };
-    // Steps that find nothing to do (no comments to flatten, …) aren't failures.
+    // A step that finds nothing to do (nothing hidden to remove) isn't a failure. Anything else
+    // is, and fails the file: a refused Sanitize or Remove hidden information (a signed or
+    // change-restricted file, a page that can't be read) must never leave the file produced as
+    // done with the refusal only in its log.
     match s.apply(id, edit) {
         Ok(()) => log.push(step.label().to_string()),
-        Err(e) => log.push(format!("{}: {e}", step.label())),
+        Err(EditError::Redact(pdfcraft_redact::RedactError::NothingToApply)) => log.push(format!("{}: nothing to do", step.label())),
+        Err(e) => return Err(e),
     }
     Ok(None)
 }

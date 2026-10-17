@@ -282,6 +282,43 @@ fn ocsp(issuer: &pkcs12::DigitalId, status: RevocationStatus, this: Time, next: 
     der::seq(&[&der::int(0), &der::explicit(0, &der::seq(&[&basic_type, &der::octets(&basic)]))])
 }
 
+/// An OCSP response answering for `cert` (issued by `issuer`), signed by `key` and naming the
+/// responder by key hash, with `responder` carried in the response's own certificates: as RFC
+/// 6960 encodes them (`[0] EXPLICIT SEQUENCE OF Certificate`) when `wrapped`, else as the
+/// certificates directly inside the `[0]` tag.
+#[allow(clippy::too_many_arguments)]
+fn ocsp_by_key(
+    key: &pdfcraft_sign::PrivateKey,
+    responder: &pdfcraft_sign::Certificate,
+    cert: &pdfcraft_sign::Certificate,
+    issuer: &pdfcraft_sign::Certificate,
+    status: RevocationStatus,
+    this: Time,
+    next: Time,
+    wrapped: bool,
+) -> Vec<u8> {
+    let cert_id = der::seq(&[
+        &DigestAlg::Sha1.algorithm(),
+        &der::octets(&DigestAlg::Sha1.digest(&[&cert.issuer.raw])),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()])),
+        &der::uint(&cert.serial),
+    ]);
+    let status = match status {
+        RevocationStatus::Good => der::tlv(tag::ctx_prim(0), &[]),
+        RevocationStatus::Revoked { at } => der::tlv(tag::ctx(1), &at.encode()),
+        RevocationStatus::Unknown => der::tlv(tag::ctx_prim(2), &[]),
+    };
+    let single = der::seq(&[&cert_id, &status, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
+    let responder_id = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&responder.public_key.key_bits()])));
+    let tbs = der::seq(&[&responder_id, &this.encode(), &der::seq(&[&single])]);
+    let alg = key.signature_algorithm(DigestAlg::Sha256);
+    let sig = key.sign(DigestAlg::Sha256, &tbs).unwrap();
+    let certs = if wrapped { der::explicit(0, &der::seq(&[&responder.raw])) } else { der::tlv(tag::ctx(0), &responder.raw) };
+    let basic = der::seq(&[&tbs, &alg, &der::bit_string(&sig), &certs]);
+    let basic_type = der::oid("1.3.6.1.5.5.7.48.1.1");
+    der::seq(&[&der::int(0), &der::explicit(0, &der::seq(&[&basic_type, &der::octets(&basic)]))])
+}
+
 fn mid_june() -> Time {
     Time { year: 2026, month: 6, day: 15, hour: 12, minute: 0, second: 0 }
 }
@@ -638,4 +675,29 @@ fn verifies_ecdsa_on_p521_and_the_brainpool_curves() {
         // P-521 etc.): that is a different digest, so it must not verify this signature.
         assert!(!key.verify(Scheme::Ecdsa, alg, &digest[..digest.len() / 2], &sig).unwrap(), "{name}: short digest");
     }
+}
+
+/// A responder certificate carried in the response that copies the issuer's subject under
+/// another key, named by key hash: it is not the issuer, so it needs the issuer's signature and
+/// the OCSP-signing purpose, and has neither. Its verdict, good or revoked, is no verdict.
+#[test]
+fn a_responder_copying_the_issuer_name_under_another_key_is_not_the_issuer() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let other = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let (this, next) = (mid_june(), Time { year: 2026, month: 7, day: 15, hour: 12, minute: 0, second: 0 });
+    let issuer = &id.certificate;
+    let from = Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+    let forged = pdfcraft_sign::Certificate::self_signed(&issuer.subject, &other.key, from, 5, &[7]).unwrap();
+    assert_eq!(forged.subject.raw, issuer.subject.raw, "the same name");
+    assert!(!forged.signed_by(&issuer.public_key), "another key");
+    let revoked_at = Time { year: 2026, month: 6, day: 2, hour: 9, minute: 0, second: 0 };
+    for wrapped in [false, true] {
+        for status in [RevocationStatus::Good, RevocationStatus::Revoked { at: revoked_at }] {
+            let resp = OcspResponse::parse(&ocsp_by_key(&other.key, &forged, issuer, issuer, status, this, next, wrapped)).unwrap();
+            assert_eq!(resp.check(issuer, issuer, mid_june()), RevocationStatus::Unknown, "wrapped: {wrapped}");
+        }
+    }
+    // The issuer named by key hash, signing for itself: still answered.
+    let genuine = OcspResponse::parse(&ocsp_by_key(&id.key, issuer, issuer, issuer, RevocationStatus::Good, this, next, true)).unwrap();
+    assert_eq!(genuine.check(issuer, issuer, mid_june()), RevocationStatus::Good);
 }

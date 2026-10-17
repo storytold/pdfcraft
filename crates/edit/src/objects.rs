@@ -6,12 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use pdfcraft_content::{Matrix, Op, Pieces};
 use pdfcraft_cos::{Dict, Document, Object};
 
+use crate::text::MAX_CONTENT_BYTES;
 use crate::{Content, EditError};
 
 pub const MAX_MOVE_OBJECTS: usize = 1_000;
 const MAX_PAGE_OBJECTS: usize = 10_000;
 const MAX_COORDINATE: f64 = 1e9;
-const MAX_CONTENT_BYTES: usize = 128 * 1024 * 1024;
 
 /// The source inventory of an editable item. Indexes are zero-based within that inventory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

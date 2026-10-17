@@ -846,6 +846,31 @@ fn deleting_works_with_a_form_dictionary_inside_the_catalog() {
     assert!(!all.iter().any(|f| f.name == "name"));
 }
 
+/// Two field dictionaries can share one fully qualified name (merged or repeated forms):
+/// deleting by object removes the chosen one, where deleting by name takes the first.
+#[test]
+fn deleting_by_object_removes_only_that_one_of_two_same_named_fields() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (acct) /V (first) /Rect [50 200 250 220] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (acct) /V (second) /Rect [50 100 250 120] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let second = pdfcraft_cos::ObjRef::new(5, 0);
+    assert_eq!(fields(&doc).iter().map(|f| f.obj).collect::<Vec<_>>(), [pdfcraft_cos::ObjRef::new(4, 0), second]);
+    delete_field_object(&mut doc, second).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(all.len(), 1);
+    assert_eq!((all[0].name.as_str(), all[0].value.as_slice()), ("acct", &["first".to_string()][..]));
+    let p = &page_refs(&doc)[0];
+    let annots = doc.resolve(doc.get(*p).as_dict().unwrap().get(b"Annots").unwrap());
+    assert_eq!(annots.as_array().unwrap().len(), 1, "the deleted widget left the page");
+    assert!(matches!(delete_field_object(&mut doc.clone(), second), Err(FormError::NoSuchField(_))));
+}
+
 fn one_page() -> Document {
     let mut doc = Document::new_empty();
     let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();

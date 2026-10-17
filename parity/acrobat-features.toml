@@ -143,7 +143,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/filters/src/flate.rs::bomb_is_bounded", "crates/filters/src/lib.rs::limit_applies_to_intermediate_buffers"]
-notes = ""
+notes = "per-stream decode caps; a page's /Contents read for text is budgeted as a whole (128 MiB decoded, 10,000 pieces, 1,000,000 operators; past them the page is refused rather than read in part) and the text interpreter's graphics-state stack is capped. Missing: the accessibility content scan and the redaction interpreters have per-stream caps but no per-page aggregate"
 
 [[feature]]
 id = "core.open-rc4"
@@ -1419,7 +1419,7 @@ status = "shipped"
 commands = ["edit.find"]
 tools = []
 evidence = ["crates/ui-egui/tests/viewer.rs::view_history_select_all_and_find_options"]
-notes = "whole words only, case-sensitive"
+notes = "whole words only, case-sensitive. The query and the page text are compared the way they read: ligatures (U+FB00-FB06) spelled out, soft hyphens and zero-width characters dropped, dash variants read as -, white space collapsed, and the precomposed letters of Latin-1 Supplement and Latin Extended-A compared equal to their decomposed spelling (Find text and redact and the pattern search go through the same normalisation). Missing: precomposed letters outside those blocks (Vietnamese, Latin Extended Additional), quotation-mark variants"
 
 [[feature]]
 id = "view.find-in-comments-bookmarks"
@@ -4197,7 +4197,7 @@ status = "partial"
 commands = ["comment.summarize"]
 tools = ["comments_summarize"]
 evidence = ["crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize", "crates/ui-egui/tests/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/automation/tests/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools"]
-notes = "Comments only layout, sorted by page, author, date or type; the layouts with the document and connector lines not yet"
+notes = "Comments only layout, sorted by page, author, date or type; each reply is written once, however many annotations share one /NM; the layouts with the document and connector lines not yet. Missing: a cap on the summary's total size (one line per reply bounds it)"
 
 [[feature]]
 id = "comment.flatten"
@@ -4681,7 +4681,7 @@ status = "shipped"
 commands = ["form.import_data"]
 tools = ["doc_import_data"]
 evidence = ["crates/xfdf/src/tests.rs::xfdf_import_keeps_text_around_xml_comments_and_instructions", "crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text"]
-notes = "XFDF, FDF; XFDF text survives XML comments and processing instructions; values go through formats and validation; read-only fields take data; XFA forms also take XDP/XML data files (form.xfa-data)"
+notes = "XFDF, FDF; XFDF text survives XML comments and processing instructions; values go through formats and validation; read-only fields take data; XFA forms also take XDP/XML data files (form.xfa-data). An FDF field tree is walked with a visited set over its /Kids references and a node budget per comment, so a file whose /Kids name one object many times over is read once. Missing: a comment aliasing more nodes than the budget is read as empty rather than refused"
 
 [[feature]]
 id = "form.export-data"
@@ -4729,7 +4729,7 @@ status = "shipped"
 commands = ["form.flatten"]
 tools = ["doc_flatten"]
 evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/automation.rs::flattening_through_tools"]
-notes = "widgets drawn into content and pruned from the field tree; a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here"
+notes = "widgets drawn into content and pruned from the field tree (each node judged once, however many /Kids entries name it); a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here; hidden annotations are left alone"
 
 [[feature]]
 id = "form.prepare-form-mode"
@@ -5185,7 +5185,7 @@ status = "shipped"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
 evidence = ["crates/js/src/tests.rs::the_sandbox_has_no_host_access", "crates/js/src/tests.rs::errors_and_runaway_scripts_are_contained", "crates/ui-egui/tests/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/document_links.rs::a_script_asks_first_and_only_once", "crates/ui-egui/tests/document_links.rs::a_script_cannot_open_other_kinds_of_address"]
-notes = "Preferences \u25b8 JavaScript \u25b8 Enable Acrobat JavaScript (remembered); no host access; loop and recursion limits; app.launchURL asks before opening and only offers http, https and mailto addresses (#90, #91)."
+notes = "Preferences \u25b8 JavaScript \u25b8 Enable Acrobat JavaScript (remembered); no host access; loop and recursion limits; app.launchURL asks before opening and only offers http, https and mailto addresses (#90, #91). A script is screened for nesting the parser would take on the stack before it runs, and so is source a script builds at run time for eval() or Function(): the engine refuses it where the script itself would have been refused. Missing: a memory budget for the engine (a script that allocates without bound is stopped by the loop limit, not by its size)."
 
 [[feature]]
 id = "form.folder-level-js"
@@ -5221,7 +5221,7 @@ status = "partial"
 commands = ["file.open"]
 tools = ["doc_open", "doc_info", "form_fields", "form_fill", "js_run"]
 evidence = ["crates/xfa/src/tests.rs::layout_places_captions_fields_and_sizes_containers_to_their_content", "crates/xfa/src/tests.rs::tables_break_across_pages_and_repeat_their_header_row", "crates/xfa/src/tests.rs::rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields", "crates/engine/src/tests.rs::dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally", "crates/automation/tests/automation.rs::dynamic_xfa_forms_open_render_fill_and_save_through_tools", "crates/ui-egui/tests/ui_group/xfa.rs::a_dynamic_xfa_form_is_laid_out_and_filled", "crates/xfa/src/tests.rs::nested_width_less_subforms_lay_out_in_polynomial_time", "crates/js/src/tests.rs::instance_managers_add_remove_and_count", "crates/xfa/src/tests.rs::the_form_tree_carries_values_presence_instances_and_the_events", "crates/engine/src/tests.rs::xfa_scripts_initialize_calculate_validate_toggle_and_add_rows", "crates/automation/tests/automation.rs::xfa_scripts_run_for_buttons_and_field_changes_through_tools", "crates/ui-egui/tests/ui_group/xfa.rs::xfa_buttons_run_their_scripts_in_the_app", "crates/engine/src/tests.rs::hostile_xfa_open_scripts_are_merged_capped_kept_from_printing_and_noted", "crates/engine/src/tests.rs::runaway_xfa_calculations_at_open_end_quickly_with_a_report", "crates/ui-egui/tests/ui_group/xfa.rs::a_form_whose_scripts_were_turned_off_at_open_says_so", "crates/ui-egui/tests/ui_group/xfa.rs::scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back", "crates/automation/tests/automation.rs::doc_info_says_when_a_runaway_script_turned_the_forms_scripts_off", "crates/xfa/src/tests.rs::the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget", "crates/xfa/src/tests.rs::data_ops_of_one_event_are_one_datasets_rewrite", "crates/xfa/src/tests.rs::choice_lists_signatures_passwords_and_pictures_become_fields_and_images", "crates/xfa/src/tests.rs::choice_values_come_from_the_data_as_saved_values_and_several_for_lists", "crates/xfa/src/tests.rs::pictures_are_sized_from_their_headers_and_hostile_ones_are_refused_unallocated", "crates/engine/src/tests.rs::xfa_choice_lists_signature_and_picture_fields_open_fill_script_and_save", "crates/xfa/src/tests.rs::repeating_subforms_inside_positioned_content_get_their_instances", "crates/engine/src/tests.rs::xfa_rows_in_areas_are_laid_out_read_calculated_and_written_where_adobe_binds_them"]
-notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG/PNG/GIF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes, radio groups, drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. All the scripts of one event run on one thread, each in a fresh context on the form as the engine holds it then (nothing shared between scripts; the live form kept up to date in place for values, rebuilt only when the structure changed), so hundreds of calculations run within the open budget. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off, which the app says in a toast and on the notice bar, with a button to the JavaScript console, and doc_info reports as xfa_scripts_off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; barcodes are drawn as their text, not bars; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60)"
+notes = "laid out from the template on open by the xfa crate (positioned, tb, lr-tb, table/row, page masters, breaks, repeated header rows, captions, rich text, JPEG/PNG/GIF images) into real pages and AcroForm fields (text, password, date with AFDate formats, check boxes, radio groups, drop-downs and list boxes with shown/saved item pairs and multi-select, signature fields, image fields showing their picture (pictures decoded once per document, at most 20 million pixels, and reused across re-layouts), buttons with reset/print/save/URL), filled from the datasets packet (including rows another viewer added), saved as an incremental revision with the values merged into the datasets so Adobe's viewers show them; doc_info reports xfa_layout. XFA JavaScript and FormCalc (form.xfa-formcalc) run in the js crate's XFA object model (xfa.form, SOM resolution, rawValue, presence, access, instance managers, xfa.host, xfa.layout, xfa.event): initialize and calculate on open, exit, validate and calculate after a field changes, click for buttons (through js_run and the app), with rows added and removed, subforms shown and hidden, and the form laid out again, all as one undo step and kept in the file. All the scripts of one event run on one thread, each in a fresh context on the form as the engine holds it then (nothing shared between scripts; the live form kept up to date in place for values, rebuilt only when the structure changed), so hundreds of calculations run within the open budget. Hostile scripts are bounded per event (merged and capped effects, messages and console lines, lower loop limits and a time budget on open and calculate, one datasets rewrite per event, print/save/links/focus from clicks only, a runaway script abandoned and the form's scripts turned off, which the app says in a toast and on the notice bar, with a button to the JavaScript console, and doc_info reports as xfa_scripts_off) and what open-time scripts changed is noted. Missing: loops inside nested calls are only stopped by abandoning their thread, and script memory is not capped; the change event per keystroke; xfa.template, connections and data descriptions; a hidden instance of a repeating subform hides them all; barcodes are drawn as their text, not bars; keep rules; metrics are approximate and Acrobat fidelity is eyeballed on real forms, not measured (#60). Layout charges its measurement budget per visited subform and per instance, so nested splittable repeating subforms past the budget are refused as too large rather than laid out without bound"
 
 [[feature]]
 id = "form.xfa-formcalc"
@@ -5609,7 +5609,7 @@ status = "shipped"
 commands = ["redact.search"]
 tools = ["redact_mark"]
 evidence = ["crates/redact/src/patterns.rs::phone_numbers", "crates/redact/src/patterns.rs::credit_cards_need_a_valid_checksum", "crates/automation/tests/automation.rs::redacting_through_tools"]
-notes = "phone (North American, E.164 with + country code, national with trunk 0), e-mail, credit card (Luhn), SSN, dates (English US forms); text drawn in a font whose built-in encoding we hold no table for (Symbol, ZapfDingbats, MacExpert) has no Unicode mapping, so a pattern search cannot see it -- it is skipped rather than mis-decoded"
+notes = "phone (North American, E.164 with + country code, national with trunk 0), e-mail, credit card (Luhn), SSN, dates (English US forms); text drawn in a font whose built-in encoding we hold no table for (Symbol, ZapfDingbats, MacExpert) has no Unicode mapping, so a pattern search cannot see it -- it is skipped rather than mis-decoded. A phone or card number that runs into another number (page text joins lines with a space, so a street number, an expiry date or a CVV follows it) is still found: the run is cut back at each space, longest first, a phone number only where what is left is punctuated like one (- . ( or )), since spaces alone also group the parts of one longer number, whose head or tail is not a phone number (#1884). Missing: a phone number grouped by spaces alone that runs into another number, and a phone number that follows another in one run, are not found, nor is any number in a run of numbers joined by single spaces longer than 28 characters (a column of three numbers, or two written as (555) 123-4567), the first included; a flexible-format number (E.164, trunk) followed by another number can take that number's first group with it"
 
 [[feature]]
 id = "protect.redact-pattern-locales"
@@ -5681,7 +5681,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/ui-egui/tests/ui_group/redact.rs::marking_applying_and_clearing", "crates/engine/src/tests.rs::redaction_marks_apply_for_good_and_undo", "crates/automation/tests/automation.rs::redacting_through_tools", "crates/engine/src/tests.rs::redaction_is_refused_when_the_page_still_shows_text_under_a_mark", "crates/redact/src/tests.rs::redacted_xobjects_do_not_survive_through_inherited_or_shared_resources"]
-notes = "confirmation; one undo step; next save is a full rewrite. Refused, with nothing changed, when the page still shows text under a mark afterwards: text whose font is set through an ExtGState or taken by a form from its caller, some predefined CMaps and rotated Type 3 fonts are not removed yet, so those documents cannot be redacted. Removed images and forms are unlinked from page-tree resources (own, inherited or shared), not yet from a form's own resources, annotation appearances or patterns"
+notes = "confirmation; one undo step; next save is a full rewrite. Fails closed, with nothing changed: when the page still shows text under a mark afterwards; when a content, form or image stream does not decode strictly and completely as the document declares it (an indirect /Filter or /DecodeParms is resolved; truncated or corrupt data, a predictor outside its range, /F or /DP on the dictionary are errors); when an inline image has no EI; when a font writes vertically (WMode from the CMap program or the predefined CMap V too). Text set through an ExtGState /Font, or by the caller of a form XObject, is removed. Some predefined CMaps and rotated Type 3 fonts are not removed yet, so those documents cannot be redacted. Removed images and forms are unlinked from page-tree resources (own, inherited or shared) and from the rewritten copies of forms, not yet from annotation appearances or patterns. Removed annotations, widgets and fields are nulled, so the structure tree, a reply's /IRT and /AcroForm /CO cannot carry them into the save. Missing: a damaged page a viewer draws partially is refused rather than guessed at"
 
 [[feature]]
 id = "protect.redact-glyph-removal"
@@ -5705,7 +5705,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared"]
-notes = "covered pixels cleared in a copy; DCT/JPX/JBIG2/CCITT images removed whole"
+notes = "covered pixels cleared in a copy (/Alternates and /OPI dropped). Removed whole instead when the codec can't be decoded (DCT/JPX/JBIG2/CCITT), when the image has a separate /SMask or /Mask, when the stream does not decode strictly, or when the sample layout is not certain to be the one the page is drawn with: an inline-image abbreviation (/CS, /W, /H, /BPC, /IM, /D, /F, /DP) on an XObject, a bare colour-space name other than the Device spaces, CalRGB or Lab without their dictionary, ICCBased with /N outside 1, 3 or 4, an /Alternate of another count or a profile that does not decode; DeviceN images are removed whole"
 
 [[feature]]
 id = "protect.redact-vectors"
@@ -5717,7 +5717,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/redact/src/tests.rs::vectors_are_removed_or_clipped_and_inline_images_go"]
-notes = "covered paths removed, others clipped; shadings clipped"
+notes = "covered paths removed, others clipped; shadings clipped. A clipped path keeps its whole geometry in the content stream (only its painting is clipped); cutting the geometry itself is a follow-up"
 
 [[feature]]
 id = "protect.redact-annots-fields"
@@ -5729,7 +5729,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/redact/src/tests.rs::comments_links_and_fields_under_a_mark_go", "crates/ui-egui/tests/ui_group/redact.rs::marking_applying_and_clearing"]
-notes = "with pop-ups; fields lose all widgets"
+notes = "with pop-ups; fields lose all widgets and are deleted by object, so two same-named fields are told apart; annotations written directly in /Annots are removed too; removed objects are nulled, so the structure tree's OBJR kids, a reply's /IRT and /AcroForm /CO cannot keep them. Missing: a widget written directly in /Annots is not a field in the forms model (it leaves the page, but no field deletion is reported); other referrers of a removed annotation (OBJR, /CO) are left pointing at null"
 
 [[feature]]
 id = "protect.redact-struct-tree"
@@ -5741,7 +5741,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/redact/src/tests.rs::tags_lose_what_redaction_removed"]
-notes = "marked content changed by redaction is found by comparing each MCID before and after; its elements lose Alt, ActualText and E, and references to now-empty marked content are dropped; untouched tags stay"
+notes = "marked content changed by redaction is found by comparing each MCID before and after; the owning element and every element above it lose Alt, ActualText, E and T (a title may repeat the words), and references to now-empty marked content are dropped; untouched tags stay. The property lists of the BDC sequences around removed or cut glyphs (inline, or named in /Properties, also inside rewritten forms and under hidden-text and hidden-layer removal) lose ActualText, Alt and E. Missing: a property list held only by a /Resources another, unredacted page inherits keeps its text; empty OBJR kids of deleted annotations are not pruned"
 
 [[feature]]
 id = "protect.redaction-verification"
@@ -5753,7 +5753,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/redact/src/tests.rs::unreadable_content_fails_closed", "crates/engine/src/tests.rs::redaction_marks_apply_for_good_and_undo"]
-notes = "re-reads redacted pages; residue or unreadable content fails the whole operation"
+notes = "re-reads redacted pages; residue or unreadable content (a stream that does not decode strictly, an inline image no EI ends) fails the whole operation. Missing: the verify pass checks page content only, not images, fields or annotations after the fact"
 
 [[feature]]
 id = "protect.redact-filename-suffix"
@@ -5789,7 +5789,7 @@ status = "shipped"
 commands = ["protect.remove_hidden"]
 tools = ["doc_hidden_info", "doc_remove_hidden"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/ui_group/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/automation.rs::removing_hidden_information_through_tools"]
-notes = "metadata, attachments, comments, form fields (flattened), hidden text, hidden layers, bookmarks, links/actions/scripts, private data; overlapping objects and cropped content pending"
+notes = "metadata (XMP on every object reachable from the catalog, XObjects included), attachments (embedded files; associated files /AF everywhere; Screen, Movie, RichMedia and 3D annotations with their media, assets and paths; /Names /Renditions), comments, form fields (flattened; Hidden and NoView widgets taken off the page undrawn; fields deleted), hidden text, hidden layers (with the images and forms an off layer's block alone drew), bookmarks, links/actions/scripts (/A and /AA on every annotation, /Names /AlternatePresentations, a 3D stream's /OnInstantiate), private data (/PieceInfo everywhere), and page thumbnails whenever a chosen category changes what a page shows. Removed annotations, widgets and fields are nulled, so the structure tree, a reply's /IRT and /AcroForm /CO cannot keep them. Fails closed on a page stream that does not decode strictly. Missing: overlapping objects and cropped content; a thumbnail is not counted as an item of its own (a document whose only hidden information is a thumbnail reports nothing to remove); objects reachable only from the trailer other than /Info are not walked"
 
 [[feature]]
 id = "protect.sanitize"
@@ -5801,7 +5801,7 @@ status = "shipped"
 commands = ["redact.sanitize"]
 tools = ["doc_remove_hidden"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/ui_group/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/automation.rs::removing_hidden_information_through_tools"]
-notes = "every category, then a full rewrite on save"
+notes = "every category of protect.remove-hidden-information (what each reaches, and what is still missing, is listed there), then a full rewrite on save"
 
 [[feature]]
 id = "protect.audit-faux-redactions"
@@ -5812,8 +5812,8 @@ milestone = "M8"
 status = "partial"
 commands = []
 tools = ["doc_audit_redactions"]
-evidence = ["crates/audit/src/tests.rs::faux_redaction_is_found", "crates/audit/src/tests.rs::background_before_text_is_not_flagged", "crates/audit/src/tests.rs::light_shading_after_text_is_not_flagged", "crates/audit/src/tests.rs::graphics_state_carries_across_streams", "crates/audit/src/tests.rs::audit_fails_closed_on_undecodable_stream", "crates/audit/src/tests.rs::unapplied_redact_mark_is_found", "crates/audit/src/tests.rs::applied_redaction_at_the_end_of_a_line_is_not_flagged", "crates/audit/src/tests.rs::faux_redaction_at_the_end_of_a_line_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_short_value_after_a_long_label_is_found", "crates/audit/src/tests.rs::faux_redaction_over_mirrored_text_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_partial_value_after_a_long_label_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_partial_value_after_a_long_label_on_a_rotated_page_is_found", "crates/audit/src/tests.rs::faux_redactions_with_multiple_covers_lines_and_spacing_are_found", "crates/audit/src/tests.rs::a_cover_over_one_word_of_a_long_line_is_found", "crates/audit/src/tests.rs::a_box_grazing_a_word_is_not_flagged", "crates/automation/tests/automation.rs::auditing_faux_redactions_through_tools", "crates/automation/tests/automation.rs::an_applied_redaction_at_the_end_of_a_line_audits_clean", "crates/audit/src/tests.rs::rectangle_drawn_as_a_path_covers_text_like_re", "crates/audit/src/tests.rs::non_rectangular_path_is_not_a_cover", "apps/pdfcraft-cli/tests/audit.rs::audit_rectangles_match_the_tool_in_top_left_points"]
-notes = "New pdfcraft-audit crate. A filled rectangle (re + fill, or a single m/l subpath whose corners form an axis-aligned rectangle, #1510; opaque) counts as a cover only when painted after the text it overlaps and dark enough to hide it (WCAG contrast < 3.0); page backgrounds, table shading and highlights are not flagged. Coverage is measured on the words a line draws, not its box, so the gap an applied redaction leaves is not counted as hidden text; a cover over 40% of the line's box still counts when it has a positive-area intersection with one word, so a short value after a long label is found. A cover hiding half of any one word counts too (#2662), so a box over one number in a long line, or an unapplied mark over it, is found; a sliver under half of every word it touches and under 40% of the line is not flagged. Graphics state carries across a page's content streams. Fails closed: undecodable content is an error, never a clean bill. Also flags /Redact annotations never applied. CLI: pdfcraft-cli audit (fails when findings exist). Tool and CLI report rectangles in points from the top-left of the displayed page, after /Rotate and rounded to 0.01 pt, like the other tools."
+evidence = ["crates/audit/src/tests.rs::faux_redaction_is_found", "crates/audit/src/tests.rs::background_before_text_is_not_flagged", "crates/audit/src/tests.rs::opaque_cover_hides_text_whatever_the_colours", "crates/audit/src/tests.rs::blended_highlight_is_not_a_cover", "crates/audit/src/tests.rs::rules_painted_after_text_are_not_covers", "crates/audit/src/tests.rs::annotation_appearance_over_text_is_found", "crates/audit/src/tests.rs::graphics_state_carries_across_streams", "crates/audit/src/tests.rs::audit_fails_closed_on_undecodable_stream", "crates/audit/src/tests.rs::unapplied_redact_mark_is_found", "crates/audit/src/tests.rs::applied_redaction_at_the_end_of_a_line_is_not_flagged", "crates/audit/src/tests.rs::faux_redaction_at_the_end_of_a_line_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_short_value_after_a_long_label_is_found", "crates/audit/src/tests.rs::faux_redaction_over_mirrored_text_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_partial_value_after_a_long_label_is_found", "crates/audit/src/tests.rs::faux_redaction_over_a_partial_value_after_a_long_label_on_a_rotated_page_is_found", "crates/audit/src/tests.rs::faux_redactions_with_multiple_covers_lines_and_spacing_are_found", "crates/audit/src/tests.rs::a_cover_over_one_word_of_a_long_line_is_found", "crates/audit/src/tests.rs::a_box_grazing_a_word_is_not_flagged", "crates/automation/tests/automation.rs::auditing_faux_redactions_through_tools", "crates/automation/tests/automation.rs::an_applied_redaction_at_the_end_of_a_line_audits_clean", "crates/audit/src/tests.rs::rectangle_drawn_as_a_path_covers_text_like_re", "crates/audit/src/tests.rs::non_rectangular_path_is_not_a_cover", "apps/pdfcraft-cli/tests/audit.rs::audit_rectangles_match_the_tool_in_top_left_points"]
+notes = "New pdfcraft-audit crate. A filled rectangle (re + fill, or a single m/l subpath whose corners form an axis-aligned rectangle, #1510) counts as a cover when it is painted after the text, opaque (/ca 1) and in a Normal or Compatible blend mode, whatever its colour: page backgrounds painted before the text, translucent fills and Multiply highlights are not flagged, a white-out or a light box over text is. Coverage is measured on the words a line draws, not its box, so the gap an applied redaction leaves is not counted as hidden text; a cover over 40% of the line's box still counts when it has a positive-area intersection with one word, so a short value after a long label is found. A cover hiding half of any one word counts too (#2662), so a box over one number in a long line, or an unapplied mark over it, is found, and so is each of several adjacent boxes; a sliver under half of every word it touches and under 40% of the line is not flagged, nor are underlines, strikethroughs and table rules. The normal appearance of every drawn annotation (not Hidden or NoView, not a pop-up) is walked like a form placed by /Rect, /BBox and /Matrix, so a box drawn with the shape or highlight tool is found. Graphics state carries across a page's content streams, and a gs without /ca leaves the alpha alone. Fails closed: undecodable content or appearance is an error, never a clean bill. Also flags /Redact annotations never applied. CLI: pdfcraft-cli audit (fails when findings exist). Tool and CLI report rectangles in points from the top-left of the displayed page, after /Rotate and rounded to 0.01 pt, like the other tools. Missing: the hidden text reported is the whole line, not the covered glyphs; text drawn inside an appearance or a form; image, inline-image and stroked-path covers; an /AP /N with several states and no /AS"
 
 [[feature]]
 id = "protect.remove-hidden-on-close"
@@ -6033,7 +6033,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "Missing: the option itself. A signature field whose /Lock another program set is honoured: the lock is written into the signature and enforced at validation (sign.field-mdp)"
 
 [[feature]]
 id = "sign.pkcs7-detached"
@@ -6093,7 +6093,7 @@ status = "shipped"
 commands = ["sign.certify"]
 tools = ["sign_document"]
 evidence = ["crates/sign/tests/pdf.rs::later_changes_are_classified_under_the_signature_permissions"]
-notes = "DocMDP P=1/2/3 enforced when validating"
+notes = "DocMDP P=1/2/3 enforced when validating. Under P=1 the one signature change permitted is a document timestamp; a later signature, form fill or comment is a disallowed change. A field is form fill only when nothing but its value and what is regenerated from it (/V, /AS, /AP, /M, /I, /RV) changed; any other change to a field or widget, or a new field or widget that is not a signed signature field, is a comment-level change, and a fill of a field the signer locked is never permitted"
 
 [[feature]]
 id = "sign.field-mdp"
@@ -6101,11 +6101,11 @@ title = "Field locks (FieldMDP)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "Validation reads the FieldMDP references a signature carries (All, Include, Exclude over /Fields), else the signed field's own /Lock, and a later fill of a locked field is a change no DocMDP level permits (the signature is invalid, not merely changed). Signing a field that has /Lock writes the lock into the signature as a FieldMDP reference (ISO 32000-2 12.8.2.4). Missing: setting a lock when placing a field or signing (the dialog has no option), a transform digest, and a test of the /Lock-only fallback"
 
 [[feature]]
 id = "sign.document-timestamp"
@@ -6117,7 +6117,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = ["crates/sign/tests/pdf.rs::a_document_timestamp_covers_the_file_and_validates"]
-notes = "timestamp_document appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time. Missing: automation tool and timestamp-server configuration (transport is caller-injected)."
+notes = "timestamp_document appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity and its timestamping purpose) and reports the trusted time. Missing: automation tool and timestamp-server configuration (transport is caller-injected)."
 
 [[feature]]
 id = "sign.timestamp-servers"
@@ -6141,7 +6141,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
-notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
+notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported only when the TSA chains to the trust store through a certificate issued for timestamping (id-kp-timeStamping); a trusted signing certificate is not thereby a time authority. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
 
 [[feature]]
 id = "sign.ltv"
@@ -6177,7 +6177,7 @@ status = "partial"
 commands = []
 tools = []
 evidence = ["crates/sign/tests/crypto.rs::crls_verify_and_report_revocation", "crates/sign/tests/crypto.rs::ocsp_responses_verify_and_match_the_certificate", "crates/sign/tests/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
-notes = "RFC 5280 CRLs and RFC 6960 OCSP responses are parsed and verified (issuer/responder signature, delegated responder's OCSP-signing EKU, CertID hash match, validity window) and checked against the DSS during validation. Missing: network fetching of fresh evidence and the OS trust store."
+notes = "RFC 5280 CRLs and RFC 6960 OCSP responses are parsed and verified (issuer/responder signature, delegated responder's OCSP-signing EKU, CertID hash match, validity window) and checked against the DSS during validation. A responder carried in the response is a delegate by how it was found, whatever subject name it copies: only the issuer's own key makes it the issuer. Missing: network fetching of fresh evidence and the OS trust store; trust-store scopes (signer, issuer and TSA roles are one list)."
 
 [[feature]]
 id = "sign.validate-all"
@@ -6321,7 +6321,7 @@ status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_list"]
 evidence = ["crates/sign/tests/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards", "crates/sign/tests/pdf.rs::validation_data_and_xmp_added_after_signing_are_not_tampering", "crates/sign/tests/pdf.rs::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store", "crates/sign/tests/pdf.rs::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it", "crates/sign/tests/pdf.rs::an_existing_array_stays_what_it_is_when_the_store_points_at_it", "crates/sign/tests/pdf.rs::a_signed_store_may_grow_but_not_lose_or_swap_entries", "crates/sign/tests/pdf.rs::a_dictionary_labelled_metadata_is_not_a_metadata_change", "crates/sign/tests/pdf.rs::a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it", "crates/sign/tests/pdf.rs::the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing", "crates/sign/tests/pdf.rs::rewritten_page_resources_are_page_content_whatever_keys_they_carry"]
-notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure. Later revisions that add DSS data (new /Certs, /CRLs, /OCSPs, /VRI objects, or ones of the signed store that only grew) or rewrite the catalog's XMP are permitted changes; a /DSS entry that names other objects, or a /Type /DSS or /Type /Metadata label on an existing dictionary or stream, does not excuse changing them (negative tests at every DocMDP level). A signed page's resources (fonts, XObjects, graphics states and what they reach) are page content by the role they held when signed, whatever keys a later revision writes into them (#1787)"
+notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure. Later revisions that add DSS data (new /Certs, /CRLs, /OCSPs, /VRI objects, or ones of the signed store that only grew) or rewrite the catalog's XMP are permitted changes; a /DSS entry that names other objects, or a /Type /DSS or /Type /Metadata label on an existing dictionary or stream, does not excuse changing them (negative tests at every DocMDP level). A signed page's resources (fonts, XObjects, graphics states and what they reach) are page content by the role they held when signed, whatever keys a later revision writes into them (#1787). Form changes are judged by what changed, not by where (sign.certify-permissions); defining an object the signed revision referenced but never defined is page content; and the byte range must exclude exactly the /Contents of the object carrying the signature dictionary, so a second field borrowing a genuine signature's range and value is invalid. Missing: the signed revision's own page list is not compared against the renderer's (a page the viewer draws from a reconstructed table)"
 
 [[feature]]
 id = "sign.view-signed-version"
@@ -6469,7 +6469,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text). A result is applied only to the document it was recognised from: an edit made while recognition ran (applying redactions, say) makes the result stale and it is refused with a message to run it again. Missing: cancelling a running recognition when such an edit is made"
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -7077,7 +7077,7 @@ status = "shipped"
 commands = ["export.all_images"]
 tools = ["doc_export_all_images"]
 evidence = ["crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/automation/tests/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/export.rs::export_dialogs_write_images_and_text"]
-notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2/CCITT masks are left out (image exported opaque); JPX/JBIG2/CCITT/separations reported as skipped; minimum size filter"
+notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2/CCITT masks are left out (image exported opaque); JPX/JBIG2/CCITT/separations reported as skipped; minimum size filter; an /Indexed base that is itself Indexed (or refers back to the array) is refused as the invalid colour space it is, and the image reported as skipped"
 
 [[feature]]
 id = "create.export-html"

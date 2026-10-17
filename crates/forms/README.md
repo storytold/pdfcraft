@@ -25,6 +25,7 @@ set_props(&mut doc, "email", &FieldProps {
     ..Default::default()
 })?;
 delete_field(&mut doc, "email")?;
+delete_field_object(&mut doc, field.obj)?;                   // one of several same-named fields
 ```
 
 ## Behaviour

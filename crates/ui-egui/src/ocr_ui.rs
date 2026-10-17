@@ -65,6 +65,10 @@ pub struct BatchProgress {
 pub struct OcrRun {
     pub doc: DocId,
     pub progress: Arc<Mutex<OcrProgress>>,
+    /// The document's edit generation when recognition started. The result is only applied if the
+    /// document is still at this generation, so edits made during a background run (for example
+    /// Apply Redactions) are not undone by a stale OCR layer.
+    pub generation: u64,
 }
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
@@ -166,6 +170,7 @@ impl PdfCraftApp {
         };
         let settings = d.settings();
         let Some(job) = self.session.ocr_job(id, &pages, settings) else { return };
+        let generation = job.generation;
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         let work = move || {
@@ -189,7 +194,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress });
+        self.ocr_run = Some(OcrRun { doc: id, progress, generation });
         self.poll_ocr();
     }
 
@@ -313,7 +318,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress) = (run.doc, run.progress.clone());
+        let (doc, progress, generation) = (run.doc, run.progress.clone(), run.generation);
         let Ok(mut s) = progress.lock() else { return };
         let Some(result) = s.result.take() else {
             let msg = crate::i18n::fmt(
@@ -340,7 +345,7 @@ impl PdfCraftApp {
         };
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
-        match self.session.apply_ocr(doc, &found) {
+        match self.session.apply_ocr(doc, &found, generation) {
             Ok(words) => {
                 if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)

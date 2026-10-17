@@ -839,6 +839,10 @@ fn files_and_quit_from_the_operating_system() {
     let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Open(vec![path.to_string_lossy().into_owned()])]));
     let q = queue.clone();
     let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    // The file is read on the open worker, which answers between frames: wait for its tab
+    // before taking the file away, or the worker may find nothing left to read.
+    support::wait_until(&mut h, "document from the operating system", |app| app.views.len() == 1 && app.password_prompt.is_none());
+    h.run_steps(2);
     std::fs::remove_file(&path).ok();
     assert_eq!(h.state().views.len(), 1, "the file opens in a tab");
     h.get_by_label_contains(&name);
