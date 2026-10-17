@@ -237,6 +237,23 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     // Certified allowing comments: fine.
     let certified3 = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(3), ..opts() }).unwrap();
     assert_eq!(check(&edit_after(&certified3, add_comment)).status, Status::Valid);
+    // #1788: a later revision relaxing the signed P 1 to P 3 does not permit the comment.
+    let relaxed = edit_after(&certified, |doc| {
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let sig = doc.resolve(catalog.get(b"Perms").unwrap()).as_dict().and_then(|p| p.get(b"DocMDP").and_then(Object::as_ref)).unwrap();
+        doc.update_dict(sig, |v| {
+            if let Some(Object::Array(r)) = v.get_mut(b"Reference")
+                && let Some(Object::Dict(sr)) = r.first_mut()
+                && let Some(Object::Dict(tp)) = sr.get_mut(b"TransformParams")
+            {
+                tp.set(b"P".to_vec(), Object::Int(3));
+            }
+        })
+        .unwrap();
+        add_comment(doc);
+    });
+    let s = check(&relaxed);
+    assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
 #[test]

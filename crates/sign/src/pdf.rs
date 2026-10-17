@@ -680,6 +680,19 @@ fn is_doc_timestamp(d: &Dict) -> bool {
     d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
 }
 
+/// The DocMDP permission level (`/P`, 1–3) of signature value `v`, or `None` for an approval
+/// signature.
+fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
+    v.get(b"Reference")
+        .map(|r| doc.resolve(r))
+        .and_then(|r| r.as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|r| doc.resolve(&r).as_dict().cloned())
+        .find(|r| r.name(b"TransformMethod") == Some(b"DocMDP"))
+        .map(|r| r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8)
+}
+
 fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
@@ -697,17 +710,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     info.contact = text(doc, v, b"ContactInfo");
     info.sub_filter = v.name(b"SubFilter").map(|s| String::from_utf8_lossy(s).into_owned());
     info.signer = text(doc, v, b"Name");
-    info.certify = v
-        .get(b"Reference")
-        .map(|r| doc.resolve(r))
-        .and_then(|r| r.as_array().cloned())
-        .into_iter()
-        .flatten()
-        .filter_map(|r| doc.resolve(&r).as_dict().cloned())
-        .find(|r| r.name(b"TransformMethod") == Some(b"DocMDP"))
-        .map(|r| {
-            r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8
-        });
+    info.certify = docmdp(doc, v);
     let invalid = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -855,7 +858,18 @@ fn finish_validation(
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(doc, bytes, covered), info.certify)
+        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788). This
+        // signature is the one whose byte range ends that revision.
+        let old = cache.revision(doc, bytes, covered);
+        if let Some(old) = &old
+            && let Some(v) = sig_fields(old)
+                .iter()
+                .filter_map(|f| f.signature(old))
+                .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
+        {
+            info.certify = docmdp(old, &v);
+        }
+        classify_changes(doc, old, info.certify)
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an
@@ -1605,7 +1619,8 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     // change is only a brand-new object, or one that was already a signature object when signed.
     let signature_ok = before.is_none_or(is_signature_dict);
     match ty {
-        Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if signature_ok => return kind::SIGNATURE,
+        // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
+        Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
         Some(b"Catalog") => {
             let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering"];
             return match before {
