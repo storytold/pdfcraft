@@ -147,7 +147,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     let (back, close) = panel_header(ui, t, g.label, true);
     if back {
         app.left = LeftPanel::AllTools;
-        app.mode = crate::Mode::AllTools;
+        app.enter_mode(crate::Mode::AllTools);
     }
     if close {
         app.left_open = false;

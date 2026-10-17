@@ -2629,6 +2629,83 @@ fn editing_existing_text_in_place() {
     assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
 }
 
+/// Under the Edit tab, opens the line "Page 1" (at (20, 150) on a 200 × 300 page, 24 pt) in the
+/// paragraph editor and retypes it as "Chapter One", leaving the editor open.
+fn edit_tab_with_an_open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Edit, QuickTool::EditText));
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].line_editor.as_ref().expect("the line opens for editing").text, "Page 1");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Chapter One".into();
+    h.run_steps(1);
+}
+
+/// Edit was left with the paragraph [`edit_tab_with_an_open_paragraph`] opened: Edit text & images
+/// is put down, and the paragraph's edit is applied instead of its editor staying open over the page.
+fn assert_edit_text_put_down_and_the_paragraph_applied(s: &PdfCraftApp) {
+    assert_eq!(s.quick_tool, pdfcraft_ui_egui::QuickTool::Select, "Edit text & images is put down");
+    assert!(s.views[0].line_editor.is_none(), "no paragraph editor is left open");
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Edit text"), "the open paragraph's edit is applied");
+    assert_eq!(doc.text_lines(0)[0].text, "Chapter One");
+    assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
+}
+
+/// The Read mode command (View ▸ Read mode, its shortcut, the palette) leaves Edit as the Edit tab
+/// does when another tab is chosen (#2241): Edit text & images is put down, and a paragraph still
+/// open in the editor is applied instead of staying open, editable, over the page in Read mode.
+#[test]
+fn the_read_mode_command_applies_an_open_paragraph_and_puts_edit_text_down() {
+    let mut h = harness(1, |_| {});
+    edit_tab_with_an_open_paragraph(&mut h);
+    assert!(h.state_mut().execute("view.read_mode"));
+    h.run_steps(3);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+    assert_edit_text_put_down_and_the_paragraph_applied(h.state());
+}
+
+/// The Edit panel's back arrow leaves Edit for All tools as the mode bar does: Edit text & images
+/// is put down and a paragraph still open in the editor is applied, instead of every paragraph
+/// keeping its box, and the editor staying open, under All tools.
+#[test]
+fn the_edit_panel_back_arrow_applies_an_open_paragraph_and_puts_edit_text_down() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode};
+    let mut h = harness(1, |_| {});
+    edit_tab_with_an_open_paragraph(&mut h);
+    h.get_by_label("Back to all tools").click();
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().left), (Mode::AllTools, LeftPanel::AllTools));
+    assert_edit_text_put_down_and_the_paragraph_applied(h.state());
+}
+
+/// Organize pages, opened under the Edit tab, leaves Edit the same way through its own back arrow.
+#[test]
+fn the_organize_back_arrow_applies_an_open_paragraph_and_puts_edit_text_down() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode};
+    let mut h = harness(1, |_| {});
+    edit_tab_with_an_open_paragraph(&mut h);
+    // What the Edit panel's Organize pages row runs.
+    assert!(h.state_mut().execute("page.organize"));
+    h.run_steps(3);
+    assert!(h.state().views[0].organize, "the page grid opens");
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is still open behind the grid");
+    h.get_by_label("Back to all tools").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.mode, s.left), (Mode::AllTools, LeftPanel::AllTools));
+    assert!(!s.views[0].organize, "the grid closes");
+    assert_edit_text_put_down_and_the_paragraph_applied(s);
+}
+
 #[test]
 fn text_tool_clicking_source_text_edits_instead_of_adding_a_copy() {
     let mut h = harness(1, |_| {});

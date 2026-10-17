@@ -2132,11 +2132,10 @@ impl PdfCraftApp {
         }
     }
 
-    /// Select the workspace and its matching tool panel, just like the mode bar. Edit turns on
-    /// Edit text & images at once, as Acrobat does: every paragraph and image on the page gets its
-    /// box and is editable with one click. Leaving Edit puts the editing tools down again.
+    /// Select the workspace and its matching tool panel, just like the mode bar. The tool goes
+    /// with the workspace as [`Self::enter_mode`] sets it.
     pub(crate) fn select_mode(&mut self, mode: Mode) {
-        self.mode = mode;
+        self.enter_mode(mode);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
             view.organize = false;
@@ -2147,6 +2146,15 @@ impl PdfCraftApp {
             Mode::Sign => LeftPanel::Tool("fill_sign"),
             _ => LeftPanel::AllTools,
         };
+    }
+
+    /// Changes the workspace and the tool that goes with it. The mode bar (through
+    /// [`Self::select_mode`]), the Read mode command and the tool panels' back arrows all come
+    /// here, so they leave Edit alike. Edit turns on Edit text & images at once, as Acrobat does:
+    /// every paragraph and image on the page gets its box and is editable with one click. Leaving
+    /// Edit puts the editing tools down again and applies a paragraph still open in the editor.
+    pub(crate) fn enter_mode(&mut self, mode: Mode) {
+        self.mode = mode;
         if mode == Mode::Edit {
             self.quick_tool = QuickTool::EditText;
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
@@ -2174,7 +2182,7 @@ impl PdfCraftApp {
         if select_tools {
             self.select_mode(mode);
         } else {
-            self.mode = mode;
+            self.enter_mode(mode);
         }
         if mode == Mode::Read && !was_read {
             self.right_before_read = self.right.take();
