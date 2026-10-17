@@ -5,6 +5,20 @@ licence files unchanged. Every patch is marked `PdfCraft patch:` in the source, 
 PdfCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases
 the fix. Vendoring copyleft code is never allowed (plan/adr/0001).
 
+Reader diagnostics (#2670, item 11): `lopdf::Reader::load_objects_raw` shares one
+budget across eager object errors, encrypted skips, object-stream dictionary/member
+warnings and deferred missing/broken `/Length` lookups. It logs at most eight details,
+then one summary with category totals and the suppressed-message count. The summary
+uses ERROR if an object/Length error occurred, otherwise WARN; each detail retains
+its original level. It is emitted after deferred lookups, or before a strict error
+returns. Counters saturate, recovery and small-file diagnostics are unchanged, and
+concurrent reads have independent budgets. Direct `ObjectStream` parsing gets a fresh
+budget per call. Other parser diagnostics (including stream-boundary recovery and
+reference-cycle warnings) are outside this scope. Covered by the twelve tests in
+`crates/render/tests/object_load_logging.rs`, including all `lopdf::*` targets and a
+one-worker strict-summary regression, plus the reader's `encrypted_load_logging`
+unit test for the normally unused eager encrypted-skip branch.
+
 A PdfCraft patch in `hayro-syntax::Page::base_dimensions` expresses the existing one-point floor as a raw reciprocal of `/UserUnit`, rounded upward only when f32 multiplication would fall below one point. Five `pdfcraft-render` regressions with prefix `raster::tests::raw_crop_` cover the observed dimensions, origins and rotations, units 41/47, bounded vector rasters and unchanged nearly-zero A4 fallback. Accepted page-unit policy and licences are unchanged.
 
 | Crate | Version | Licence | Patches | Test |

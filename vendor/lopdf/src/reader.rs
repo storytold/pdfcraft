@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -26,6 +27,78 @@ use crate::object_stream::ObjectStream;
 use crate::parser;
 use crate::xref::{Xref, XrefEntry, XrefType};
 use crate::{Dictionary, Document, Error, IncrementalDocument, Object, ObjectId, Result};
+
+// PdfCraft patch (#2670, item 11): keep samples and exact diagnostic totals per
+// eager load, shared by Rayon workers and the deferred stream-Length pass.
+const MAX_OBJECT_LOAD_MESSAGES: usize = 8;
+
+#[derive(Default)]
+pub(crate) struct ObjectLoadLog {
+    messages: AtomicUsize,
+    failures: AtomicUsize,
+    streams: AtomicUsize,
+    lengths: AtomicUsize,
+    warnings: AtomicUsize,
+    encrypted: AtomicUsize,
+}
+
+impl ObjectLoadLog {
+    fn increment(counter: &AtomicUsize) -> usize {
+        // Member diagnostics can exceed the xref count. Saturate even if a
+        // hostile graph revisits a stream, rather than wrapping the budget.
+        counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_add(1)))
+            .unwrap_or_else(|n| n)
+    }
+
+    fn message(&self, counter: &AtomicUsize) -> bool {
+        Self::increment(counter);
+        Self::increment(&self.messages) < MAX_OBJECT_LOAD_MESSAGES
+    }
+
+    fn object(&self) -> bool {
+        self.message(&self.failures)
+    }
+
+    fn stream(&self) -> bool {
+        Self::increment(&self.streams);
+        self.object()
+    }
+
+    fn length(&self) -> bool {
+        self.message(&self.lengths)
+    }
+
+    pub(crate) fn warning(&self) -> bool {
+        self.message(&self.warnings)
+    }
+
+    fn encrypted(&self) -> bool {
+        self.message(&self.encrypted)
+    }
+
+    pub(crate) fn finish(&self) {
+        let messages = self.messages.load(Ordering::Relaxed);
+        if messages <= MAX_OBJECT_LOAD_MESSAGES {
+            return;
+        }
+        let failures = self.failures.load(Ordering::Relaxed);
+        let lengths = self.lengths.load(Ordering::Relaxed);
+        let level = if failures > 0 || lengths > 0 {
+            log::Level::Error
+        } else {
+            log::Level::Warn
+        };
+        log::log!(
+            level,
+            "Object loading: {failures} failed objects ({} object streams), {lengths} stream length errors, {} object stream warnings, {} encrypted skips; {} additional messages suppressed",
+            self.streams.load(Ordering::Relaxed),
+            self.warnings.load(Ordering::Relaxed),
+            self.encrypted.load(Ordering::Relaxed),
+            messages.saturating_sub(MAX_OBJECT_LOAD_MESSAGES),
+        );
+    }
+}
 
 #[cfg(not(feature = "async"))]
 impl Document {
@@ -961,6 +1034,15 @@ impl Reader<'_> {
     }
 
     fn load_objects_raw(&mut self, filter_func: Option<FilterFunc>) -> Result<()> {
+        let load_log = ObjectLoadLog::default();
+        let result = self.load_objects_raw_with_log(filter_func, &load_log);
+        // The inner call joins its workers and completes deferred Length lookups.
+        // Report before propagating a strict error, as well as on success.
+        load_log.finish();
+        result
+    }
+
+    fn load_objects_raw_with_log(&mut self, filter_func: Option<FilterFunc>, load_log: &ObjectLoadLog) -> Result<()> {
         let is_encrypted = self.document.trailer.get(b"Encrypt").is_ok();
         let zero_length_streams = Mutex::new(vec![]);
         let object_streams = Mutex::new(vec![]);
@@ -998,11 +1080,15 @@ impl Reader<'_> {
                             // Expected for some encrypted objects - but log which
                             // ones. These failures stay non-fatal even in strict
                             // mode because they do not indicate a malformed file.
-                            warn!("Skipping encrypted object at offset {}: {:?}", offset, e);
+                            if load_log.encrypted() {
+                                warn!("Skipping encrypted object at offset {}: {:?}", offset, e);
+                            }
                             return Ok(None);
                         }
                         // Lenient loading logs and skips malformed objects; strict loading fails.
-                        error!("Object load error at offset {}: {e:?}", offset);
+                        if load_log.object() {
+                            error!("Object load error at offset {}: {e:?}", offset);
+                        }
                         return if self.strict { Err(e) } else { Ok(None) };
                     }
                 };
@@ -1014,17 +1100,20 @@ impl Reader<'_> {
 
                 if let Ok(stream) = object.as_stream() {
                     if stream.dict.has_type(b"ObjStm") && !is_encrypted {
-                        let obj_stream = match ObjectStream::new_with_limit(stream, self.max_decompressed_size) {
+                        let obj_stream = match ObjectStream::new_with_log(stream, self.max_decompressed_size, load_log)
+                        {
                             Ok(obj_stream) => obj_stream,
                             // Not an encryption-related loss, so it obeys the same
                             // strict-mode policy as any other load error.
                             Err(e) => {
-                                error!("Object stream load error for {object_id:?}: {e:?}");
+                                if load_log.stream() {
+                                    error!("Object stream load error for {object_id:?}: {e:?}");
+                                }
                                 return if self.strict { Err(e) } else { Ok(None) };
                             }
                         };
                         let container_id = object_id.0;
-                        let mut object_streams = object_streams.lock().unwrap();
+                        let mut object_streams = object_streams.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(filter_func) = filter_func {
                             let objects: BTreeMap<(u32, u16), Object> = obj_stream
                                 .objects
@@ -1045,7 +1134,7 @@ impl Reader<'_> {
                             }));
                         }
                     } else if stream.content.is_empty() {
-                        let mut zero_length_streams = zero_length_streams.lock().unwrap();
+                        let mut zero_length_streams = zero_length_streams.lock().unwrap_or_else(|e| e.into_inner());
                         zero_length_streams.push(object_id);
                     }
                 }
@@ -1057,42 +1146,40 @@ impl Reader<'_> {
         };
 
         #[cfg(feature = "rayon")]
-        {
-            self.document.objects = self
-                .document
-                .reference_table
-                .entries
-                .par_iter()
-                .map(entries_filter_map)
-                .filter_map(Result::transpose)
-                .collect::<Result<BTreeMap<_, _>>>()?;
-        }
+        let objects = self
+            .document
+            .reference_table
+            .entries
+            .par_iter()
+            .map(entries_filter_map)
+            .filter_map(Result::transpose)
+            .collect::<Result<BTreeMap<_, _>>>();
         #[cfg(not(feature = "rayon"))]
-        {
-            self.document.objects = self
-                .document
-                .reference_table
-                .entries
-                .iter()
-                .map(entries_filter_map)
-                .filter_map(Result::transpose)
-                .collect::<Result<BTreeMap<_, _>>>()?;
-        }
+        let objects = self
+            .document
+            .reference_table
+            .entries
+            .iter()
+            .map(entries_filter_map)
+            .filter_map(Result::transpose)
+            .collect::<Result<BTreeMap<_, _>>>();
+
+        self.document.objects = objects?;
 
         // Only add entries, but never replace entries
-        for (id, entry) in object_streams.into_inner().unwrap() {
+        for (id, entry) in object_streams.into_inner().unwrap_or_else(|e| e.into_inner()) {
             self.document.objects.entry(id).or_insert(entry);
         }
 
-        for object_id in zero_length_streams.into_inner().unwrap() {
-            let _ = self.read_stream_content(object_id);
+        for object_id in zero_length_streams.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            let _ = self.read_stream_content(object_id, load_log);
         }
 
         Ok(())
     }
 
-    fn read_stream_content(&mut self, object_id: ObjectId) -> Result<()> {
-        let length = self.get_stream_length(object_id)?;
+    fn read_stream_content(&mut self, object_id: ObjectId, load_log: &ObjectLoadLog) -> Result<()> {
+        let length = self.get_stream_length(object_id, load_log)?;
         let stream = self
             .document
             .get_object_mut(object_id)
@@ -1106,17 +1193,15 @@ impl Reader<'_> {
         }
 
         let length = usize::try_from(length).map_err(|e| Error::NumericCast(e.to_string()))?;
-        let end = start + length;
-
-        if end > self.buffer.len() {
-            return Err(Error::InvalidStream("stream extends after document end.".to_string()));
-        }
-
-        stream.set_content(self.buffer[start..end].to_vec());
+        let content = start
+            .checked_add(length)
+            .and_then(|end| self.buffer.get(start..end))
+            .ok_or_else(|| Error::InvalidStream("stream extends after document end.".to_string()))?;
+        stream.set_content(content.to_vec());
         Ok(())
     }
 
-    fn get_stream_length(&self, object_id: ObjectId) -> Result<i64> {
+    fn get_stream_length(&self, object_id: ObjectId, load_log: &ObjectLoadLog) -> Result<i64> {
         let object = self.document.get_object(object_id)?;
         let stream = object.as_stream()?;
         stream
@@ -1136,10 +1221,12 @@ impl Reader<'_> {
                 },
             })
             .inspect_err(|_err| {
-                error!(
-                    "stream dictionary of '{} {} R' is missing the Length entry",
-                    object_id.0, object_id.1
-                );
+                if load_log.length() {
+                    error!(
+                        "stream dictionary of '{} {} R' is missing the Length entry",
+                        object_id.0, object_id.1
+                    );
+                }
             })
     }
 
@@ -1182,7 +1269,10 @@ impl Reader<'_> {
         // PdfCraft patch: each top-level lookup starts with an empty set and every nested lookup adds one object, so
         // the set's size is the depth of the lookup chain.
         if already_seen.len() >= MAX_LOOKUP_DEPTH {
-            warn!("lookup chain deeper than {MAX_LOOKUP_DEPTH} at object {} {}", id.0, id.1);
+            warn!(
+                "lookup chain deeper than {MAX_LOOKUP_DEPTH} at object {} {}",
+                id.0, id.1
+            );
             return Err(Error::ReferenceLimit);
         }
         if already_seen.contains(&id) {
@@ -2007,4 +2097,43 @@ fn object_marker_parsing_accepts_only_real_headers() {
     assert_eq!(Reader::parse_object_header(b"1 0obj"), None);
     assert_eq!(Reader::parse_object_header(b"1  obj"), None);
     assert_eq!(Reader::parse_object_header(b"x 0 obj"), None);
+}
+
+#[cfg(test)]
+mod encrypted_load_logging {
+    use super::*;
+    #[test]
+    fn encrypted_skips_share_the_budget_and_stay_nonfatal_in_strict_mode() {
+        // Exercise the eager reader's encrypted-skip branch directly. Public
+        // encrypted opens normally use load_encrypted_document instead.
+        let mut buffer = Vec::new();
+        let mut xref = Xref::new(1251, XrefType::CrossReferenceTable);
+        for id in 1..=1250 {
+            let offset = u32::try_from(buffer.len()).unwrap();
+            xref.insert(id, XrefEntry::Normal { offset, generation: 0 });
+            buffer.extend_from_slice(format!("{id} 0 obj\nnot-an-object\nendobj\n").as_bytes());
+        }
+        let mut document = Document::new();
+        document.trailer.set("Encrypt", (9999, 0));
+        let mut reader = Reader {
+            buffer: &buffer,
+            document,
+            encryption_state: None,
+            raw_objects: BTreeMap::new(),
+            password: None,
+            strict: true,
+            max_decompressed_size: None,
+            normal_offsets: Vec::new(),
+        };
+        reader.set_reference_table(xref);
+        // Inspect the shared budget rather than installing another global logger
+        // in the vendor's unit-test binary (its parser tests use env_logger).
+        let load_log = ObjectLoadLog::default();
+        reader.load_objects_raw_with_log(None, &load_log).unwrap();
+        assert!(reader.document.objects.is_empty());
+        assert_eq!(load_log.messages.load(Ordering::Relaxed), 1250);
+        assert_eq!(load_log.encrypted.load(Ordering::Relaxed), 1250);
+        assert_eq!(load_log.failures.load(Ordering::Relaxed), 0);
+        assert_eq!(load_log.lengths.load(Ordering::Relaxed), 0);
+    }
 }

@@ -1,4 +1,5 @@
 use crate::parser;
+use crate::reader::ObjectLoadLog;
 use crate::{Document, Error, Object, ObjectId, Result, Stream};
 use std::collections::BTreeMap;
 use std::num::TryFromIntError;
@@ -51,6 +52,17 @@ impl ObjectStream {
     /// decoded content if it would exceed `max_decompressed_size` bytes. `None`
     /// means no limit (the behavior of [`ObjectStream::new`]).
     pub fn new_with_limit(stream: &Stream, max_decompressed_size: Option<usize>) -> Result<ObjectStream> {
+        // PdfCraft patch: direct callers also get a bounded budget. The eager
+        // reader uses new_with_log to share one across every stream in a load.
+        let load_log = ObjectLoadLog::default();
+        let result = Self::new_with_log(stream, max_decompressed_size, &load_log);
+        load_log.finish();
+        result
+    }
+
+    pub(crate) fn new_with_log(
+        stream: &Stream, max_decompressed_size: Option<usize>, load_log: &ObjectLoadLog,
+    ) -> Result<ObjectStream> {
         let content = match max_decompressed_size {
             // Object streams are decoded while the document is loaded, so
             // enforcing the limit here bounds the memory a single stream can use.
@@ -82,7 +94,7 @@ impl ObjectStream {
         let len = numbers.len() / 2 * 2; // Ensure only pairs.
 
         let n = stream.dict.get(b"N").and_then(Object::as_i64)?;
-        if numbers.len().try_into().ok() != n.checked_mul(2) {
+        if numbers.len().try_into().ok() != n.checked_mul(2) && load_log.warning() {
             warn!("object stream: the object stream dictionary specifies a wrong number of objects")
         }
 
@@ -108,12 +120,16 @@ impl ObjectStream {
             let offset = first_offset.saturating_add(chunk[1]? as usize);
 
             if offset >= content.len() {
-                warn!("out-of-bounds offset in object stream");
+                if load_log.warning() {
+                    warn!("out-of-bounds offset in object stream");
+                }
                 return None;
             }
             let &(first_index, extent_end) = extents.get(&offset)?;
             if index != first_index {
-                warn!("duplicate offset in object stream");
+                if load_log.warning() {
+                    warn!("duplicate offset in object stream");
+                }
                 return None;
             }
             // Skip leading whitespace — some PDFs emit newlines before objects in ObjStm
@@ -122,7 +138,9 @@ impl ObjectStream {
                 start += 1;
             }
             if start >= extent_end {
-                warn!("only whitespace after offset in object stream");
+                if load_log.warning() {
+                    warn!("only whitespace after offset in object stream");
+                }
                 return None;
             }
             let object = parser::direct_object(&content[start..extent_end])?;

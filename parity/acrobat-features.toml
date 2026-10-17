@@ -46,8 +46,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/cos/src/document.rs::damaged_xref_is_reconstructed", "crates/cos/src/parser.rs::indirect_stream_with_wrong_length_recovers", "crates/cos/src/document.rs::self_referential_length_does_not_overflow"]
-notes = ""
+evidence = ["crates/render/tests/object_load_logging.rs::compatibility_inspection_gets_a_fresh_budget_on_every_open", "crates/render/tests/object_load_logging.rs::malformed_objects_log_bounded_details_and_an_exact_summary", "crates/render/tests/object_load_logging.rs::ordinary_and_object_stream_failures_share_one_log_budget", "crates/render/tests/object_load_logging.rs::deferred_stream_length_errors_share_the_load_budget", "crates/render/tests/object_load_logging.rs::object_stream_member_warnings_are_bounded_across_all_streams", "crates/render/tests/object_load_logging.rs::strict_error_still_reports_the_suppressed_diagnostics", "crates/render/tests/object_load_logging.rs::concurrent_document_reads_have_independent_budgets", "crates/cos/src/document.rs::damaged_xref_is_reconstructed", "crates/cos/src/parser.rs::indirect_stream_with_wrong_length_recovers", "crates/cos/src/document.rs::self_referential_length_does_not_overflow"]
+notes = "The eager lopdf compatibility reader shares eight details across object errors, deferred missing/broken Length errors, object-stream warnings and encrypted skips, then emits a category summary at the highest observed severity (#2670 item 11). The summary is also emitted before strict refusal; concurrent reads have independent budgets. Recovery, small-file diagnostics and other parser warnings are unchanged. Direct ObjectStream calls have their own budget; this is not a global log limit or a repair for every damaged file."
 
 [[feature]]
 id = "core.malformed-input-safety"
