@@ -146,7 +146,10 @@ fn marquee_and_mixed_group_drag_move_once_and_undo_together() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(4);
     assert_eq!(objects(&h), before);
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
     h.run_steps(4);
     assert_eq!(objects(&h), after);
@@ -171,7 +174,10 @@ fn modifier_clicks_extend_an_ordinary_selection_and_toggle_objects() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     h.key_press(Key::Escape);
     h.run_steps(3);
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
 }
 
 #[test]
@@ -221,7 +227,10 @@ fn a_document_change_invalidates_old_selection_before_the_next_drag() {
         .apply(id, Edit::AddText { page: 0, text: AddedText { text: "A new item".into(), rect: [40.0, 210.0, 150.0, 240.0], ..Default::default() } })
         .unwrap();
     h.run_steps(4);
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
     assert_eq!(objects(&h).len(), 5);
 }
 

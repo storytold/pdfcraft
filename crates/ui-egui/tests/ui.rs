@@ -1368,3 +1368,38 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
 }
+
+/// Organize pages in the Edit panel opens the Organize workspace: its own panel and the page grid,
+/// not the grid behind the Edit panel.
+#[test]
+fn organize_pages_from_the_edit_panel_opens_its_panel() {
+    use pdfcraft_ui_egui::LeftPanel;
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::Tool("edit"));
+    assert!(
+        h.query_by_label("Shift-click to select several objects. Drag empty space to select an area.").is_none(),
+        "no idle hint above Format text, as in Acrobat"
+    );
+    h.get_by_label("Organize pages").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::Tool("organize"));
+    assert!(h.state().views[0].organize, "the page grid is showing");
+}
+
+/// Header and footer, Watermark and Background keep their Add / Update / Remove menu in the Edit
+/// panel, as under All tools: Update and Remove wait for the document to have that kind of mark.
+#[test]
+fn the_edit_panel_keeps_the_add_update_remove_menu() {
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    h.get_by_label("Watermark").click();
+    h.run_steps(3);
+    assert_eq!(enabled(&h, "Add watermark…"), Some(true));
+    assert_eq!(enabled(&h, "Remove watermark"), Some(false), "nothing to remove yet");
+    h.get_by_label("Add watermark…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)));
+}
