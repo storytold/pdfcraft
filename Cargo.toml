@@ -13,11 +13,16 @@ repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
 # Shared frontend components; engines remain independent of egui.
-craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+# The pin follows craft-libs#112 (the shared capability widget, `printing::network` for the
+# network-printer destination, and the `scanning` component) until it merges; then pin an immutable revision.
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/112/head", features = ["serde"] }
 # Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
 craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f58bc1a3df490992d633393d0898af0588ce882c" }
-# Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "666c358065261a2816b376fa3bb10538dbf53040" }
+# Shared print backends and registry; document composition remains in pdfcraft-print. The pin follows
+# craft-libs#116 (the print backend and registry, WS-Print, tracked jobs, IPP; it carries the craft-wsd core
+# of #113 and craft-job of #120) until those merge; then pin an immutable revision. The `wsd` feature is
+# chosen by pdfcraft-print's `network-print` feature, so a build without it has the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head", default-features = false }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.8.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.8.0" }

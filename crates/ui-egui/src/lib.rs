@@ -100,6 +100,12 @@ mod panels;
 #[cfg(not(target_arch = "wasm32"))]
 mod pickers;
 pub mod prepare;
+// Print ▸ Network printer: craft-ui's `printing::network` model and widgets, with craft-print's WS-Print
+// backend behind them. Needs the `network-print` feature on a target with sockets.
+#[cfg(network_print)]
+mod network_glue;
+#[cfg(network_print)]
+pub use network_glue::Transport as WsdTransport;
 mod print_ui;
 mod signature_drag;
 pub mod units;

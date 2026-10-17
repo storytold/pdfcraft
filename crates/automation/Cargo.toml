@@ -14,6 +14,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-print = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
@@ -22,11 +23,17 @@ base64 = { version = "0.22", optional = true }
 
 
 [features]
-default = ["mcp"]
+default = ["mcp", "network-print"]
 # The MCP server module. Opt-in at run time either way; disable to leave it out of the build.
 mcp = ["dep:base64"]
+# print_wsd / wsd_printer_info: WS-Print through craft-print's `wsd` backend (numeric local printer
+# addresses only, every job confirmed). On by default; without it those tools refuse and the build has
+# no WS-Print code or HTTP client. Not built for wasm32.
+network-print = ["pdfcraft-print/network-print"]
 
 [dev-dependencies]
+# The in-memory fake WS-Print printer and the loopback server (`craft_print::wsd::testing`): tests only.
+craft-print = { workspace = true, features = ["wsd", "testing"] }
 pdfcraft-fonts = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }

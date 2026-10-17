@@ -20,6 +20,7 @@ pdfcraft-audit = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-print = { workspace = true }
 base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
@@ -32,6 +33,13 @@ rustix = { version = "1", features = ["process"] }
 winresource = "0.1"
 
 [features]
-default = ["mcp"]
+default = ["mcp", "network-print"]
 # The opt-in MCP server (`pdfcraft-cli mcp`). Build with --no-default-features to leave it out.
 mcp = ["pdfcraft-automation/mcp"]
+# `pdfcraft-cli print --wsd`: WS-Print to numeric local printer addresses, every job confirmed with
+# --yes. On by default; --no-default-features leaves it out.
+network-print = ["pdfcraft-automation/network-print", "pdfcraft-print/network-print"]
+
+[dev-dependencies]
+# The in-memory fake WS-Print printer and the loopback server (`craft_print::wsd::testing`): tests only.
+craft-print = { workspace = true, features = ["wsd", "testing"] }

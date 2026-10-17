@@ -31,6 +31,7 @@ mod redact;
 mod signing;
 mod text_cache;
 mod tools;
+mod wsdprint;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -118,6 +119,9 @@ pub struct Automation {
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
     /// Extracted page text, under one memory budget across all open documents.
     texts: TextCache,
+    /// The WS-Print transport (None: the built-in HTTP one, in builds that have it).
+    #[cfg(all(feature = "network-print", not(target_arch = "wasm32")))]
+    wsd: Option<wsdprint::WsdTransport>,
 }
 
 impl Default for Automation {
@@ -128,7 +132,18 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
-        Self { session: Session::new(), root: None, roots: None, renderers: HashMap::new(), texts: TextCache::default() }
+        // Network printing converts a PDF to PWG raster with this build's renderer (registered once).
+        #[cfg(all(feature = "network-print", not(target_arch = "wasm32")))]
+        pdfcraft_print::network::register_pdf_converter();
+        Self {
+            session: Session::new(),
+            root: None,
+            roots: None,
+            renderers: HashMap::new(),
+            texts: TextCache::default(),
+            #[cfg(all(feature = "network-print", not(target_arch = "wasm32")))]
+            wsd: None,
+        }
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
@@ -729,6 +744,8 @@ impl Automation {
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
             "printer_options" => self.printer_options(&a)?,
+            "wsd_printer_info" => self.wsd_printer_info(&a)?,
+            "print_wsd" => self.print_wsd(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,

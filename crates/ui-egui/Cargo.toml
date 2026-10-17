@@ -9,10 +9,18 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+# Print ▸ Network printer (WS-Print). On by default; build with --no-default-features to leave the
+# destination, its code and craft-print's `wsd` backend out. Web builds (wasm32) never have it: there
+# is no socket to open (build.rs turns the feature and the target into the `network_print` cfg).
+default = ["network-print"]
+network-print = ["pdfcraft-print/network-print"]
+
 [dependencies]
 craft-ui = { workspace = true }
 # macOS: a window close quits through `terminate:` (the Touch Bar crash, #1136); elsewhere a no-op.
 craft-quit = { workspace = true, features = ["egui"] }
+pdfcraft-print = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
@@ -74,6 +82,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget"] }
 
 [dev-dependencies]
+# The in-process fake WS-Print printer for the network print tests (`craft_print::wsd::testing`).
+craft-print = { workspace = true, features = ["wsd", "testing"] }
 pdfcraft-xfa = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

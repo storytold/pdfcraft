@@ -8,9 +8,16 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Network printing over WS-Print (`network`): turns on craft-print's `wsd` backend. Not built for
+# wasm32 (there is no socket to open). Nothing connects until the app adds a printer and a job is
+# confirmed.
+network-print = ["craft-print/wsd", "dep:pdfcraft-render"]
+
 [dependencies]
 craft-print = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
+pdfcraft-render = { workspace = true, optional = true }
 thiserror = { workspace = true }

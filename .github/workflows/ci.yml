@@ -103,6 +103,13 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo check -p pdfcraft-cli --no-default-features
 
+      - name: Network printing left out still builds, lints and refuses
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy -p pdfcraft-print -p pdfcraft-automation -p pdfcraft-cli --no-default-features --all-targets -- -D warnings
+          cargo test -p pdfcraft-automation --no-default-features --test wsd_print_off
+          cargo test -p pdfcraft-cli --no-default-features --test print_off
+
   wasm:
     name: wasm32 check
     runs-on: ubuntu-latest
