@@ -5468,6 +5468,13 @@ fn copy_image_finds_the_image_under_a_point_and_decodes_it_at_full_size() {
     assert_eq!((w, h), (3, 2));
     assert_eq!(rgba, px.into_raw());
     assert!(d.page_image_rgba(0, 1).is_err());
+
+    // When the image is cropped, page_image_at only hit-tests the visible cropped region:
+    let crop_keep = [r[0] + (r[2] - r[0]) * 0.25, r[1] + (r[3] - r[1]) * 0.25, r[0] + (r[2] - r[0]) * 0.75, r[1] + (r[3] - r[1]) * 0.75];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop(crop_keep) }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_image_at(0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]), Some(0));
+    assert_eq!(d.page_image_at(0, [r[0] + 0.1, r[1] + 0.1]), None, "cropped-away corner must not hit-test positive");
 }
 
 /// Copy Image: a JPEG drawn through grouped Form artwork (as Word, InDesign and scanners write

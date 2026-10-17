@@ -723,7 +723,7 @@ theme	Appearance	Giao diện
 	More options	Thêm tùy chọn
 	More options:	Thêm tùy chọn:
 	More ways to add files	Thêm cách để thêm tệp
-	Mouse wheel scroll speed	Tốc độ cuộn bánh xe chuột
+	Scroll speed (mouse wheel and arrow keys)	Tốc độ cuộn (bánh xe chuột và phím mũi tên)
 	Move down	Chuyển xuống
 	Move earlier	Chuyển lên trước
 	Move later	Chuyển ra sau
@@ -1176,7 +1176,7 @@ theme	Appearance	Giao diện
 	This document isn't password-protected	Tài liệu này không được bảo vệ bằng mật khẩu
 	This drawing exceeds the snapping limit; only the first paths are used.	Bản vẽ này vượt quá giới hạn bắt dính; chỉ các đường đầu tiên được sử dụng.
 	This field is locked. Unlock it to change its properties.	Trường này đã bị khóa. Hãy mở khóa để thay đổi thuộc tính của nó.
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tệp này đã thay đổi trên đĩa. Hãy tải lại để xem phiên bản mới; các thay đổi chưa lưu của bạn sẽ bị mất.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tệp này đã thay đổi trên đĩa. Tải lại sẽ hiển thị phiên bản mới và hủy các thay đổi chưa lưu của bạn; Lưu sẽ thay thế bằng phiên bản này.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Tệp này bị hỏng và đã được sửa chữa. Việc lưu sẽ giữ phiên bản đã sửa.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Thư mục này hiện không khả dụng. Nó có thể đã bị di chuyển, hoặc ổ đĩa hay đồng bộ đám mây của nó đang ngoại tuyến.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Các script của biểu mẫu này đã bị tắt vì một script chạy quá lâu. Hãy mở lại tài liệu để chạy chúng lại.
@@ -2616,6 +2616,12 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Bring forward	Chuyển lên trước
+	Bring to front	Đưa lên trước cùng
+	Crop image	Cắt hình ảnh
+	Remove crop	Xóa cắt
+	Send backward	Chuyển về sau
+	Send to back	Đưa về sau cùng
 
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
@@ -2662,7 +2668,6 @@ key	Space	Space
 	Resolution:	Độ phân giải:
 	Save anyway	Vẫn lưu
 	Save over the changed file?	Lưu đè lên tệp đã thay đổi?
-	Scroll speed (mouse wheel and arrow keys)	Tốc độ cuộn (con lăn chuột và phím mũi tên)
 	Set page transitions	Đặt hiệu ứng chuyển trang
 	Shown while the pointer is over a mark.	Hiển thị khi con trỏ nằm trên một dấu.
 	Side by side	Cạnh nhau
@@ -2672,7 +2677,6 @@ key	Space	Space
 	The labels are in English: the signature's font can't draw them in this language.	Các nhãn được hiển thị bằng tiếng Anh: phông chữ của chữ ký không thể hiển thị chúng bằng ngôn ngữ này.
 	The password must have at least 8 characters.	Mật khẩu phải có ít nhất 8 ký tự.
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Tài liệu này yêu cầu mở ở chế độ toàn màn hình: trang chiếm toàn bộ màn hình và không hiển thị nội dung nào khác. Nhấn Esc bất kỳ lúc nào để thoát.
-	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tệp này đã thay đổi trên đĩa. Tải lại sẽ hiển thị phiên bản mới và bỏ các thay đổi chưa lưu của bạn; Lưu sẽ thay thế tệp bằng phiên bản này.
 	Trim the picture with its handles; Enter or Done applies	Xén hình bằng các tay nắm; nhấn Enter hoặc Xong để áp dụng
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Dùng khi máy in bỏ sót văn bản, chuyển sắc hoặc độ trong suốt. Bản in không còn chứa văn bản có thể tìm kiếm; với In thang độ xám, hình ảnh sẽ có màu xám.
 	What takes up the space in this file, by kind of content.	Dung lượng mà từng loại nội dung chiếm trong tệp này.

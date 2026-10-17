@@ -65,7 +65,11 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {
-            if tool_row(ui, t, g).clicked() {
+            let pinned = app.is_tool_pinned(g.id);
+            let (resp, pin_clicked) = tool_row(ui, t, g, pinned);
+            if pin_clicked {
+                app.toggle_pin_tool(g.id);
+            } else if resp.clicked() {
                 app.select_tool(g.id);
             }
         }
@@ -96,21 +100,29 @@ fn row_label(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32, 
     elided
 }
 
-fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
+fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (egui::Response, bool) {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(g.label)));
     let press = theme::Press::track(ui, &resp);
     press.wash(ui, rect, 6, false);
     let body = rect.translate(press.offset());
     icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 7.0), vec2(20.0, 20.0)), g.icon, 19.0, hue(g));
-    let right_reserved = match (g.badge, g.availability) {
-        (Some(b), _) => ui.fonts_mut(|f| f.layout_no_wrap(tl!(b).to_owned(), theme::semibold(9.5), Color32::WHITE).size().x) + 26.0,
+
+    let pin_rect = Rect::from_center_size(body.right_center() - vec2(14.0, 0.0), vec2(22.0, 22.0));
+    let pin_resp = ui.interact(pin_rect, ui.id().with(("pin_toggle_row", g.id)), Sense::click());
+    let pin_hovered = pin_resp.hovered();
+    let mut pin_clicked = false;
+
+    let pin_space = 26.0;
+    let badge_or_hint_reserved = match (g.badge, g.availability) {
+        (Some(b), _) => ui.fonts_mut(|f| f.layout_no_wrap(tl!(b).to_owned(), theme::semibold(9.5), Color32::WHITE).size().x) + 18.0,
         (None, Availability::Planned(m)) if resp.hovered() => {
             let hint = format!("{} · {m}", tl!("Planned"));
-            ui.fonts_mut(|f| f.layout_no_wrap(hint, theme::medium(10.5), t.text_faint).size().x) + 18.0
+            ui.fonts_mut(|f| f.layout_no_wrap(hint, theme::medium(10.5), t.text_faint).size().x) + 10.0
         }
-        _ => 8.0,
+        _ => 0.0,
     };
+    let right_reserved = pin_space + badge_or_hint_reserved + 8.0;
     let clipped =
         row_label(ui, tl!(g.label), theme::regular(13.5), t.text, body.left_center() + vec2(36.0, 0.0), rect.width() - 36.0 - right_reserved);
     match (g.badge, g.availability) {
@@ -118,14 +130,14 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
             let font = theme::semibold(9.5);
             let badge = tl!(b);
             let w = ui.fonts_mut(|f| f.layout_no_wrap(badge.to_string(), font.clone(), Color32::WHITE).size().x);
-            let r = Rect::from_center_size(body.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
+            let r = Rect::from_center_size(body.right_center() - vec2(pin_space + w / 2.0 + 4.0, 0.0), vec2(w + 10.0, 16.0));
             ui.painter().rect_filled(r, CornerRadius::same(4), t.badge_new);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, badge, font, Color32::WHITE);
         }
         // Planned tools: a quiet milestone hint instead of a chip, so the list stays calm.
         (None, Availability::Planned(m)) if resp.hovered() => {
             ui.painter().text(
-                body.right_center() - vec2(10.0, 0.0),
+                body.right_center() - vec2(pin_space + 4.0, 0.0),
                 Align2::RIGHT_CENTER,
                 format!("{} · {m}", tl!("Planned")),
                 theme::medium(10.5),
@@ -134,13 +146,34 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
         }
         _ => {}
     }
+
+    let row_hovered = ui.rect_contains_pointer(rect) || resp.hovered();
+    if is_pinned || row_hovered || pin_hovered {
+        if pin_hovered {
+            ui.painter().rect_filled(pin_rect, CornerRadius::same(4), t.pressed);
+        }
+        let pin_tint = if is_pinned {
+            t.accent_text
+        } else if pin_hovered {
+            t.text
+        } else {
+            t.text_faint
+        };
+        icons::paint(ui, pin_rect.shrink(3.0), "pin", 15.0, pin_tint);
+        let tip = if is_pinned { "Unpin from Home" } else { "Pin to Home" };
+        pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+        if theme::hand(pin_resp).on_hover_text(tip).clicked() {
+            pin_clicked = true;
+        }
+    }
+
     let tip = match g.availability {
         Availability::Ready => tl!("Available").to_string(),
         Availability::Planned(m) => format!("{} {m} — {}", tl!("Planned for milestone"), tl!("open to see what it will include")),
         Availability::Provider => tl!("Optional: needs an AI provider you configure").into(),
     };
     let tip = if clipped { format!("{} — {tip}", tl!(g.label)) } else { tip };
-    theme::hand(resp).on_hover_text(tip)
+    (theme::hand(resp).on_hover_text(tip), pin_clicked)
 }
 
 fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
@@ -381,41 +414,157 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let mut ed = ed;
         let mut changed = false;
         let font_choices = app.session.get(app.views[i].id).map(|d| d.text_editor_fonts(ed.page)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("document-font-resource")
-            .selected_text(
-                ed.font_resource
-                    .as_ref()
-                    .and_then(|r| font_choices.iter().find(|f| &f.resource == r))
-                    .map_or(tl!("Keep source fonts"), |f| f.face.as_str()),
-            )
-            .show_ui(ui, |ui| {
-                changed |= ui.selectable_value(&mut ed.font_resource, None, tl!("Keep source fonts")).changed();
-                for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
-                    changed |= ui.selectable_value(&mut ed.font_resource, Some(font.resource.clone()), &font.face).changed();
+        let current_font_label = if let Some(r) = ed.font_resource.as_ref() {
+            font_choices.iter().find(|f| &f.resource == r).map_or_else(|| r.clone(), |f| f.face.clone())
+        } else if ed.look.family != pdfcraft_engine::FontFamily::Helvetica {
+            ed.look.family.label().to_string()
+        } else {
+            tl!("Keep source fonts").to_string()
+        };
+
+        crate::widgets::section_title(ui, "FORMAT TEXT");
+        egui::ComboBox::from_id_salt("text-font-dropdown").selected_text(current_font_label).width(ui.available_width().max(180.0)).show_ui(
+            ui,
+            |ui| {
+                if ui.selectable_label(ed.font_resource.is_none(), tl!("Keep source fonts")).clicked() {
+                    ed.font_resource = None;
+                    changed = true;
                 }
-            });
-        if ui.button(tl!("Load font…")).clicked() {
-            app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        egui::ComboBox::from_id_salt("installed-document-font").selected_text(tl!("Installed fonts…")).show_ui(ui, |ui| {
-            if let Some(fonts) = crate::files::installed_font_files(ui.ctx()) {
-                if fonts.is_empty() {
-                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                }
-                for font in fonts {
-                    if ui.selectable_label(false, &font.face).clicked() {
-                        app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[font.path]);
+                if !font_choices.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Document fonts").weak().small());
+                    for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
+                        let is_current = ed.font_resource.as_ref() == Some(&font.resource);
+                        if ui.selectable_label(is_current, &font.face).clicked() {
+                            ed.font_resource = Some(font.resource.clone());
+                            changed = true;
+                        }
                     }
                 }
-            } else {
-                ui.label(tl!("Finding document fonts…"));
+                ui.separator();
+                ui.label(egui::RichText::new("Standard fonts").weak().small());
+                for f in [pdfcraft_engine::FontFamily::Helvetica, pdfcraft_engine::FontFamily::Times, pdfcraft_engine::FontFamily::Courier] {
+                    let is_current = ed.font_resource.is_none() && ed.look.family == f;
+                    if ui.selectable_label(is_current, f.label()).clicked() {
+                        ed.font_resource = None;
+                        ed.look.family = f;
+                        changed = true;
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Installed fonts").weak().small());
+                    if let Some(installed) = crate::files::installed_font_files(ui.ctx()) {
+                        if installed.is_empty() {
+                            ui.label(egui::RichText::new("No installed fonts found.").weak().small());
+                        } else {
+                            for font in &installed {
+                                let is_current =
+                                    ed.font_resource.as_ref().is_some_and(|r| font_choices.iter().any(|f| &f.resource == r && f.face == font.face));
+                                if ui.selectable_label(is_current, &font.face).clicked()
+                                    && let Ok(bytes) = std::fs::read(&font.path)
+                                {
+                                    let edit = pdfcraft_engine::Edit::RegisterTextFont { page: ed.page, bytes: std::sync::Arc::new(bytes.clone()) };
+                                    if app.apply_edit(edit)
+                                        && let Some(doc) = app.session.get(app.views[i].id)
+                                    {
+                                        if let Some(f) = doc.text_editor_fonts(ed.page).into_iter().find(|f| f.bytes == bytes) {
+                                            ed.font_resource = Some(f.resource);
+                                            changed = true;
+                                        }
+                                        ed.fonts = crate::edit_text_ui::install_source_fonts(ui.ctx(), doc, ed.page);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("Finding installed fonts…").weak().small());
+                    }
+                }
+                ui.separator();
+                if ui.button("Load font from file…").clicked() {
+                    app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
+                }
+            },
+        );
+
+        ui.horizontal(|ui| {
+            // Font size ComboBox
+            egui::ComboBox::from_id_salt("font-size").selected_text(format!("{:.1}", ed.look.size)).width(55.0).show_ui(ui, |ui| {
+                for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
+                    changed |= ui.selectable_value(&mut ed.look.size, size, format!("{size}")).changed();
+                }
+            });
+            // Color swatch square
+            let (color_rect, color_resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let color_val = crate::comments::color32(ed.look.color);
+            ui.painter().rect_filled(color_rect, t.radius, color_val);
+            ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            let show_palette_id = ui.id().with("show-palette");
+            let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
+            if color_resp.on_hover_text("Text color").clicked() {
+                show_palette = !show_palette;
+                ui.data_mut(|d| d.insert_temp(show_palette_id, show_palette));
+            }
+            ui.add_space(2.0);
+            // Bullet list button
+            let is_bullet = crate::edit_text_ui::is_bulleted(&ed.text);
+            if crate::icons::button(ui, "list", 24.0, is_bullet, "Bullet list").clicked() {
+                changed |= crate::edit_text_ui::toggle_bullet_list(&mut ed.text);
+            }
+            // Numbered list button
+            let is_num = crate::edit_text_ui::is_numbered(&ed.text);
+            if crate::icons::button(ui, "list-ordered", 24.0, is_num, "Numbered list").clicked() {
+                changed |= crate::edit_text_ui::toggle_numbered_list(&mut ed.text);
+            }
+            ui.add_space(2.0);
+            // Alignment buttons
+            for (a, icon, tip) in [
+                (pdfcraft_engine::TextAlign::Left, "align-left", tl!("Align left")),
+                (pdfcraft_engine::TextAlign::Center, "align-center", tl!("Centre")),
+                (pdfcraft_engine::TextAlign::Right, "align-right", tl!("Align right")),
+                (pdfcraft_engine::TextAlign::Justify, "align-justify", tl!("Justify")),
+            ] {
+                if crate::icons::button(ui, icon, 24.0, ed.look.align == a, tip).clicked() {
+                    ed.look.align = a;
+                    changed = true;
+                }
             }
         });
-        if let Some(look) = crate::content_ui::format_panel(ui, t, &ed.look) {
-            ed.look = look;
+
+        // Color Swatch Grid (when toggled or open)
+        let show_palette_id = ui.id().with("show-palette");
+        if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false)
+            && let Some(picked) = crate::comments::swatch_grid(ui, Some(ed.look.color))
+        {
+            ed.look.color = picked;
             changed = true;
         }
+
+        // Formatting Buttons: Bold, Italic, Underline, Superscript, Subscript
+        ui.horizontal(|ui| {
+            let b_resp = ui.selectable_label(ed.look.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold"));
+            if b_resp.clicked() {
+                ed.look.bold = !ed.look.bold;
+                changed = true;
+            }
+            let i_resp = ui.selectable_label(ed.look.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic"));
+            if i_resp.clicked() {
+                ed.look.italic = !ed.look.italic;
+                changed = true;
+            }
+            let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0)).on_hover_text("Superscript");
+            if sup_resp.clicked() {
+                changed |= crate::edit_text_ui::toggle_superscript(&mut ed);
+            }
+            let sub_resp = ui.selectable_label(false, egui::RichText::new("T₁").size(13.0)).on_hover_text("Subscript");
+            if sub_resp.clicked() {
+                changed |= crate::edit_text_ui::toggle_subscript(&mut ed);
+            }
+        });
+
+        // Spacing: Value-based line spacing, paragraph spacing, horizontal scale, character spacing
         changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
         if changed {
             let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };

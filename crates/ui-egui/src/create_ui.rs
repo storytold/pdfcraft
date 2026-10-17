@@ -59,14 +59,17 @@ pub enum Clip {
 /// An image on the system clipboard, or else its text.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_clipboard() -> Option<Clip> {
-    let mut cb = arboard::Clipboard::new().ok()?;
-    if let Ok(img) = cb.get_image() {
-        return Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() });
-    }
-    cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text)
+    crate::os_clipboard::with(|cb| {
+        if let Ok(img) = cb.get_image() {
+            return Ok(Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() }));
+        }
+        Ok(cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text))
+    })
+    .ok()
+    .flatten()
 }
 
-fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let (w, h) = (u32::try_from(width).map_err(|e| e.to_string())?, u32::try_from(height).map_err(|e| e.to_string())?);
     if w == 0 || h == 0 || rgba.len() != width * height * 4 {
         return Err("the clipboard image is empty or malformed".into());

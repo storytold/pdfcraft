@@ -1953,6 +1953,12 @@ action wizard	Start	Iniciar
 	Rotate image	Girar imagen
 	Flip image	Voltear imagen
 	Delete image	Eliminar imagen
+	Bring to front	Traer al frente
+	Send to back	Enviar al fondo
+	Bring forward	Traer adelante
+	Send backward	Enviar atrás
+	Remove crop	Quitar recorte
+	Crop image	Recortar imagen
 	Add header & footer	Añadir encabezado y pie de página
 	Update header & footer	Actualizar encabezado y pie de página
 	Update watermark	Actualizar marca de agua

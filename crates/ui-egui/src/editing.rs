@@ -974,6 +974,7 @@ fn is_form_edit(edit: &Edit) -> bool {
 /// because Outlook can still hold the file, or appears to work while the edits stay out of the
 /// email and are deleted with the cache. Matched on either separator and in any case, so it can
 /// be tested on every platform.
+#[allow(dead_code)]
 pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
     let p = path.replace('\\', "/").to_ascii_lowercase();
     p.contains("/inetcache/content.outlook/")

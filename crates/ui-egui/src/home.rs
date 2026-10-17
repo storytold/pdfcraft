@@ -18,6 +18,57 @@ fn card_lift(ui: &egui::Ui, t: &Tokens, rect: Rect, press: theme::Press) {
     }
 }
 
+/// Render a single tool card with the standard lift, styling, icon, title, description, and action.
+/// If `allow_unpin` is true, an unpin button appears on hover in the top right corner.
+fn tool_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static catalog::ToolGroup, allow_unpin: bool) -> Option<&'static str> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 104.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(g.label)));
+    let press = theme::Press::track(ui, &resp);
+    card_lift(ui, t, rect, press);
+    let fill = press.fill(t.card, t.hover, t.pressed);
+    ui.painter().rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
+    let body = rect.translate(press.offset());
+    let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
+    icons::paint(ui, Rect::from_min_size(body.min + vec2(14.0, 14.0), vec2(22.0, 22.0)), g.icon, 21.0, color);
+
+    let mut unpin_clicked = false;
+    if allow_unpin && (ui.rect_contains_pointer(rect) || resp.hovered()) {
+        let unpin_rect = Rect::from_center_size(body.right_top() + vec2(-18.0, 18.0), vec2(22.0, 22.0));
+        let unpin_resp = ui.interact(unpin_rect, ui.id().with(("unpin_card_btn", g.id)), Sense::click());
+        unpin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Unpin tool"));
+        if unpin_resp.hovered() {
+            ui.painter().rect_filled(unpin_rect, CornerRadius::same(4), t.pressed);
+        }
+        icons::paint(ui, unpin_rect.shrink(4.0), "x", 14.0, t.icon);
+        if unpin_resp.on_hover_text("Unpin from Home").clicked() {
+            unpin_clicked = true;
+        }
+    }
+
+    let mut title_job = egui::text::LayoutJob::simple_singleline(tl!(g.label).to_owned(), theme::semibold(13.5), t.text);
+    title_job.wrap = egui::text::TextWrapping { max_width: body.width() - 58.0, max_rows: 1, break_anywhere: true, ..Default::default() };
+    let title = ui.fonts_mut(|f| f.layout_job(title_job));
+    let title_elided = title.elided;
+    ui.painter().galley(body.min + vec2(44.0, 25.0 - title.size().y * 0.5), title, t.text);
+    let blurb = g.sections.first().map(|s| s.items.iter().take(3).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · ")).unwrap_or_default();
+    // Fixed-height cards must leave room for their action in every language.
+    let mut job = egui::text::LayoutJob::simple(blurb.clone(), theme::regular(11.5), t.text_muted, body.width() - 28.0);
+    job.wrap.max_rows = 2;
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let blurb_elided = galley.elided;
+    ui.painter().galley(body.min + vec2(14.0, 46.0), galley, t.text_muted);
+    ui.painter().text(body.left_bottom() + vec2(14.0, -14.0), Align2::LEFT_CENTER, tl!("Use now"), theme::medium(12.0), t.accent_text);
+    let resp = if title_elided || blurb_elided { resp.on_hover_text(format!("{}\n{blurb}", tl!(g.label))) } else { resp };
+    if unpin_clicked {
+        Some(g.id)
+    } else {
+        if theme::hand(resp).clicked() {
+            app.select_tool(g.id);
+        }
+        None
+    }
+}
+
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -63,43 +114,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
                         for id in RECOMMENDED {
                             let Some(g) = catalog::group(id) else { continue };
-                            let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 104.0), Sense::click());
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(g.label)));
-                            let press = theme::Press::track(ui, &resp);
-                            card_lift(ui, &t, rect, press);
-                            let fill = press.fill(t.card, t.hover, t.pressed);
-                            ui.painter().rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, t.divider), egui::StrokeKind::Inside);
-                            let body = rect.translate(press.offset());
-                            let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
-                            icons::paint(ui, Rect::from_min_size(body.min + vec2(14.0, 14.0), vec2(22.0, 22.0)), g.icon, 21.0, color);
-                            let mut title_job = egui::text::LayoutJob::simple_singleline(tl!(g.label).to_owned(), theme::semibold(13.5), t.text);
-                            title_job.wrap =
-                                egui::text::TextWrapping { max_width: body.width() - 58.0, max_rows: 1, break_anywhere: true, ..Default::default() };
-                            let title = ui.fonts_mut(|f| f.layout_job(title_job));
-                            let title_elided = title.elided;
-                            ui.painter().galley(body.min + vec2(44.0, 25.0 - title.size().y * 0.5), title, t.text);
-                            let blurb = g
-                                .sections
-                                .first()
-                                .map(|s| s.items.iter().take(3).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · "))
-                                .unwrap_or_default();
-                            // Fixed-height cards must leave room for their action in every language.
-                            let mut job = egui::text::LayoutJob::simple(blurb.clone(), theme::regular(11.5), t.text_muted, body.width() - 28.0);
-                            job.wrap.max_rows = 2;
-                            let galley = ui.fonts_mut(|f| f.layout_job(job));
-                            let blurb_elided = galley.elided;
-                            ui.painter().galley(body.min + vec2(14.0, 46.0), galley, t.text_muted);
-                            ui.painter().text(
-                                body.left_bottom() + vec2(14.0, -14.0),
-                                Align2::LEFT_CENTER,
-                                tl!("Use now"),
-                                theme::medium(12.0),
-                                t.accent_text,
-                            );
-                            let resp = if title_elided || blurb_elided { resp.on_hover_text(format!("{}\n{blurb}", tl!(g.label))) } else { resp };
-                            if theme::hand(resp).clicked() {
-                                app.select_tool(g.id);
-                            }
+                            tool_card(app, ui, &t, g, false);
                         }
                         let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Open file")));
@@ -120,6 +135,36 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     });
                 });
+
+            ui.add_space(26.0);
+            let mut unpin_tool = None;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Pinned Tools").font(theme::semibold(17.0)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::ghost_button(ui, "pin", "Pin a tool…").clicked() {
+                        app.dialog = Some(crate::Dialog::PinTool);
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            if app.pinned_tools.is_empty() {
+                ui.label(egui::RichText::new("Pin your favorite tools here for quick access.").color(t.text_muted));
+            } else {
+                ui.add_space(6.0);
+                let pinned = app.pinned_tools.clone();
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
+                    for id in &pinned {
+                        let Some(g) = catalog::group(id) else { continue };
+                        if let Some(to_unpin) = tool_card(app, ui, &t, g, true) {
+                            unpin_tool = Some(to_unpin);
+                        }
+                    }
+                });
+            }
+            if let Some(id) = unpin_tool {
+                app.unpin_tool(id);
+            }
 
             #[cfg(not(target_arch = "wasm32"))]
             {

@@ -476,13 +476,33 @@ impl PdfCraftApp {
         match purpose {
             FilePurpose::TextFont { page } => {
                 let Some((_, bytes)) = files.into_iter().next() else { return };
-                if self.apply_edit(Edit::RegisterTextFont { page, bytes: Arc::new(bytes) })
+                if self.apply_edit(Edit::RegisterTextFont { page, bytes: Arc::new(bytes.clone()) })
                     && let Some((index, id)) = self.active_ids()
-                    && let Some(doc) = self.session.get(id)
-                    && let Some(ed) = self.views[index].line_editor.as_mut()
-                    && let Some(ctx) = self.ctx.as_ref()
                 {
-                    ed.fonts = crate::edit_text_ui::install_source_fonts(ctx, doc, page);
+                    let resource =
+                        self.session.get(id).and_then(|doc| doc.text_editor_fonts(page).into_iter().find(|f| f.bytes == bytes).map(|f| f.resource));
+                    if let Some(resource) = resource
+                        && let Some(ed) = self.views[index].line_editor.as_mut()
+                    {
+                        ed.font_resource = Some(resource);
+                        let edit = Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+                        if self.apply_edit(edit)
+                            && let Some(ed) = self.views[index].line_editor.as_mut()
+                        {
+                            ed.applied();
+                            if let Some(doc) = self.session.get(id)
+                                && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
+                            {
+                                ed.refresh_source(block, doc.text_lines(ed.page));
+                            }
+                        }
+                    }
+                    if let Some(ed) = self.views[index].line_editor.as_mut()
+                        && let Some(doc) = self.session.get(id)
+                        && let Some(ctx) = self.ctx.as_ref()
+                    {
+                        ed.fonts = crate::edit_text_ui::install_source_fonts(ctx, doc, page);
+                    }
                 }
             }
             FilePurpose::Combine => self.stage_combine(files),

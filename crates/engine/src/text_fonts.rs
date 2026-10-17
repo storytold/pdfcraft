@@ -39,10 +39,9 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
     let mut pending: Vec<_> = roots.iter().take(16).map(|r| (r.clone(), 0usize)).collect();
     let mut files = Vec::new();
     let mut entries = 0usize;
-    let mut budget = 64u64 << 20;
     let mut seen = std::collections::HashSet::new();
     while let Some((path, depth)) = pending.pop() {
-        if entries >= 4096 || budget == 0 {
+        if entries >= 4096 || files.len() >= 500 {
             break;
         }
         entries += 1;
@@ -56,23 +55,36 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
                 pending.extend(children.take(remaining).filter_map(Result::ok).map(|p| (p.path(), depth + 1)));
             }
         } else if meta.is_file() && meta.len() <= (16 << 20) && font_extension(&path) {
-            if meta.len() > budget {
-                continue;
-            }
-            budget = budget.saturating_sub(meta.len());
             let mut bytes = Vec::new();
             let read = std::fs::File::open(&path).and_then(|f| f.take((16 << 20) + 1).read_to_end(&mut bytes));
-            if read.is_err() || pdfcraft_fonts::embedding::validate_document_input(&bytes).is_err() {
+            if read.is_err() {
                 continue;
             }
-            if let Ok((family, face)) = pdfcraft_fonts::embedding::names(&bytes) {
-                files.push(FontFile { path, family, face });
+            if let Ok(bytes) = read.map(|_| bytes) {
+                if pdfcraft_fonts::embedding::validate_document_input(&bytes).is_err() {
+                    continue;
+                }
+                if let Ok((family, face)) = pdfcraft_fonts::embedding::names(&bytes) {
+                    files.push(FontFile { path, family, face });
+                }
             }
         }
     }
     files.sort_by(|a, b| a.face.cmp(&b.face).then(a.path.cmp(&b.path)));
+    files.dedup_by(|a, b| a.face == b.face);
     files
 }
 fn font_extension(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_installed_directories() {
+        let dirs = installed_directories();
+        assert!(!dirs.is_empty());
+    }
 }

@@ -2677,10 +2677,11 @@ key	Space	Tarpas
 	Make properties default	Nustatyti ypatybes kaip numatytąsias
 	Pages selected	Pasirinkti puslapiai
 	Page properties	Puslapio ypatybės
-
-# AI-assisted additions for concurrently merged UI features (2026-10-15).
-# These additions have not had separate native-speaker review.
-	Mouse wheel scroll speed	Pelės ratuko slinkimo greitis
+	Bring forward	Perkelti į priekį
+	Bring to front	Iškelti į priekį
+	Crop image	Apkarpyti paveikslėlį
+	Remove crop	Pašalinti apkarpymą
+	Send backward	Perkelti atgal
+	Send to back	Nukelti į galą
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda

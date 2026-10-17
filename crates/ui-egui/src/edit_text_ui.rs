@@ -7,11 +7,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke, pos2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
+use crate::image_engine::{CROP_ACCENT, HandleId, apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -135,6 +136,365 @@ impl TextBackground {
 /// per box) stalls the UI. Past this, only the selected and hovered boxes are outlined:
 /// hit-testing still covers every image, so nothing becomes unselectable.
 const MAX_OUTLINES: usize = 250;
+
+pub fn is_bulleted(text: &str) -> bool {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return false };
+    first.trim_start().starts_with("• ") || first.trim_start().starts_with("- ")
+}
+
+pub fn is_numbered(text: &str) -> bool {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return false };
+    let t = first.trim_start();
+    let num_end = t.find('.').unwrap_or(0);
+    num_end > 0 && t[..num_end].chars().all(|c| c.is_ascii_digit()) && t[num_end..].starts_with(". ")
+}
+
+pub fn toggle_bullet_list(text: &mut String) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let all_bulleted = lines.iter().all(|l| {
+        let t = l.trim_start();
+        t.is_empty() || t.starts_with("• ") || t.starts_with("- ")
+    });
+    let mut new_text = String::with_capacity(text.len() + 16);
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        let trimmed = line.trim_start();
+        if all_bulleted {
+            if let Some(rest) = trimmed.strip_prefix("• ").or_else(|| trimmed.strip_prefix("- ")) {
+                new_text.push_str(rest);
+            } else {
+                new_text.push_str(line);
+            }
+        } else if trimmed.is_empty() || trimmed.starts_with("• ") {
+            new_text.push_str(line);
+        } else {
+            new_text.push_str("• ");
+            new_text.push_str(line);
+        }
+    }
+    if new_text != *text {
+        *text = new_text;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn toggle_numbered_list(text: &mut String) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let is_num_line = |l: &str| {
+        let t = l.trim_start();
+        if t.is_empty() {
+            return true;
+        }
+        let dot_idx = t.find('.').unwrap_or(0);
+        dot_idx > 0 && t[..dot_idx].chars().all(|c| c.is_ascii_digit()) && t[dot_idx..].starts_with(". ")
+    };
+    let all_numbered = lines.iter().all(|l| is_num_line(l));
+    let mut new_text = String::with_capacity(text.len() + 16);
+    let mut num = 1;
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        let t = line.trim_start();
+        if all_numbered {
+            if let Some(dot_idx) = t.find('.')
+                && dot_idx > 0
+                && t[..dot_idx].chars().all(|c| c.is_ascii_digit())
+                && t[dot_idx..].starts_with(". ")
+            {
+                new_text.push_str(&t[dot_idx + 2..]);
+                continue;
+            }
+            new_text.push_str(line);
+        } else if t.is_empty() {
+            new_text.push_str(line);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(new_text, "{num}. ");
+            new_text.push_str(t);
+            num += 1;
+        }
+    }
+    if new_text != *text {
+        *text = new_text;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn char_to_superscript(c: char) -> char {
+    match c {
+        '0' => '⁰',
+        '1' => '¹',
+        '2' => '²',
+        '3' => '³',
+        '4' => '⁴',
+        '5' => '⁵',
+        '6' => '⁶',
+        '7' => '⁷',
+        '8' => '⁸',
+        '9' => '⁹',
+        '+' => '⁺',
+        '-' | '−' => '⁻',
+        '=' => '⁼',
+        '(' => '⁽',
+        ')' => '⁾',
+        'a' => 'ᵃ',
+        'b' => 'ᵇ',
+        'c' => 'ᶜ',
+        'd' => 'ᵈ',
+        'e' => 'ᵉ',
+        'f' => 'ᶠ',
+        'g' => 'ᵍ',
+        'h' => 'ʰ',
+        'i' => 'ⁱ',
+        'j' => 'ʲ',
+        'k' => 'ᵏ',
+        'l' => 'ˡ',
+        'm' => 'ᵐ',
+        'n' => 'ⁿ',
+        'o' => 'ᵒ',
+        'p' => 'ᵖ',
+        'r' => 'ʳ',
+        's' => 'ˢ',
+        't' => 'ᵗ',
+        'u' => 'ᵘ',
+        'v' => 'ᵛ',
+        'w' => 'ʷ',
+        'x' => 'ˣ',
+        'y' => 'ʸ',
+        'z' => 'ᶻ',
+        'A' => 'ᴬ',
+        'B' => 'ᴮ',
+        'D' => 'ᴰ',
+        'E' => 'ᴱ',
+        'G' => 'ᴳ',
+        'H' => 'ᴴ',
+        'I' => 'ᴵ',
+        'J' => 'ᴶ',
+        'K' => 'ᴷ',
+        'L' => 'ᴸ',
+        'M' => 'ᴹ',
+        'N' => 'ᴺ',
+        'O' => 'ᴼ',
+        'P' => 'ᴾ',
+        'R' => 'ᴿ',
+        'T' => 'ᵀ',
+        'U' => 'ᵁ',
+        'V' => 'ⱽ',
+        'W' => 'ᵂ',
+        other => other,
+    }
+}
+
+pub fn char_from_superscript(c: char) -> char {
+    match c {
+        '⁰' => '0',
+        '¹' => '1',
+        '²' => '2',
+        '³' => '3',
+        '⁴' => '4',
+        '⁵' => '5',
+        '⁶' => '6',
+        '⁷' => '7',
+        '⁸' => '8',
+        '⁹' => '9',
+        '⁺' => '+',
+        '⁻' => '-',
+        '⁼' => '=',
+        '⁽' => '(',
+        '⁾' => ')',
+        'ᵃ' => 'a',
+        'ᵇ' => 'b',
+        'ᶜ' => 'c',
+        'ᵈ' => 'd',
+        'ᵉ' => 'e',
+        'ᶠ' => 'f',
+        'ᵍ' => 'g',
+        'ʰ' => 'h',
+        'ⁱ' => 'i',
+        'ʲ' => 'j',
+        'ᵏ' => 'k',
+        'ˡ' => 'l',
+        'ᵐ' => 'm',
+        'ⁿ' => 'n',
+        'ᵒ' => 'o',
+        'ᵖ' => 'p',
+        'ʳ' => 'r',
+        'ˢ' => 's',
+        'ᵗ' => 't',
+        'ᵘ' => 'u',
+        'ᵛ' => 'v',
+        'ʷ' => 'w',
+        'ˣ' => 'x',
+        'ʸ' => 'y',
+        'ᶻ' => 'z',
+        'ᴬ' => 'A',
+        'ᴮ' => 'B',
+        'ᴰ' => 'D',
+        'ᴱ' => 'E',
+        'ᴳ' => 'G',
+        'ᴴ' => 'H',
+        'ᴵ' => 'I',
+        'ᴶ' => 'J',
+        'ᴷ' => 'K',
+        'ᴸ' => 'L',
+        'ᴹ' => 'M',
+        'ᴺ' => 'N',
+        'ᴼ' => 'O',
+        'ᴾ' => 'P',
+        'ᴿ' => 'R',
+        'ᵀ' => 'T',
+        'ᵁ' => 'U',
+        'ⱽ' => 'V',
+        'ᵂ' => 'W',
+        other => other,
+    }
+}
+
+pub fn char_to_subscript(c: char) -> char {
+    match c {
+        '0' => '₀',
+        '1' => '₁',
+        '2' => '₂',
+        '3' => '₃',
+        '4' => '₄',
+        '5' => '₅',
+        '6' => '₆',
+        '7' => '₇',
+        '8' => '₈',
+        '9' => '₉',
+        '+' => '₊',
+        '-' | '−' => '₋',
+        '=' => '₌',
+        '(' => '₍',
+        ')' => '₎',
+        'a' => 'ₐ',
+        'e' => 'ₑ',
+        'h' => 'ₕ',
+        'i' => 'ᵢ',
+        'j' => 'ⱼ',
+        'k' => 'ₖ',
+        'l' => 'ₗ',
+        'm' => 'ₘ',
+        'n' => 'ₙ',
+        'o' => 'ₒ',
+        'p' => 'ₚ',
+        'r' => 'ᵣ',
+        's' => 'ₛ',
+        't' => 'ₜ',
+        'u' => 'ᵤ',
+        'v' => 'ᵥ',
+        'x' => 'ₓ',
+        other => other,
+    }
+}
+
+pub fn char_from_subscript(c: char) -> char {
+    match c {
+        '₀' => '0',
+        '₁' => '1',
+        '₂' => '2',
+        '₃' => '3',
+        '₄' => '4',
+        '₅' => '5',
+        '₆' => '6',
+        '₇' => '7',
+        '₈' => '8',
+        '₉' => '9',
+        '₊' => '+',
+        '₋' => '-',
+        '₌' => '=',
+        '₍' => '(',
+        '₎' => ')',
+        'ₐ' => 'a',
+        'ₑ' => 'e',
+        'ₕ' => 'h',
+        'ᵢ' => 'i',
+        'ⱼ' => 'j',
+        'ₖ' => 'k',
+        'ₗ' => 'l',
+        'ₘ' => 'm',
+        'ₙ' => 'n',
+        'ₒ' => 'o',
+        'ₚ' => 'p',
+        'ᵣ' => 'r',
+        'ₛ' => 's',
+        'ₜ' => 't',
+        'ᵤ' => 'u',
+        'ᵥ' => 'v',
+        'ₓ' => 'x',
+        other => other,
+    }
+}
+
+fn snap_char_boundaries(s: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut s_idx = start.min(s.len());
+    while s_idx > 0 && !s.is_char_boundary(s_idx) {
+        s_idx -= 1;
+    }
+    let mut e_idx = end.min(s.len());
+    while e_idx < s.len() && !s.is_char_boundary(e_idx) {
+        e_idx += 1;
+    }
+    (s_idx, e_idx)
+}
+
+pub fn toggle_superscript(ed: &mut LineEditor) -> bool {
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection { (r.start.min(ed.text.len()), r.end.min(ed.text.len())) } else { (0, ed.text.len()) };
+    let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
+    if start >= end {
+        return false;
+    }
+    let target = &ed.text[start..end];
+    let all_sup = target.chars().all(|c| char_from_superscript(c) != c);
+    let converted: String =
+        if all_sup { target.chars().map(char_from_superscript).collect() } else { target.chars().map(char_to_superscript).collect() };
+    if converted != target {
+        let conv_len = converted.len();
+        ed.text.replace_range(start..end, &converted);
+        if ed.selection.is_some() {
+            ed.selection = Some(start..start + conv_len);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+pub fn toggle_subscript(ed: &mut LineEditor) -> bool {
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection { (r.start.min(ed.text.len()), r.end.min(ed.text.len())) } else { (0, ed.text.len()) };
+    let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
+    if start >= end {
+        return false;
+    }
+    let target = &ed.text[start..end];
+    let all_sub = target.chars().all(|c| char_from_subscript(c) != c);
+    let converted: String = if all_sub { target.chars().map(char_from_subscript).collect() } else { target.chars().map(char_to_subscript).collect() };
+    if converted != target {
+        let conv_len = converted.len();
+        ed.text.replace_range(start..end, &converted);
+        if ed.selection.is_some() {
+            ed.selection = Some(start..start + conv_len);
+        }
+        true
+    } else {
+        false
+    }
+}
 
 /// A paragraph being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -349,25 +709,55 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
     if contrast(text, Color32::WHITE) >= contrast(text, DARK_EDITOR_FILL) { Color32::WHITE } else { DARK_EDITOR_FILL }
 }
 
+/// The 8 resize handles on an image (4 corners + 4 edge centers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageHandle {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    RightCenter,
+    BottomRight,
+    BottomCenter,
+    BottomLeft,
+    LeftCenter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragTarget {
+    Move,
+    Handle(ImageHandle),
+    CropHandle(ImageHandle),
+    Rotate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageDrag {
+    pub start: Pos2,
+    pub target: DragTarget,
+    pub initial_rect: Rect,
+    pub initial_matrix: [f64; 6],
+}
+
 /// A selected page image, and what the pointer is doing to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageSelection {
     pub page: usize,
     pub index: usize,
-    /// Dragging: the start point and, for a corner, the opposite corner (screen).
-    drag: Option<(Pos2, Option<Pos2>)>,
+    /// Dragging in progress.
+    pub drag: Option<ImageDrag>,
     /// Crop mode (Acrobat's crop handles): the box kept so far.
     pub crop: Option<CropMode>,
+    pub crop_mode: bool,
+    pub crop_rect: Option<Rect>,
 }
 
 /// Cropping a page image: the handles trim instead of resizing, the part that will go is
 /// dimmed, Enter or Done applies and Esc or Cancel leaves it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CropMode {
-    /// The box to keep (user space).
+    /// The box to keep (user space or normalized UV).
     pub keep: [f64; 4],
-    /// A drag in progress: the grip (0–3 corners, 4–7 edges, 8 the inside), where it started
-    /// and the box then.
+    /// A drag in progress: the grip (0–7 handles, 8 inside), where it started and the box then.
     drag: Option<(usize, Pos2, [f64; 4])>,
 }
 
@@ -377,8 +767,71 @@ impl CropMode {
     }
 }
 
-/// The screen boxes of the crop's eight handles: corners, then the top, right, bottom and left
-/// edge midpoints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Matrix(pub(crate) [f64; 6]);
+
+impl Matrix {
+    #[allow(dead_code)]
+    pub(crate) const IDENTITY: Self = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    pub(crate) fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        let [a, b, c, d, e, f] = self.0;
+        (a * x + c * y + e, b * x + d * y + f)
+    }
+
+    pub(crate) fn invert(&self) -> Option<Self> {
+        let [a, b, c, d, e, f] = self.0;
+        let det = a * d - b * c;
+        if det.abs() < 1e-12 || !det.is_finite() {
+            return None;
+        }
+        let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
+        Some(Matrix([ia, ib, ic, id, -(e * ia + f * ic), -(e * ib + f * id)]))
+    }
+
+    pub(crate) fn then(&self, then: &Matrix) -> Matrix {
+        let [a, b, c, d, e, f] = self.0;
+        let [a2, b2, c2, d2, e2, f2] = then.0;
+        Matrix([a * a2 + b * c2, a * b2 + b * d2, c * a2 + d * c2, c * b2 + d * d2, e * a2 + f * c2 + e2, e * b2 + f * d2 + f2])
+    }
+}
+
+pub(crate) fn user_to_screen(xf: &PageXform, info: &DocInfo, page: usize, x: f64, y: f64) -> Pos2 {
+    let Some(p) = info.pages.get(page) else { return Pos2::ZERO };
+    let v = p.user_to_view(x as f32, y as f32);
+    xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph)
+}
+
+fn screen_to_user(xf: &PageXform, info: &DocInfo, page: usize, pt: Pos2) -> (f64, f64) {
+    let (vx, vy) = xf.screen_to_view(pt);
+    let Some(p) = info.pages.get(page) else { return (0.0, 0.0) };
+    let u = p.view_to_user(vx, vy);
+    (f64::from(u[0]), f64::from(u[1]))
+}
+
+pub(crate) fn quad_contains(quad: [Pos2; 4], p: Pos2) -> bool {
+    let mut sign = 0;
+    for i in 0..4 {
+        let p1 = quad[i];
+        let p2 = quad[(i + 1) % 4];
+        let cross = (p2.x - p1.x) * (p.y - p1.y) - (p2.y - p1.y) * (p.x - p1.x);
+        if cross.abs() > 1e-4 {
+            let s = if cross > 0.0 { 1 } else { -1 };
+            if sign == 0 {
+                sign = s;
+            } else if sign != s {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+pub use crate::canvas::{ImageObb, PainterExt, project_delta};
+
+/// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
+/// (the pointer and keys are the crop's while it lasts).
+/// The screen positions of the crop's eight handles: corners, then the top, right, bottom and left edge midpoints.
 fn crop_handles(k: Rect) -> [Pos2; 8] {
     [k.left_top(), k.right_top(), k.left_bottom(), k.right_bottom(), k.center_top(), k.right_center(), k.center_bottom(), k.left_center()]
 }
@@ -394,135 +847,253 @@ fn crop_input(
     info: &DocInfo,
     view: &mut DocView,
     i: usize,
-    b: Rect,
+    image: &pdfcraft_engine::PageImage,
     allow_interaction: bool,
 ) -> bool {
     let painter = ui.painter();
-    let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
+    let Some(sel) = view.image_selection.as_mut() else { return false };
+    if let Some(rect) = sel.crop_rect
+        && let Some(mode) = sel.crop.as_mut()
+    {
+        mode.keep = user_box(xf, info, page, rect);
+        sel.crop_rect = None;
+    }
+    let Some(mode) = sel.crop.as_mut() else { return false };
     let hover_pos = ui.input(|inp| inp.pointer.hover_pos());
+    let full_b = xf.user_rect(info, page, image.rect.map(|v| v as f32));
+    let b = if full_b.is_positive() { full_b } else { xf.user_rect(info, page, image.visible_rect.unwrap_or(image.rect).map(|v| v as f32)) };
     let keep_screen = |keep: [f64; 4]| xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
-    // A drag in progress moves a grip; the box stays inside the picture and at least 6 px.
+    let k = keep_screen(mode.keep);
+
     if allow_interaction
         && resp.drag_started()
         && let Some(o) = ui.input(|inp| inp.pointer.press_origin())
     {
-        let k = keep_screen(mode.keep);
-        let grip = crop_handles(k).iter().position(|h| h.distance(o) < 8.0).or_else(|| k.contains(o).then_some(8));
+        let grip = crop_handles(k).iter().position(|h| h.distance(o) < 10.0).or_else(|| k.contains(o).then_some(8));
         if let Some(g) = grip {
             mode.drag = Some((g, o, mode.keep));
         }
     }
+
     if let Some((grip, start, at_start)) = mode.drag
         && let Some(p) = hover_pos
     {
         let d = p - start;
         let k0 = keep_screen(at_start);
-        let (mut min, mut max) = (k0.min, k0.max);
-        match grip {
-            0 => {
-                min.x += d.x;
-                min.y += d.y;
-            }
-            1 => {
-                max.x += d.x;
-                min.y += d.y;
-            }
-            2 => {
-                min.x += d.x;
-                max.y += d.y;
-            }
-            3 => {
-                max.x += d.x;
-                max.y += d.y;
-            }
-            4 => min.y += d.y,
-            5 => max.x += d.x,
-            6 => max.y += d.y,
-            7 => min.x += d.x,
-            _ => {
-                let shift = egui::vec2(d.x.clamp(b.min.x - k0.min.x, b.max.x - k0.max.x), d.y.clamp(b.min.y - k0.min.y, b.max.y - k0.max.y));
-                min += shift;
-                max += shift;
-            }
+        if grip < 8 {
+            let handle_id = match grip {
+                0 => HandleId::TopLeft,
+                1 => HandleId::TopRight,
+                2 => HandleId::BottomLeft,
+                3 => HandleId::BottomRight,
+                4 => HandleId::TopMid,
+                5 => HandleId::RightMid,
+                6 => HandleId::BottomMid,
+                _ => HandleId::LeftMid,
+            };
+            let uv0 = if b.width() > 0.0 && b.height() > 0.0 {
+                Rect::from_min_max(
+                    pos2(((k0.min.x - b.min.x) / b.width()).clamp(0.0, 1.0), ((k0.min.y - b.min.y) / b.height()).clamp(0.0, 1.0)),
+                    pos2(((k0.max.x - b.min.x) / b.width()).clamp(0.0, 1.0), ((k0.max.y - b.min.y) / b.height()).clamp(0.0, 1.0)),
+                )
+            } else {
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
+            };
+            let (new_screen, _) = apply_crop(k0, uv0, handle_id, d);
+            let (min_w, min_h) = (6.0_f32.min(b.width()), 6.0_f32.min(b.height()));
+            let clamped = Rect::from_min_max(
+                pos2(new_screen.min.x.clamp(b.min.x, b.max.x - min_w), new_screen.min.y.clamp(b.min.y, b.max.y - min_h)),
+                pos2(new_screen.max.x.clamp(b.min.x + min_w, b.max.x), new_screen.max.y.clamp(b.min.y + min_h, b.max.y)),
+            );
+            mode.keep = user_box(xf, info, page, clamped);
+        } else {
+            let shift = egui::vec2(d.x.clamp(b.min.x - k0.min.x, b.max.x - k0.max.x), d.y.clamp(b.min.y - k0.min.y, b.max.y - k0.max.y));
+            mode.keep = user_box(xf, info, page, Rect::from_min_max(k0.min + shift, k0.max + shift));
         }
-        let (min_w, min_h) = (6.0_f32.min(b.width()), 6.0_f32.min(b.height()));
-        min.x = min.x.clamp(b.min.x, b.max.x - min_w);
-        min.y = min.y.clamp(b.min.y, b.max.y - min_h);
-        max.x = max.x.clamp(min.x + min_w, b.max.x);
-        max.y = max.y.clamp(min.y + min_h, b.max.y);
-        mode.keep = user_box(xf, info, page, Rect::from_min_max(min, max));
+
         if resp.drag_stopped() || !ui.input(|inp| inp.pointer.primary_down()) {
             mode.drag = None;
         }
     }
-    let k = keep_screen(mode.keep);
-    // What goes is dimmed; what stays keeps its frame and handles.
+
+    // Faint ghost outline of the full uncropped image underneath
+    painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgba_unmultiplied(200, 200, 200, 80)), egui::StrokeKind::Outside);
+
+    // Dim outer excluded bands
     let dim = Color32::from_black_alpha(96);
-    for r in [
-        Rect::from_min_max(b.min, Pos2::new(b.max.x, k.min.y)),
-        Rect::from_min_max(Pos2::new(b.min.x, k.max.y), b.max),
-        Rect::from_min_max(Pos2::new(b.min.x, k.min.y), Pos2::new(k.min.x, k.max.y)),
-        Rect::from_min_max(Pos2::new(k.max.x, k.min.y), Pos2::new(b.max.x, k.max.y)),
-    ] {
-        if r.is_positive() {
-            painter.rect_filled(r.intersect(xf.rect), CornerRadius::ZERO, dim);
-        }
+    if k.min.y > b.min.y {
+        painter.rect_filled(Rect::from_min_max(b.min, Pos2::new(b.max.x, k.min.y)), CornerRadius::ZERO, dim);
     }
-    painter.rect_stroke(k, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-    for h in crop_handles(k) {
-        painter.rect(
-            Rect::from_center_size(h, egui::vec2(8.0, 8.0)),
-            CornerRadius::ZERO,
-            Color32::WHITE,
-            Stroke::new(1.0, ACCENT),
-            egui::StrokeKind::Middle,
-        );
+    if k.max.y < b.max.y {
+        painter.rect_filled(Rect::from_min_max(Pos2::new(b.min.x, k.max.y), b.max), CornerRadius::ZERO, dim);
     }
-    // Done and Cancel, painted under the box (above it near the bottom of the view).
+    if k.min.x > b.min.x {
+        painter.rect_filled(Rect::from_min_max(Pos2::new(b.min.x, k.min.y), Pos2::new(k.min.x, k.max.y)), CornerRadius::ZERO, dim);
+    }
+    if k.max.x < b.max.x {
+        painter.rect_filled(Rect::from_min_max(Pos2::new(k.max.x, k.min.y), Pos2::new(b.max.x, k.max.y)), CornerRadius::ZERO, dim);
+    }
+
+    // Rule-of-Thirds Grid inside crop area
+    draw_rule_of_thirds(painter, k, Stroke::new(1.0, CROP_ACCENT.gamma_multiply(0.45)));
+
+    // Crop border stroke
+    painter.rect_stroke(k, CornerRadius::ZERO, Stroke::new(1.5, CROP_ACCENT), egui::StrokeKind::Outside);
+
+    // Crop handles
+    for (idx, h) in crop_handles(k).iter().enumerate() {
+        let is_active = mode.drag.as_ref().is_some_and(|d| d.0 == idx);
+        let is_hovered = hover_pos.is_some_and(|p| p.distance(*h) < 10.0);
+        draw_handle(painter, *h, true, is_hovered, is_active, CROP_ACCENT);
+    }
+
+    // Action pills
     let font = egui::FontId::proportional(12.5);
-    let pill = |label: &str, right: f32, y: f32| -> Rect {
-        let w = painter.layout_no_wrap(label.to_string(), font.clone(), Color32::WHITE).size().x + 20.0;
-        Rect::from_min_size(Pos2::new(right - w, y), egui::vec2(w, 22.0))
+    let done_w = painter.layout_no_wrap(tl!("Done").to_string(), font.clone(), Color32::WHITE).size().x + 22.0;
+    let cancel_w = painter.layout_no_wrap(tl!("Cancel").to_string(), font.clone(), Color32::WHITE).size().x + 22.0;
+    let is_full_rect = (mode.keep[0] - image.rect[0]).abs() < 1e-3
+        && (mode.keep[1] - image.rect[1]).abs() < 1e-3
+        && (mode.keep[2] - image.rect[2]).abs() < 1e-3
+        && (mode.keep[3] - image.rect[3]).abs() < 1e-3;
+    let has_crop = !is_full_rect || image.visible_rect.is_some_and(|v| v != image.rect);
+    let reset_w =
+        if has_crop { Some(painter.layout_no_wrap(tl!("Remove Crop").to_string(), font.clone(), Color32::WHITE).size().x + 22.0) } else { None };
+    let spacing = 6.0;
+    let total_w = done_w + spacing + cancel_w + reset_w.map_or(0.0, |w| w + spacing);
+
+    // Position pills below crop box if there's room, otherwise above
+    let y = if k.max.y + 32.0 < xf.rect.max.y {
+        k.max.y + 6.0
+    } else if k.min.y - 28.0 > xf.rect.min.y {
+        k.min.y - 28.0
+    } else {
+        k.max.y + 6.0
     };
-    let y = if k.max.y + 30.0 < xf.rect.max.y { k.max.y + 6.0 } else { k.min.y - 28.0 };
-    let done = pill(tl!("Done"), k.max.x, y);
-    let cancel = pill(tl!("Cancel"), done.min.x - 6.0, y);
+
+    // Right-align pills with k.max.x, clamped inside the page bounds
+    let mut right = k.max.x.min(xf.rect.max.x - 8.0);
+    if right - total_w < xf.rect.min.x + 8.0 {
+        right = (xf.rect.min.x + 8.0 + total_w).min(xf.rect.max.x - 8.0);
+    }
+
+    let done = Rect::from_min_size(Pos2::new(right - done_w, y), egui::vec2(done_w, 22.0));
+    let cancel = Rect::from_min_size(Pos2::new(done.min.x - spacing - cancel_w, y), egui::vec2(cancel_w, 22.0));
+    let reset = reset_w.map(|w| Rect::from_min_size(Pos2::new(cancel.min.x - spacing - w, y), egui::vec2(w, 22.0)));
+
+    let done_id = ui.id().with("crop_pill_done").with(page).with(i);
+    let cancel_id = ui.id().with("crop_pill_cancel").with(page).with(i);
+    let reset_id = ui.id().with("crop_pill_reset").with(page).with(i);
+
+    let done_resp = ui.interact(done, done_id, egui::Sense::click());
+    let cancel_resp = ui.interact(cancel, cancel_id, egui::Sense::click());
+    let reset_resp = reset.map(|r| ui.interact(r, reset_id, egui::Sense::click()));
+
     let t = crate::theme::Tokens::get(ui.ctx());
-    painter.rect_filled(done, CornerRadius::same(11), ACCENT);
+
+    // Done button (accent colored)
+    let done_bg = if done_resp.is_pointer_button_down_on() {
+        ACCENT.gamma_multiply(0.8)
+    } else if done_resp.hovered() {
+        Color32::from_rgb(40, 145, 255)
+    } else {
+        ACCENT
+    };
+    painter.rect_filled(done, CornerRadius::same(11), done_bg);
     painter.text(done.center(), egui::Align2::CENTER_CENTER, tl!("Done"), font.clone(), Color32::WHITE);
-    painter.rect(cancel, CornerRadius::same(11), t.panel, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    painter.text(cancel.center(), egui::Align2::CENTER_CENTER, tl!("Cancel"), font, t.text);
+
+    // Cancel button (panel style with border)
+    let cancel_bg = if cancel_resp.is_pointer_button_down_on() {
+        t.pressed
+    } else if cancel_resp.hovered() {
+        t.hover
+    } else {
+        t.card
+    };
+    let cancel_stroke = Stroke::new(1.0, if cancel_resp.hovered() { ACCENT } else { t.border });
+    let cancel_text = if cancel_resp.hovered() { ACCENT } else { t.text };
+    painter.rect(cancel, CornerRadius::same(11), cancel_bg, cancel_stroke, egui::StrokeKind::Inside);
+    painter.text(cancel.center(), egui::Align2::CENTER_CENTER, tl!("Cancel"), font.clone(), cancel_text);
+
+    // Reset button (panel style with border)
+    if let (Some(r), Some(r_resp)) = (reset, reset_resp.as_ref()) {
+        let reset_bg = if r_resp.is_pointer_button_down_on() {
+            t.pressed
+        } else if r_resp.hovered() {
+            t.hover
+        } else {
+            t.card
+        };
+        let reset_stroke = Stroke::new(1.0, if r_resp.hovered() { ACCENT } else { t.border });
+        let reset_text = if r_resp.hovered() { ACCENT } else { t.text };
+        painter.rect(r, CornerRadius::same(11), reset_bg, reset_stroke, egui::StrokeKind::Inside);
+        painter.text(r.center(), egui::Align2::CENTER_CENTER, tl!("Remove Crop"), font.clone(), reset_text);
+    }
+
     if let Some(p) = hover_pos {
-        let icon = if let Some(g) = crop_handles(k).iter().position(|h| h.distance(p) < 8.0) {
-            match g {
-                0 | 3 => egui::CursorIcon::ResizeNwSe,
-                1 | 2 => egui::CursorIcon::ResizeNeSw,
-                4 | 6 => egui::CursorIcon::ResizeVertical,
-                _ => egui::CursorIcon::ResizeHorizontal,
-            }
-        } else if done.contains(p) || cancel.contains(p) {
+        let icon = if done_resp.hovered()
+            || cancel_resp.hovered()
+            || reset_resp.as_ref().is_some_and(|r| r.hovered())
+            || done.contains(p)
+            || cancel.contains(p)
+            || reset.is_some_and(|r| r.contains(p))
+        {
             egui::CursorIcon::PointingHand
+        } else if let Some(g) = crop_handles(k).iter().position(|h| h.distance(p) < 8.0) {
+            match g {
+                0 => HandleId::TopLeft.cursor_icon(),
+                1 => HandleId::TopRight.cursor_icon(),
+                2 => HandleId::BottomLeft.cursor_icon(),
+                3 => HandleId::BottomRight.cursor_icon(),
+                4 => HandleId::TopMid.cursor_icon(),
+                5 => HandleId::RightMid.cursor_icon(),
+                6 => HandleId::BottomMid.cursor_icon(),
+                _ => HandleId::LeftMid.cursor_icon(),
+            }
         } else if k.contains(p) {
-            egui::CursorIcon::Move
+            if mode.drag.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }
         } else {
             egui::CursorIcon::Default
         };
         ui.ctx().set_cursor_icon(icon);
     }
-    let clicked = |r: Rect| allow_interaction && resp.clicked() && hover_pos.is_some_and(|p| r.contains(p));
+
     let keys = |key: egui::Key| allow_interaction && ui.input(|inp| inp.key_pressed(key)) && !ui.ctx().egui_wants_keyboard_input();
-    if clicked(done) || keys(egui::Key::Enter) {
+    let done_clicked = allow_interaction && (done_resp.clicked() || (resp.clicked() && hover_pos.is_some_and(|p| done.contains(p))));
+    let cancel_clicked = allow_interaction && (cancel_resp.clicked() || (resp.clicked() && hover_pos.is_some_and(|p| cancel.contains(p))));
+    let reset_clicked = allow_interaction
+        && reset
+            .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
+
+    if reset_clicked {
+        mode.keep = image.rect;
+        mode.drag = None;
+        if let Some(s) = view.image_selection.as_mut() {
+            s.crop_rect = None;
+        }
+    } else if done_clicked || keys(egui::Key::Enter) {
         let keep = mode.keep;
         if let Some(s) = view.image_selection.as_mut() {
             s.crop = None;
+            s.crop_mode = false;
+            s.crop_rect = None;
         }
-        if keep_screen(keep) != b {
+        let is_full = (keep[0] - image.rect[0]).abs() < 1e-3
+            && (keep[1] - image.rect[1]).abs() < 1e-3
+            && (keep[2] - image.rect[2]).abs() < 1e-3
+            && (keep[3] - image.rect[3]).abs() < 1e-3;
+        if is_full {
+            if image.visible_rect.is_some_and(|v| v != image.rect) {
+                view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::RemoveCrop });
+            }
+        } else if image.visible_rect != Some(keep) {
             view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Crop(keep) });
         }
-    } else if (clicked(cancel) || keys(egui::Key::Escape))
+    } else if (cancel_clicked || keys(egui::Key::Escape))
         && let Some(s) = view.image_selection.as_mut()
     {
         s.crop = None;
+        s.crop_mode = false;
+        s.crop_rect = None;
     }
     true
 }
@@ -537,14 +1108,15 @@ impl ImageSelection {
 /// applies after the pointer leaves the image/page while dragging.
 pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) -> bool {
     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
-    if selection.drag.is_some() {
+    if selection.drag.is_some() || selection.crop.is_some() || selection.crop_mode {
         return true;
     }
     let Some(image) = view.edit_images.get(&page).and_then(|(_, images)| images.get(selection.index)) else { return false };
-    let Some(rect) = image.visible_rect else { return false };
-    let b = xf.user_rect(info, page, rect.map(|v| v as f32));
+    let obb = ImageObb::from_image(image, xf, info, page);
     let p = ui.input(|i| if i.pointer.primary_down() { i.pointer.press_origin() } else { i.pointer.hover_pos() });
-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().any(|c| c.distance(p) < 8.0))
+    let Some(p) = p else { return false };
+
+    obb.handles().iter().any(|(_, h)| h.distance(p) < 8.0) || obb.s_rot.distance(p) < 8.0
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -618,6 +1190,10 @@ pub(crate) enum ImageAction {
     Link(usize, usize),
     /// Open Recognize Text for the picture's page.
     Recognize(usize),
+    Paste(usize, [f64; 4]),
+    DrawFreehand,
+    AddComment(usize, usize),
+    Crop,
 }
 
 fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
@@ -637,10 +1213,10 @@ pub(crate) fn image_input(
     info: &DocInfo,
     images: &[pdfcraft_engine::PageImage],
     view: &mut DocView,
-    action: &mut Option<ImageAction>,
+    _action: &mut Option<ImageAction>,
     allow_interaction: bool,
 ) -> bool {
-    let boxes: Vec<Rect> = images.iter().map(|im| im.visible_rect.map_or(Rect::NOTHING, |r| xf.user_rect(info, page, r.map(|v| v as f32)))).collect();
+    let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ui.input(|i| i.pointer.hover_pos());
     let image_contains = |index: usize, point: Pos2| {
@@ -656,25 +1232,53 @@ pub(crate) fn image_input(
     // Fully clipped placements (empty visible frames) get no outline.
     let faint_all = boxes.len() <= MAX_OUTLINES;
     if faint_all {
-        for b in boxes.iter().filter(|b| b.is_positive()) {
-            painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+        for (idx, im) in images.iter().enumerate() {
+            if let Some(b) = boxes.get(idx).filter(|b| b.is_positive()) {
+                let obb = ImageObb::from_image(im, xf, info, page);
+                if obb.is_rotated {
+                    let pts = obb.corners();
+                    for k in 0..4 {
+                        painter.line_segment([pts[k], pts[(k + 1) % 4]], Stroke::new(0.75, ACCENT.gamma_multiply(0.35)));
+                    }
+                } else {
+                    painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+                }
+            }
         }
     }
-    let hovered_box = hover_pos.and_then(|p| boxes.iter().enumerate().rposition(|(i, b)| b.is_positive() && b.contains(p) && image_contains(i, p)));
+    let hovered_box = hover_pos.and_then(|p| {
+        boxes.iter().enumerate().rposition(|(i, b)| {
+            b.is_positive() && (b.contains(p) || quad_contains(ImageObb::from_image(&images[i], xf, info, page).corners(), p)) && image_contains(i, p)
+        })
+    });
     if !faint_all {
         for i in selected.into_iter().chain(hovered_box.filter(|h| Some(*h) != selected)) {
             if let Some(b) = boxes.get(i).filter(|b| b.is_positive()) {
-                painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+                let obb = ImageObb::from_image(&images[i], xf, info, page);
+                if obb.is_rotated {
+                    let pts = obb.corners();
+                    for k in 0..4 {
+                        painter.line_segment([pts[k], pts[(k + 1) % 4]], Stroke::new(0.75, ACCENT.gamma_multiply(0.35)));
+                    }
+                } else {
+                    painter.rect_stroke(*b, CornerRadius::ZERO, Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
+                }
             }
         }
     }
     for i in selected.into_iter().chain(hovered_box).collect::<Vec<_>>() {
         let Some(b) = boxes.get(i).copied().filter(|b| b.is_positive()) else { continue };
+        let obb = ImageObb::from_image(&images[i], xf, info, page);
         if selected == Some(i) {
-            // The selected frame and handles are drawn below (or the drag preview instead).
             if !dragging {
-                painter.rect_filled(b, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+                if obb.is_rotated {
+                    painter.polygon(obb.corners().to_vec(), ACCENT.gamma_multiply(0.04), Stroke::NONE);
+                } else {
+                    painter.rect_filled(b, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+                }
             }
+        } else if obb.is_rotated {
+            painter.polygon(obb.corners().to_vec(), Color32::TRANSPARENT, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)));
         } else {
             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
@@ -682,112 +1286,381 @@ pub(crate) fn image_input(
     // The selected image: frame, corner handles, dragging.
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
         let b = boxes[i];
-        if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()) {
-            return crop_input(ui, resp, xf, page, info, view, i, b, allow_interaction);
-        }
-        let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
-        let handles = |rect: Rect| {
-            for c in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()] {
-                painter.rect(
-                    Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
-                    CornerRadius::ZERO,
-                    Color32::WHITE,
-                    Stroke::new(1.0, ACCENT),
-                    egui::StrokeKind::Middle,
-                );
+        let image = &images[i];
+        let obb = ImageObb::from_image(image, xf, info, page);
+
+        if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some() || s.crop_mode) {
+            if let Some(s) = view.image_selection.as_mut()
+                && s.crop.is_none()
+            {
+                let rect = images.get(i).and_then(|im| im.visible_rect).unwrap_or(images.get(i).map_or([0.0; 4], |im| im.rect));
+                s.crop = Some(CropMode::new(rect));
             }
-        };
+            return crop_input(ui, resp, xf, page, info, view, i, image, allow_interaction);
+        }
+
         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
-            painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-            handles(b);
+            if obb.is_rotated {
+                painter.polygon(obb.corners().to_vec(), Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
+            } else {
+                painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            }
+            painter.line_segment([obb.s_tc, obb.s_rot], Stroke::new(1.2, ACCENT));
+            painter.circle(obb.s_rot, 4.5, Color32::WHITE, Stroke::new(1.0, ACCENT));
+            for (_, h) in obb.handles() {
+                let is_hovered = hover_pos.is_some_and(|p| p.distance(h) < 10.0);
+                draw_handle(painter, h, false, is_hovered, false, ACCENT);
+            }
         }
-        if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
-            ui.ctx().set_cursor_icon(if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+
+        let mut handle_drag = None;
+        for (h, h_pos, handle_id) in obb.handles_with_ids(ui.id().with("img_handle")) {
+            let handle_rect = Rect::from_center_size(h_pos, egui::vec2(18.0, 18.0));
+            let handle_resp = ui.interact(handle_rect, handle_id, egui::Sense::drag());
+            if allow_interaction && handle_resp.drag_started() {
+                handle_drag = Some(h);
+            }
         }
+        let rot_id = ui.id().with("img_handle").with(8);
+        let rot_rect = Rect::from_center_size(obb.s_rot, egui::vec2(12.0, 12.0));
+        let rot_resp = ui.interact(rot_rect, rot_id, egui::Sense::drag());
+        let rot_drag = allow_interaction && rot_resp.drag_started();
+
+        if allow_interaction && let Some(p) = hover_pos {
+            if obb.s_rot.distance(p) < 8.0 {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            } else if let Some((h, _)) = obb.handles().iter().find(|(_, pos)| pos.distance(p) < 8.0) {
+                let icon = match h {
+                    ImageHandle::TopLeft | ImageHandle::BottomRight => {
+                        if obb.is_rotated {
+                            let v = obb.handle_pos(*h) - obb.screen_center;
+                            if v.x * v.y > 0.0 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw }
+                        } else {
+                            egui::CursorIcon::ResizeNwSe
+                        }
+                    }
+                    ImageHandle::TopRight | ImageHandle::BottomLeft => {
+                        if obb.is_rotated {
+                            let v = obb.handle_pos(*h) - obb.screen_center;
+                            if v.x * v.y > 0.0 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw }
+                        } else {
+                            egui::CursorIcon::ResizeNeSw
+                        }
+                    }
+                    ImageHandle::TopCenter | ImageHandle::BottomCenter => {
+                        if obb.is_rotated && (obb.v_axis.0.abs() > obb.v_axis.1.abs()) {
+                            egui::CursorIcon::ResizeHorizontal
+                        } else {
+                            egui::CursorIcon::ResizeVertical
+                        }
+                    }
+                    ImageHandle::RightCenter | ImageHandle::LeftCenter => {
+                        if obb.is_rotated && (obb.u_axis.1.abs() > obb.u_axis.0.abs()) {
+                            egui::CursorIcon::ResizeVertical
+                        } else {
+                            egui::CursorIcon::ResizeHorizontal
+                        }
+                    }
+                };
+                ui.ctx().set_cursor_icon(icon);
+            }
+        }
+
         let origin = ui.input(|i| i.pointer.press_origin());
-        if allow_interaction
-            && resp.drag_started()
-            && let Some(o) = origin
-        {
-            let corner = corners.iter().position(|c| c.distance(o) < 8.0);
-            if corner.is_some() || image_contains(i, o) {
-                let opposite = corner.map(|k| corners[3 - k]);
+        if allow_interaction {
+            if let Some(h) = handle_drag {
                 if let Some(s) = view.image_selection.as_mut() {
-                    s.drag = Some((o, opposite));
+                    let o = origin.unwrap_or_else(|| obb.handle_pos(h));
+                    s.drag = Some(ImageDrag { start: o, target: DragTarget::Handle(h), initial_rect: b, initial_matrix: image.matrix });
+                }
+            } else if rot_drag {
+                if let Some(s) = view.image_selection.as_mut() {
+                    let o = origin.unwrap_or(obb.s_rot);
+                    s.drag = Some(ImageDrag { start: o, target: DragTarget::Rotate, initial_rect: b, initial_matrix: image.matrix });
+                }
+            } else if resp.drag_started()
+                && let Some(o) = origin
+            {
+                if obb.s_rot.distance(o) < 8.0 {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Rotate, initial_rect: b, initial_matrix: image.matrix });
+                    }
+                } else if let Some((h, _)) = obb.handles().iter().find(|(_, pos)| pos.distance(o) < 8.0) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Handle(*h), initial_rect: b, initial_matrix: image.matrix });
+                    }
+                } else if (image_contains(i, o) || quad_contains(obb.corners(), o))
+                    && let Some(s) = view.image_selection.as_mut()
+                {
+                    s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: b, initial_matrix: image.matrix });
                 }
             }
         }
-        if let Some((start, opposite)) = view.image_selection.as_ref().and_then(|s| s.drag)
+
+        if let Some(drag) = view.image_selection.as_ref().and_then(|s| s.drag)
             && let Some(p) = hover_pos
         {
-            let preview = match opposite {
-                // Resize from the opposite corner, keeping the aspect ratio.
-                Some(fixed) => {
-                    let (w0, h0) = (b.width().max(1.0), b.height().max(1.0));
-                    // Use the axis with the larger relative pointer change. Taking the maximum
-                    // absolute size freezes shrinking when the other axis hasn't moved. Measure
-                    // from the press point so grabbing a handle off-centre cannot cause a jump.
-                    let horizontal = (p.x - start.x) * (start.x - fixed.x).signum() / w0;
-                    let vertical = (p.y - start.y) * (start.y - fixed.y).signum() / h0;
-                    let delta = if horizontal.abs() > vertical.abs() { horizontal } else { vertical };
-                    let k = (1.0 + delta).max(0.05);
-                    let (w, h) = (w0 * k, h0 * k);
-                    let x = if start.x < fixed.x { fixed.x - w } else { fixed.x };
-                    let y = if start.y < fixed.y { fixed.y - h } else { fixed.y };
-                    Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
-                }
-                None => b.translate(p - start),
-            };
-            // Move/resize the full placement by the visible frame's change. The engine
-            // transforms an isolated crop together with its image, preserving its contents.
-            let raw = images.get(i).map_or(b, |im| xf.user_rect(info, page, im.rect.map(|v| v as f32)));
-            // A zero-width or zero-height visible frame (or a degenerate ratio) keeps the
-            // placement's scale instead of producing inf/NaN.
-            let ratio = |new: f32, old: f32| if old.abs() > 1e-3 && (new / old).is_finite() { new / old } else { 1.0 };
-            let factor = egui::vec2(ratio(preview.width(), b.width()), ratio(preview.height(), b.height()));
-            let target = Rect::from_min_max(preview.min + (raw.min - b.min) * factor, preview.min + (raw.max - b.min) * factor);
-            let visible = preview.intersect(xf.rect);
-            if visible.is_positive() {
-                // The pixels follow the frame: the page raster's picture of the image, stretched
-                // into the preview over a blank where it was. Re-rendering every frame of a drag
-                // would lag; the edit renders it properly on release.
-                if preview != b
-                    && let Some(tex) = view.page_raster(page)
-                {
-                    let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
-                    clipped.rect_filled(b, CornerRadius::ZERO, Color32::WHITE);
-                    let mut mesh = egui::Mesh::with_texture(tex);
-                    for (from, to) in [
-                        (b.left_top(), preview.left_top()),
-                        (b.right_top(), preview.right_top()),
-                        (b.right_bottom(), preview.right_bottom()),
-                        (b.left_bottom(), preview.left_bottom()),
-                    ] {
-                        let (u, v) = xf.screen_to_norm(from);
-                        mesh.vertices.push(egui::epaint::Vertex { pos: to, uv: Pos2::new(u, v), color: Color32::WHITE });
+            if !obb.is_rotated && !matches!(drag.target, DragTarget::Rotate) {
+                let preview = match drag.target {
+                    DragTarget::Handle(handle) => {
+                        let handle_id = HandleId::from(handle);
+                        let delta = p - drag.start;
+                        let is_corner = matches!(handle_id, HandleId::TopLeft | HandleId::TopRight | HandleId::BottomLeft | HandleId::BottomRight);
+                        let shift = ui.input(|inp| inp.modifiers.shift);
+                        if is_corner && !shift {
+                            apply_resize_proportional(drag.initial_rect, handle_id, delta)
+                        } else {
+                            apply_resize(drag.initial_rect, handle_id, delta)
+                        }
                     }
-                    mesh.add_triangle(0, 1, 2);
-                    mesh.add_triangle(0, 2, 3);
-                    clipped.add(egui::Shape::mesh(mesh));
+                    DragTarget::Move => drag.initial_rect.translate(p - drag.start),
+                    _ => drag.initial_rect,
+                };
+
+                let raw = images.get(i).map_or(b, |im| xf.user_rect(info, page, im.rect.map(|v| v as f32)));
+                let ratio = |new: f32, old: f32| if old.abs() > 1e-3 && (new / old).is_finite() { new / old } else { 1.0 };
+                let factor = egui::vec2(ratio(preview.width(), b.width()), ratio(preview.height(), b.height()));
+                let f_min = egui::vec2((raw.min.x - b.min.x) * factor.x, (raw.min.y - b.min.y) * factor.y);
+                let f_max = egui::vec2((raw.max.x - b.min.x) * factor.x, (raw.max.y - b.min.y) * factor.y);
+                let target = Rect::from_min_max(preview.min + f_min, preview.min + f_max);
+                let visible = preview.intersect(xf.rect);
+
+                if visible.is_positive() {
+                    if preview != b
+                        && let Some(tex) = view.page_raster(page)
+                    {
+                        let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+                        let mut mesh = egui::Mesh::with_texture(tex);
+                        for (from, to) in [
+                            (b.left_top(), preview.left_top()),
+                            (b.right_top(), preview.right_top()),
+                            (b.right_bottom(), preview.right_bottom()),
+                            (b.left_bottom(), preview.left_bottom()),
+                        ] {
+                            let (u, v) = xf.screen_to_norm(from);
+                            mesh.vertices.push(egui::epaint::Vertex { pos: to, uv: Pos2::new(u, v), color: Color32::WHITE });
+                        }
+                        mesh.add_triangle(0, 1, 2);
+                        mesh.add_triangle(0, 2, 3);
+                        clipped.add(egui::Shape::mesh(mesh));
+                    }
+                    painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+                    painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+                    for h in [
+                        preview.left_top(),
+                        preview.right_top(),
+                        preview.left_bottom(),
+                        preview.right_bottom(),
+                        preview.center_top(),
+                        preview.right_center(),
+                        preview.center_bottom(),
+                        preview.left_center(),
+                    ] {
+                        draw_handle(painter, h, false, false, false, ACCENT);
+                    }
                 }
-                painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
-                painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-                handles(preview);
+
+                if resp.drag_stopped() || !ui.input(|inp| inp.pointer.primary_down()) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = None;
+                    }
+                    if preview != b {
+                        view.pending_edit =
+                            Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(user_box(xf, info, page, target)) });
+                    }
+                }
+
+                let icon = match drag.target {
+                    DragTarget::Handle(handle) => HandleId::from(handle).cursor_icon(),
+                    DragTarget::Move => egui::CursorIcon::Grabbing,
+                    _ => egui::CursorIcon::Move,
+                };
+                ui.ctx().set_cursor_icon(icon);
+                return true;
             }
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+
+            let m_init = Matrix(drag.initial_matrix);
+            let [a0, b0, c0, d0, e0, f0] = drag.initial_matrix;
+            let w0 = (a0 * a0 + b0 * b0).sqrt().max(1e-6);
+            let h0 = (c0 * c0 + d0 * d0).sqrt().max(1e-6);
+            let u_axis = (a0 / w0, b0 / w0);
+            let v_axis = (c0 / h0, d0 / h0);
+            let center_user = (e0 + 0.5 * (a0 + c0), f0 + 0.5 * (b0 + d0));
+
+            let (sx, sy) = screen_to_user(xf, info, page, drag.start);
+            let (px, py) = screen_to_user(xf, info, page, p);
+
+            let (m_new, cursor_icon) = match drag.target {
+                DragTarget::Rotate => {
+                    let v0 = (sx - center_user.0, sy - center_user.1);
+                    let v1 = (px - center_user.0, py - center_user.1);
+                    let theta0 = v0.1.atan2(v0.0);
+                    let theta1 = v1.1.atan2(v1.0);
+                    let mut delta = theta1 - theta0;
+                    if ui.input(|i| i.modifiers.shift) {
+                        let step = std::f64::consts::PI / 12.0;
+                        delta = (delta / step).round() * step;
+                    }
+                    let (cos_d, sin_d) = (delta.cos(), delta.sin());
+                    let t_rot = [
+                        cos_d,
+                        sin_d,
+                        -sin_d,
+                        cos_d,
+                        center_user.0 * (1.0 - cos_d) + center_user.1 * sin_d,
+                        center_user.1 * (1.0 - cos_d) - center_user.0 * sin_d,
+                    ];
+                    (m_init.then(&Matrix(t_rot)), egui::CursorIcon::Grab)
+                }
+                DragTarget::Move => {
+                    let (dx, dy) = (px - sx, py - sy);
+                    (Matrix([a0, b0, c0, d0, e0 + dx, f0 + dy]), egui::CursorIcon::Move)
+                }
+                DragTarget::Handle(handle) => {
+                    let p00 = (e0, f0);
+                    let p10 = (e0 + a0, f0 + b0);
+                    let p11 = (e0 + a0 + c0, f0 + b0 + d0);
+                    let p01 = (e0 + c0, f0 + d0);
+                    let p_curr = (px, py);
+
+                    let (new_w, new_h, p00_new, icon) = match handle {
+                        ImageHandle::TopRight => {
+                            let anchor = p00;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let du = d.0 * u_axis.0 + d.1 * u_axis.1;
+                            let dv = d.0 * v_axis.0 + d.1 * v_axis.1;
+                            let su = du / w0;
+                            let sv = dv / h0;
+                            let s = if (su - 1.0).abs() >= (sv - 1.0).abs() { su } else { sv };
+                            let s = s.max(5.0 / w0).max(5.0 / h0);
+                            (w0 * s, h0 * s, anchor, egui::CursorIcon::ResizeNeSw)
+                        }
+                        ImageHandle::TopLeft => {
+                            let anchor = p10;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let du = d.0 * (-u_axis.0) + d.1 * (-u_axis.1);
+                            let dv = d.0 * v_axis.0 + d.1 * v_axis.1;
+                            let su = du / w0;
+                            let sv = dv / h0;
+                            let s = if (su - 1.0).abs() >= (sv - 1.0).abs() { su } else { sv };
+                            let s = s.max(5.0 / w0).max(5.0 / h0);
+                            let nw = w0 * s;
+                            let nh = h0 * s;
+                            (nw, nh, (anchor.0 - nw * u_axis.0, anchor.1 - nw * u_axis.1), egui::CursorIcon::ResizeNwSe)
+                        }
+                        ImageHandle::BottomLeft => {
+                            let anchor = p11;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let du = d.0 * (-u_axis.0) + d.1 * (-u_axis.1);
+                            let dv = d.0 * (-v_axis.0) + d.1 * (-v_axis.1);
+                            let su = du / w0;
+                            let sv = dv / h0;
+                            let s = if (su - 1.0).abs() >= (sv - 1.0).abs() { su } else { sv };
+                            let s = s.max(5.0 / w0).max(5.0 / h0);
+                            let nw = w0 * s;
+                            let nh = h0 * s;
+                            (
+                                nw,
+                                nh,
+                                (anchor.0 - nw * u_axis.0 - nh * v_axis.0, anchor.1 - nw * u_axis.1 - nh * v_axis.1),
+                                egui::CursorIcon::ResizeNeSw,
+                            )
+                        }
+                        ImageHandle::BottomRight => {
+                            let anchor = p01;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let du = d.0 * u_axis.0 + d.1 * u_axis.1;
+                            let dv = d.0 * (-v_axis.0) + d.1 * (-v_axis.1);
+                            let su = du / w0;
+                            let sv = dv / h0;
+                            let s = if (su - 1.0).abs() >= (sv - 1.0).abs() { su } else { sv };
+                            let s = s.max(5.0 / w0).max(5.0 / h0);
+                            let nw = w0 * s;
+                            let nh = h0 * s;
+                            (nw, nh, (anchor.0 - nh * v_axis.0, anchor.1 - nh * v_axis.1), egui::CursorIcon::ResizeNwSe)
+                        }
+                        ImageHandle::RightCenter => {
+                            let anchor = p00;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let du = (d.0 * u_axis.0 + d.1 * u_axis.1).max(5.0);
+                            (du, h0, anchor, egui::CursorIcon::ResizeHorizontal)
+                        }
+                        ImageHandle::LeftCenter => {
+                            let anchor = p10;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let du = (d.0 * (-u_axis.0) + d.1 * (-u_axis.1)).max(5.0);
+                            (du, h0, (anchor.0 - du * u_axis.0, anchor.1 - du * u_axis.1), egui::CursorIcon::ResizeHorizontal)
+                        }
+                        ImageHandle::TopCenter => {
+                            let anchor = p00;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let dv = (d.0 * v_axis.0 + d.1 * v_axis.1).max(5.0);
+                            (w0, dv, anchor, egui::CursorIcon::ResizeVertical)
+                        }
+                        ImageHandle::BottomCenter => {
+                            let anchor = p01;
+                            let d = (p_curr.0 - anchor.0, p_curr.1 - anchor.1);
+                            let dv = (d.0 * (-v_axis.0) + d.1 * (-v_axis.1)).max(5.0);
+                            (w0, dv, (anchor.0 - dv * v_axis.0, anchor.1 - dv * v_axis.1), egui::CursorIcon::ResizeVertical)
+                        }
+                    };
+                    let mat = Matrix([new_w * u_axis.0, new_w * u_axis.1, new_h * v_axis.0, new_h * v_axis.1, p00_new.0, p00_new.1]);
+                    (mat, icon)
+                }
+                _ => (m_init, egui::CursorIcon::Default),
+            };
+
+            let preview_obb = ImageObb::new(m_new.0, xf, info, page);
+            if let Some(tex) = view.page_raster(page) {
+                let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+                let mut mesh = egui::Mesh::with_texture(tex);
+                let orig_corners = obb.corners();
+                let new_corners = preview_obb.corners();
+                for (from, to) in [
+                    (orig_corners[3], new_corners[3]),
+                    (orig_corners[2], new_corners[2]),
+                    (orig_corners[1], new_corners[1]),
+                    (orig_corners[0], new_corners[0]),
+                ] {
+                    let (u, v) = xf.screen_to_norm(from);
+                    mesh.vertices.push(egui::epaint::Vertex { pos: to, uv: Pos2::new(u, v), color: Color32::WHITE });
+                }
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                clipped.add(egui::Shape::mesh(mesh));
+            }
+
+            if preview_obb.is_rotated {
+                let pts = preview_obb.corners();
+                painter.polygon(pts.to_vec(), ACCENT.gamma_multiply(0.04), Stroke::new(1.5, ACCENT));
+            } else {
+                let p_rect = Rect::from_two_pos(preview_obb.s01, preview_obb.s10);
+                let visible = p_rect.intersect(xf.rect);
+                if visible.is_positive() {
+                    painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+                    painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+                }
+            }
+            for (_, h) in preview_obb.handles() {
+                draw_handle(painter, h, false, false, false, ACCENT);
+            }
+
+            if resp.drag_stopped() || !ui.input(|inp| inp.pointer.primary_down()) {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
                 }
-                if preview != b {
-                    view.pending_edit =
-                        Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(user_box(xf, info, page, target)) });
+                if m_new.0 != drag.initial_matrix {
+                    if matches!(drag.target, DragTarget::Move) {
+                        let (dx, dy) = (px - sx, py - sy);
+                        let new_rect = [image.rect[0] + dx, image.rect[1] + dy, image.rect[2] + dx, image.rect[3] + dy];
+                        view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(new_rect) });
+                    } else if let Some(inv) = Matrix(drag.initial_matrix).invert() {
+                        let t = inv.then(&m_new);
+                        view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Transform(t.0) });
+                    }
                 }
             }
-            ui.ctx().set_cursor_icon(match opposite {
-                Some(fixed) if (start.x - fixed.x) * (start.y - fixed.y) < 0.0 => egui::CursorIcon::ResizeNeSw,
-                Some(_) => egui::CursorIcon::ResizeNwSe,
-                None => egui::CursorIcon::Move,
-            });
+            ui.ctx().set_cursor_icon(cursor_icon);
             return true;
         }
         if allow_interaction
@@ -806,90 +1679,88 @@ pub(crate) fn image_input(
     // (a logo is smaller than its menu), and a menu that is not drawn for a frame cannot be clicked.
     // Only a menu opened by a right-click on the picture: one opened over text or empty page while
     // a picture stays selected is the page's own menu.
-    let menu_key = resp.id.with("image-menu");
-    if resp.secondary_clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(menu_key, false));
-    }
-    let mut menu_drawn = false;
-    if let Some(sel) = selected
-        && resp.context_menu_opened()
-        && ui.ctx().data(|d| d.get_temp::<bool>(menu_key)).unwrap_or(false)
-    {
-        resp.context_menu(|ui| image_menu(ui, page, sel, images, view, action));
-        menu_drawn = true;
-    }
+    let menu_key = egui::Id::new("image-menu");
     let Some(p) = hover_pos.filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| b.contains(p) && image_contains(i, p)) else { return false };
+    let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| {
+        b.is_positive() && (b.contains(p) || quad_contains(ImageObb::from_image(&images[i], xf, info, page).corners(), p)) && image_contains(i, p)
+    }) else {
+        if resp.secondary_clicked() || resp.clicked() {
+            view.image_selection = None;
+        }
+        return false;
+    };
+    let hit_obb = ImageObb::from_image(&images[hit], xf, info, page);
     if selected != Some(hit) {
-        painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+        if hit_obb.is_rotated {
+            let pts = hit_obb.corners();
+            for k in 0..4 {
+                painter.line_segment([pts[k], pts[(k + 1) % 4]], Stroke::new(1.5, ACCENT.gamma_multiply(0.7)));
+            }
+        } else {
+            painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+        }
     }
-    let Some(b) = boxes.get(hit).copied() else { return false };
-    let corner = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().position(|c| c.distance(p) < 8.0);
+    let corner = hit_obb.handles().iter().position(|(_, c)| c.distance(p) < 10.0);
     ui.ctx().set_cursor_icon(match (selected == Some(hit), corner) {
-        (true, Some(0 | 3)) => egui::CursorIcon::ResizeNwSe,
-        (true, Some(_)) => egui::CursorIcon::ResizeNeSw,
-        (true, None) => egui::CursorIcon::Move,
+        (true, Some(0 | 4)) => egui::CursorIcon::ResizeNwSe,
+        (true, Some(2 | 6)) => egui::CursorIcon::ResizeNeSw,
+        (true, Some(1 | 5)) => egui::CursorIcon::ResizeVertical,
+        (true, Some(3 | 7)) => egui::CursorIcon::ResizeHorizontal,
+        (true, None) => egui::CursorIcon::Grab,
         _ => egui::CursorIcon::PointingHand,
     });
     if resp.clicked() || resp.secondary_clicked() {
-        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None });
+        view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None, crop_mode: false, crop_rect: None });
     }
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(menu_key, true));
     }
-    if selected == Some(hit) && !menu_drawn {
-        resp.context_menu(|ui| image_menu(ui, page, hit, images, view, action));
-    }
     true
 }
 
-/// The right-click menu of the picture `hit` (its rotate, flip, replace, copy, cut, redact, link,
-/// recognize and delete items).
-fn image_menu(
+/// The right-click context menu for a selected image matching Adobe Acrobat.
+pub(crate) fn image_context_menu(
     ui: &mut egui::Ui,
+    view: &mut DocView,
+    images: &[pdfcraft_engine::PageImage],
     page: usize,
     hit: usize,
-    images: &[pdfcraft_engine::PageImage],
-    view: &mut DocView,
+    can_paste: bool,
     action: &mut Option<ImageAction>,
 ) {
+    let Some(img) = images.get(hit) else { return };
     use pdfcraft_engine::ImageEdit as E;
-    let items: [(&str, Option<E>); 4] = [
-        (tl!("Rotate Clockwise"), Some(E::Rotate(1))),
-        (tl!("Rotate Counterclockwise"), Some(E::Rotate(3))),
-        (tl!("Flip Horizontal"), Some(E::Flip { horizontal: true })),
-        (tl!("Flip Vertical"), Some(E::Flip { horizontal: false })),
-    ];
-    for (label, change) in items {
-        if ui.button(label).clicked() {
-            view.pending_edit = change.map(|c| Edit::EditPageImage { page, index: hit, change: c });
+
+    // Top horizontal icon bar: Comment, Crop, Rotate CCW, Rotate CW
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::icons::button(ui, "message-square", 24.0, false, tl!("Add a sticky note here")).clicked() {
+            *action = Some(ImageAction::AddComment(page, hit));
             ui.close();
         }
-    }
-    // Crop: the handles trim instead of resizing until Done.
-    if ui.button(tl!("Crop Image")).clicked() {
-        if let (Some(s), Some(im)) = (view.image_selection.as_mut(), images.get(hit)) {
-            s.crop = Some(CropMode::new(im.visible_rect.unwrap_or(im.rect)));
+        if crate::icons::button(ui, "crop", 24.0, false, "Crop").clicked() {
+            *action = Some(ImageAction::Crop);
+            if let Some(s) = view.image_selection.as_mut() {
+                let rect = img.visible_rect.unwrap_or(img.rect);
+                s.crop = Some(CropMode::new(rect));
+                s.crop_mode = true;
+                s.crop_rect = None;
+            }
+            ui.close();
         }
-        ui.close();
-    }
-    let cropped = images.get(hit).is_some_and(|im| im.visible_rect.is_some_and(|v| v.iter().zip(im.rect.iter()).any(|(a, b)| (a - b).abs() > 0.01)));
-    if ui.add_enabled(cropped, egui::Button::new(tl!("Remove Crop"))).clicked() {
-        if let Some(im) = images.get(hit) {
-            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Crop(im.rect) });
+        if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate Counterclockwise")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Rotate(3) });
+            ui.close();
         }
-        ui.close();
-    }
-    let raster = images.get(hit).is_some_and(|image| !image.is_form);
-    if ui.add_enabled(raster, egui::Button::new(tl!("Replace Image…"))).clicked() {
-        *action = Some(ImageAction::Replace(page, hit));
-        ui.close();
-    }
-    if ui.add_enabled(raster, egui::Button::new(tl!("Save Image As…"))).clicked() {
-        *action = Some(ImageAction::Save(page, hit));
-        ui.close();
-    }
-    // Cutting and copying also find the picture inside grouped Form artwork.
+        if crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Rotate Clockwise")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Rotate(1) });
+            ui.close();
+        }
+    });
+
+    ui.separator();
+
+    let raster = !img.is_form;
     if ui.button(tl!("Cut Image")).clicked() {
         *action = Some(ImageAction::Cut(page, hit));
         ui.close();
@@ -898,24 +1769,102 @@ fn image_menu(
         *action = Some(ImageAction::Copy(page, hit));
         ui.close();
     }
-    if ui.button(tl!("Copy Image in Original Format")).clicked() {
-        *action = Some(ImageAction::CopyFile(page, hit));
+    if ui.add_enabled(can_paste, egui::Button::new("Paste")).clicked() {
+        *action = Some(ImageAction::Paste(page, img.rect));
         ui.close();
     }
+
     ui.separator();
+
+    let is_cropped = img.visible_rect.is_some() && img.visible_rect != Some(img.rect);
+    if ui.add_enabled(is_cropped, egui::Button::new("Remove crop")).clicked() {
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::RemoveCrop });
+        ui.close();
+    }
+
+    if ui.button(tl!("Flip horizontal")).clicked() {
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Flip { horizontal: true } });
+        ui.close();
+    }
+    if ui.button(tl!("Flip vertical")).clicked() {
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Flip { horizontal: false } });
+        ui.close();
+    }
+
+    ui.menu_button("Arrange image", |ui| {
+        let total = images.len();
+        if ui.button("Bring to front").clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront) });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = total.saturating_sub(1);
+            }
+            ui.close();
+        }
+        if ui.button("Send to back").clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack) });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = 0;
+            }
+            ui.close();
+        }
+        if ui.button("Bring forward").clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringForward) });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = (hit + 1).min(total.saturating_sub(1));
+            }
+            ui.close();
+        }
+        if ui.button("Send backward").clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward) });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = hit.saturating_sub(1);
+            }
+            ui.close();
+        }
+    });
+
+    if ui.add_enabled(raster, egui::Button::new(tl!("Replace image"))).clicked() {
+        *action = Some(ImageAction::Replace(page, hit));
+        ui.close();
+    }
+    if ui.add_enabled(raster, egui::Button::new(tl!("Save Image As…"))).clicked() {
+        *action = Some(ImageAction::Save(page, hit));
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.button(tl!("Draw freehand")).clicked() {
+        *action = Some(ImageAction::DrawFreehand);
+        ui.close();
+    }
     if ui.button(tl!("Redact Image")).clicked() {
         *action = Some(ImageAction::Redact(page, hit));
         ui.close();
     }
+    if ui.add_enabled(raster, egui::Button::new("Export image")).clicked() {
+        *action = Some(ImageAction::Save(page, hit));
+        ui.close();
+    }
+
+    ui.separator();
+
     if ui.button(tl!("Create Link…")).clicked() {
         *action = Some(ImageAction::Link(page, hit));
         ui.close();
     }
+
+    ui.menu_button("Edit image using", |ui| {
+        ui.add_enabled(false, egui::Button::new("Default image editor"));
+    });
+
     if ui.button(tl!("Recognize Text…")).clicked() {
         *action = Some(ImageAction::Recognize(page));
         ui.close();
     }
+
     ui.separator();
+
     if ui.button(tl!("Delete")).clicked() {
         view.image_selection = None;
         view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Delete });
@@ -1545,5 +2494,100 @@ mod tests {
         assert_eq!(caret_color_on(Color32::from_rgb(0xFF, 0xFF, 0xF4)), Color32::BLACK);
         assert_eq!(caret_color_on(Color32::BLACK), Color32::WHITE);
         assert_eq!(caret_color_on(DARK_EDITOR_FILL), Color32::WHITE);
+    }
+
+    #[test]
+    fn bullet_list_toggles_and_preserves_content() {
+        let mut text = "First line\nSecond line\n\nThird line".to_string();
+        assert!(!is_bulleted(&text));
+        assert!(toggle_bullet_list(&mut text));
+        assert!(is_bulleted(&text));
+        assert_eq!(text, "• First line\n• Second line\n\n• Third line");
+
+        // Toggling again removes bullets
+        assert!(toggle_bullet_list(&mut text));
+        assert!(!is_bulleted(&text));
+        assert_eq!(text, "First line\nSecond line\n\nThird line");
+    }
+
+    #[test]
+    fn numbered_list_toggles_and_preserves_content() {
+        let mut text = "Item A\nItem B\n\nItem C".to_string();
+        assert!(!is_numbered(&text));
+        assert!(toggle_numbered_list(&mut text));
+        assert!(is_numbered(&text));
+        assert_eq!(text, "1. Item A\n2. Item B\n\n3. Item C");
+
+        // Toggling again removes numbering
+        assert!(toggle_numbered_list(&mut text));
+        assert!(!is_numbered(&text));
+        assert_eq!(text, "Item A\nItem B\n\nItem C");
+    }
+
+    #[test]
+    fn superscript_and_subscript_conversion() {
+        let mut ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "E = mc2".to_string(),
+            original: "E = mc2".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: Some(6..7), // selecting '2'
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            focus: true,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras::default(),
+            extras0: Extras::default(),
+        };
+
+        assert!(toggle_superscript(&mut ed));
+        assert_eq!(ed.text, "E = mc²");
+        // Toggling superscript again returns to normal '2'
+        assert!(toggle_superscript(&mut ed));
+        assert_eq!(ed.text, "E = mc2");
+
+        // Test subscript on H2O
+        ed.text = "H2O".to_string();
+        ed.selection = Some(1..2); // selecting '2'
+        assert!(toggle_subscript(&mut ed));
+        assert_eq!(ed.text, "H₂O");
+        assert!(toggle_subscript(&mut ed));
+        assert_eq!(ed.text, "H2O");
+    }
+
+    #[test]
+    fn value_based_line_spacing_in_style() {
+        let ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "Paragraph text".to_string(),
+            original: "Paragraph text".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: None,
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            focus: true,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras { line_spacing: 1.33, underline: true, ..Default::default() },
+            extras0: Extras::default(),
+        };
+        let style = ed.style();
+        assert_eq!(style.line_spacing, Some(1.33));
+        assert_eq!(style.underline, Some(true));
     }
 }

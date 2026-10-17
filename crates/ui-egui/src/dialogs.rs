@@ -85,6 +85,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
+            Dialog::PinTool => 540.0,
             _ => 520.0,
         });
         match dialog {
@@ -1179,6 +1180,96 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     }
                 }
             }
+            Dialog::PinTool => {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Pin tools to Home").font(theme::semibold(18.0)));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if widgets::ghost_button(ui, "x", tl!("Close")).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Select tools to display on your Home page for quick access.").color(t.text_muted));
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    crate::icons::paint(ui, icon_rect, "search", 16.0, t.text_muted);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.pin_tool_search).hint_text("Search tools…").desired_width(ui.available_width() - 32.0),
+                    );
+                    if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", "Clear search").clicked() {
+                        app.pin_tool_search.clear();
+                    }
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                let query = app.pin_tool_search.trim().to_lowercase();
+                egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+                    let mut toggle = None;
+                    for g in pdfcraft_engine::catalog::TOOL_GROUPS {
+                        let label = tl!(g.label);
+                        let blurb = g
+                            .sections
+                            .first()
+                            .map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · "))
+                            .unwrap_or_default();
+                        if !query.is_empty()
+                            && !label.to_lowercase().contains(&query)
+                            && !blurb.to_lowercase().contains(&query)
+                            && !g.id.to_lowercase().contains(&query)
+                        {
+                            continue;
+                        }
+
+                        let pinned = app.is_tool_pinned(g.id);
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+                        let press = theme::Press::track(ui, &resp);
+                        press.wash(ui, rect, 6, false);
+                        let body = rect.translate(press.offset());
+
+                        let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
+                        crate::icons::paint(
+                            ui,
+                            egui::Rect::from_min_size(body.min + egui::vec2(8.0, 11.0), egui::vec2(22.0, 22.0)),
+                            g.icon,
+                            20.0,
+                            color,
+                        );
+
+                        let btn_w = 78.0;
+                        let btn_rect =
+                            egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
+                        let btn_resp = ui.interact(btn_rect, ui.id().with(("pin_modal_btn", g.id)), egui::Sense::click());
+                        let btn_hovered = btn_resp.hovered();
+
+                        let (btn_fill, btn_stroke, text_color, btn_label) = if pinned {
+                            (t.accent, egui::Stroke::NONE, egui::Color32::WHITE, "Pinned")
+                        } else if btn_hovered {
+                            (t.hover, egui::Stroke::new(1.0, t.border), t.text, "Pin")
+                        } else {
+                            (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, "Pin")
+                        };
+
+                        ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);
+                        ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, btn_label, theme::medium(12.0), text_color);
+
+                        let max_w = (btn_rect.left() - body.left() - 44.0).max(10.0);
+                        widgets::row_text(ui, body.min + egui::vec2(38.0, 6.0), label, theme::semibold(13.5), t.text, max_w);
+                        widgets::row_text(ui, body.min + egui::vec2(38.0, 24.0), &blurb, theme::regular(11.0), t.text_muted, max_w);
+
+                        if btn_resp.clicked() || resp.clicked() {
+                            toggle = Some(g.id);
+                        }
+                    }
+                    if let Some(id) = toggle {
+                        app.toggle_pin_tool(id);
+                    }
+                });
+            }
         }
         ui.add_space(16.0);
         let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
@@ -1190,6 +1281,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
                 if widgets::pill_button(ui, tl!("Discard"), false).clicked() {
                     recover = Some(false);
+                    close = true;
+                }
+            } else if dialog == Dialog::PinTool {
+                if widgets::pill_button(ui, tl!("Done"), true).clicked() {
                     close = true;
                 }
             } else if dialog == Dialog::NumberPages {

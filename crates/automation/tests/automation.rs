@@ -731,11 +731,11 @@ fn a_recovered_page_tree_survives_a_full_save() {
         original.extend_from_slice(b"\nendobj\n");
     }
     let xref = original.len();
-    original.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    original.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
     for o in offsets {
         original.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    original.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    original.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     std::fs::write(dir.join("damaged.pdf"), &original).unwrap();
 
     let mut a = auto(&dir);
@@ -2551,6 +2551,16 @@ fn editing_page_images_through_tools() {
     assert_eq!(cropped["visible_rect"], json!([10.0, 10.0, 25.0, 30.0]));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "rotate" }));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "flip_horizontal" }));
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" }));
+    assert_eq!(r["undo"], "Bring to front");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "send_to_back" }));
+    assert_eq!(r["undo"], "Send to back");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_forward" }));
+    assert_eq!(r["undo"], "Bring forward");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "send_backward" }));
+    assert_eq!(r["undo"], "Send backward");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "remove_crop" }));
+    assert_eq!(r["undo"], "Remove crop");
     let saved = ok(&mut a, "image_save", json!({ "doc": made, "page": 1, "image": 1, "path": "out/picture" }));
     assert_eq!(saved["format"], "png");
     assert!(std::fs::read(dir.join("out/picture.png")).unwrap().starts_with(b"\x89PNG"));

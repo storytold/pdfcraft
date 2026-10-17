@@ -58,13 +58,7 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
     if attribution.to_ascii_lowercase().contains("adobe") {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
     }
-    let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
-    if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
-        .iter()
-        .any(|l| license.contains(l))
-    {
-        return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
-    }
+    validate(bytes)?;
     Ok(())
 }
 

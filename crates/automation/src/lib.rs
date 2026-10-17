@@ -504,6 +504,11 @@ impl Automation {
                         "flip_horizontal" => ImageEdit::Flip { horizontal: true },
                         "flip_vertical" => ImageEdit::Flip { horizontal: false },
                         "delete" => ImageEdit::Delete,
+                        "bring_to_front" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+                        "send_to_back" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
+                        "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
+                        "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
+                        "remove_crop" => ImageEdit::RemoveCrop,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;

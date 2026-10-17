@@ -10,6 +10,27 @@ use std::sync::Arc;
 
 use crate::EditError;
 
+/// The identity of a soft mask (`/SMask`) in the PDF graphics state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaskIdentity {
+    /// Indirect reference to a mask dictionary or stream.
+    Ref(u32, u16),
+    /// Indirect reference to the transparency group (`/G`) in a mask dictionary.
+    Group(u32, u16),
+    /// Explicit named mask or resource name.
+    Named(Vec<u8>),
+}
+
+impl std::fmt::Display for MaskIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaskIdentity::Ref(num, generation) => write!(f, "{num} {generation} R"),
+            MaskIdentity::Group(num, generation) => write!(f, "group {num} {generation} R"),
+            MaskIdentity::Named(name) => write!(f, "{}", String::from_utf8_lossy(name)),
+        }
+    }
+}
+
 /// An image drawn on a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageImage {
@@ -30,6 +51,8 @@ pub struct PageImage {
     /// Pixel size; zero for vector/grouped Form artwork.
     pub width: u32,
     pub height: u32,
+    /// Active soft mask identity at the image placement, if any.
+    pub smask: Option<MaskIdentity>,
     stream: usize,
     op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
@@ -213,12 +236,16 @@ impl ImageState {
 pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditError> {
     let p = page_of(doc, page)?;
     let xo = xobjects(doc, &p.dict);
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let ext_gstates = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
     // The graphics state carries over from one stream to the next.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+    let mut tracker = ExtendedGStateTracker::default();
     for (si, (_, data)) in streams(doc, &p.dict).into_iter().enumerate() {
         for (i, op) in parse(&data).ops.iter().enumerate() {
             state.apply(op)?;
+            tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
             let ctm = state.placement.matrix;
             if op.is("Do") {
                 let Some(name) = op.name(0) else { continue };
@@ -274,6 +301,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                     is_form,
                     width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                     height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
+                    smask: tracker.current_state.smask.clone(),
                     stream: si,
                     op: i,
                     draw_matrix: ctm.0,
@@ -347,6 +375,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     is_form: false,
                     width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
                     height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,
+                    smask: None,
                     stream,
                     op: i,
                     draw_matrix: ctm.0,
@@ -367,6 +396,15 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     Ok(out)
 }
 
+/// The four stacking order arrangements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrangeOrder {
+    BringToFront,
+    SendToBack,
+    BringForward,
+    SendBackward,
+}
+
 /// What to do with an image.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageChange {
@@ -379,6 +417,10 @@ pub enum ImageChange {
     /// Draw this image XObject instead, in the same place.
     Replace(ObjRef),
     Delete,
+    /// Change the stacking order.
+    Arrange(ArrangeOrder),
+    /// Remove any private crop on the image.
+    RemoveCrop,
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
@@ -444,6 +486,831 @@ fn clip_matrix(draw: Matrix, cm: Matrix, t: Matrix) -> Option<Matrix> {
     Some(outer.then(&t).then(&outer.invert()?))
 }
 
+fn is_entire_page_wrapped(ops: &[Op]) -> bool {
+    if ops.len() < 2 || !ops.first().is_some_and(|o| o.is("q")) || !ops.last().is_some_and(|o| o.is("Q")) {
+        return false;
+    }
+    let mut depth: usize = 0;
+    for (i, op) in ops.iter().enumerate() {
+        if op.is("q") {
+            depth = depth.saturating_add(1);
+        } else if op.is("Q") {
+            depth = depth.saturating_sub(1);
+            if depth == 0 && i < ops.len().saturating_sub(1) {
+                return false;
+            }
+        }
+    }
+    depth == 0
+}
+
+fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
+    let mut units = Vec::new();
+    let mut i = scan_start;
+    while i < scan_end {
+        let op = match ops.get(i) {
+            Some(o) => o,
+            None => break,
+        };
+        if op.is("q") {
+            let mut depth: usize = 1;
+            let mut j = i.saturating_add(1);
+            while j < scan_end {
+                if let Some(next) = ops.get(j) {
+                    if next.is("q") {
+                        depth = depth.saturating_add(1);
+                    } else if next.is("Q") {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            j = j.saturating_add(1);
+                            break;
+                        }
+                    }
+                }
+                j = j.saturating_add(1);
+            }
+            units.push(i..j);
+            i = j;
+        } else if op.is("BT") {
+            let mut j = i.saturating_add(1);
+            while j < scan_end {
+                if ops.get(j).is_some_and(|o| o.is("ET")) {
+                    j = j.saturating_add(1);
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            units.push(i..j);
+            i = j;
+        } else if op.is("BI") {
+            let mut j = i.saturating_add(1);
+            while j < scan_end {
+                if ops.get(j).is_some_and(|o| o.is("EI")) {
+                    j = j.saturating_add(1);
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            units.push(i..j);
+            i = j;
+        } else if op.is("Do") || op.is("sh") {
+            units.push(i..i.saturating_add(1));
+            i = i.saturating_add(1);
+        } else {
+            let mut j = i;
+            let mut found_end = false;
+            while j < scan_end {
+                let next = match ops.get(j) {
+                    Some(o) => o,
+                    None => break,
+                };
+                if matches!(next.op.as_slice(), b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
+                    j = j.saturating_add(1);
+                    found_end = true;
+                    break;
+                } else if j > i && matches!(next.op.as_slice(), b"q" | b"BT" | b"BI" | b"Do" | b"sh") {
+                    found_end = true;
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            let u_end = if found_end { j } else { scan_end };
+            units.push(i..u_end);
+            i = u_end;
+        }
+    }
+    units.retain(|u| {
+        ops.get(u.clone()).is_some_and(|slice| {
+            slice.iter().any(|op| {
+                matches!(
+                    op.op.as_slice(),
+                    b"Do" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\""
+                )
+            })
+        })
+    });
+    units
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExtractedScopeState {
+    pub clip_ops: Vec<Op>,
+    pub state_ops: Vec<Op>,
+    pub effective_cm: Matrix,
+    pub do_op: Op,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EffectiveGState {
+    ca: Option<f64>,
+    ca_stroke: Option<f64>,
+    bm: Option<Vec<u8>>,
+    smask: Option<MaskIdentity>,
+}
+
+impl EffectiveGState {
+    fn effective_ca(&self) -> f64 {
+        self.ca.unwrap_or(1.0)
+    }
+
+    fn effective_ca_stroke(&self) -> f64 {
+        self.ca_stroke.unwrap_or(1.0)
+    }
+
+    fn effective_bm(&self) -> &[u8] {
+        self.bm.as_deref().unwrap_or(b"Normal")
+    }
+
+    fn effective_smask(&self) -> Option<&MaskIdentity> {
+        self.smask.as_ref()
+    }
+
+    fn visually_differs(&self, other: &EffectiveGState) -> bool {
+        (self.effective_ca() - other.effective_ca()).abs() > 1e-4
+            || (self.effective_ca_stroke() - other.effective_ca_stroke()).abs() > 1e-4
+            || self.effective_bm() != other.effective_bm()
+            || self.effective_smask() != other.effective_smask()
+    }
+
+    fn merge_dict(&mut self, dict: &Dict, doc: &Document, gs_name: Option<&[u8]>) {
+        if let Some(val) = dict.get(b"ca").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) {
+            self.ca = Some(val);
+        }
+        if let Some(val) = dict.get(b"CA").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) {
+            self.ca_stroke = Some(val);
+        }
+        if let Some(bm_obj) = dict.get(b"BM").map(|v| doc.resolve(v)) {
+            if let Some(name) = bm_obj.as_name() {
+                self.bm = Some(name.to_vec());
+            } else if let Some(arr) = bm_obj.as_array()
+                && let Some(first_name) = arr.first().map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(|n| n.to_vec()))
+            {
+                self.bm = Some(first_name);
+            }
+        }
+        if let Some(raw_smask) = dict.get(b"SMask") {
+            let resolved = doc.resolve(raw_smask);
+            if let Some(name) = resolved.as_name() {
+                if name == b"None" {
+                    self.smask = None;
+                } else {
+                    self.smask = Some(MaskIdentity::Named(name.to_vec()));
+                }
+            } else if let Some(mask_dict) = resolved.as_dict() {
+                if let Some(gr) = mask_dict.get(b"G").and_then(|g| g.as_ref()) {
+                    self.smask = Some(MaskIdentity::Group(gr.num, gr.generation));
+                } else if let Some(r) = raw_smask.as_ref() {
+                    self.smask = Some(MaskIdentity::Ref(r.num, r.generation));
+                } else if let Some(name) = mask_dict.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_name().map(|s| s.to_vec())) {
+                    self.smask = Some(MaskIdentity::Named(name));
+                } else if let Some(name) = gs_name {
+                    self.smask = Some(MaskIdentity::Named(name.to_vec()));
+                } else {
+                    self.smask = Some(MaskIdentity::Named(b"CustomMask".to_vec()));
+                }
+            } else if let Some(r) = raw_smask.as_ref() {
+                self.smask = Some(MaskIdentity::Ref(r.num, r.generation));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct ExtendedGStateTracker {
+    stack: Vec<(EffectiveGState, Vec<(Op, Matrix)>)>,
+    current_state: EffectiveGState,
+    active_gs_ops: Vec<(Op, Matrix)>,
+}
+
+impl ExtendedGStateTracker {
+    fn step(&mut self, op: &Op, ext_gstates: &Dict, doc: &Document, ctm: Matrix) -> Result<(), EditError> {
+        match op.op.as_slice() {
+            b"q" => {
+                if self.stack.len() >= 4096 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                self.stack.push((self.current_state.clone(), self.active_gs_ops.clone()));
+            }
+            b"Q" => {
+                if let Some((prev_state, prev_ops)) = self.stack.pop() {
+                    self.current_state = prev_state;
+                    self.active_gs_ops = prev_ops;
+                }
+            }
+            b"gs" => {
+                if let Some(name) = op.name(0) {
+                    if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
+                        self.current_state.merge_dict(&dict, doc, Some(name));
+                    } else if self.current_state.ca.is_none() {
+                        self.current_state.ca = Some(0.5);
+                    }
+                    self.active_gs_ops.retain(|(o, _)| o.name(0) != Some(name));
+                    self.active_gs_ops.push((op.clone(), ctm));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+fn clip_path_to_ops(clip: &ClipPath) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let mut current_pt = Point::ZERO;
+    for el in clip.path.elements() {
+        match el {
+            kurbo::PathEl::MoveTo(p) => {
+                if !p.x.is_finite() || !p.y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p;
+                ops.push(Op::new("m", vec![pdfcraft_content::num(p.x), pdfcraft_content::num(p.y)]));
+            }
+            kurbo::PathEl::LineTo(p) => {
+                if !p.x.is_finite() || !p.y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p;
+                ops.push(Op::new("l", vec![pdfcraft_content::num(p.x), pdfcraft_content::num(p.y)]));
+            }
+            kurbo::PathEl::QuadTo(p1, p2) => {
+                if !p1.x.is_finite() || !p1.y.is_finite() || !p2.x.is_finite() || !p2.y.is_finite() {
+                    return Vec::new();
+                }
+                let c1_x = current_pt.x + (p1.x - current_pt.x) * (2.0 / 3.0);
+                let c1_y = current_pt.y + (p1.y - current_pt.y) * (2.0 / 3.0);
+                let c2_x = p2.x + (p1.x - p2.x) * (2.0 / 3.0);
+                let c2_y = p2.y + (p1.y - p2.y) * (2.0 / 3.0);
+                if !c1_x.is_finite() || !c1_y.is_finite() || !c2_x.is_finite() || !c2_y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p2;
+                ops.push(Op::new(
+                    "c",
+                    vec![
+                        pdfcraft_content::num(c1_x),
+                        pdfcraft_content::num(c1_y),
+                        pdfcraft_content::num(c2_x),
+                        pdfcraft_content::num(c2_y),
+                        pdfcraft_content::num(p2.x),
+                        pdfcraft_content::num(p2.y),
+                    ],
+                ));
+            }
+            kurbo::PathEl::CurveTo(p1, p2, p3) => {
+                if !p1.x.is_finite() || !p1.y.is_finite() || !p2.x.is_finite() || !p2.y.is_finite() || !p3.x.is_finite() || !p3.y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p3;
+                ops.push(Op::new(
+                    "c",
+                    vec![
+                        pdfcraft_content::num(p1.x),
+                        pdfcraft_content::num(p1.y),
+                        pdfcraft_content::num(p2.x),
+                        pdfcraft_content::num(p2.y),
+                        pdfcraft_content::num(p3.x),
+                        pdfcraft_content::num(p3.y),
+                    ],
+                ));
+            }
+            kurbo::PathEl::ClosePath => {
+                ops.push(Op::new("h", vec![]));
+            }
+        }
+    }
+    if !ops.is_empty() {
+        ops.push(Op::new(if clip.even_odd { "W*" } else { "W" }, vec![]));
+        ops.push(Op::new("n", vec![]));
+    }
+    ops
+}
+
+pub(crate) fn extract_scope_state(ops: &[Op], start: usize, target: usize, initial_ctm: Matrix) -> Result<Option<ExtractedScopeState>, EditError> {
+    if target >= ops.len() || start > target {
+        return Ok(None);
+    }
+    let target_op = ops.get(target).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    if start == target {
+        return Ok(Some(ExtractedScopeState { clip_ops: Vec::new(), state_ops: Vec::new(), effective_cm: initial_ctm, do_op: target_op }));
+    }
+    let mut clip_ops = Vec::new();
+    let mut state_ops = Vec::new();
+    let mut pending_path: Vec<Op> = Vec::new();
+    let mut pending_clip = false;
+    let mut active_path = false;
+    let mut depth: usize = 0;
+    let mut matrix = initial_ctm;
+    let mut matrix_at_clip = None;
+
+    let scan_start = if ops.get(start).is_some_and(|o| o.is("q")) { start.saturating_add(1) } else { start };
+
+    for i in scan_start..target {
+        let Some(op) = ops.get(i) else {
+            return Ok(None);
+        };
+        match op.op.as_slice() {
+            b"q" => {
+                if depth >= 4096 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                depth = depth.saturating_add(1);
+            }
+            b"Q" => {
+                if depth == 0 {
+                    return Ok(None);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ if depth > 0 => {}
+            b"cm" => {
+                if active_path {
+                    return Ok(None);
+                }
+                if let Some(m) = op.nums::<6>() {
+                    matrix = Matrix(m).then(&matrix);
+                }
+            }
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" => {
+                active_path = true;
+                pending_path.push(op.clone());
+            }
+            b"W" | b"W*" => {
+                if !active_path {
+                    return Ok(None);
+                }
+                pending_clip = true;
+                pending_path.push(op.clone());
+            }
+            b"n" => {
+                if pending_clip {
+                    if matrix_at_clip.is_none() {
+                        matrix_at_clip = Some(matrix);
+                    } else if matrix_at_clip != Some(matrix) {
+                        return Ok(None);
+                    }
+                    clip_ops.extend(std::mem::take(&mut pending_path));
+                    clip_ops.push(op.clone());
+                    pending_clip = false;
+                    active_path = false;
+                } else {
+                    pending_path.clear();
+                    active_path = false;
+                }
+            }
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if pending_clip {
+                    return Ok(None);
+                }
+                pending_path.clear();
+                active_path = false;
+            }
+            b"gs" | b"CS" | b"cs" | b"SC" | b"sc" | b"SCN" | b"scn" | b"G" | b"g" | b"RG" | b"rg" | b"K" | b"k" | b"ri" | b"i" => {
+                state_ops.push(op.clone());
+            }
+            b"BT" => {
+                return Ok(None);
+            }
+            _ => {}
+        }
+    }
+
+    if depth != 0 || active_path || pending_clip {
+        return Ok(None);
+    }
+
+    if !clip_ops.is_empty() && matrix_at_clip != Some(Matrix::IDENTITY) {
+        return Ok(None);
+    }
+
+    Ok(Some(ExtractedScopeState { clip_ops, state_ops, effective_cm: matrix, do_op: target_op }))
+}
+
+/// Change the stacking order of image `index` on `page`.
+pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: ArrangeOrder) -> Result<(), EditError> {
+    let images = page_images(doc, page)?;
+    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let p = page_of(doc, page)?;
+    let all = streams(doc, &p.dict);
+    let mut offset = 0_usize;
+    for (_, data) in all.iter().take(img.stream) {
+        offset = offset
+            .checked_add(data.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    }
+    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
+    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let target = ops
+        .iter()
+        .position(|op| op.span.start == span && op.is("Do"))
+        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+
+    let is_wrapped = is_entire_page_wrapped(&ops);
+    let (scan_start, scan_end) = if is_wrapped { (1, ops.len().saturating_sub(1)) } else { (0, ops.len()) };
+    let units = content_units(&ops, scan_start, scan_end);
+    let Some(target_idx) = units.iter().position(|u| u.start <= target && target < u.end) else {
+        return Ok(());
+    };
+    if units.len() <= 1 {
+        return Ok(());
+    }
+
+    let (dest_unit, insert_after) = match order {
+        ArrangeOrder::BringToFront => {
+            if target_idx == units.len().saturating_sub(1) {
+                return Ok(());
+            }
+            let Some(u) = units.last() else { return Ok(()) };
+            (u, true)
+        }
+        ArrangeOrder::SendToBack => {
+            if target_idx == 0 {
+                return Ok(());
+            }
+            let Some(u) = units.first() else { return Ok(()) };
+            (u, false)
+        }
+        ArrangeOrder::BringForward => {
+            if target_idx == units.len().saturating_sub(1) {
+                return Ok(());
+            }
+            let Some(u) = units.get(target_idx.saturating_add(1)) else { return Ok(()) };
+            (u, true)
+        }
+        ArrangeOrder::SendBackward => {
+            if target_idx == 0 {
+                return Ok(());
+            }
+            let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else { return Ok(()) };
+            (u, false)
+        }
+    };
+
+    let Some(target_unit) = units.get(target_idx) else { return Ok(()) };
+    let has_other_paint = ops.iter().enumerate().any(|(i, op)| {
+        i >= target_unit.start
+            && i < target_unit.end
+            && i != target
+            && matches!(
+                op.op.as_slice(),
+                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+            )
+    });
+
+    let (mut target_span, scope_start) = if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+        && sub_start >= target_unit.start
+        && sub_end < target_unit.end
+    {
+        let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
+        let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
+        (start_op.span.start..end_op.span.end, sub_start)
+    } else if has_other_paint {
+        let target_op = &ops[target];
+        (target_op.span.start..target_op.span.end, target_unit.start)
+    } else {
+        let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
+        let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
+        (first_op.span.start..last_op.span.end, target_unit.start)
+    };
+
+    let (dest_pos, scan_target) = if insert_after {
+        let Some(op) = dest_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
+        (op.span.end, dest_unit.end)
+    } else {
+        let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
+        (op.span.start, dest_unit.start)
+    };
+
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let ext_gstates = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+
+    let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+    let mut tracker = ExtendedGStateTracker::default();
+    let mut source_effective_state = EffectiveGState::default();
+    let mut source_gs_ops = Vec::new();
+    let mut dest_effective_state = EffectiveGState::default();
+    let mut dest_ctm = Matrix::IDENTITY;
+    let mut scope_start_ctm = Matrix::IDENTITY;
+
+    let max_scan = scan_target.max(target.saturating_add(1)).max(scope_start.saturating_add(1));
+    for (i, op) in ops.iter().enumerate() {
+        if i == scope_start {
+            scope_start_ctm = state.placement.matrix;
+        }
+        if i == target {
+            source_effective_state = tracker.current_state.clone();
+            source_gs_ops = tracker.active_gs_ops.clone();
+        }
+        if i == scan_target {
+            dest_effective_state = tracker.current_state.clone();
+            dest_ctm = state.placement.matrix;
+        }
+        if i >= max_scan {
+            break;
+        }
+        state.apply(op)?;
+        tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
+    }
+    if scan_target >= ops.len() {
+        dest_effective_state = tracker.current_state.clone();
+        dest_ctm = state.placement.matrix;
+    }
+    if dest_ctm.invert().is_none() {
+        return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+    }
+
+    let mut extracted = match extract_scope_state(&ops, scope_start, target, scope_start_ctm)? {
+        Some(ext) => ext,
+        None if scope_start != target => {
+            let target_op = ops.get(target).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+            target_span = target_op.span.start..target_op.span.end;
+            extract_scope_state(&ops, target, target, Matrix(img.draw_matrix))?
+                .ok_or_else(|| EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()))?
+        }
+        None => {
+            return Err(EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()));
+        }
+    };
+
+    if extracted.clip_ops.is_empty() && !img.clips.is_empty() {
+        for clip in &img.clips {
+            let ops = clip_path_to_ops(clip);
+            if !ops.is_empty() {
+                extracted.clip_ops.extend(ops);
+            }
+        }
+    }
+
+    let has_inherited_clip = !img.clips.is_empty() && extracted.clip_ops.is_empty();
+    if has_inherited_clip {
+        return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
+    }
+
+    let non_gs_ops: Vec<Op> = extracted.state_ops.into_iter().filter(|o| !o.is("gs")).collect();
+
+    let mut reconstructed_state = dest_effective_state.clone();
+    for (op, _) in &source_gs_ops {
+        if let Some(name) = op.name(0) {
+            if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
+                reconstructed_state.merge_dict(&dict, doc, Some(name));
+            } else if reconstructed_state.ca.is_none() {
+                reconstructed_state.ca = Some(0.5);
+            }
+        }
+    }
+
+    if reconstructed_state.visually_differs(&source_effective_state) {
+        return Err(EditError::Invalid(
+            "unsupported graphics state: moving the image would alter effective opacity, blend mode, or soft mask".into(),
+        ));
+    }
+
+    let mut unit_ops = Vec::new();
+    unit_ops.push(Op::new("q", vec![]));
+    let mut current_ctm = dest_ctm;
+
+    for (gs_op, target_ctm) in &source_gs_ops {
+        if *target_ctm != current_ctm {
+            let Some(current_inv) = current_ctm.invert() else {
+                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+            };
+            let delta = target_ctm.then(&current_inv);
+            if !delta.0.iter().all(|v| v.is_finite()) {
+                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+            }
+            if delta != Matrix::IDENTITY {
+                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
+                current_ctm = *target_ctm;
+            }
+        }
+        unit_ops.push(gs_op.clone());
+    }
+
+    unit_ops.extend(non_gs_ops);
+
+    if !extracted.clip_ops.is_empty() {
+        if current_ctm != Matrix::IDENTITY {
+            let Some(current_inv) = current_ctm.invert() else {
+                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+            };
+            unit_ops.push(Op::new("cm", current_inv.0.map(pdfcraft_content::num).to_vec()));
+        }
+        unit_ops.extend(extracted.clip_ops);
+        if Matrix(img.draw_matrix) != Matrix::IDENTITY {
+            unit_ops.push(Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()));
+        }
+    } else {
+        if Matrix(img.draw_matrix) != current_ctm {
+            let Some(current_inv) = current_ctm.invert() else {
+                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+            };
+            let delta = Matrix(img.draw_matrix).then(&current_inv);
+            if !delta.0.iter().all(|v| v.is_finite()) {
+                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+            }
+            if delta != Matrix::IDENTITY {
+                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
+            }
+        }
+    }
+    unit_ops.push(extracted.do_op);
+    unit_ops.push(Op::new("Q", vec![]));
+
+    let mut serialized = Vec::new();
+    serialized.push(b'\n');
+    serialized.extend_from_slice(&serialize_ops(&unit_ops));
+    serialized.push(b'\n');
+
+    let mut edits = Vec::new();
+    if dest_pos >= target_span.end {
+        edits.push((target_span, Vec::new()));
+        edits.push((dest_pos..dest_pos, serialized));
+    } else if dest_pos <= target_span.start {
+        edits.push((dest_pos..dest_pos, serialized));
+        edits.push((target_span, Vec::new()));
+    } else {
+        return Ok(());
+    }
+
+    let changed = pieces.splice(edits);
+    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
+/// Locate the innermost graphics state scope enclosing only `target` (with no other painting operations).
+/// Returns `Some((start, end, scope_matrix))` where `start` is the index of `q`, `end` is the index of `Q`,
+/// and `scope_matrix` is the CTM in effect immediately before entering that `q`.
+fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usize, Matrix)>, EditError> {
+    struct Scope {
+        start: usize,
+        matrix: Matrix,
+        inherited_clip: bool,
+        inherited_path: bool,
+        selected: bool,
+        other_paint: bool,
+    }
+    let mut stack: Vec<Scope> = Vec::new();
+    let mut matrix = Matrix::IDENTITY;
+    let mut clipped = false;
+    let mut path = false;
+    let mut pending_clip = false;
+    let mut text = false;
+    let mut at_image = None;
+    let mut isolated = None;
+    for (index, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"q" => {
+                if stack.len() >= 256 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                stack.push(Scope { start: index, matrix, inherited_clip: clipped, inherited_path: path, selected: false, other_paint: false });
+            }
+            b"Q" => {
+                if let Some(scope) = stack.pop() {
+                    if scope.selected && !scope.other_paint && !scope.inherited_clip && !scope.inherited_path {
+                        isolated.get_or_insert((scope.start, index, scope.matrix));
+                    }
+                    matrix = scope.matrix;
+                    clipped = scope.inherited_clip;
+                }
+            }
+            b"cm" => {
+                if let Some(m) = op.nums::<6>() {
+                    matrix = Matrix(m).then(&matrix);
+                }
+            }
+            b"BT" => text = true,
+            b"ET" => text = false,
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" => path = true,
+            b"W" | b"W*" => pending_clip = true,
+            _ => {}
+        }
+        if index == target {
+            if text {
+                return Err(EditError::Invalid("an image inside a text object cannot be cropped".into()));
+            }
+            at_image = Some(matrix);
+            for scope in &mut stack {
+                scope.selected = true;
+            }
+        } else if matches!(
+            op.op.as_slice(),
+            b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+        ) {
+            for scope in &mut stack {
+                scope.other_paint = true;
+            }
+        }
+        if matches!(op.op.as_slice(), b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") {
+            clipped |= pending_clip;
+            pending_clip = false;
+            path = false;
+        }
+    }
+    if at_image.is_none() {
+        return Err(EditError::Invalid("the image operation is missing".into()));
+    }
+    Ok(isolated)
+}
+
+fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, scope_matrix: Matrix) -> Vec<Op> {
+    let mut drawing = Vec::new();
+    let mut i = start.saturating_add(1);
+    while i < end {
+        let op = match ops.get(i) {
+            Some(o) => o,
+            None => break,
+        };
+        if op.is("cm")
+            && scope_matrix != Matrix::IDENTITY
+            && let (Some(m), Some(inv)) = (op.nums::<6>(), scope_matrix.invert())
+            && Matrix(m) == inv
+        {
+            let mut k = i.saturating_add(1);
+            while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
+                k = k.saturating_add(1);
+            }
+            if k > i.saturating_add(1)
+                && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*"))
+                && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n"))
+            {
+                i = i.saturating_add(1);
+                continue;
+            }
+        }
+        if matches!(op.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re") {
+            let mut k = i;
+            while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
+                k = k.saturating_add(1);
+            }
+            if k > i && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n"))
+            {
+                i = k.saturating_add(2);
+                if scope_matrix != Matrix::IDENTITY
+                    && ops.get(i).is_some_and(|next| next.is("cm"))
+                    && let Some(m) = ops.get(i).and_then(|next| next.nums::<6>())
+                    && Matrix(m) == scope_matrix
+                {
+                    i = i.saturating_add(1);
+                }
+                continue;
+            }
+        }
+        drawing.push(op.clone());
+        i = i.saturating_add(1);
+    }
+    drawing
+}
+
+/// Remove any private clipping path / crop on image `index` on `page`.
+pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
+    let images = page_images(doc, page)?;
+    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let p = page_of(doc, page)?;
+    let all = streams(doc, &p.dict);
+    let mut offset = 0_usize;
+    for (_, data) in all.iter().take(img.stream) {
+        offset = offset
+            .checked_add(data.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    }
+    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
+    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let target = ops
+        .iter()
+        .position(|op| op.span.start == span && op.is("Do"))
+        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+    if let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? {
+        let drawing_ops = extract_image_drawing_ops(&ops, start, end, scope_matrix);
+        let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+        let end_op = ops.get(end).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+        let range = start_op.span.start..end_op.span.end;
+        let mut unit_ops = Vec::new();
+        unit_ops.push(Op::new("q", vec![]));
+        unit_ops.extend(drawing_ops);
+        unit_ops.push(Op::new("Q", vec![]));
+        let serialized = serialize_ops(&unit_ops);
+        let changed = pieces.splice([(range, serialized)]);
+        let contents = crate::text::rewritten_contents(doc, &all, changed);
+        doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    }
+    Ok(())
+}
+
+/// Crop image `index` on `page` to `crop_rect` in user space `[x0, y0, x1, y1]`.
+pub fn crop_image(doc: &mut Document, page: usize, index: usize, crop_rect: [f64; 4]) -> Result<(), EditError> {
+    change_image(doc, page, index, &ImageChange::Crop(crop_rect))
+}
+
 /// Change image `index` (from [`page_images`]) on `page`.
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
@@ -461,8 +1328,14 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         ImageChange::Transform(t) => {
             return transform_image(doc, &p, &all, &img, *t);
         }
+        ImageChange::Arrange(order) => {
+            return arrange_image(doc, page, index, *order);
+        }
+        ImageChange::RemoveCrop => {
+            return remove_image_crop(doc, page, index);
+        }
         ImageChange::Crop(keep) => {
-            return crop_image(doc, &p, &all, &img, *keep);
+            return crop_image_impl(doc, &p, &all, &img, *keep);
         }
         ImageChange::Replace(r) => {
             if img.is_form {
@@ -623,6 +1496,7 @@ fn transform_image(
     if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
         return Err(EditError::Invalid("the image transform is too large".into()));
     }
+
     // Already alone in a `q cm … Q` (its own placement, or the wrapper an earlier edit added):
     // change that `cm` in place. The CTM inside is `local · cm · outer` either way.
     if let Some((at, cm)) = enclosing_transform(&ops, start, end) {
@@ -663,7 +1537,7 @@ fn transform_image(
 /// that holds the image and its private crop (or a new `q … Q` around the `Do`), written in
 /// that scope's coordinates as the box's four corners, so a turned image crops to an upright
 /// box too and a later transform of the scope moves the crop with the pixels.
-fn crop_image(
+fn crop_image_impl(
     doc: &mut Document,
     page: &pdfcraft_model::Page,
     streams: &[(Object, Vec<u8>)],
@@ -673,10 +1547,43 @@ fn crop_image(
     if !keep.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box must be finite and no larger than 1e12".into()));
     }
-    let [x0, y0, x1, y1] = [keep[0].min(keep[2]), keep[1].min(keep[3]), keep[0].max(keep[2]), keep[1].max(keep[3])];
-    if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
+    let is_normalized = keep[0] >= 0.0
+        && keep[1] >= 0.0
+        && keep[2] <= 1.0
+        && keep[3] <= 1.0
+        && keep[2] > keep[0]
+        && keep[3] > keep[1]
+        && ((image.rect[2] - image.rect[0]).abs() > 1.5 || (image.rect[3] - image.rect[1]).abs() > 1.5);
+
+    let (u0, v0, u1, v1) = if is_normalized {
+        (keep[0], keep[1], keep[2], keep[3])
+    } else {
+        let [x0, y0, x1, y1] = [keep[0].min(keep[2]), keep[1].min(keep[3]), keep[0].max(keep[2]), keep[1].max(keep[3])];
+        if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
+            return Err(EditError::Invalid("the crop box has no area".into()));
+        }
+        let inv = Matrix(image.matrix).invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
+        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inv.apply(x, y));
+        let min_u = corners.iter().map(|(u, _)| *u).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
+        let max_u = corners.iter().map(|(u, _)| *u).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
+        let min_v = corners.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
+        let max_v = corners.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
+        if max_u - min_u < 1e-6 || max_v - min_v < 1e-6 {
+            return Err(EditError::Invalid("the crop box has no area".into()));
+        }
+        (min_u, min_v, max_u, max_v)
+    };
+
+    if u1 - u0 < 1e-6 || v1 - v0 < 1e-6 {
         return Err(EditError::Invalid("the crop box has no area".into()));
     }
+
+    let m = Matrix(image.matrix);
+    let p00 = m.apply(u0, v0);
+    let p10 = m.apply(u1, v0);
+    let p11 = m.apply(u1, v1);
+    let p01 = m.apply(u0, v1);
+
     let mut offset = 0_usize;
     for (_, data) in streams.iter().take(image.stream) {
         offset = offset
@@ -695,16 +1602,36 @@ fn crop_image(
         .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
     let (start, end, placement) = image_transform_scope(&ops, target)?.unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
-    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inverse.apply(x, y));
+    let corners = [p00, p10, p11, p01].map(|(x, y)| inverse.apply(x, y));
     if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1e12 && y.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box is too large for the image's placement".into()));
     }
-    let clip: Vec<Op> = corners
-        .iter()
-        .enumerate()
-        .map(|(i, (x, y))| Op::new(if i == 0 { "m" } else { "l" }, vec![Object::Real(*x), Object::Real(*y)]))
-        .chain([Op::new("h", vec![]), Op::new("W", vec![]), Op::new("n", vec![])])
-        .collect();
+    let is_axis_aligned = ((corners[0].1 - corners[1].1).abs() < 1e-4
+        && (corners[1].0 - corners[2].0).abs() < 1e-4
+        && (corners[2].1 - corners[3].1).abs() < 1e-4
+        && (corners[3].0 - corners[0].0).abs() < 1e-4)
+        || ((corners[0].0 - corners[1].0).abs() < 1e-4
+            && (corners[1].1 - corners[2].1).abs() < 1e-4
+            && (corners[2].0 - corners[3].0).abs() < 1e-4
+            && (corners[3].1 - corners[0].1).abs() < 1e-4);
+    let clip: Vec<Op> = if is_axis_aligned {
+        let min_x = corners.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+        let max_x = corners.iter().map(|(x, _)| *x).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = corners.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
+        let max_y = corners.iter().map(|(_, y)| *y).fold(f64::NEG_INFINITY, f64::max);
+        vec![
+            Op::new("re", vec![Object::Real(min_x), Object::Real(min_y), Object::Real(max_x - min_x), Object::Real(max_y - min_y)]),
+            Op::new("W", vec![]),
+            Op::new("n", vec![]),
+        ]
+    } else {
+        corners
+            .iter()
+            .enumerate()
+            .map(|(i, (x, y))| Op::new(if i == 0 { "m" } else { "l" }, vec![Object::Real(*x), Object::Real(*y)]))
+            .chain([Op::new("h", vec![]), Op::new("W", vec![]), Op::new("n", vec![])])
+            .collect()
+    };
     // The image's own earlier crop (a clipping path right after the scope's `q`) gives way to
     // the new one, so a crop can grow again as well as shrink.
     let old_clip: Option<std::ops::Range<usize>> = (start != end)
@@ -822,4 +1749,33 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let contents = crate::text::rewritten_contents(doc, &all, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+/// Post-multiplies the image's existing CTM `[a, b, c, d, e, f]` by the crop transform
+/// `[u_min, v_min, u_max, v_max]` to shrink the footprint without stretching.
+pub fn crop_ctm(ctm: [f64; 6], crop: [f64; 4]) -> [f64; 6] {
+    let [a, b, c, d, e, f] = ctm;
+    let [u_min, v_min, u_max, v_max] = crop;
+    let new_a = a * (u_max - u_min);
+    let new_b = b * (u_max - u_min);
+    let new_c = c * (v_max - v_min);
+    let new_d = d * (v_max - v_min);
+    let new_e = e + a * u_min + c * v_min;
+    let new_f = f + b * u_min + d * v_min;
+    [new_a, new_b, new_c, new_d, new_e, new_f]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crop_ctm_standard_non_stretched() {
+        // Standard upright CTM: width=200, height=100 at origin (50, 100)
+        let ctm = [200.0, 0.0, 0.0, 100.0, 50.0, 100.0];
+        let crop = [0.25, 0.25, 0.75, 0.75];
+        let cropped = crop_ctm(ctm, crop);
+        let expected = [100.0, 0.0, 0.0, 50.0, 100.0, 125.0];
+        assert_eq!(cropped, expected);
+    }
 }

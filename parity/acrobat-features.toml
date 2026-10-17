@@ -2151,11 +2151,11 @@ title = "Arrange objects (bring forward, send backward)"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["image_edit"]
+evidence = ["crates/edit/src/tests.rs::image_arrange_stacking_order_and_remove_crop"]
+notes = "Image stacking order in content streams: Bring to Front, Send to Back, Bring Forward, Send Backward with undo/redo and PDF export persistence. Image-level crop and 8-point handle transforms. Still missing: arbitrary vector paths, inline images, and multi-object grouping."
 
 [[feature]]
 id = "edit.align-distribute-objects"

@@ -67,7 +67,7 @@ pub use pdfcraft_edit::{BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, 
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
-pub use pdfcraft_edit::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
+pub use pdfcraft_edit::{ArrangeOrder, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -86,7 +86,13 @@ pub enum ImageEdit {
         name: String,
         bytes: Arc<Vec<u8>>,
     },
+    /// Apply an arbitrary 2D affine transform matrix in user space.
+    Transform([f64; 6]),
     Delete,
+    /// Change the stacking order.
+    Arrange(ArrangeOrder),
+    /// Remove any private crop on the image.
+    RemoveCrop,
 }
 pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, script_outline, undrawable_message};
 
@@ -1872,6 +1878,12 @@ pub const EDIT_LABELS: &[&str] = &[
     "Flip image",
     "Replace image",
     "Delete image",
+    "Bring to front",
+    "Send to back",
+    "Bring forward",
+    "Send backward",
+    "Remove crop",
+    "Crop image",
     "Add header & footer",
     "Update header & footer",
     "Add watermark",
@@ -1999,11 +2011,17 @@ impl Edit {
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
+                ImageEdit::Transform(_) => "Transform image",
                 ImageEdit::Rotate(_) => "Rotate image",
                 ImageEdit::Crop(_) => "Crop image",
                 ImageEdit::Flip { .. } => "Flip image",
                 ImageEdit::Replace { .. } => "Replace image",
                 ImageEdit::Delete => "Delete image",
+                ImageEdit::Arrange(ArrangeOrder::BringToFront) => "Bring to front",
+                ImageEdit::Arrange(ArrangeOrder::SendToBack) => "Send to back",
+                ImageEdit::Arrange(ArrangeOrder::BringForward) => "Bring forward",
+                ImageEdit::Arrange(ArrangeOrder::SendBackward) => "Send backward",
+                ImageEdit::RemoveCrop => "Remove crop",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
@@ -2499,6 +2517,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
             let c = match change {
                 ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
+                ImageEdit::Transform(t) => pdfcraft_edit::ImageChange::Transform(*t),
                 ImageEdit::Rotate(q) => {
                     pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
                 }
@@ -2518,6 +2537,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 }
                 ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
+                ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
+                ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }

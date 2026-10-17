@@ -2498,6 +2498,7 @@ mod tests {
             "JavaScript",
             "Microsoft Word (.docx)",
             "PDF/A…",
+            "DN: ",
             "PostScript / EPS",
             "Rich Text Format (.rtf)",
             "CheckBox",
