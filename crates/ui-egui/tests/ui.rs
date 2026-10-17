@@ -830,6 +830,39 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
 }
 
 #[test]
+fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order() {
+    // #585: "Combine files" on PDFs and pictures selected together opens Combine files with them
+    // listed in the order they arrive; pictures become PDFs as they join (#569). Nothing is opened
+    // or combined until Combine is pressed.
+    use pdfcraft_ui_egui::OsEvent;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(40, 20, image::Rgb([90, 120, 200])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    for (name, bytes) in [("b.pdf", FIXTURE.to_vec()), ("photo.png", png.into_inner()), ("a.pdf", FIXTURE.to_vec()), ("c.pdf", FIXTURE.to_vec())] {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    let queue =
+        std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Combine(vec![path("b.pdf"), path("missing.pdf"), path("photo.png"), path("a.pdf")])]));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    let names = |h: &Harness<'_, PdfCraftApp>| h.state().combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    assert!(h.state().combine_showing(), "the Combine files tab shows");
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf"], "in the order given; the file that can't be read is left out");
+    assert!(h.state().combine_draft.iter().all(|f| f.bytes.starts_with(b"%PDF-") && f.problem.is_none()), "all PDFs, none with a problem");
+    h.get_by_label_contains("missing.pdf");
+    assert!(h.state().views.is_empty(), "nothing is opened or combined");
+    // A later launch's files join the same list, after the others.
+    queue.borrow_mut().push(OsEvent::Combine(vec![path("c.pdf")]));
+    h.step();
+    assert_eq!(names(&h), ["b.pdf", "photo.png", "a.pdf", "c.pdf"]);
+    assert!(h.state().views.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn files_and_quit_from_the_operating_system() {
     // #73: macOS hands Finder double-clicks, Open With and Dock drops over as Apple events.
     use pdfcraft_ui_egui::OsEvent;
