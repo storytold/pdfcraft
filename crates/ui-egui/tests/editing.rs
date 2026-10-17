@@ -2192,7 +2192,9 @@ fn copying_out_of_a_document_honours_its_security() {
     let mut h = open("pw");
     assert!(!copy(&mut h), "⌘C copies nothing");
     assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
-    for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"] {
+    for command in
+        ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images", "export.cbz"]
+    {
         h.state_mut().toast = None;
         assert!(!h.state_mut().execute(command), "{command} is refused");
         assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused, "{command} says why");

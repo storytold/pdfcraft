@@ -1,8 +1,11 @@
-//! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
+//! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats), and comic book
+//! archives ([`cbz`]).
 //!
 //! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
 //! text, from a
 //! document's working file (so unsaved edits and hidden layers are respected, as on screen).
+
+pub mod cbz;
 
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 
@@ -95,12 +98,17 @@ impl Exporter {
 
     /// Page `page` as an image file of `format`.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
+        self.image_sized(page, dpi, format).map(|(img, _, _)| img)
+    }
+
+    /// [`Exporter::image`] with the image's width and height in pixels.
+    pub fn image_sized(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<(Vec<u8>, u32, u32), String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
         if let Some(e) = r.error {
             return Err(format!("page {}: {e}", page + 1));
         }
-        encode_image(r.width, r.height, &r.rgba, format)
+        Ok((encode_image(r.width, r.height, &r.rgba, format)?, r.width, r.height))
     }
 
     /// The reading-order text of a page.

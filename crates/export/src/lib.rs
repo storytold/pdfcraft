@@ -1,4 +1,4 @@
-//! pdfcraft-export — Export a PDF ▸ Word, HTML, RTF (L4).
+//! pdfcraft-export — Export a PDF ▸ Word, HTML, RTF, and the comic archive parts (L4).
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing
@@ -8,11 +8,13 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod comic;
 mod pptx;
 mod zip;
 
+pub use comic::{ComicInfo, ComicPage, comic_info};
 pub use pptx::pptx;
-pub use zip::Zip;
+pub use zip::{Zip, ZipWriter};
 
 /// A paragraph of a page.
 #[derive(Clone, Debug, PartialEq)]

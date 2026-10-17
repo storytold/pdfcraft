@@ -781,6 +781,7 @@ impl Automation {
             "pdfa_verify" => self.pdfa_verify(&a)?,
             "print_readiness" => self.print_readiness(&a)?,
             "doc_export_office" => self.doc_export_office(&a)?,
+            "doc_export_cbz" => self.doc_export_cbz(&a)?,
             "pdfa_convert" => self.pdfa_convert(&a)?,
             "action_run" => self.action_run(&a)?,
             "doc_compare_report" => self.doc_compare_report(&a)?,
@@ -1302,6 +1303,44 @@ impl Automation {
         } else {
             Ok(json!({ "count": files.len(), "files": files, "lower_dpi": lowered }))
         }
+    }
+
+    /// Export a PDF ▸ Comic book archive: the pages as images in a `.cbz`, streamed into a
+    /// staging file beside `path` and renamed over it when complete.
+    fn doc_export_cbz(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::export::{ImageFormat, cbz};
+        let doc = self.doc_to_copy(a)?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let src = doc.export_source();
+        let dpi = a.opt_num("dpi")?.unwrap_or(cbz::CbzOptions::default().dpi);
+        if !(18.0..=1200.0).contains(&dpi) {
+            return Err(ToolError::InvalidArgs("dpi must be between 18 and 1200".into()));
+        }
+        let quality = a.opt_int("quality")?.unwrap_or(90).clamp(1, 100) as u8;
+        let format = match a.opt_str("format")?.unwrap_or("jpeg") {
+            "jpeg" | "jpg" => ImageFormat::Jpeg { quality },
+            "png" => ImageFormat::Png,
+            f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (jpeg, png)"))),
+        };
+        let opts = cbz::CbzOptions { dpi, format, passthrough: a.opt_bool("passthrough")?.unwrap_or(true) };
+        let path = self.resolve(a.str("path")?, true)?;
+        let report = write_atomic_streamed(&path, staging_suffixes(), std::fs::File::sync_all, |file| {
+            let (out, report) = cbz::write_cbz(&src, &pages, opts, std::io::BufWriter::new(file), |_| {}).map_err(std::io::Error::other)?;
+            out.into_inner().map_err(std::io::IntoInnerError::into_error)?;
+            Ok(report)
+        })?;
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let lowered: Vec<Value> = report.lower_dpi.iter().map(|(p, dpi)| json!({ "page": p + 1, "dpi": dpi })).collect();
+        Ok(json!({
+            "path": path.to_string_lossy(),
+            "pages": report.pages,
+            "passed_through": report.passed_through.iter().map(|p| p + 1).collect::<Vec<_>>(),
+            "lower_dpi": lowered,
+            "bytes": bytes,
+        }))
     }
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {
@@ -2581,6 +2620,18 @@ fn write_atomic_synced(
     suffixes: impl IntoIterator<Item = u64>,
     sync: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
 ) -> Result<()> {
+    use std::io::Write as _;
+    write_atomic_streamed(path, suffixes, sync, |file| file.write_all(bytes))
+}
+
+/// [`write_atomic`] for a file written as it is produced (see
+/// `pdfcraft_platform::staging::write_atomically_streamed`): `write` fills the staging file.
+fn write_atomic_streamed<T>(
+    path: &Path,
+    suffixes: impl IntoIterator<Item = u64>,
+    sync: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<T>,
+) -> Result<T> {
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
     // the root itself, whose parent isn't ours to write in.
     if path.is_dir() {
@@ -2593,7 +2644,7 @@ fn write_atomic_synced(
     // (#2166): the staging file is written, flushed (delayed writeback failures surface before
     // the destination is replaced or a document marked clean), closed and renamed; a failure at
     // any step removes it and leaves the destination as it was.
-    pdfcraft_platform::staging::write_atomically_with(path, bytes, StagingName::SuffixThenTag, suffixes, sync)
+    pdfcraft_platform::staging::write_atomically_streamed(path, StagingName::SuffixThenTag, suffixes, sync, write)
         .map_err(|e| failed(format!("{}: {e}", path.display())))
 }
 

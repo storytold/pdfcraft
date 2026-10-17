@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (XDP data row corrected; BigTIFF in Create PDF) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (comic book archive export) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -91,6 +91,7 @@ features total).
 | PNG, JPEG, TIFF | yes | yes | good | `create.export-png`, `create.export-jpeg-tiff` |
 | JPEG 2000 | yes | no | none | `create.export-jpeg2000` planned |
 | All embedded images | yes | yes | good | `create.export-all-images` |
+| Comic book archive (`.cbz`) | no | one image per page with `ComicInfo.xml` (title, author, subject, language, right-to-left, bookmarks); a page that is a single JPEG image is copied without recompressing, other pages are rendered as JPEG or PNG; zip64 past 4 GiB. Not imported | good | `export.cbz`, `doc_export_cbz`; not in the Acrobat checklist (Acrobat has no such export) |
 | XML 1.0 | yes | no | none | `create.export-xml` planned |
 | SVG | no (dropped by Adobe) | no | none | `create.export-svg` planned |
 | PostScript, EPS | yes | no | none | `create.export-ps`, `create.export-eps` planned |
@@ -110,6 +111,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Export to comic book archive (`.cbz`), a PdfCraft extra outside Acrobat parity: pages that are a single JPEG image are copied without recompressing, other pages are rendered; streamed to disk, zip64 when large. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |
 | 2026-10-11 | minor | Encrypted PDF row: written files open in Acrobat DC (#774, fixed by #836). FDF row: #807, #809 and #819 fixed |

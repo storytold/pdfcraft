@@ -1063,6 +1063,20 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_export_office", "Export to Word, PowerPoint, HTML or RTF", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline) or RTF (.rtf), chosen by path's extension: text, headings, bold and italic. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited.")
             .cmd("export.docx")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
+        t("doc_export_cbz", "Export to comic book archive", "Export a PDF ▸ Comic book archive (.cbz): pages as images in a zip (`001.jpg`, `002.jpg`…, in the order of pages) with a ComicInfo.xml (title, author, subject, language, right-to-left reading, page sizes, and bookmarks as page bookmarks). A page that is only one upright JPEG image covering it (typically a scan) is copied without recompressing unless passthrough is false, listed in passed_through; other pages are rendered at dpi (default 200) as JPEG (quality default 90) or PNG, flattened onto white. A rendered page too large at that resolution is drawn at the most the renderer allows, listed in lower_dpi. Large archives use zip64. Includes unsaved edits.")
+            .cmd("export.cbz")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "path": { "type": "string" },
+                    "format": { "type": "string", "enum": ["jpeg", "png"], "description": "For rendered pages (default jpeg)." },
+                    "quality": { "type": "integer", "minimum": 1, "maximum": 100, "description": "JPEG quality (default 90)." },
+                    "dpi": { "type": "number", "minimum": 18, "maximum": 1200 },
+                    "passthrough": { "type": "boolean", "description": "Copy a page that is a single JPEG image without recompressing (default true)." },
+                    "pages": pages("to export, in this order (default: all)"),
+                }),
+                &["doc", "path"],
+            )),
         t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
             .ro()
             .cmd("standards.pdfa")

@@ -1004,6 +1004,13 @@ fn write_atomically_syncing(
     pdfcraft_platform::staging::write_atomically_with(std::path::Path::new(path), bytes, StagingName::TagThenSuffix, suffixes, sync_all)
 }
 
+/// [`write_atomically`] for a file written as it is produced (a comic book archive of rendered
+/// pages), so it is never held in memory whole: `write` fills the staging file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_atomically_streamed<T>(path: &std::path::Path, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<T>) -> std::io::Result<T> {
+    pdfcraft_platform::staging::write_atomically_streamed(path, StagingName::TagThenSuffix, staging_suffixes(), std::fs::File::sync_all, write)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn short_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())

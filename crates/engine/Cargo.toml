@@ -14,6 +14,7 @@ pdfcraft-measure = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 pdfcraft-render = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-content = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-forms = { workspace = true }
@@ -47,3 +48,6 @@ unicode-segmentation = "1.13"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Already in the graph through lopdf; used only for the local UTC offset ("today").
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+flate2 = { workspace = true }

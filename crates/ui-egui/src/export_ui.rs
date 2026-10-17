@@ -1,4 +1,5 @@
-//! Export a PDF ▸ Image (PNG, JPEG, TIFF) and Text (Acrobat's Export a PDF tool, first formats).
+//! Export a PDF ▸ Image (PNG, JPEG, TIFF) and Text (Acrobat's Export a PDF tool, first formats),
+//! and to a comic book archive (`.cbz`).
 //!
 //! On the desktop the export runs on a worker thread and reports progress in the notice bar;
 //! on the web it runs in place and downloads the files.
@@ -18,6 +19,8 @@ pub enum ExportKind {
     Text,
     /// Export all images: the images pages use, as files.
     AllImages,
+    /// One comic book archive (`.cbz`) of page images.
+    Comic,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,11 +49,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
             ExportKind::Image => tl!("Export to Image"),
             ExportKind::Text => tl!("Export to Text"),
             ExportKind::AllImages => tl!("Export All Images"),
+            ExportKind::Comic => tl!("Export to Comic Book Archive"),
         })
         .font(theme::semibold(18.0)),
     );
     ui.add_space(8.0);
-    if kind == ExportKind::Image {
+    // Comic readers don't open TIFF.
+    if kind == ExportKind::Comic && d.format == ImageFormat::Tiff {
+        d.format = ImageFormat::Jpeg { quality: 85 };
+    }
+    if matches!(kind, ExportKind::Image | ExportKind::Comic) {
         ui.horizontal(|ui| {
             ui.label(tl!("Resolution"));
             egui::ComboBox::from_id_salt("export-dpi")
@@ -68,7 +76,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 _ => 85,
             };
             egui::ComboBox::from_id_salt("export-format").selected_text(d.format.label()).show_ui(ui, |ui| {
-                for f in [ImageFormat::Png, ImageFormat::Jpeg { quality }, ImageFormat::Tiff] {
+                let tiff = (kind == ExportKind::Image).then_some(ImageFormat::Tiff);
+                for f in [Some(ImageFormat::Png), Some(ImageFormat::Jpeg { quality }), tiff].into_iter().flatten() {
                     let on = std::mem::discriminant(&d.format) == std::mem::discriminant(&f);
                     if ui.selectable_label(on, f.label()).clicked() {
                         d.format = f;
@@ -82,11 +91,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 }
             }
         });
-        ui.label(
-            egui::RichText::new(crate::i18n::fmt(tl!("One {f} file per page, named after the document."), &[("f", d.format.label())]))
-                .small()
-                .color(t.text_faint),
-        );
+        let note = match kind {
+            ExportKind::Comic => {
+                tl!("One .cbz file with an image of each page. Pages that are a single JPEG are copied without recompressing.").to_string()
+            }
+            _ => crate::i18n::fmt(tl!("One {f} file per page, named after the document."), &[("f", d.format.label())]),
+        };
+        ui.label(egui::RichText::new(note).small().color(t.text_faint));
     } else if kind == ExportKind::AllImages {
         ui.horizontal(|ui| {
             ui.label(tl!("Exclude images smaller than"));
@@ -173,8 +184,8 @@ fn run(
     }
     let mut ex = Exporter::from_source(src);
     match kind {
-        // Handled above.
-        ExportKind::AllImages => String::new(),
+        // Handled above, and by `run_comic`.
+        ExportKind::AllImages | ExportKind::Comic => String::new(),
         ExportKind::Image => {
             for (k, p) in pages.iter().enumerate() {
                 set(k, None);
@@ -183,21 +194,8 @@ fn run(
                     return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]);
                 }
             }
-            let mut msg = if total == 1 {
-                crate::i18n::fmt(tl!("Exported 1 image"), &[])
-            } else {
-                crate::i18n::fmt(tl!("Exported {n} images"), &[("n", &total.to_string())])
-            };
-            // Pages too large for the renderer at the chosen resolution are drawn at the most it
-            // allows: say so, rather than leave a smaller image unexplained.
             let lowered: Vec<f64> = pages.iter().map(|p| ex.dpi_used(*p, dpi)).filter(|used| *used < dpi.clamp(18.0, 1200.0) - 0.5).collect();
-            if let Some(lowest) = lowered.iter().copied().reduce(f64::min) {
-                msg.push_str(&crate::i18n::fmt(
-                    tl!(" ({n} at {dpi} dpi, the largest size they can be drawn at)"),
-                    &[("n", &lowered.len().to_string()), ("dpi", &format!("{}", lowest.floor()))],
-                ));
-            }
-            msg
+            exported_images(total, &lowered)
         }
         ExportKind::Text => {
             set(0, None);
@@ -213,6 +211,44 @@ fn run(
             }
         }
     }
+}
+
+/// "Exported n images", and how many pages were drawn at a lower resolution than asked
+/// (`lowered`, the resolutions they were drawn at) because they are too large for the renderer:
+/// said, rather than leave a smaller image unexplained.
+fn exported_images(n: usize, lowered: &[f64]) -> String {
+    let mut msg =
+        if n == 1 { crate::i18n::fmt(tl!("Exported 1 image"), &[]) } else { crate::i18n::fmt(tl!("Exported {n} images"), &[("n", &n.to_string())]) };
+    if let Some(lowest) = lowered.iter().copied().reduce(f64::min) {
+        msg.push_str(&crate::i18n::fmt(
+            tl!(" ({n} at {dpi} dpi, the largest size they can be drawn at)"),
+            &[("n", &lowered.len().to_string()), ("dpi", &format!("{}", lowest.floor()))],
+        ));
+    }
+    msg
+}
+
+/// Write `pages` as a comic book archive to `out`, reporting progress; the writer back and the
+/// message to show, or why it stopped.
+fn run_comic<W: std::io::Write>(
+    src: &ExportSource,
+    pages: &[usize],
+    opts: pdfcraft_engine::export::cbz::CbzOptions,
+    out: W,
+    status: &ExportStatus,
+    lang: crate::i18n::Lang,
+) -> Result<(W, String), String> {
+    // May run on a worker thread: messages are drawn in the UI's language.
+    crate::i18n::set_current(lang);
+    let total = pages.len();
+    let progress = |done: usize| {
+        if let Ok(mut s) = status.lock() {
+            *s = Some((done, total, None));
+        }
+    };
+    let (out, report) = pdfcraft_engine::export::cbz::write_cbz(src, pages, opts, out, progress)?;
+    let lowered: Vec<f64> = report.lower_dpi.iter().map(|(_, dpi)| *dpi).collect();
+    Ok((out, exported_images(report.pages, &lowered)))
 }
 
 impl PdfCraftApp {
@@ -234,6 +270,10 @@ impl PdfCraftApp {
         let format = self.export_draft.format;
         let min_side = self.export_draft.min_side;
         let status: ExportStatus = Arc::new(Mutex::new(Some((0, pages.len(), None))));
+        if kind == ExportKind::Comic {
+            let opts = pdfcraft_engine::export::cbz::CbzOptions { dpi, format, passthrough: true };
+            return self.start_comic_export(src, pages, opts, stem, status);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let start = move |app: &mut Self, dir: std::path::PathBuf, inline: bool| {
@@ -280,6 +320,70 @@ impl PdfCraftApp {
                 &status,
                 crate::i18n::current(),
             );
+            if let Ok(mut s) = status.lock() {
+                *s = Some((0, 0, Some(msg)));
+            }
+            self.export_status = Some(status);
+        }
+    }
+
+    /// Export ▸ Comic book archive: choose where the `.cbz` goes, then write it there through a
+    /// staging file on a worker thread (on the web: build it and download it).
+    fn start_comic_export(
+        &mut self,
+        src: ExportSource,
+        pages: Vec<usize>,
+        opts: pdfcraft_engine::export::cbz::CbzOptions,
+        stem: String,
+        status: ExportStatus,
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let start = move |app: &mut Self, path: std::path::PathBuf, inline: bool| {
+                let st = status.clone();
+                let lang = crate::i18n::current();
+                let work = move || {
+                    let written = crate::editing::write_atomically_streamed(&path, |file| {
+                        let (out, msg) = run_comic(&src, &pages, opts, std::io::BufWriter::new(file), &st, lang).map_err(std::io::Error::other)?;
+                        out.into_inner().map_err(std::io::IntoInnerError::into_error)?;
+                        Ok(msg)
+                    });
+                    let msg = match written {
+                        Ok(msg) => crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &path.display().to_string())]),
+                        Err(e) => crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
+                    };
+                    if let Ok(mut s) = st.lock() {
+                        let total = s.as_ref().map_or(0, |(_, t, _)| *t);
+                        *s = Some((total, total, Some(msg)));
+                    }
+                };
+                if inline {
+                    work(); // tests and automation: synchronous
+                } else {
+                    std::thread::Builder::new().name("pdfcraft-export".into()).spawn(work).ok();
+                }
+                app.export_status = Some(status);
+            };
+            match self.save_override.clone() {
+                Some(p) => start(self, p.into(), true),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_title(tl!("Export").to_string())
+                        .add_filter("CBZ", &["cbz"])
+                        .set_file_name(format!("{stem}.cbz"));
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| start(app, path, false));
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let msg = match run_comic(&src, &pages, opts, Vec::new(), &status, crate::i18n::current()) {
+                Ok((bytes, msg)) => match crate::editing::download(&format!("{stem}.cbz"), &bytes) {
+                    Ok(()) => msg,
+                    Err(e) => crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
+                },
+                Err(e) => crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", e.as_str())]),
+            };
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }

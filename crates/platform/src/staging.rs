@@ -85,17 +85,33 @@ pub fn write_atomically_with(
     sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use std::io::Write as _;
+    write_atomically_streamed(path, form, suffixes, sync_all, |file| file.write_all(bytes))
+}
+
+/// [`write_atomically_with`] for a file written as it is produced (an archive of rendered pages),
+/// so it never has to be held in memory whole: `write` writes the whole file into the staging
+/// file, and what it returns is returned. A failure in `write`, as at any other step, removes the
+/// staging file and leaves the target as it was.
+pub fn write_atomically_streamed<T>(
+    path: &Path,
+    form: StagingName,
+    suffixes: impl IntoIterator<Item = u64>,
+    sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<T>,
+) -> std::io::Result<T> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
     let (tmp, file) = create_staging(dir, name, form, suffixes)?;
     let result = (|| {
         // Closed at the end of the block, before the rename (required on Windows).
-        {
+        let value = {
             let mut file = file;
-            file.write_all(bytes)?;
+            let value = write(&mut file)?;
             sync_staged(&file, sync_all)?;
-        }
-        std::fs::rename(&tmp, path)
+            value
+        };
+        std::fs::rename(&tmp, path)?;
+        Ok(value)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);

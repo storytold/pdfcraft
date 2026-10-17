@@ -2699,6 +2699,38 @@ fn exporting_all_images_through_tools() {
     assert_eq!(ok(&mut a, "doc_export_all_images", json!({ "doc": made, "folder": "imgs3", "min_size": 10000 }))["count"], 0);
 }
 
+/// Export ▸ Comic book archive: a scanned page (one JPEG filling it) goes in unchanged, other
+/// pages are rendered, in the order asked for.
+#[test]
+fn exporting_a_comic_book_archive_through_tools() {
+    let dir = workdir("export-cbz");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 36, "pages": [1], "format": "jpeg" }));
+    let scan = std::fs::read(dir.join("src/a_page_1.jpg")).unwrap();
+    let made = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.jpg"] }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_cbz", json!({ "doc": made, "path": "comic.cbz" }));
+    assert_eq!(r["pages"], 1, "{r}");
+    assert_eq!(r["passed_through"], json!([1]), "{r}");
+    let zip = std::fs::read(dir.join("comic.cbz")).unwrap();
+    assert!(zip.starts_with(b"PK\x03\x04"));
+    assert!(zip.windows(scan.len()).any(|w| w == scan), "the scan's JPEG, unchanged");
+    assert_eq!(r["bytes"], zip.len() as u64);
+
+    let r = ok(&mut a, "doc_export_cbz", json!({ "doc": doc, "path": "text.cbz", "dpi": 36, "format": "png", "pages": [2, 1] }));
+    assert_eq!(r["pages"], 2, "{r}");
+    assert_eq!(r["passed_through"], json!([]), "{r}");
+    let zip = std::fs::read(dir.join("text.cbz")).unwrap();
+    for name in [&b"001.png"[..], b"002.png", b"ComicInfo.xml"] {
+        assert!(zip.windows(name.len()).any(|w| w == name), "{}", String::from_utf8_lossy(name));
+    }
+    assert!(!dir.read_dir().unwrap().any(|e| e.unwrap().file_name().to_string_lossy().contains("pdfcraft-tmp")), "no staging file left");
+
+    assert!(matches!(err(&mut a, "doc_export_cbz", json!({ "doc": doc, "path": "x.cbz", "format": "tiff" })), ToolError::InvalidArgs(_)));
+    assert!(matches!(err(&mut a, "doc_export_cbz", json!({ "doc": doc, "path": "x.cbz", "dpi": 5 })), ToolError::InvalidArgs(_)));
+    assert!(!dir.join("x.cbz").exists());
+}
+
 #[test]
 fn fill_and_sign_through_tools() {
     let dir = workdir("fill");
