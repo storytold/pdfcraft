@@ -1852,9 +1852,22 @@ fn page_boxes_default_inherit_and_set() {
 #[test]
 fn duplicate_pages_inserts_copies_after_the_last() {
     let mut doc = open(fixture());
-    duplicate_pages(&mut doc, &[0, 1]).unwrap();
+    duplicate_pages(&mut doc, &[0, 1], None).unwrap();
     let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 1", "Page 2", "Page 3"]);
+}
+
+#[test]
+fn duplicate_pages_at_inserts_the_copies_there() {
+    let mut doc = open(fixture());
+    duplicate_pages(&mut doc, &[2], Some(0)).unwrap();
+    let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(labels(&doc), ["Page 3", "Page 1", "Page 2", "Page 3"]);
+    // An index past the end lands at the end.
+    let mut doc = open(fixture());
+    duplicate_pages(&mut doc, &[0], Some(99)).unwrap();
+    let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3", "Page 1"]);
 }
 
 #[test]
@@ -2463,7 +2476,7 @@ fn import_can_merge_into_same_named_fields_instead() {
 #[test]
 fn duplicating_a_page_with_a_field_keeps_the_field_name() {
     let mut doc = doc_with_field("Text1");
-    crate::duplicate_pages(&mut doc, &[0]).unwrap();
+    crate::duplicate_pages(&mut doc, &[0], None).unwrap();
     assert_eq!(crate::page_count(&doc).unwrap(), 2);
     assert_eq!(form_field_names(&doc), ["Text1", "Text1"], "nothing renamed");
 }

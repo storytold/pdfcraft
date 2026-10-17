@@ -822,9 +822,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_replace", "Replace pages", "Replace the content of pages with pages of another PDF (same count). Links, comments, form fields and bookmarks on the original pages stay, as in Acrobat. Undoable.")
             .cmd("page.replace")
             .with(schema(json!({ "doc": doc(), "pages": pages("to replace"), "path": path_arg(), "from_pages": pages("of the other file, in order (default: its first pages)") }), &["doc", "pages", "path"])),
-        t("page_duplicate", "Duplicate pages", "Insert copies of pages after the last of them (fonts and images are shared, not copied). Undoable.")
+        t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
-            .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate") }), &["doc", "pages"])),
+            .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
         t(
             "page_transition_set",
             "Set page transitions",

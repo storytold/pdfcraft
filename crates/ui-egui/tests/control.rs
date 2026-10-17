@@ -5,9 +5,22 @@ use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
+
+/// The text each page shows, in order, as the app's session holds it.
+fn page_texts(app: &PdfCraftApp) -> Vec<String> {
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+    (0..r.page_count())
+        .map(|p| {
+            let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+            out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+        })
+        .collect()
+}
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -1032,6 +1045,44 @@ fn state_reports_the_selected_pages() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([2, 3, 4]));
     ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([]));
+}
+
+#[test]
+fn ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page() {
+    let (mut h, c) = harness_pages(3);
+    ok(&mut h, &c, "ui.set", json!({ "key": "tool", "value": "organize" }));
+    h.run_steps(3);
+    // The grid cell of a page: the node labelled exactly "Page N" (the checkbox says "Select page N").
+    let cell = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, page: usize| -> [f64; 4] {
+        let nodes = ok(h, c, "ui.inspect", json!({ "query": &format!("page {page}") }));
+        let want = format!("Page {page}");
+        let r = nodes["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["label"].as_str() == Some(want.as_str()))
+            .and_then(|w| w["rect"].as_array().cloned())
+            .expect("the page's grid cell");
+        let f = |i: usize| r[i].as_f64().unwrap();
+        [f(0), f(1), f(2), f(3)]
+    };
+    let (a, b) = (cell(&mut h, &c, 1), cell(&mut h, &c, 3));
+    let copy = if cfg!(target_os = "macos") { "alt" } else { "ctrl" };
+    ok(
+        &mut h,
+        &c,
+        "ui.drag",
+        json!({
+            "from": [(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0],
+            "to": [b[2] - 4.0, (b[1] + b[3]) / 2.0],
+            "modifiers": [copy],
+        }),
+    );
+    h.run_steps(3);
+    let st = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(st["documents"][0]["pages"], 4, "the drag copied the page instead of moving it: {st}");
+    assert_eq!(st["active"]["selected_pages"], json!([4]), "{st}");
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 1"], "the copy landed at the drop gap, after page 3");
 }
 
 #[test]

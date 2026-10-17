@@ -4737,6 +4737,12 @@ pub(crate) fn drop_gap(cells: &[(usize, Rect)], p: Pos2) -> Option<usize> {
     Some(if p.x < r.center().x { *i } else { i + 1 })
 }
 
+/// Ctrl (Option on macOS) held when a page drag drops copies the dragged pages into the gap
+/// instead of moving them, as Acrobat's Organize Pages does.
+fn copy_modifier(m: &egui::Modifiers) -> bool {
+    if cfg!(target_os = "macos") { m.alt } else { m.ctrl }
+}
+
 /// A "+" on a gap of the page grid: insert files there. Returns whether it was clicked.
 fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: String, t: &Tokens) -> bool {
     let resp = ui.interact(Rect::from_center_size(at, Vec2::splat(22.0)), ui.id().with(("org-gap", gap)), Sense::click());
@@ -4968,6 +4974,8 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
         }
         // While dragging: the gap the pages would go to, drawn as a bar.
         if let (Some(pages), Some(p)) = (view.org_drag.clone(), ui.input(|i| i.pointer.hover_pos())) {
+            // Ctrl (Option on macOS) held over the drop copies the pages; see #2997.
+            let copying = copy_modifier(&ui.input(|i| i.modifiers));
             if let Some(gap) = drop_gap(&cells, p) {
                 let x = match cells.iter().find(|(i, _)| *i == gap) {
                     Some((_, r)) => r.left() + 3.0,
@@ -4975,8 +4983,18 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                 };
                 let row = cells.iter().find(|(i, _)| *i == gap).or(cells.last()).map(|(_, r)| r.y_range()).unwrap_or(egui::Rangef::new(0.0, 0.0));
                 ui.painter().line_segment([pos2(x, row.min + 10.0), pos2(x, row.max - 10.0)], Stroke::new(3.0, t.accent));
+                let mut text_at = p + vec2(14.0, 14.0);
+                if copying {
+                    // A "+" by the pointer: this drop copies the pages, it doesn't move them.
+                    let badge = p + vec2(12.0, 12.0);
+                    ui.painter().circle(badge, 9.0, t.accent, Stroke::new(1.0, t.accent));
+                    let ink = Stroke::new(1.5, Color32::WHITE);
+                    ui.painter().line_segment([badge - vec2(4.0, 0.0), badge + vec2(4.0, 0.0)], ink);
+                    ui.painter().line_segment([badge - vec2(0.0, 4.0), badge + vec2(0.0, 4.0)], ink);
+                    text_at.x += 18.0;
+                }
                 ui.painter().text(
-                    p + vec2(14.0, 14.0),
+                    text_at,
                     Align2::LEFT_TOP,
                     if pages.len() == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.len().to_string())]) },
                     theme::medium(12.0),
@@ -4986,13 +5004,19 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
             if drop {
                 view.org_drag = None;
                 if let Some(gap) = drop_gap(&cells, p) {
-                    // `to` counts positions without the moving pages.
-                    let to = gap - pages.iter().filter(|x| **x < gap).count();
-                    let first = pages[0];
-                    let contiguous = pages.windows(2).all(|w| w[1] == w[0] + 1);
-                    if !(contiguous && to == first) {
-                        view.pending_edit = Some(Edit::MovePages { pages: pages.clone(), to });
-                        view.selected = (to..to + pages.len()).collect();
+                    if copying {
+                        // The copies land at the gap as it is: nothing leaves its place.
+                        view.pending_edit = Some(Edit::DuplicatePages { pages: pages.clone(), at: Some(gap) });
+                        view.selected = (gap..gap + pages.len()).collect();
+                    } else {
+                        // `to` counts positions without the moving pages.
+                        let to = gap - pages.iter().filter(|x| **x < gap).count();
+                        let first = pages[0];
+                        let contiguous = pages.windows(2).all(|w| w[1] == w[0] + 1);
+                        if !(contiguous && to == first) {
+                            view.pending_edit = Some(Edit::MovePages { pages: pages.clone(), to });
+                            view.selected = (to..to + pages.len()).collect();
+                        }
                     }
                 }
             }

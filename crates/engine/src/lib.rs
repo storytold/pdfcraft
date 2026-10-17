@@ -1252,9 +1252,11 @@ pub enum Edit {
         width: f64,
         height: f64,
     },
-    /// Copies of `pages` inserted after the last of them.
+    /// Copies of `pages` inserted at `at` (an index in the page order as it is now), or after
+    /// the last of them when `at` is `None`.
     DuplicatePages {
         pages: Vec<usize>,
+        at: Option<usize>,
     },
     /// Replace Pages: the content of `pages` is replaced by `src_pages` of another PDF; the
     /// pages' links, comments and bookmarks stay.
@@ -1917,7 +1919,7 @@ impl Edit {
             Edit::DeletePages { pages } => plural("Delete page", "Delete pages", pages.len()),
             Edit::MovePages { pages, .. } => plural("Move page", "Move pages", pages.len()),
             Edit::InsertBlankPage { .. } => Label::of("Insert blank page"),
-            Edit::DuplicatePages { pages } => plural("Duplicate page", "Duplicate pages", pages.len()),
+            Edit::DuplicatePages { pages, .. } => plural("Duplicate page", "Duplicate pages", pages.len()),
             Edit::ReplacePages { pages, .. } => plural("Replace page", "Replace pages", pages.len()),
             Edit::SetPageBox { pages, which: PageBox::Crop, .. } => plural("Crop page", "Crop pages", pages.len()),
             Edit::SetPageBox { .. } => Label::of("Set page boxes"),
@@ -2302,7 +2304,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
-        Edit::DuplicatePages { pages } => pdfcraft_organize::duplicate_pages(doc, pages)?,
+        Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = open_source(name, bytes)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;

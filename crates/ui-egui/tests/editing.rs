@@ -2354,6 +2354,41 @@ fn dragging_thumbnails_reorders_pages() {
     assert_eq!(sel, vec![2], "the moved page stays selected");
 }
 
+/// A page drag with the copy modifier held — Ctrl (Option on macOS) — instead of none.
+/// Modifiers are input state: `ModifiersChanged` once, as the column-select drag does.
+fn copy_drag(h: &mut Harness<'static, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    let modifiers = if cfg!(target_os = "macos") { Modifiers::ALT } else { Modifiers::CTRL };
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.run_steps(1);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.run_steps(1);
+    for k in 1..=5 {
+        h.hover_at(from + (to - from) * (k as f32 / 5.0));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.run_steps(4);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+}
+
+#[test]
+fn dragging_with_the_copy_modifier_copies_the_pages_into_the_gap() {
+    let mut h = organize(3);
+    let before = page_texts(h.state());
+    let grab = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).rect();
+    let (from, to) = (grab(&h, "Page 1").center(), grab(&h, "Page 3").right_center() - egui::vec2(10.0, 0.0));
+    copy_drag(&mut h, from, to);
+    // The original stays first; a copy of page 1 lands after page 3 (#2997).
+    let after = page_texts(h.state());
+    assert_eq!(after, vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone()], "{after:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Duplicate page"));
+    let sel: Vec<usize> = h.state().views[0].selected.iter().copied().collect();
+    assert_eq!(sel, vec![3], "the copy is selected");
+}
+
 #[test]
 fn copying_cutting_and_pasting_pages() {
     let mut h = organize(4);

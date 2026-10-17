@@ -2824,8 +2824,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.duplicate"]
 tools = ["page_duplicate"]
-evidence = ["crates/ui-egui/tests/ui_group/pageboxes.rs::duplicate_pages_copies_the_current_page", "crates/organize/src/tests.rs::duplicate_pages_inserts_copies_after_the_last"]
-notes = "copies share fonts and images with the originals"
+evidence = ["crates/ui-egui/tests/ui_group/pageboxes.rs::duplicate_pages_copies_the_current_page", "crates/ui-egui/tests/editing.rs::dragging_with_the_copy_modifier_copies_the_pages_into_the_gap", "crates/ui-egui/tests/control.rs::ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page", "crates/organize/src/tests.rs::duplicate_pages_inserts_copies_after_the_last", "crates/organize/src/tests.rs::duplicate_pages_at_inserts_the_copies_there", "crates/automation/tests/automation.rs::page_duplicate_at_inserts_the_copies_there"]
+notes = "copies share fonts and images with the originals; Ctrl-drag (Option on macOS) in the page grid drops the copies at the gap instead of moving the pages, with a \"+\" badge and the copies selected (#2997); page_duplicate takes `at` for where the first copy goes (left out: after the last of them)"
 
 [[feature]]
 id = "organize.reverse-pages"

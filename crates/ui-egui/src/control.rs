@@ -410,12 +410,23 @@ impl Control {
         let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200) as usize;
         let modifiers = modifiers(p.get("modifiers"))?;
         let which = pointer_button(p, "ui.drag")?;
+        // The events carry the modifiers and so does the input state: gestures that read
+        // `ui.input(|i| i.modifiers)` (a Ctrl-drag copy, an Alt-drag column select) see them.
+        let held = |mut events: Vec<egui::Event>| {
+            if modifiers != egui::Modifiers::NONE {
+                events.insert(0, egui::Event::ModifiersChanged(modifiers));
+            }
+            events
+        };
         let button = |pos, pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers };
-        let mut frames = vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)]];
+        let mut frames = vec![held(vec![egui::Event::PointerMoved(from)]), held(vec![button(from, true)])];
         for k in 1..=steps {
-            frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]);
+            frames.push(held(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]));
         }
-        frames.push(vec![button(to, false)]);
+        frames.push(held(vec![button(to, false)]));
+        if modifiers != egui::Modifiers::NONE {
+            frames.push(vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+        }
         let n = self.inject(frames);
         Ok(Handled::AfterFrames(n, json!({ "dragged": [[from.x, from.y], [to.x, to.y]] })))
     }

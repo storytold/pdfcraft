@@ -2083,6 +2083,19 @@ fn orphan_form_fields_through_tools() {
 }
 
 #[test]
+fn page_duplicate_at_inserts_the_copies_there() {
+    let dir = workdir("duplicate-at");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "page_duplicate", json!({ "doc": doc, "pages": [2], "at": 1 }));
+    assert_eq!(r["pages"], 4);
+    assert_eq!(page_text(&mut a, doc), ["Page 2", "Page 1", "Page 2", "Page 3"]);
+    // `at` is 1-based and within 1..=pages+1, as for the other page inserts.
+    assert!(matches!(a.call("page_duplicate", &json!({ "doc": doc, "pages": [1], "at": 0 })), Err(ToolError::InvalidArgs(_))), "1-based");
+    assert!(matches!(a.call("page_duplicate", &json!({ "doc": doc, "pages": [1], "at": 6 })), Err(ToolError::InvalidArgs(_))), "past the end");
+}
+
+#[test]
 fn duplicating_and_cropping_through_tools() {
     let dir = workdir("boxes");
     let mut a = auto(&dir);

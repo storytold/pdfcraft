@@ -373,7 +373,8 @@ impl Automation {
             }
             "page_duplicate" => {
                 let pages = self.pages(&a, "pages")?;
-                self.apply(&a, Edit::DuplicatePages { pages })?
+                let at = self.opt_position(&a, "at")?;
+                self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
@@ -1781,12 +1782,17 @@ impl Automation {
 
     /// A 1-based insertion position (1 = before the first page, n+1 = after the last) → 0-based.
     fn position(&self, a: &Args, key: &str) -> Result<usize> {
+        self.opt_position(a, key)?.ok_or_else(|| Args::missing(key))
+    }
+
+    /// `position`, but `None` when the key is absent.
+    fn opt_position(&self, a: &Args, key: &str) -> Result<Option<usize>> {
+        let Some(at) = a.opt_int(key)? else { return Ok(None) };
         let n = self.doc(a)?.info.pages.len();
-        let at = a.int(key)?;
         if at < 1 || at as usize > n + 1 {
             return Err(ToolError::InvalidArgs(format!("{key} must be between 1 and {} (the document has {n} pages)", n + 1)));
         }
-        Ok(at as usize - 1)
+        Ok(Some(at as usize - 1))
     }
 
     fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {

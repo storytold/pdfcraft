@@ -627,7 +627,7 @@ impl PdfCraftApp {
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
             "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets });
+                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
             }
             "ocr.enhance_camera" => {
                 // The corners start on the document's edges when they can be found, else
