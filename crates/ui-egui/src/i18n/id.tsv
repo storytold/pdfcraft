@@ -1,0 +1,2678 @@
+# Indonesian (id) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+# Clean-room translations of PdfCraft's English UI labels. Use standard Indonesian computing
+# terms; keep product and format names (PdfCraft, PDF, PDF/A, OCR, XFA, Word...) unchanged.
+# Indonesian does not inflect nouns for number, so @plural entries list one form.
+	Menu	Menu
+	Edit	Edit
+	Pages	Halaman
+	View	Lihat
+	Help	Bantuan
+	Zoom	Zoom
+	Actual size	Ukuran sebenarnya
+	Zoom to page level	Zoom ke tingkat halaman
+	Fit to width	Sesuaikan lebar
+	Display theme	Tema tampilan
+	Side panels	Panel samping
+	Preferences	Preferensi
+	Preferences…	Preferensi…
+	Interface language	Bahasa antarmuka
+	Interface size	Ukuran antarmuka
+	Auto ({percent}%)	Otomatis ({percent}%)
+	Identity	Identitas
+	Name on new comments	Nama untuk komentar baru
+	Open…	Buka…
+	Open Recent	Buka yang baru saja dibuka
+	Clear Recent Files	Hapus File Terbaru
+	Remove from Recent	Hapus dari Terbaru
+	No recent files	Tidak ada file terbaru
+	New blank PDF	PDF kosong baru
+	Create PDF from file…	Buat PDF dari file…
+	Create PDF from images…	Buat PDF dari gambar…
+	Create PDF from multiple files…	Buat PDF dari beberapa file…
+	Create separate PDFs…	Buat PDF terpisah…
+	Create PDF from clipboard	Buat PDF dari papan klip
+	Combine files…	Gabung file…
+	Save	Simpan
+	Save as…	Simpan sebagai…
+	Close file	Tutup file
+	Close all	Tutup semua
+	Revert	Kembalikan
+	Print…	Cetak…
+	Document properties…	Properti dokumen…
+	Find…	Cari…
+	Advanced search…	Pencarian lanjutan…
+	Copy	Salin
+	Cut	Potong
+	Paste	Tempel
+	Delete	Hapus
+	Select all	Pilih semua
+	Cancel	Batal
+	OK	OK
+	Apply	Terapkan
+	Close	Tutup
+	Back	Kembali
+	Next	Berikutnya
+	Previous	Sebelumnya
+	Name	Nama
+	File name	Nama file
+	Location	Lokasi
+	Browse…	Telusuri…
+	Choose…	Pilih…
+	Search	Cari
+	Clear	Bersihkan
+	Refresh	Segarkan
+	Loading…	Memuat…
+	Save changes?	Simpan perubahan?
+	Don't save	Jangan simpan
+	Page	Halaman
+	Page {n}	Halaman {n}
+	of	dari
+	Fit one full page	muatkan satu halaman penuh
+	Single page	Satu halaman
+	Two-page view	Tampilan dua halaman
+	Continuous scrolling	Gulir terus-menerus
+	Page display	Tampilan halaman
+	Default page display	Tampilan halaman bawaan
+	Default zoom	Zoom bawaan
+	Full screen mode	Mode layar penuh
+	Read mode	Mode baca
+	Comments	Komentar
+	Comment	Komentar
+	Add comment	Tambah komentar
+	Delete comment	Hapus komentar
+	Reply	Balas
+	Highlight	Sorot
+	Underline	Garis bawah
+	Strikethrough	Coret
+	Text	Teks
+	Font	Font
+	Size	Ukuran
+	Color	Warna
+	Opacity	Opasitas
+	Width	Lebar
+	Height	Tinggi
+	Rotation	Rotasi
+	More	Lainnya
+	Settings	Pengaturan
+	General	Umum
+	Language	Bahasa
+	Appearance	Tampilan
+	Theme	Tema
+	Light	Terang
+	Dark	Gelap
+	System	Sistem
+	Open file	Buka file
+	Save file	Simpan file
+	Export	Ekspor
+	Import	Impor
+	Export to image…	Ekspor ke gambar…
+	Export to text…	Ekspor ke teks…
+	Export to Word…	Ekspor ke Word…
+	Export to HTML…	Ekspor ke HTML…
+	Export to RTF…	Ekspor ke RTF…
+	Reduce file size…	Perkecil ukuran file…
+	Optimize PDF…	Optimalkan PDF…
+	Protect using password…	Lindungi dengan kata sandi…
+	Remove security	Hapus keamanan
+	Security properties…	Properti keamanan…
+	Organize pages	Atur halaman
+	Rotate pages…	Putar halaman…
+	Delete pages	Hapus halaman
+	Insert blank page	Sisipkan halaman kosong
+	Insert pages from file…	Sisipkan halaman dari file…
+	Replace pages…	Ganti halaman…
+	Extract pages…	Ekstrak halaman…
+	Split document…	Pisah dokumen…
+	Number pages…	Nomor halaman…
+	Bookmarks	Bookmark
+	New bookmark	Bookmark baru
+	Forms	Formulir
+	Form fields	Kolom formulir
+	Signatures	Tanda tangan
+	Sign	Tanda tangani
+	Fill & Sign	Isi & Tanda Tangani
+	Accessibility	Aksesibilitas
+	Help…	Bantuan…
+	Check for updates…	Periksa pembaruan…
+	About PdfCraft	Tentang PdfCraft
+	Automatically	Otomatis
+	Never	Tidak pernah
+	Always	Selalu
+	Yes	Ya
+	No	Tidak
+	On	Aktif
+	Off	Nonaktif
+	Enabled	Aktif
+	Disabled	Nonaktif
+	Required	Wajib
+	Optional	Opsional
+	None	Tidak ada
+	Unknown	Tidak diketahui
+	Error	Kesalahan
+	Warning	Peringatan
+	Information	Informasi
+	Success	Berhasil
+	Failed	Gagal
+	File	File
+	Folder	Folder
+	Choose a file…	Pilih file…
+	Choose a folder…	Pilih folder…
+	Open folder	Buka folder
+	Create folder	Buat folder
+	Remove	Hapus
+	Rename	Ganti nama
+	Duplicate	Duplikat
+	Move	Pindahkan
+	Copy to clipboard	Salin ke papan klip
+	Copied to clipboard	Disalin ke papan klip
+	Undo	Urungkan
+	Redo	Ulangi
+	Keyboard shortcuts	Pintasan keyboard
+	Find tools and commands…	Cari alat dan perintah…
+	Take a snapshot	Ambil cuplikan
+	Organize	Atur
+	Comment and review	Komentar dan tinjau
+	Prepare a form	Siapkan formulir
+	Protect	Lindungi
+	Print	Cetak
+	Create	Buat
+	Convert	Konversi
+	Optimize	Optimalkan
+	Measure	Ukur
+	Redact	Sensor
+	Search results	Hasil pencarian
+	No results	Tidak ada hasil
+	Page {n} of {total}	Halaman {n} dari {total}
+	{n} pages selected	{n} halaman dipilih
+	  · not fixable here	  · tidak dapat diperbaiki di sini
+	 (page {p})	 (halaman {p})
+	 (searching… {s} of {p} pages)	 (mencari… {s} dari {p} halaman)
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} pada {dpi} dpi, ukuran terbesar yang dapat digambarnya)
+	 ({s} not exported: {first})	 ({s} tidak diekspor: {first})
+	 on page {p}	 di halaman {p}
+	 · password-protected	 · dilindungi kata sandi
+	(none)	(tidak ada)
+	, Expires: 	, Berlaku hingga: 
+	1 difference found	1 perbedaan ditemukan
+	1 file	1 file
+	1 file done	1 file selesai
+	1 file needs attention	1 file perlu perhatian
+	1 instance	1 instans
+	1 issue	1 masalah
+	1 mark	1 tanda
+	1 page	1 halaman
+	1 page selected	1 halaman dipilih
+	1 page selected.	1 halaman dipilih.
+	180 degrees	180 derajat
+	9 digit, A letter, O letter or digit, X any character	9 angka, A huruf, O huruf atau angka, X karakter apa pun
+	; 1 page already had text	; 1 halaman sudah memiliki teks
+	; failed: {list}	; gagal: {list}
+	; {n} pages already had text	; {n} halaman sudah memiliki teks
+	? of {n}	? dari {n}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Aplikasi PDF clean-room sumber terbuka yang ditulis dengan Rust. MIT OR Apache-2.0.
+	Accessibility Checker	Pemeriksa Aksesibilitas
+	Accessibility Checker Options	Opsi Pemeriksa Aksesibilitas
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 dan yang lebih baru (40-bit RC4)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 dan yang lebih baru (128-bit RC4)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 dan yang lebih baru (128-bit AES)
+	Acrobat X and later (256-bit AES)	Acrobat X dan yang lebih baru (256-bit AES)
+	Action name:	Nama tindakan:
+	Actions	Tindakan
+	Active	Aktif
+	Actual Size	Ukuran sebenarnya
+	Actual text	Teks aktual
+	Add	Tambah
+	Add Step	Tambah Langkah
+	Add a comment	Tambahkan komentar
+	Add a reply	Tambahkan balasan
+	Add a sticky note here	Tambahkan catatan tempel di sini
+	Add an Action	Tambahkan Tindakan
+	Add at least two files	Tambahkan setidaknya dua file
+	Add files…	Tambahkan file…
+	Add folder	Tambahkan folder
+	Add folder and subfolders	Tambahkan folder dan subfolder
+	Add folder and subfolders…	Tambahkan folder dan subfolder…
+	Add folder…	Tambahkan folder…
+	Add open documents	Tambahkan dokumen terbuka
+	Add the choices people pick from.	Tambahkan pilihan-pilihan yang dapat dipilih orang.
+	Add the files to combine	Tambahkan file yang akan digabung
+	Add the steps this action runs, in order.	Tambahkan langkah-langkah yang dijalankan tindakan ini, secara berurutan.
+	Add to Trusted Certificates	Tambahkan ke Sertifikat Tepercaya
+	Add to trusted certificates	Tambahkan ke sertifikat terpercaya
+	Added 1 comment	Ditambahkan 1 komentar
+	Added more than once	Ditambahkan lebih dari sekali
+	Added {n} comments	Ditambahkan {n} komentar
+	Adds invisible text over each word; the page image is not changed	Menambahkan teks tak terlihat di atas setiap kata; gambar halaman tidak diubah
+	Advanced	Lanjutan
+	Advanced Options {chevron}	Opsi Lanjutan {chevron}
+	Align	Ratakan
+	Align left	Rata kiri
+	Align right	Rata kanan
+	Alignment:	Perataan:
+	All	Semua
+	All document contents	Seluruh isi dokumen
+	All document contents except metadata	Seluruh isi dokumen kecuali metadata
+	All open documents	Semua dokumen terbuka
+	All pages	Semua halaman
+	All pages in document	Semua halaman dalam dokumen
+	All pages in range	Semua halaman dalam rentang
+	Allow Rich Text Formatting	Izinkan Pemformatan Teks Kaya
+	Allow user to enter custom text	Izinkan pengguna memasukkan teks kustom
+	Also recognize pages that already have text	Kenali juga halaman yang sudah memiliki teks
+	Alternate text	Teks alternatif
+	An action with this name already exists.	Tindakan dengan nama ini sudah ada.
+	An open-source PDF workbench — local, private, and scriptable.	Meja kerja PDF sumber terbuka — lokal, privat, dan dapat diotomatisasi dengan skrip.
+	Angle	Sudut
+	Animation effects	Efek animasi
+	Annotations, form fill-in, and digital signatures	Anotasi, pengisian formulir, dan tanda tangan digital
+	Any	Apa pun
+	Any except extracting pages	Apa pun kecuali ekstraksi halaman
+	Anyone opening the document will need this password. It's applied when you save.	Siapa pun yang membuka dokumen ini akan memerlukan kata sandi ini. Berlaku saat Anda menyimpan.
+	Appear behind page	Tampil di belakang halaman
+	Appear on top of page	Tampil di atas halaman
+	Appearance mode	Mode tampilan
+	Appearance settings…	Pengaturan tampilan…
+	Applies to 1 page	Berlaku untuk 1 halaman
+	Applies to {n} pages	Berlaku untuk {n} halaman
+	Apply redactions	Terapkan penyensoran
+	Apply scale	Terapkan skala
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Meminta rilis terbaru dari GitHub. Tidak ada yang diunduh atau dipasang secara otomatis.
+	At most	Paling banyak
+	Attachments	Lampiran
+	Attachments Panel and Page	Panel Lampiran dan Halaman
+	Audit space usage…	Audit penggunaan ruang…
+	Author	Penulis
+	Auto	Otomatis
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Otomatis mengikuti ukuran teks sistem. Halaman selalu dirender pada resolusi penuh layar.
+	Auto portrait/landscape	Potret/landscape otomatis
+	Auto-rotate pages	Putar halaman otomatis
+	Auto-size text to fit redaction region	Sesuaikan ukuran teks otomatis agar pas dengan area penyensoran
+	Available	Tersedia
+	Back side only	Hanya sisi belakang
+	Back to all tools	Kembali ke semua alat
+	Back to the document	Kembali ke dokumen
+	Before each selected page (select pages in Organize)	Sebelum setiap halaman yang dipilih (pilih halaman di Atur)
+	Before the number	Sebelum nomor
+	Bicubic downsampling to	Downsampling bikubik hingga
+	Binding	Pengikatan
+	Binding:	Pengikatan:
+	Black and white	Hitam dan putih
+	Bold	Tebal
+	Booklet	Buku kecil
+	Booklet subset:	Subset buku kecil:
+	Bookmark options	Opsi bookmark
+	Bookmarks Panel and Page	Panel Bookmark dan Halaman
+	Border Color:	Warna Garis Batas:
+	Borders and Colors	Garis Batas dan Warna
+	Both sides	Kedua sisi
+	Bottom	Bawah
+	Bottom:	Bawah:
+	Box	Kotak
+	Browser's print dialog	Dialog cetak browser
+	Butt	Rata
+	Button is checked by default	Tombol tercentang secara bawaan
+	Buttons with the same name and value are selected in unison	Tombol dengan nama dan nilai yang sama dipilih bersama-sama
+	Bytes	Byte
+	Calibrate from two points	Kalibrasi dari dua titik
+	Can't be read: {e}	Tidak dapat dibaca: {e}
+	Cancelling…	Membatalkan…
+	Case-sensitive	Pezonan huruf besar-kecil
+	Category:	Kategori:
+	Center	Tengah
+	Center window on screen	Pusatkan jendela di layar
+	Centre	Tengah
+	Certify	Sertifikasi
+	Change settings…	Ubah pengaturan…
+	Change the colour of line art as well as text	Ubah warna gambar garis serta teks
+	Change {what}	Ubah {what}
+	Changes allowed	Perubahan yang diizinkan
+	Character limit 0 means no limit. A comb of characters needs a limit.	Batas karakter 0 berarti tanpa batas. Susunan karakter memerlukan batas.
+	Character spacing	Spasi karakter
+	Check Again	Periksa Lagi
+	Check again	Periksa lagi
+	Check box is checked by default	Kotak centang tercentang secara bawaan
+	Check for updates	Periksa pembaruan
+	Check spelling	Periksa ejaan
+	Check the pages	Periksa halaman
+	Check the pages of {name}: {why}	Periksa halaman {name}: {why}
+	Checking Options ({on} of 32 in all categories)	Memeriksa Opsi ({on} dari 32 di semua kategori)
+	Checking for a newer version…	Mencari versi yang lebih baru…
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Pilih gambar PNG atau JPEG (hingga 4 MiB). Transparansi dipertahankan.
+	Choose a folder for the exported files	Pilih folder untuk file yang diekspor
+	Choose a folder for the extracted pages	Pilih folder untuk halaman yang diekstrak
+	Choose a folder for the results	Pilih folder untuk hasil
+	Choose a folder for the searchable files	Pilih folder untuk file yang dapat dicari
+	Choose a layout:	Pilih tata letak:
+	Choose a stamp, then click on the page to place it.	Pilih stempel, lalu klik pada halaman untuk menempatkan.
+	Choose an image	Pilih gambar
+	Choose images	Pilih gambar
+	Choose image…	Pilih gambar…
+	Choose photo…	Pilih foto…
+	Choose the digital ID that you want to use for signing:	Pilih ID digital yang ingin Anda gunakan untuk menandatangani:
+	Circle	Lingkaran
+	Clean Up	Bersihkan
+	Clean-up	Pembersihan
+	Clear All	Hapus Semua
+	Clear all	Hapus semua
+	Clear selection / close find	Hapus pilihan / tutup pencarian
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	Klik pada halaman untuk menambahkan teks; setiap klik memulai kotak baru, dan ✓ menyelesaikannya. Seret item untuk memindahkannya, seret sudut untuk mengubah ukurannya, klik dua kali teks untuk mengeditnya.
+	Click the first point to begin.	Klik titik pertama untuk memulai.
+	Click to sort, drag to move the column. Drag its edge to resize it.	Klik untuk mengurutkan, seret untuk memindahkan kolom. Seret tepinya untuk mengubah ukurannya.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	Klik titik sudut. Enter atau klik dua kali menyelesaikan perimeter atau area. Klik titik pertama untuk menutup area.
+	Clockwise 90 degrees	90 derajat searah jarum jam
+	Close (Esc)	Tutup (Esc)
+	Close Tab	Tutup Tab
+	Close panel	Tutup panel
+	Closed arrow	Panah tertutup
+	Collapse	Ciutkan
+	Collapse all	Ciutkan semua
+	Collapse all bookmarks	Ciutkan semua bookmark
+	Collapse tag	Ciutkan tag
+	Collate	Susun
+	Color:	Warna:
+	Colour	Warna
+	Colours are remapped while rendering; the document itself never changes.	Warna dipetakan ulang saat merender; dokumen itu sendiri tidak pernah berubah.
+	Comb of	Comb dari
+	Combine the rest	Gabungkan sisanya
+	Combined {n} files	Menggabungkan {n} file
+	Coming in milestone	Segera hadir di milestone
+	Comment and form data	Komentar dan data formulir
+	Commenting, filling in form fields, and signing existing signature fields	Memberi komentar, mengisi kolom formulir, dan menandatangani kolom tanda tangan yang ada
+	Comments & Forms	Komentar & Formulir
+	Comments only	Hanya komentar
+	Commit selected value immediately	Langsung terapkan nilai yang dipilih
+	Common Properties	Properti Umum
+	Compare Files	Bandingkan File
+	Compare this file with an older version: Compare files… in All tools.	Bandingkan file ini dengan versi lama: Bandingkan file… di Semua alat.
+	Compatibility	Kompatibilitas
+	Compress document structure (object streams)	Kompres struktur dokumen (object streams)
+	Compression	Kompresi
+	Configure New Digital ID	Konfigurasi ID Digital Baru
+	Confirm Password	Konfirmasi Kata Sandi
+	Conformance level:	Tingkat kesesuaian:
+	Continue	Lanjutkan
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Jumlah salinan, cetak dua sisi, dan warna dipilih dalam dialog cetak browser.
+	Copies:	Salinan:
+	Copy selected text	Salin teks yang dipilih
+	Copy text	Salin teks
+	Couldn't check for updates: {e}	Tidak dapat memeriksa pembaruan: {e}
+	Couldn't open the printer's preferences: {e}	Tidak dapat membuka preferensi printer: {e}
+	Counterclockwise 90 degrees	90 derajat berlawanan arah jarum jam
+	Country/Region	Negara/Wilayah
+	Create Custom Stamp	Buat Stempel Kustom
+	Create Link	Buat Tautan
+	Create PDF Comment Summary	Buat Ringkasan Komentar PDF
+	Create PDF comment summary…	Buat ringkasan komentar PDF…
+	Create PDF from images	Buat PDF dari gambar
+	Create a new Digital ID (self-signed, saved to a password-protected file)	Buat ID digital baru (ditandatangani sendiri, disimpan dalam file terlindungi kata sandi)
+	Create accessibility report	Buat laporan aksesibilitas
+	Create custom stamp…	Buat stempel kustom…
+	Create {what}	Buat {what}
+	Created a PDF from {n} files	Membuat PDF dari {n} file
+	Created a PDF from {n} files; left out: {names}	Membuat PDF dari {n} file; tidak disertakan: {names}
+	Creates 1 file from {n} pages.	Membuat 1 file dari {n} halaman.
+	Creates {f} files from {n} pages.	Membuat {f} file dari {n} halaman.
+	Crop (% trimmed from each side)	Potong (% dipangkas dari setiap sisi)
+	Currency symbol:	Simbol mata uang:
+	Current page	Halaman saat ini
+	Current page ({n})	Halaman saat ini ({n})
+	Current page — type a page number or label (such as iv) and press Enter	Halaman saat ini — ketik nomor atau label halaman (misalnya iv) lalu tekan Enter
+	Custom	Kustom
+	Custom scale:	Skala kustom:
+	Custom text:	Teks kustom:
+	Custom:	Kustom:
+	Cut and stack	Potong dan tumpuk
+	Cut marks	Tanda potong
+	DPI sets the printed page size without resampling the image.	DPI mengatur ukuran halaman cetak tanpa mengambil ulang sampel gambar.
+	Dark theme	Tema gelap
+	Date format	Format tanggal
+	Decimal places:	Tempat desimal:
+	Decimals	Desimal
+	Declared conformance: {shown}	Kesesuaian yang dinyatakan: {shown}
+	Decorative figure	Gambar dekoratif
+	Default	Bawaan
+	Default Value:	Nilai Bawaan:
+	Default workspace mode	Mode ruang kerja bawaan
+	Default:	Bawaan:
+	Delete page {label}	Hapus halaman {label}
+	Delete pages (Delete)	Hapus halaman (Hapus)
+	Delete pages after extracting	Hapus halaman setelah mengekstrak
+	Delete selected pages (Organize)	Hapus halaman yang dipilih (Atur halaman)
+	Delete stamp	Hapus stempel
+	Delete {o}	Hapus {o}
+	Describe the figure	Jelaskan gambarnya
+	Description	Deskripsi
+	Description:	Deskripsi:
+	Details	Detail
+	Diamond	Belah ketupat
+	Digital ID	ID Digital
+	Digital ID password	Kata sandi ID Digital
+	Direction:	Arah:
+	Discard	Buang
+	Discard Objects	Buang Objek
+	Discard User Data	Buang Data Pengguna
+	Discard alternate images	Buang gambar alternatif
+	Discard document tags	Buang tag dokumen
+	Discard embedded page thumbnails	Buang thumbnail halaman yang tertanam
+	Discard embedded print settings	Buang pengaturan cetak yang tertanam
+	Discard this text (Esc)	Buang teks ini (Esc)
+	Dismiss	Tutup
+	Distinguished name	Nama distinguished
+	Distribute	Distribusikan
+	Document	Dokumen
+	Document Properties	Properti Dokumen
+	Document Title	Judul Dokumen
+	Document and markups	Dokumen dan anotasi
+	Document and stamps	Dokumen dan stempel
+	Document language	Bahasa dokumen
+	Document properties ({key})	Properti dokumen ({key})
+	Documents and view	Dokumen dan tampilan
+	Done	Selesai
+	Done adding text	Selesai menambahkan teks
+	Download	Unduh
+	Downsample to	Turunkan sampel ke
+	Drag the selection to move it. Esc clears the selection.	Seret pilihan untuk memindahkannya. Esc menghapus pilihan.
+	Drag to reorder	Seret untuk mengurutkan ulang
+	Draw	Gambar
+	Draw your {what} below.	Gambar {what} Anda di bawah.
+	Drawing scale changes. Use Actual size for full-scale plans.	Skala gambar berubah. Gunakan Ukuran sebenarnya untuk gambar berskala penuh.
+	Drop PDFs, images, text files or folders here, or choose them.	Jatuhkan PDF, gambar, file teks, atau folder di sini, atau pilih dari komputer.
+	Duplicate "{name}" onto:	Duplikasi "{name}" ke:
+	Duplicate Field	Duplikasi Kolom
+	Duplicate…	Duplikasi…
+	Dynamic	Dinamis
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulir XFA dinamis ditata dari templatenya: {pages}, {fields}.
+	Each file holds as many of the {n} pages as fit.	Setiap file memuat sebanyak mungkin dari {n} halaman yang muat.
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	Setiap gambar diukur di tempat halaman menampilkannya; gambar hanya diganti jika hasilnya lebih kecil.
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	Setiap gambar sekali, diberi nama sesuai dokumen dan halamannya. Gambar JPEG disimpan apa adanya; lainnya sebagai PNG.
+	Earlier in tab order	Lebih awal dalam urutan tab
+	Edit Action	Ubah Tindakan
+	Edit image	Edit gambar
+	Edit text…	Edit teks…
+	Edit…	Edit…
+	Email Address	Alamat Email
+	Enable Acrobat JavaScript	Aktifkan Acrobat JavaScript
+	Enable copying of text, images, and other content	Izinkan penyalinan teks, gambar, dan konten lainnya
+	Enable text access for screen reader devices for the visually impaired	Aktifkan akses teks untuk pembaca layar bagi tuna netra
+	Encrypt	Enkripsi
+	Endpoints	Endpoint
+	Enhance page	Tingkatkan halaman
+	Enter the password that opens it	Masukkan kata sandi untuk membukanya
+	Enter the permissions password to allow combining	Masukkan kata sandi izin untuk mengizinkan penggabungan
+	Entire page	Seluruh halaman
+	Even Pages Only	Hanya Halaman Genap
+	Even and Odd Pages	Halaman Genap dan Ganjil
+	Even pages only	Hanya halaman genap
+	Every PDF, image and text file in the folder	Semua file PDF, gambar, dan teks di dalam folder
+	Every PDF, image and text file in the folder and the folders inside it	Semua file PDF, gambar, dan teks di dalam folder beserta folder di dalamnya
+	Example: {sample}	Contoh: {sample}
+	Exclude images smaller than	Kecualikan gambar yang lebih kecil dari
+	Expand	Perluas
+	Expand all	Perluas semua
+	Expand all bookmarks	Perluas semua bookmark
+	Expand tag	Perluas tag
+	Expand top-level bookmarks	Perluas bookmark tingkat atas
+	Explain	Jelaskan
+	Export All Images	Ekspor Semua Gambar
+	Export Value: {on}	Nilai Ekspor: {on}
+	Export all to data file…	Ekspor semua ke file data…
+	Export certificate…	Ekspor sertifikat…
+	Export comments	Ekspor komentar
+	Export form data	Ekspor data formulir
+	Export stopped: {e}	Ekspor dihentikan: {e}
+	Export to Image	Ekspor ke Gambar
+	Export to Text	Ekspor ke Teks
+	Exported 1 image	Mengekspor 1 gambar
+	Exported the text of 1 page	Mengekspor teks dari 1 halaman
+	Exported the text of {n} pages	Mengekspor teks dari {n} halaman
+	Exported {n} images	Mengekspor {n} gambar
+	Exporting… {d} of {t}	Mengekspor… {d} dari {t}
+	Export…	Ekspor…
+	Extract pages as separate files	Ekstrak halaman sebagai file terpisah
+	Extract pages to a new document	Ekstrak halaman ke dokumen baru
+	Extracted 1 page	Mengekstrak 1 halaman
+	Extracted {n} pages	Mengekstrak {n} halaman
+	Field is used for file selection	Kolom ini digunakan untuk pemilihan file
+	Field names (comma-separated)	Nama kolom (dipisahkan koma)
+	Field names with + - * / and parentheses; put \\ before spaces in names.	Nama kolom dengan + - * / dan tanda kurung; letakkan \\ sebelum spasi dalam nama.
+	Field value is in range:	Nilai kolom berada dalam rentang:
+	Field value is not validated	Nilai kolom tidak divalidasi
+	Field: {field} on page {p}	Kolom: {field} pada halaman {p}
+	Fields to reset (comma-separated; empty: all)	Kolom yang akan direset (dipisahkan koma; kosong: semua)
+	Figure {i} of {n}{page}	Gambar {i} dari {n}{page}
+	File (.p12, .pfx)	File (.p12, .pfx)
+	File Name	Nama File
+	File size	Ukuran file
+	Files are combined from top to bottom. Leave Pages empty to take every page.	File digabungkan dari atas ke bawah. Biarkan Halaman kosong untuk mengambil semua halaman.
+	Files are combined in the order shown. Drag them to change it.	File digabungkan sesuai urutan yang ditampilkan. Seret untuk mengubah urutannya.
+	Files for {name}	File untuk {name}
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	File yang Anda buka di PdfCraft akan muncul di sini. Jatuhkan PDF di mana saja untuk membukanya.
+	Fill & Sign dates	Tanggal Isi & Tanda Tangani
+	Fill & Sign signature	Tanda tangan Isi & Tanda Tangani
+	Fill Color:	Warna Isian:
+	Fill colour	Warna isian
+	Fill colour: none	Warna isian: tidak ada
+	Filling in form fields and signing existing signature fields	Mengisi kolom formulir dan menandatangani kolom tanda tangan yang ada
+	Filter comments	Filter komentar
+	Find a tag	Cari tag
+	Find options	Opsi pencarian
+	Find text	Cari teks
+	Find tools and commands	Cari alat dan perintah
+	Finding document fonts…	Mencari font dokumen…
+	Finish or discard the text being edited before selecting several objects.	Selesaikan atau buang teks yang sedang diedit sebelum memilih beberapa objek.
+	First / last page	Halaman pertama / terakhir
+	Fit	Sesuaikan
+	Fit Height	Sesuaikan Tinggi
+	Fit Page	Sesuaikan Halaman
+	Fit Visible	Sesuaikan Tampil
+	Fit Width	Sesuaikan Lebar
+	Fit to height	Sesuaikan tinggi
+	Fit to page	Sesuaikan halaman
+	Fix	Perbaiki
+	Fixed what could be fixed; 1 problem remains	Memperbaiki yang bisa diperbaiki; 1 masalah tersisa
+	Fixed what could be fixed; {n} problems remain	Memperbaiki yang bisa diperbaiki; {n} masalah tersisa
+	Flatten Fill & Sign when saving	Ratakan Isi & Tanda Tangani saat menyimpan
+	Flip Horizontal	Balik Horizontal
+	Flip Vertical	Balik Vertikal
+	Flip horizontal	Balik horizontal
+	Flip on long edge	Balik pada sisi panjang
+	Flip on short edge	Balik pada sisi pendek
+	Flip vertical	Balik vertikal
+	Folders	Folder
+	Font Size:	Ukuran Font:
+	Font colour:	Warna font:
+	Font size 0 uses automatic sizing.	Ukuran font 0 menggunakan ukuran otomatis.
+	Font size:	Ukuran font:
+	Font:	Font:
+	Font: Helvetica	Font: Helvetica
+	Fonts	Font
+	For page sizes and margins.	Untuk ukuran halaman dan margin.
+	Form data and PDF forms	Data formulir dan formulir PDF
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	Kolom formulir diratakan: nilainya tetap terlihat. Menyimpan menulis ulang seluruh file.
+	Form fields only	Hanya kolom formulir
+	Form fill-in and digital signatures	Pengisian formulir dan tanda tangan digital
+	Format	Format
+	Format text	Format teks
+	Format:	Format:
+	From	Dari
+	From a PDF page or an image	Dari halaman PDF atau gambar
+	From colour	Dari warna
+	From {file}	Dari {file}
+	From:	Dari:
+	Front side only	Hanya sisi depan
+	Get help, share feedback and follow development on Discord.	Dapatkan bantuan, berikan masukan, dan ikuti pengembangan di Discord.
+	Go to a page view	Ke tampilan halaman
+	Go to page {p}	Ke halaman {p}
+	Go to the page	Ke halaman tersebut
+	Go to this result	Ke hasil ini
+	Graphic	Grafis
+	Greyscale	Skala abu-abu
+	Grid view	Tampilan kisi
+	Hand (H)	Tangan (H)
+	Has JavaScript actions (run in M6)	Punya tindakan JavaScript (jalankan di M6)
+	Height:	Tinggi:
+	Hide field highlights	Sembunyikan sorotan kolom
+	Hide layer	Sembunyikan lapisan
+	Hide menu bar	Sembunyikan bilah menu
+	Hide password	Sembunyikan kata sandi
+	Hide toolbars	Sembunyikan bilah alat
+	Hide window controls	Sembunyikan kontrol jendela
+	High Resolution	Resolusi Tinggi
+	High resolution	Resolusi tinggi
+	Highlight Style:	Gaya Sorotan:
+	Highlight fields	Sorot kolom
+	Home	Beranda
+	Horizontal	Horizontal
+	Horizontal reversed	Horizontal terbalik
+	Horizontal scale	Skala horizontal
+	Icon	Ikon
+	Images and text	Gambar dan teks
+	Images and text (converted to PDF)	Gambar dan teks (dikonversi ke PDF)
+	Import list…	Daftar impor…
+	Includes unsaved changes	Termasuk perubahan yang belum disimpan
+	Indent	Indentasi
+	Initial View	Tampilan Awal
+	Ink sensitivity	Sensitivitas tinta
+	Insert Date	Sisipkan Tanggal
+	Insert Page Number	Sisipkan Nomor Halaman
+	Insert a blank page after the selection	Sisipkan halaman kosong setelah pilihan
+	Insert a file at the end	Sisipkan file di akhir
+	Insert a file before page {label}	Sisipkan file sebelum halaman {label}
+	Insert pages from a file…	Sisipkan halaman dari file…
+	Inserting, deleting, and rotating pages	Menyisipkan, menghapus, dan memutar halaman
+	Installed fonts…	Font terpasang…
+	Intersections	Irisan
+	Invisible Rectangle	Persegi panjang tak terlihat
+	Issued by: 	Diterbitkan oleh: 
+	Italic	Miring
+	Item List	Daftar Item
+	Item:	Item:
+	Items marked Ready work today.	Item yang ditandai Siap sudah berfungsi hari ini.
+	Its security settings don't allow copying pages	Pengaturan keamanannya tidak mengizinkan penyalinan halaman
+	JavaScript Console	Konsol JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript dimatikan (Preferensi > JavaScript).
+	JavaScript, e.g. getField("total").value	JavaScript, misalnya getField("total").value
+	Join our Discord	Gabung ke Discord kami
+	Join the ArtCraft community	Gabung ke komunitas ArtCraft
+	Justify	Ratakan kanan-kiri
+	Keep source fonts	Pertahankan font sumber
+	Keep tool selected	Pertahankan alat terpilih
+	Keep tool selected: on	Pertahankan alat terpilih: aktif
+	Key Algorithm	Algoritma kunci
+	Keychain  ·  	Gudang kunci  ·  
+	Label	Label
+	Labels	Label
+	Labels: {preview}. Later pages keep their labels.	Label: {preview}. Halaman berikutnya tetap memakai labelnya.
+	Landscape	Landskap
+	Landscape Pages	Halaman Landskap
+	Landscape and Portrait Pages	Halaman Landskap dan Potret
+	Larger pages	Halaman lebih besar
+	Later	Nanti
+	Later in tab order	Nanti dalam urutan tab
+	Layers	Lapisan
+	Layers Panel and Page	Panel Lapisan dan Halaman
+	Layout and Magnification	Tata Letak dan Pembesaran
+	Leave out files that can't be read?	Lewati file yang tidak dapat dibaca?
+	Left	Kiri
+	Left Edge	Tepi Kiri
+	Left out: {names}	Dilewati: {names}
+	Left:	Kiri:
+	Light theme	Tema terang
+	Limit of	Batas
+	Line Style:	Gaya garis:
+	Line Thickness:	Ketebalan garis:
+	Line ending	Akhir baris
+	Line spacing	Spasi baris
+	Line thickness	Ketebalan garis
+	Link Action	Tindakan Tautan
+	Link Appearance	Tampilan Tautan
+	Link Properties	Properti Tautan
+	Link Type:	Jenis tautan:
+	List view	Tampilan daftar
+	Load font…	Muat font…
+	Locked	Terkunci
+	Looking for PDFs…	Mencari PDF…
+	Looking for printers…	Mencari printer…
+	Low Resolution (150 dpi)	Resolusi Rendah (150 dpi)
+	Low resolution	Resolusi rendah
+	Magnification	Pembesaran
+	Make Current Properties Default	Jadikan Properti Saat Ini sebagai Bawaan
+	Margins	Margin
+	Mark Page Range	Tandai Rentang Halaman
+	Mark as comments	Tandai sebagai komentar
+	Mark with checkmark	Tandai dengan centang
+	Marked	Ditandai
+	Mask:	Masker:
+	Match page at 100%	Samakan halaman pada 100%
+	Medium	Sedang
+	Midpoints	Titik tengah
+	Mixed	Campuran
+	Modified	Diubah
+	More options	Opsi lainnya
+	More options:	Opsi lainnya:
+	More ways to add files	Cara lain untuk menambahkan file
+	Mouse wheel scroll speed	Kecepatan gulir dengan roda mouse
+	Move down	Pindahkan ke bawah
+	Move earlier	Pindahkan lebih awal
+	Move later	Pindahkan lebih nanti
+	Move up	Pindahkan ke atas
+	Multi-line	Multi-baris
+	Multiple	Banyak
+	Multiple selection	Pilihan ganda
+	Multiple words or phrases	Banyak kata atau frasa
+	Name:	Nama:
+	Navigation tab	Tab navigasi
+	Needs manual check	Perlu pemeriksaan manual
+	Negative number style:	Gaya angka negatif:
+	New Action	Tindakan Baru
+	New Action…	Tindakan Baru…
+	New bookmark ({key})	Bookmark baru ({key})
+	New file:	File baru:
+	Next ({key})	Berikutnya ({key})
+	Next / previous match	Kecocokan berikutnya / sebelumnya
+	Next figure	Gambar berikutnya
+	Next month	Bulan berikutnya
+	Next page	Halaman berikutnya
+	Next sheet	Lembar berikutnya
+	Next view	Tampilan berikutnya
+	No PDFs in this folder yet	Belum ada PDF di folder ini
+	No actions	Tidak ada tindakan
+	No changes allowed	Perubahan tidak diizinkan
+	No changes to save	Tidak ada perubahan untuk disimpan
+	No check has run yet.	Pemeriksaan belum pernah dijalankan.
+	No color	Tidak ada warna
+	No colour	Tidak ada warna
+	No comments match.	Tidak ada komentar yang cocok.
+	No comments yet.	Belum ada komentar.
+	No differences in the text.	Tidak ada perbedaan pada teks.
+	No digital IDs yet.	Belum ada ID digital.
+	No documents are open	Tidak ada dokumen yang terbuka
+	No file chosen	Tidak ada file yang dipilih
+	No fill	Tanpa isian
+	No fonts are referenced by the pages.	Halaman tidak merujuk font apa pun.
+	No issues found	Tidak ada masalah ditemukan
+	No limit	Tanpa batas
+	No matches	Tidak ada kecocokan
+	No matches.	Tidak ada kecocokan.
+	No matching tools	Tidak ada alat yang cocok
+	No openly licensed document fonts found. Load a font file.	Tidak ditemukan font dokumen berlisensi terbuka. Muat sebuah file font.
+	No pages selected	Tidak ada halaman yang dipilih
+	No photo chosen	Tidak ada foto yang dipilih
+	No preview	Tanpa pratinjau
+	No problems found: the document conforms to {level}.	Tidak ada masalah ditemukan: dokumen memenuhi {level}.
+	No security	Tanpa keamanan
+	No sheets	Tidak ada lembar
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Tidak ada tanda tangan di dalam bingkai. Pindahkan bingkai ke atas tanda tangan atau naikkan sensitivitas tinta.
+	No status has been set.	Status belum ditetapkan.
+	None (prefix only)	Tidak ada (hanya awalan)
+	None found	Tidak ditemukan
+	None — everything is allowed	Tidak ada — semuanya diizinkan
+	Not allowed	Tidak diizinkan
+	Not present	Tidak ada
+	Nothing to redo	Tidak ada yang perlu diulang
+	Nothing to undo	Tidak ada yang perlu diurutkan
+	Number	Nomor
+	Number of pages	Jumlah halaman
+	Number pages	Nomor halaman
+	Odd Pages Only	Halaman Ganjil Saja
+	Odd pages only	Hanya halaman ganjil
+	Offset from centre	Offset dari titik tengah
+	Old file:	File lama:
+	One word or phrase per line	Satu kata atau frasa per baris
+	One {f} file per page, named after the document.	Satu file {f} per halaman, diberi nama sesuai dokumen.
+	Only change the colour of black text or line art	Ubah hanya warna teks hitam atau gambar garis
+	Only checked properties will change. Mixed means the selected fields have different values.	Hanya properti yang dicentang yang akan berubah. Campuran berarti kolom yang dipilih memiliki nilai berbeda.
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	Hanya isi halaman yang berubah: tautan, komentar, kolom formulir dan bookmark pada halaman asli tetap.
+	Open	Buka
+	Open a PDF ({key})	Buka PDF ({key})
+	Open a PDF to measure it.	Buka PDF untuk mengukurnya.
+	Open a document first	Buka dokumen terlebih dahulu
+	Open a web page	Buka halaman web
+	Open arrow	Panah terbuka
+	Open email app	Buka aplikasi email
+	Open in Full Screen mode	Buka dalam mode Layar Penuh
+	Open in a new tab	Buka di tab baru
+	Open link	Buka tautan
+	Open the file as it was saved then	Buka file seperti saat disimpan
+	Open the older version first	Buka versi lama terlebih dahulu
+	Open this web page?	Buka halaman web ini?
+	Open to page	Buka ke halaman
+	Opened, but its security settings don't allow combining. Enter the permissions password.	Terbuka, tetapi pengaturan keamanannya tidak mengizinkan penggabungan. Masukkan kata sandi izin.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	Membuka preferensi driver printer. Preferensi ini tersimpan untuk setiap cetak dari komputer ini; jumlah salinan, cetak dua sisi, skala abu-abu dan kertas yang dipilih di sini tetap berlaku.
+	Optimizing… cleaning up	Mengoptimalkan… membersihkan
+	Optimizing… image {d} of {t}	Mengoptimalkan… gambar {d} dari {t}
+	Optimizing… merging identical objects	Mengoptimalkan… menggabungkan objek yang identik
+	Optimizing… removing user data	Mengoptimalkan… menghapus data pengguna
+	Optimizing… writing the copy	Mengoptimalkan… menulis salinan
+	Optional: needs an AI provider you configure	Opsional: memerlukan penyedia AI yang Anda konfigurasi
+	Options…	Opsi…
+	Organization Name	Nama Organisasi
+	Organizational Unit	Unit Organisasi
+	Orientation:	Orientasi:
+	Original	Asli
+	Original: replace pages	Asli: ganti halaman
+	Other colour…	Warna lain…
+	Outdent	Kurangi indentasi
+	Output	Keluaran
+	Output appears here.	Keluaran akan muncul di sini.
+	Output intent: {list}	Niat keluaran: {list}
+	Overlap:	Tumpang tindih:
+	Owner password (no restrictions apply)	Kata sandi pemilik (tidak ada pembatasan)
+	PDF Optimizer	Pengoptimal PDF
+	PDF or image	PDF atau gambar
+	PDF page: {size}	Halaman PDF: {size}
+	PDF scale: {scale}%	Skala PDF: {scale}%
+	PDF, images and text	PDF, gambar dan teks
+	Page Only	Halaman Saja
+	Page Range Options	Opsi Rentang Halaman
+	Page Sizing & Handling	Ukuran & Penanganan Halaman
+	Page background	Latar halaman
+	Page display: {layout}	Tampilan halaman: {layout}
+	Page layout	Tata letak halaman
+	Page navigation	Navigasi halaman
+	Page number	Nomor halaman
+	Page order:	Urutan halaman:
+	Page size	Ukuran halaman
+	Page {label}	Halaman {label}
+	Page {p} of {n}	Halaman {p} dari {n}
+	Pages Panel and Page	Panel Halaman dan Halaman
+	Pages from	Halaman dari
+	Pages of {name} to combine, e.g. 1-3, 6	Halaman dari {name} yang akan digabung, misalnya 1-3, 6
+	Pages per file	Halaman per file
+	Pages per sheet:	Halaman per lembar:
+	Pages to Print	Halaman yang Dicetak
+	Pages:	Halaman:
+	Pages: {k} of {n}	Halaman: {k} dari {n}
+	Paper:	Kertas:
+	Part of	Bagian dari
+	Password	Kata sandi
+	Password required	Kata sandi diperlukan
+	Password security	Keamanan kata sandi
+	Password-protected	Dilindungi kata sandi
+	Paste after	Tempel setelah
+	Paths	Lokasi
+	Pattern	Pola
+	Patterns	Pola
+	Patterns (graphics objects)	Pola (objek grafis)
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft tidak berhenti secara normal. Dokumen-dokumen ini memiliki perubahan yang disimpan otomatis:
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft bekerja secara luring. Tidak ada telemetri, tidak ada akun, dan tidak ada pemrosesan awan kecuali Anda menambahkan penyedia.
+	PdfCraft {c} is up to date.	PdfCraft {c} sudah terbaru.
+	PdfCraft {v} is available.	PdfCraft {v} tersedia.
+	Percentage	Persentase
+	Permissions password	Kata sandi izin
+	Permitted actions after certifying	Tindakan yang diizinkan setelah disertifikasi
+	Photo	Foto
+	Pick a tool in the quick bar, or type above.	Pilih alat di bilah cepat, atau ketik di atas.
+	Pictures on those pages are recognized too; words already in the page's text are not added again	Gambar di halaman-halaman itu juga dikenali; kata yang sudah ada dalam teks halaman tidak ditambahkan lagi
+	Pin a folder to Home	Sematkan folder ke Beranda
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Sematkan folder untuk menampilkan PDF terbarunya di sini, misalnya tempat pemindai atau drive cloud tersinkron Anda menyimpannya.
+	Pin a folder…	Sematkan folder…
+	Plain text in reading order; pages are separated by form feeds.	Teks biasa dalam urutan baca; halaman dipisahkan oleh form feed.
+	Planned	Direncanakan
+	Planned for milestone	Direncanakan untuk tonggak
+	Points from the page's bottom-left corner.	Titik diukur dari sudut kiri bawah halaman.
+	Portrait	Potret
+	Portrait Pages	Halaman Potret
+	Post	Kirim
+	Poster	Poster
+	Prefix	Awalan
+	Preview	Pratinjau
+	Preview unavailable: {e}	Pratinjau tidak tersedia: {e}
+	Preview: page {p} of {n}	Pratinjau: halaman {p} dari {n}
+	Previous ({key})	Sebelumnya ({key})
+	Previous / next page	Halaman sebelumnya / berikutnya
+	Previous figure	Gambar sebelumnya
+	Previous month	Bulan sebelumnya
+	Previous page	Halaman sebelumnya
+	Previous sheet	Lembar sebelumnya
+	Previous view	Tampilan sebelumnya
+	Print ({key})	Cetak ({key})
+	Print in grayscale	Cetak dalam skala abu-abu
+	Print page border	Cetak bingkai halaman
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage atau LastPage
+	Printer paper and scaling may differ. Check driver settings.	Kertas dan penskalaan printer bisa berbeda. Periksa pengaturan driver.
+	Printer properties	Properti printer
+	Printer:	Printer:
+	Printing allowed	Pencetakan diizinkan
+	Privacy	Privasi
+	Properties…	Properti…
+	Protect Using Password	Lindungi dengan Kata Sandi
+	Protected: the combined file won't keep its security settings	Dilindungi: file gabungan tidak akan mempertahankan pengaturan keamanannya
+	Quality	Kualitas
+	Read Only	Hanya Baca
+	Reading colours	Warna pembacaan
+	Ready	Siap
+	Reason	Alasan
+	Recent	Terbaru
+	Recent colours	Warna terbaru
+	Recognize Text	Kenali Teks
+	Recognized 1 word	1 kata dikenali
+	Recognized {n} words	{n} kata dikenali
+	Recognized {w} words in 1 file	{w} kata dikenali dalam 1 file
+	Recognized {w} words in {n} files	{w} kata dikenali dalam {n} file
+	Recognizing text… file {d} of {t}	Mengenali teks… file {d} dari {t}
+	Recognizing text… page {d} of {t}	Mengenali teks… halaman {d} dari {t}
+	Recommended tools	Alat yang direkomendasikan
+	Recover	Pulihkan
+	Recover unsaved documents?	Pulihkan dokumen yang belum disimpan?
+	Redact all	Sensor semua
+	Redacted area fill colour:	Warna isi area bersensor:
+	Redaction Tool Properties	Properti Alat Sensor
+	Redaction code:	Kode sensor:
+	Reload	Muat ulang
+	Reload documents when their files change on disk	Muat ulang dokumen saat file-nya berubah di disk
+	Remove checkmark	Hapus centang
+	Remove invalid links and bookmarks	Hapus tautan dan bookmark yang tidak valid
+	Remove page	Hapus halaman
+	Remove unreferenced named destinations	Hapus tujuan bernama yang tidak dirujuk
+	Remove unused objects and merge identical ones	Hapus objek yang tidak terpakai dan gabungkan yang identik
+	Remove {name}	Hapus {name}
+	Remove {name} from Recent	Hapus {name} dari Terbaru
+	Remove {n} files	Hapus {n} file
+	Remove {n} pages	Hapus {n} halaman
+	Reopen Closed Tab	Buka Ulang Tab yang Ditutup
+	Reopen the files that were open when PdfCraft last closed	Buka kembali file yang terbuka saat PdfCraft terakhir ditutup
+	Repair log	Log perbaikan
+	Repeat overlay text	Ulangi teks hamparan
+	Replace Image…	Ganti Gambar…
+	Replace Pages	Ganti Halaman
+	Replace document colours	Ganti warna dokumen
+	Replace image	Ganti gambar
+	Replacement text	Teks pengganti
+	Replacement: pages of {name}	Pengganti: halaman dari {name}
+	Replaces the existing one on those pages.	Menggantikan yang ada di halaman-halaman itu.
+	Report	Laporan
+	Report…	Laporan…
+	Requires user to enter a password for:	Memerlukan pengguna untuk memasukkan kata sandi untuk:
+	Reset columns	Atur ulang kolom
+	Reset page size	Atur ulang ukuran halaman
+	Reset to printer defaults	Atur ulang ke bawaan printer
+	Resize window to initial page	Ubah ukuran jendela ke halaman awal
+	Resolution	Resolusi
+	Retain existing	Pertahankan yang ada
+	Reveal in File Explorer	Tampilkan di File Explorer
+	Reveal in Finder	Tampilkan di Finder
+	Reverse closed arrow	Balik panah tertutup
+	Reverse open arrow	Balik panah terbuka
+	Reverse pages	Balik halaman
+	Revert changes	Kembalikan perubahan
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Kembalikan ke versi “{name}” yang tersimpan sebelumnya? Perubahan setelahnya tidak dapat dibatalkan.
+	Review History	Riwayat Tinjau
+	Revisions	Revisi
+	Right	Kanan
+	Right Edge	Tepi Kanan
+	Rotate Clockwise	Putar Searah Jarum Jam
+	Rotate Counterclockwise	Putar Berlawanan Arah Jarum Jam
+	Rotate Pages	Putar Halaman
+	Rotate clockwise	Putar searah jarum jam
+	Rotate counterclockwise	Putar berlawanan arah jarum jam
+	Rotate view	Putar tampilan
+	Rotate view clockwise	Putar tampilan searah jarum jam
+	Rotate view clockwise ({key})	Putar tampilan searah jarum jam ({key})
+	Rotate view counterclockwise	Putar tampilan berlawanan arah jarum jam
+	Rotate:	Putar:
+	Rotation:	Rotasi:
+	Running action… file {d} of {t}	Menjalankan tindakan… file {d} dari {t}
+	Same as interface ({language})	Sama seperti antarmuka ({language})
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	Pembersihan menghapus informasi tersembunyi dari dokumen: metadata, lampiran file, komentar, kolom formulir (diratakan), teks dan lapisan tersembunyi, bookmark, tautan, tindakan dan skrip, serta data aplikasi privat.
+	Save & Close	Simpan & Tutup
+	Save ({key})	Simpan ({key})
+	Save Image As…	Simpan Gambar Sebagai…
+	Copy Image	Salin Gambar
+	The image has been copied ({w} × {h} pixels)	Gambar telah disalin ({w} × {h} piksel)
+	Couldn't copy the image: {e}	Tidak dapat menyalin gambar: {e}
+	Copy Image in Original Format	Salin Gambar dalam Format Asli
+	The image has been copied as a {ext} file	Gambar telah disalin sebagai file {ext}
+	The page has changed; select the image again	Halaman telah berubah; pilih gambar lagi
+	Save as PDF	Simpan sebagai PDF
+	Save attachment…	Simpan lampiran…
+	Save changes to “{name}” before closing?	Simpan perubahan pada “{name}” sebelum menutup?
+	Save pages	Simpan halaman
+	Save tag properties	Simpan properti tag
+	Save the accessibility report	Simpan laporan aksesibilitas
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	Simpan dokumen setelahnya: penyimpanan menulis ulang seluruh file sehingga tidak ada jejak konten yang dihapus tertinggal di dalamnya.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	Simpan dokumen setelahnya; penyimpanan menulis ulang seluruh file sehingga tidak ada yang dihapus tertinggal di dalamnya.
+	Save the spreadsheet	Simpan lembar kerja
+	Save these pages as one PDF	Simpan halaman ini sebagai satu PDF
+	Saved measurements	Pengukuran tersimpan
+	Saved measurements.	Pengukuran tersimpan.
+	Scale relative to target page	Skala relatif terhadap halaman target
+	Scan	Pindai
+	Script Name:	Nama Skrip:
+	Script:	Skrip:
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skrip berjalan di sandbox tanpa akses file atau jaringan. Skrip yang meminta membuka halaman web memerlukan izin Anda terlebih dahulu. Dengan JavaScript nonaktif, fungsi format standar, validasi, dan hitung milik Acrobat tetap berfungsi.
+	Scroll long text	Gulir teks panjang
+	Scroll tabs left	Gulir tab ke kiri
+	Scroll tabs right	Gulir tab ke kanan
+	Search comments	Cari komentar
+	Search tools and commands…	Cari alat dan perintah…
+	Searchable Image (Exact)	Gambar yang Dapat Dicari (Tepat)
+	Searching… {s} of {p} pages	Mencari… {s} dari {p} halaman
+	Searching… {s}/{p}	Mencari… {s}/{p}
+	Security	Keamanan
+	Security settings	Pengaturan keamanan
+	Select (V)	Pilih (V)
+	Select Action:	Pilih Tindakan:
+	Select All	Pilih Semua
+	Select Icon	Pilih Ikon
+	Select Trigger:	Pilih Pemicu:
+	Select a file first	Pilih file terlebih dahulu
+	Select a file for the stamp	Pilih file untuk stempel
+	Select a password-protected file first	Pilih file terlindungi kata sandi terlebih dahulu
+	Select a word	Pilih satu kata
+	Select all pages (Organize)	Pilih semua halaman (Atur)
+	Select at most 1000 objects at a time.	Pilih maksimal 1000 objek sekaligus.
+	Select data files to merge	Pilih file data untuk digabung
+	Select format category:	Pilih kategori format:
+	Select page {label}	Pilih halaman {label}
+	Select pages	Pilih halaman
+	Select the items to remove from this document.	Pilih item yang akan dihapus dari dokumen ini.
+	Selected image files: {count}	File gambar dipilih: {count}
+	Selected pages	Halaman dipilih
+	Selection	Pilihan
+	Sending to {printer}…	Mengirim ke {printer}…
+	Sensitivity	Sensitivitas
+	Sent to {printer}	Dikirim ke {printer}
+	Sent to {printer}: {msg}	Dikirim ke {printer}: {msg}
+	Separator style:	Gaya pemisah:
+	Set Alternate Text	Tetapkan Teks Alternatif
+	Set Fields to Same Size	Samakan Ukuran Kolom
+	Set Page Boxes	Tetapkan Kotak Halaman
+	Set layer visibility	Atur visibilitas lapisan
+	Set status	Tetapkan status
+	Set to current page ({n})	Samakan dengan halaman saat ini ({n})
+	Set to zero	Samakan dengan nol
+	Shared Field Properties	Properti Kolom Bersama
+	Sheet {s} of {n}	Lembar {s} dari {n}
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift membatasi ke 45 derajat. Backspace menghapus simpul. Escape membatalkan.
+	Shift- or Ctrl/Command-click to select several fields.	Klik Shift- atau Ctrl/Command untuk memilih beberapa kolom.
+	Shift-click to select several objects. Drag empty space to select an area.	Klik Shift untuk memilih beberapa objek. Seret ruang kosong untuk memilih area.
+	Show Report	Tampilkan Laporan
+	Show all	Tampilkan semua
+	Show all comments	Tampilkan semua komentar
+	Show certificate…	Tampilkan sertifikat…
+	Show layer	Tampilkan lapisan
+	Show less	Tampilkan lebih sedikit
+	Show password	Tampilkan kata sandi
+	Show the accessibility report	Tampilkan laporan aksesibilitas
+	Show this dialog when the Checker starts	Tampilkan dialog ini saat Pemeriksa dimulai
+	Show {n} more	Tampilkan {n} lagi
+	Show:	Tampilkan:
+	Shrink oversized pages	Perkecil halaman yang terlalu besar
+	Sign Here	Tanda Tangani Di Sini
+	Sign this field…	Tanda tangani kolom ini…
+	Sign yourself	Tanda tangani sendiri
+	Signature Details	Detail Tanda Tangan
+	Signature is INVALID:	Tanda tangan TIDAK VALID:
+	Signature is valid:	Tanda tangan valid:
+	Signature panel	Panel tanda tangan
+	Signature validity is UNKNOWN:	Keabsahan tanda tangan TIDAK DIKETAHUI:
+	Signer's name	Nama penanda tangan
+	Simplified field notation:	Notasi kolom sederhana:
+	Single Page	Halaman Tunggal
+	Single Page Continuous	Halaman Tunggal Berurutan
+	Single word or phrase	Satu kata atau frasa
+	Skip Rule	Aturan Lewati
+	Skipped	Dilewati
+	Slash	Garis miring
+	Smaller pages	Halaman lebih kecil
+	Snap to drawing	Tempel ke gambar
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Sebagian bookmark tidak ditampilkan di sini: panel hanya menampilkan jumlah dan tingkat kedalaman yang terbatas.
+	Some page content couldn't be read; snapping uses the rest.	Sebagian konten halaman tidak dapat dibaca; tempelan memakai bagian sisanya.
+	Sort by	Urutkan menurut
+	Sort comments by:	Urutkan komentar menurut:
+	Sort items	Urutkan item
+	Source	Sumber
+	Space Audit	Audit Spasi
+	Special	Khusus
+	Split document	Pisah dokumen
+	Split into files…	Pisah menjadi file…
+	Square	Persegi
+	Standard Business	Bisnis Standar
+	Start	Mulai
+	Start Checking	Mulai Pemeriksaan
+	Start page number	Nomor halaman awal
+	Status	Status
+	Steps	Langkah
+	Strength: {s}	Kekuatan: {s}
+	Style	Gaya
+	Subject	Subjek
+	Subset	Subhimpunan
+	Summarize Options	Ringkasan Opsi
+	Summary	Ringkasan
+	Switch to List view to change the pages it takes.	Beralih ke tampilan Daftar untuk mengubah halaman yang digunakannya.
+	Switch to two-page view first to show the cover page	Beralih ke tampilan dua halaman terlebih dahulu untuk menampilkan halaman sampul
+	Tab order: move a field with its arrows.	Urutan tab: pindahkan kolom dengan panahnya.
+	Tag type	Tipe tag
+	Tags	Tag
+	Text Color:	Warna Teks:
+	Text alignment:	Perataan teks:
+	Text in images isn't found; recognise text (OCR) first.	Teks dalam gambar tidak ditemukan; lakukan pengenalan teks (OCR) terlebih dahulu.
+	Text is compared word by word; the differences are shown on the new file.	Teks dibandingkan kata demi kata; perbedaan ditampilkan pada file baru.
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Pengenalan teks belum terpasang: file modelnya hilang. Pasang ulang PdfCraft, atau atur PDFCRAFT_MODELS ke folder yang memuatnya.
+	Text to find	Teks yang dicari
+	Text to insert	Teks yang disisipkan
+	Text used as a clipping path cannot be moved with this selection.	Teks yang dipakai sebagai jalur pemotongan tidak dapat dipindahkan dengan pilihan ini.
+	Text, marks and signatures become part of the page. Other comments stay editable.	Teks, tanda, dan tanda tangan menjadi bagian dari halaman. Komentar lain tetap dapat diedit.
+	Thai and Arabic use regular fallback fonts when available.	Bahasa Thai dan Arab memakai font cadangan biasa jika tersedia.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Font teks PDF tidak dapat menggambar “{c}” ({code}). Pilih teks yang didukung.
+	The checker found 1 problem which may prevent the document from being fully accessible.	Pemeriksa menemukan 1 masalah yang dapat menghambat dokumen agar sepenuhnya aksesibel.
+	The checker found no problems in this document.	Pemeriksa tidak menemukan masalah pada dokumen ini.
+	The checker found {n} problems which may prevent the document from being fully accessible.	Pemeriksa menemukan {n} masalah yang dapat menghambat dokumen agar sepenuhnya aksesibel.
+	The document now conforms to {level}; save it to keep the changes	Dokumen sekarang sesuai dengan {level}; simpan untuk mempertahankan perubahan
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Dokumen terbuka tanpa kata sandi; kata sandi ini diperlukan untuk mengubah pembatasan. Ini berlaku saat Anda menyimpan.
+	The document's security settings don't allow copying text and images	Pengaturan keamanan dokumen tidak mengizinkan penyalinan teks dan gambar
+	The document's security settings don't allow this change	Pengaturan keamanan dokumen tidak mengizinkan perubahan ini
+	The existing action will be preserved.	Tindakan yang ada akan dipertahankan.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Font yang dipakai PdfCraft tidak dapat menggambar “{c}” ({code}), sehingga teks itu tampil sebagai ? di setiap penampil PDF. Teks tetap tersimpan.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	Kunci berada di penyimpanan sertifikat Windows, yang mungkin meminta izin untuk memakai PdfCraft.
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	Kunci berada di Keychain macOS, yang mungkin meminta izin untuk memakai PdfCraft.
+	The newest {n} of {total} PDFs	{n} PDF terbaru dari {total}
+	The password is only used to read the file; it isn't saved.	Kata sandi hanya dipakai untuk membaca file; kata sandi tidak disimpan.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	Pengaturan milik driver printer sendiri untuk cetakan ini: baki kertas, jenis kertas, finishing, dan lainnya.
+	The replacement file doesn't have that many pages.	File pengganti tidak memiliki sebanyak itu halaman.
+	The same password is tried on each file.	Kata sandi yang sama dicoba pada setiap file.
+	The signature will be invisible.	Tanda tangan akan tidak terlihat.
+	The text is the same	Teksnya sama
+	The value is shown as typed.	Nilainya ditampilkan apa adanya.
+	There are no redaction marks (mark text, areas or pages first)	Tidak ada tanda sensor (tandai teks, area, atau halaman terlebih dahulu)
+	These files can't be read, so they won't be in the combined PDF:	File ini tidak dapat dibaca, jadi tidak akan ada dalam PDF gabungan:
+	These objects could not be moved. Select them again and try a smaller move.	Objek ini tidak dapat dipindahkan. Pilih lagi dan coba perpindahan yang lebih kecil.
+	Thick	Tebal
+	Thickness	Ketebalan
+	Thin	Tipis
+	This area has too many overlapping paths; intersection snapping is limited.	Area ini memiliki terlalu banyak jalur yang bertumpuk; tempelan titik potong dibatasi.
+	This certificate is in your list of trusted certificates.	Sertifikat ini ada dalam daftar sertifikat tepercaya Anda.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	Sertifikat ini tidak tepercaya. Tanda tangan yang dibuat dengannya menampilkan identitas yang tidak dikenal.
+	This certificate is trusted through a certificate above it in the chain.	Sertifikat ini tepercaya melalui sertifikat di atasnya dalam rantai.
+	This comment's appearance can't be changed yet.	Tampilan komentar ini belum dapat diubah.
+	This dialog shows the details of a certificate and its chain.	Dialog ini menampilkan detail sebuah sertifikat dan rantainya.
+	This document contains {n} interactive form fields.	Dokumen ini berisi {n} kolom formulir interaktif.
+	This document has no comments to flatten	Dokumen ini tidak ada komentar untuk diratakan
+	This document has no document-level scripts.	Dokumen ini tidak memiliki skrip tingkat dokumen.
+	This document has no editable structure tags.	Dokumen ini tidak memiliki tag struktur yang dapat diedit.
+	This document has no form fields to flatten	Dokumen ini tidak ada kolom formulir untuk diratakan
+	This document has no form fields you can fill in	Dokumen ini tidak ada kolom formulir yang dapat Anda isi
+	This document has no pages.	Dokumen ini tidak memiliki halaman.
+	This document has no restrictions to lift	Dokumen ini tidak ada pembatasan untuk dilepas
+	This document has no signatures.	Dokumen ini tidak memiliki tanda tangan.
+	This document has no tagged figures.	Dokumen ini tidak memiliki gambar bertag.
+	This document has no {kind} to change	Dokumen ini tidak ada {kind} untuk diubah
+	This document hasn't been checked yet.	Dokumen ini belum diperiksa.
+	This document is secured. Some changes are restricted by its security settings.	Dokumen ini diamankan. Beberapa perubahan dibatasi oleh pengaturan keamanannya.
+	This document isn't password-protected	Dokumen ini tidak terlindungi kata sandi
+	This drawing exceeds the snapping limit; only the first paths are used.	Gambar ini melampaui batas tempelan; hanya jalur pertama yang dipakai.
+	This field is locked. Unlock it to change its properties.	Kolom ini terkunci. Buka kuncinya untuk mengubah propertinya.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	File ini berubah di disk. Muat ulang untuk melihat versi baru; perubahan yang belum disimpan akan hilang.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	File ini rusak dan telah diperbaiki. Menyimpan mempertahankan versi yang sudah diperbaiki.
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Folder ini sedang tidak tersedia. Folder mungkin telah berpindah, atau drive atau sinkronisasi cloud-nya sedang luring.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skrip formulir ini dinonaktifkan karena salah satunya berjalan terlalu lama. Buka kembali dokumen untuk menjalankannya lagi.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	Ini adalah formulir XFA dinamis, yang belum dapat ditampilkan oleh PdfCraft. Yang Anda lihat adalah halaman placeholder milik file tersebut.
+	This measurement needs at least {n} points.	Pengukuran ini memerlukan minimal {n} titik.
+	This page contains objects that cannot be selected together.	Halaman ini berisi objek yang tidak dapat dipilih bersama-sama.
+	This page couldn't be displayed.\n{e}	Halaman ini tidak dapat ditampilkan.\n{e}
+	This printer offers no settings of its own.	Printer ini tidak menyediakan pengaturan sendiri.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Driver printer ini tidak mengambil pengaturan cetak dua sisi dari program lain, jadi pengaturan miliknya yang berlaku. Ubah di Properti…
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	Alamat web ini mencampur huruf dari beberapa abjad, cara umum untuk menyamar sebagai nama situs lain.
+	This web address uses letters from another alphabet, which can look like familiar ones.	Alamat web ini memakai huruf dari abjad lain, yang bisa tampak seperti huruf yang familier.
+	Tile scale:	Skala ubin:
+	Time	Waktu
+	Title	Judul
+	To change locked fields, also set Locked to No.	Untuk mengubah kolom terkunci, tetapkan juga Terkunci ke Tidak.
+	To:	Ke:
+	Today: {date}	Hari ini: {date}
+	Toggle fit page / fit width	Alihkan sesuaikan halaman / sesuaikan lebar
+	Tool	Alat
+	Tools panel side	Sisi panel alat
+	Tooltip:	Tooltip:
+	Top	Atas
+	Top-level bookmarks ({n})	Bookmark tingkat atas ({n})
+	Total	Total
+	Trust	Percayai
+	Try the form as people filling it in will see it	Coba formulir seperti yang akan dilihat oleh orang yang mengisinya
+	Two-Up (Cover Page)	Dua-ke-Satu (Halaman Sampul)
+	Two-Up (Facing)	Dua-ke-Satu (Bersebelahan)
+	Two-Up Continuous (Cover Page)	Dua-ke-Satu Berurutan (Halaman Sampul)
+	Two-Up Continuous (Facing)	Dua-ke-Satu Berurutan (Bersebelahan)
+	Two-sided:	Dua sisi:
+	Type	Tipe
+	Type text	Ketik teks
+	Type the web address.	Ketik alamat web.
+	Type your {what}.	Ketik {what} Anda.
+	URL to submit to	URL tujuan pengiriman
+	Unit	Unit
+	Units	Unit
+	Unknown author	Penulis tidak dikenal
+	Unlock	Buka kunci
+	Unlock {name}	Buka kunci {name}
+	Unlock {n} files	Buka kunci {n} file
+	Unlocked: the combined file won't be password-protected	Tidak terkunci: file gabungan tidak akan terlindungi kata sandi
+	Unlock…	Buka kunci…
+	Unpin	Lepas sematan
+	Unpin {folder}	Lepas sematan {folder}
+	Unplaced	Belum ditempatkan
+	Unsupported measurements	Pengukuran tidak didukung
+	Up	Atas
+	Update	Perbarui
+	Use 72 DPI (one point per pixel)	Gunakan 72 DPI (satu titik per piksel)
+	Use Flate to encode streams that are not encoded	Gunakan Flate untuk mengodekan stream yang belum dikodekan
+	Use a Digital ID from a file	Gunakan ID Digital dari file
+	Use custom DPI	Gunakan DPI kustom
+	Use each image's embedded DPI; use 72 DPI when it is absent.	Gunakan DPI tertanam pada setiap gambar; gunakan 72 DPI jika tidak ada.
+	Use image resolution	Gunakan resolusi gambar
+	Use now	Gunakan sekarang
+	Use overlay text	Gunakan teks overlay
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Dipakai ketika PDF tidak meminta tata letak atau zoom. Gulir berurutan tidak pernah berhenti di antara halaman.
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	Dipakai saat membuka PDF. Mode peluncuran atau mode kontrol eksplisit berlaku lebih dulu selama sesi.
+	User Interface Options	Opsi Antarmuka Pengguna
+	User password	Kata sandi pengguna
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	Berlaku selama 5 tahun, untuk tanda tangan digital. ID yang ditandatangani sendiri biasanya tidak tepercaya oleh orang lain.
+	Validate all	Validasi semua
+	Value is not calculated	Nilai belum dihitung
+	Value is the	Nilainya adalah
+	Value:	Nilai:
+	Verify	Verifikasi
+	Verify to see what the document needs.	Verifikasi untuk melihat apa yang dibutuhkan dokumen.
+	Version {v}	Versi {v}
+	Vertical	Vertikal
+	Vertical reversed	Vertikal terbalik
+	Vertical text cannot be moved with this selection.	Teks vertikal tidak dapat dipindahkan dengan pilihan ini.
+	View revision {n}	Lihat revisi {n}
+	View signed version	Lihat versi bertanda tangan
+	Viewport	Area pandang
+	Viewport rectangle in page points (x, y, width, height)	Persegi area pandang dalam titik halaman (x, y, lebar, tinggi)
+	Visible Rectangle	Persegi Terlihat
+	Visual	Visual
+	Warnings	Peringatan
+	Welcome to PdfCraft	Selamat datang di PdfCraft
+	What word or phrase would you like to search for?	Kata atau frasa apa yang ingin Anda cari?
+	Whole words only	Hanya kata utuh
+	Width:	Lebar:
+	Window Options	Opsi Jendela
+	Windows store  ·  	Windows store  ·  
+	Write this email?	Tulis email ini?
+	Wrong password	Kata sandi salah
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulir XFA: kolom dan data XFA-nya dijaga tetap sinkron, sehingga penampil lain menampilkan yang Anda isi.
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Anda akan menerapkan 1 tanda sensor. Teks, gambar, dan gambar-gambar di bawah tanda tersebut, serta komentar dan kolom formulir yang bertumpang tindih dengannya, akan dihapus permanen.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Anda akan menerapkan {n} tanda sensor. Teks, gambar, dan gambar-gambar di bawah tanda tersebut, serta komentar dan kolom formulir yang bertumpang tindih dengannya, akan dihapus permanen.
+	You have version {c}. All releases are listed at {page}.	Anda memiliki versi {c}. Semua rilis tercantum di {page}.
+	You have version {c}. Download the new version from its release page.	Anda memiliki versi {c}. Unduh versi baru dari halaman rilisnya.
+	Your changes will be lost if you don't save them.	Perubahan Anda akan hilang jika tidak Anda simpan.
+	ZIP	ZIP
+	Zoom in	Perbesar
+	Zoom in ({key})	Perbesar ({key})
+	Zoom in / out (also pinch or {key}-scroll)	Perbesar / perkecil (juga cubit atau gulir {key})
+	Zoom out	Perkecil
+	Zoom out ({key})	Perkecil ({key})
+	already a PDF	sudah berupa PDF
+	and {n} more	dan {n} lagi
+	background	latar belakang
+	characters	karakter
+	e.g. My stamps	mis. Stempel saya
+	e.g. en-US	mis. en-US
+	for images above	untuk gambar di atas
+	header or footer	header atau footer
+	initials	inisial
+	is available	tersedia
+	is not available yet	belum tersedia
+	just now	baru saja
+	yesterday	kemarin
+	needs an AI provider (off by default)	membutuhkan penyedia AI (nonaktif secara bawaan)
+	no output folder was chosen	tidak ada folder keluaran yang dipilih
+	no unused output name	tidak ada nama keluaran yang belum terpakai
+	none	tidak ada
+	of the following fields:	dari kolom berikut:
+	AI assistant	Asisten AI
+	Action Wizard	Penyihir Tindakan
+	Action Wizard…	Penyihir Tindakan…
+	Actions list	Daftar tindakan
+	Add Bates numbering…	Tambahkan penomoran Bates…
+	Add a button	Tambahkan tombol
+	Add a callout	Tambahkan kotak komentar
+	Add a checkbox	Tambahkan kotak centang
+	Add a date field	Tambahkan kolom tanggal
+	Add a digital signature field	Tambahkan kolom tanda tangan digital
+	Add a drop-down list	Tambahkan daftar tarik-turun
+	Add a list box	Tambahkan kotak daftar
+	Add a radio button	Tambahkan tombol radio
+	Add a stamp	Tambahkan stempel
+	Add a sticky note	Tambahkan catatan tempel
+	Add a text box	Tambahkan kotak teks
+	Add a text field	Tambahkan kolom teks
+	Add alternate text	Tambahkan teks alternatif
+	Add alternate text…	Tambahkan teks alternatif…
+	Add an image field	Tambahkan kolom gambar
+	Add background…	Tambahkan latar belakang…
+	Add comments	Tambahkan komentar
+	Add content	Tambahkan konten
+	Add files to combine	Tambahkan file untuk digabung
+	Add form components	Tambahkan komponen formulir
+	Add header & footer…	Tambahkan header & footer…
+	Add image…	Tambahkan gambar…
+	Add or edit links	Tambahkan atau edit tautan
+	Add printer marks	Tambahkan tanda cetak
+	Add search index	Tambahkan indeks pencarian
+	Add text	Tambahkan teks
+	Add watermark…	Tambahkan tanda air…
+	Advanced optimization	Optimasi lanjutan
+	Advanced options	Opsi lanjutan
+	Apply PDF standards	Terapkan standar PDF
+	Apply redactions…	Terapkan penyensoran…
+	Archive documents	Arsipkan dokumen
+	Area	Luas
+	Arrow	Panah
+	ArtCraft website	Situs ArtCraft
+	Ask about this document	Tanyakan tentang dokumen ini
+	Attach a file	Lampirkan file
+	Attach file	Lampirkan file
+	Audit space usage	Periksa penggunaan ruang
+	Automatically tag PDF	Tandai PDF secara otomatis
+	Background	Latar belakang
+	Bates numbering	Penomoran Bates
+	Blank page	Halaman kosong
+	Bring your own model (off by default)	Gunakan model Anda sendiri (nonaktif secara bawaan)
+	Button	Tombol
+	Certificates	Sertifikat
+	Certify (invisible signature)	Sertifikasi (tanda tangan tak terlihat)
+	Certify (visible signature)	Sertifikasi (tanda tangan terlihat)
+	Change initials	Ubah inisial
+	Change reading options	Ubah opsi baca
+	Change reading options…	Ubah opsi baca…
+	Change signature	Ubah tanda tangan
+	Check for accessibility	Periksa aksesibilitas
+	Check for accessibility…	Periksa aksesibilitas…
+	Checkbox	Kotak centang
+	Checkmark	Tanda centang
+	Clear form	Kosongkan formulir
+	Clear redaction marks	Hapus tanda penyensoran
+	Clipboard	Papan klip
+	Cloud	Awan
+	Column select	Pilih kolom
+	Combine	Gabung
+	Combine files	Gabung file
+	Comment list	Daftar komentar
+	Comments panel	Panel komentar
+	Compare	Bandingkan
+	Compare files	Bandingkan file
+	Compare files…	Bandingkan file…
+	Compress a PDF	Kompres PDF
+	Console	Konsol
+	Convert colors	Konversi warna
+	Copy pages	Salin halaman
+	Correct recognized text	Koreksi teks hasil pengenalan
+	Create a PDF	Buat PDF
+	Create from	Buat dari
+	Create links from URLs	Buat tautan dari URL
+	Crop pages	Pangkas halaman
+	Cross	Salib
+	Cut pages	Potong halaman
+	Dark gray	Abu-abu tua
+	Date	Tanggal
+	Date field	Kolom tanggal
+	Detect form fields	Deteksi kolom formulir
+	Digital signature	Tanda tangan digital
+	Digitally sign	Tanda tangani secara digital
+	Distance	Jarak
+	Document JavaScripts	JavaScript dokumen
+	Document JavaScripts…	JavaScript dokumen…
+	Document actions	Tindakan dokumen
+	Dot	Titik
+	Draw a cloud	Gambar awan
+	Draw a line	Gambar garis
+	Draw a polygon	Gambar poligon
+	Draw a rectangle	Gambar persegi panjang
+	Draw an arrow	Gambar panah
+	Draw an oval	Gambar oval
+	Draw connected lines	Gambar garis terhubung
+	Draw freehand	Gambar bebas
+	Drawing	Gambar
+	Drawing scale	Skala gambar
+	Drop-down list	Daftar drop-down
+	Duplicate pages	Duplikat halaman
+	Edit a PDF	Edit PDF
+	Edit text & images	Edit teks & gambar
+	Encrypt with certificate	Enkripsi dengan sertifikat
+	Enhance camera image	Perbaiki kualitas gambar kamera
+	Enhance scanned file	Perbaiki hasil pindai file
+	Enter permissions password…	Masukkan kata sandi izin…
+	Erase drawings	Hapus gambar
+	Export a PDF	Ekspor PDF
+	Export all comments to data file…	Ekspor semua komentar ke file data…
+	Export all images	Ekspor semua gambar
+	Export all images…	Ekspor semua gambar…
+	Export data	Ekspor data
+	Export form data…	Ekspor data formulir…
+	Export measurements	Ekspor hasil pengukuran
+	Export measurements as CSV	Ekspor hasil pengukuran sebagai CSV
+	Export to	Ekspor ke
+	Export to PowerPoint…	Ekspor ke PowerPoint…
+	Extract	Ekstrak
+	Extract pages	Ekstrak halaman
+	Field list	Daftar kolom
+	Field properties	Properti kolom
+	Field properties…	Properti kolom…
+	Fields	Kolom
+	Fill	Isi
+	Fill & Sign: add text	Isi & Tanda Tangani: tambahkan teks
+	Fill & Sign: change initials	Isi & Tanda Tangani: ubah inisial
+	Fill & Sign: change signature	Isi & Tanda Tangani: ubah tanda tangan
+	Fill & Sign: checkmark	Isi & Tanda Tangani: tanda centang
+	Fill & Sign: cross	Isi & Tanda Tangani: salib
+	Fill & Sign: date	Isi & Tanda Tangani: tanggal
+	Fill & Sign: dot	Isi & Tanda Tangani: titik
+	Fill & Sign: initials	Isi & Tanda Tangani: inisial
+	Fill & Sign: line	Isi & Tanda Tangani: garis
+	Fill & Sign: remove saved initials	Isi & Tanda Tangani: hapus inisial tersimpan
+	Fill & Sign: remove saved signature	Isi & Tanda Tangani: hapus tanda tangan tersimpan
+	Fill & Sign: sign	Isi & Tanda Tangani: tanda tangani
+	Find text and redact	Cari teks dan sensor
+	Find text and redact…	Cari teks dan sensor…
+	Fit to width scrolling	Gulir sesuai lebar
+	Fit visible	Sesuaikan yang terlihat
+	Fix hairlines	Perbaiki garis rambut
+	Fix reading order	Perbaiki urutan baca
+	Flatten comments	Ratakan komentar
+	Flatten form fields	Ratakan kolom formulir
+	Form fields panel	Panel kolom formulir
+	Geospatial location	Lokasi geospasial
+	Go to page…	Ke halaman…
+	HTML web page	Halaman web HTML
+	Header and footer	Header dan footer
+	Hide all comments	Sembunyikan semua komentar
+	Highlight text	Sorot teks
+	Image	Gambar
+	Image (PNG)	Gambar (PNG)
+	Image field	Kolom gambar
+	Images	Gambar
+	Import comments…	Impor komentar…
+	Import data	Impor data
+	Import form data…	Impor data formulir…
+	In multiple files	Di beberapa file
+	In this file	Di file ini
+	Index	Indeks
+	Initials	Inisial
+	Insert	Sisipkan
+	Insert pages	Sisipkan halaman
+	Insert text	Sisipkan teks
+	JavaScript	JavaScript
+	JavaScript console…	Konsol JavaScript…
+	Join the ArtCraft Discord	Gabung ke Discord ArtCraft
+	Light gray	Abu-abu muda
+	Line	Garis
+	Link	Tautan
+	List box	Kotak daftar
+	Make accessible	Jadikan aksesibel
+	Manage embedded index	Kelola indeks tersematam
+	Markup	Anotasi
+	Marquee zoom	Zoom area terpilih
+	Measure area	Ukur luas
+	Measure distance	Ukur jarak
+	Measure objects	Ukur objek
+	Measure perimeter	Ukur keliling
+	Measurement information	Informasi pengukuran
+	Measurement snapping	Snapping pengukuran
+	Merge data files into spreadsheet…	Gabungkan file data ke spreadsheet…
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Modify page	Ubah halaman
+	Multiple files	Beberapa file
+	New bookmarks from structure	Bookmark baru dari struktur
+	Open accessibility report	Buka laporan aksesibilitas
+	Optimize scanned documents	Optimalkan dokumen hasil pindai
+	Optimize scanned documents…	Optimalkan dokumen hasil pindai…
+	Output preview	Pratinjau keluaran
+	Oval	Oval
+	PDF/A…	PDF/A…
+	Page grid	Kisi halaman
+	Page labels	Label halaman
+	Page options	Opsi halaman
+	Page transitions	Transisi halaman
+	Paste pages	Tempel halaman
+	PdfCraft on GitHub	PdfCraft di GitHub
+	PdfCraft web page	Halaman web PdfCraft
+	Perimeter	Keliling
+	Pin folder to Home…	Sematkan folder ke Beranda…
+	PostScript / EPS	PostScript / EPS
+	Preflight	Pemeriksaan pra-cetak
+	Prepare for accessibility	Siapkan untuk aksesibilitas
+	Prepare for distribution	Siapkan untuk distribusi
+	Prepare for distribution…	Siapkan untuk distribusi…
+	Presentation (.pptx)	Presentasi (.pptx)
+	Print production	Produksi cetak
+	Protect a PDF	Lindungi PDF
+	Protect with password	Lindungi dengan kata sandi
+	Radio button	Tombol radio
+	Recognize text	Pengenalan teks
+	Recognize text in multiple files…	Pengenalan teks di beberapa file…
+	Recognize text…	Pengenalan teks…
+	Rectangle	Persegi panjang
+	Redact a PDF	Sensor PDF
+	Redact pages	Sensori halaman
+	Redact pages…	Sensori halaman…
+	Redact text and images	Sensor teks dan gambar
+	Redaction properties…	Properti penyensoran…
+	Reduce file size	Perkecil ukuran file
+	Remove all links	Hapus semua tautan
+	Remove background	Hapus latar belakang
+	Remove header & footer	Hapus header & footer
+	Remove hidden information	Hapus informasi tersembunyi
+	Remove hidden information…	Hapus informasi tersembunyi…
+	Remove watermark	Hapus tanda air
+	Replace	Ganti
+	Replace text	Ganti teks
+	Reset panel layout	Atur ulang tata letak panel
+	Review	Tinjau
+	Rich Text Format (.rtf)	Rich Text Format (.rtf)
+	Rotate	Putar
+	Rotate pages	Putar halaman
+	Rotate pages clockwise	Putar halaman searah jarum jam
+	Rotate pages counterclockwise	Putar halaman berlawanan arah jarum jam
+	Sanitize document	Bersihkan dokumen
+	Sanitize document…	Bersihkan dokumen…
+	Save as PDF/A	Simpan sebagai PDF/A
+	Save as PDF/UA	Simpan sebagai PDF/UA
+	Save as PDF/X	Simpan sebagai PDF/X
+	Scan & OCR	Pindai & OCR
+	Security properties	Properti keamanan
+	Select files to compare	Pilih file untuk dibandingkan
+	Separate PDFs	Pisahkan PDF
+	Set measurement scale	Atur skala pengukuran
+	Set page boxes	Atur kotak halaman
+	Set page boxes…	Atur kotak halaman…
+	Set properties	Atur properti
+	Show cover page in two-page view	Tampilkan halaman sampul dalam tampilan dua halaman
+	Signature	Tanda tangan
+	Signatures panel	Panel tanda tangan
+	Single file	Satu file
+	Snapping	Snapping
+	Split	Pisah
+	Spreadsheet (.xlsx)	Spreadsheet (.xlsx)
+	Squiggly underline	Garis bawah bergelombang
+	Squiggly underline text	Teks garis bawah bergelombang
+	Stamp	Stempel
+	Stamp palette	Palet stempel
+	Stamps	Stempel
+	Standards	Standar
+	Sticky note	Catatan tempel
+	Strikethrough text	Teks coret
+	Summarize	Ringkas
+	Summarize comments	Ringkas komentar
+	Switch light / dark theme	Ganti tema terang / gelap
+	Tab order by columns	Urutan tab menurut kolom
+	Tab order by rows	Urutan tab menurut baris
+	Tab order: by columns	Urutan tab: menurut kolom
+	Tab order: by document structure	Urutan tab: menurut struktur dokumen
+	Tab order: by rows	Urutan tab: menurut baris
+	Tags panel	Panel tag
+	Text (plain)	Teks (polos)
+	Text box	Kotak teks
+	Text field	Kolom teks
+	Timestamp	Stempel waktu
+	Translate	Terjemahkan
+	Underline text	Teks bergaris bawah
+	Update background…	Perbarui latar belakang…
+	Update header & footer…	Perbarui header & footer…
+	Update watermark…	Perbarui tanda air…
+	Use JavaScript	Gunakan JavaScript
+	Use a certificate	Gunakan sertifikat
+	Use guided actions	Gunakan tindakan berpemandu
+	Use print production	Gunakan produksi cetak
+	Use system setting	Gunakan setelan sistem
+	Validate all signatures	Validasi semua tanda tangan
+	Watermark	Tanda air
+	Move object	Pindahkan objek
+	Move objects	Pindahkan objek
+	All tools	Semua alat
+	Read	Baca
+	E-Sign	E-Sign
+	Tools	Alat
+	Inspector	Inspektur
+	 on page {label}	 di halaman {label}
+	A font isn't embedded	Font tidak tertanam
+	A {} action isn't allowed	Tindakan {} tidak diizinkan
+	A {} annotation has additional actions	Anotasi {} memiliki tindakan tambahan
+	A {} annotation has no appearance stream	Anotasi {} tidak memiliki aliran tampilan
+	A {} annotation isn't set to print, or is hidden	Anotasi {} tidak disetel untuk dicetak, atau disembunyikan
+	Accessibility Report	Laporan Aksesibilitas
+	Add the PDFs to combine	Tambahkan PDF untuk digabung
+	Added the first {n} PDFs in {folder}	Menambahkan {n} PDF pertama di {folder}
+	CRL Signing	Penandatanganan CRL
+	Certificate Signing	Penandatanganan Sertifikat
+	Change Author	Ubah Penulis
+	Change Keywords	Ubah Kata Kunci
+	Change Subject	Ubah Subjek
+	Change Title	Ubah Judul
+	Choose a digital ID.	Pilih ID digital.
+	Create links	Buat tautan
+	Creator	Pembuat
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Potong dan tumpuk memerlukan Dua sisi: Nonaktif. Cetak lembar satu sisi.
+	Data Encipherment	Enkripsi Data
+	Decipher Only	Hanya Dekripsi
+	Detailed Report	Laporan Rinci
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	DeviceCMYK digunakan, tetapi output intent PDF/A bukan profil CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	DeviceRGB digunakan, tetapi output intent PDF/A bukan profil RGB
+	Digital Signature	Tanda Tangan Digital
+	Document properties (⌘D)	Properti dokumen (⌘D)
+	Drop PDFs or folders here, or choose them.	Letakkan PDF atau folder di sini, atau pilih.
+	Encipher Only	Hanya Enkripsi
+	English	Inggris
+	Enter a URL	Masukkan URL
+	Enter a name.	Masukkan nama.
+	Enter a page number	Masukkan nomor halaman
+	Enter the field names	Masukkan nama kolom
+	Every PDF in the folder	Semua PDF di folder
+	Every PDF in the folder and the folders inside it	Semua PDF di folder dan folder di dalamnya
+	Field "{}" on page {p} has no description (tooltip)	Kolom "{}" pada halaman {p} tidak memiliki deskripsi (tooltip)
+	Filename	Nama file
+	Flatten Fill & Sign	Ratakan Isi & Tanda Tangani
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Font (tanpa nama) pada halaman {p} tidak memetakan karakternya ke Unicode
+	Font {} on page {p} doesn't map its characters to Unicode	Font {} pada halaman {p} tidak memetakan karakternya ke Unicode
+	Form field on page {p} isn't tagged	Kolom formulir pada halaman {p} tidak diberi tag
+	H{n} follows an H{d}; headings should not skip levels	H{n} mengikuti H{d}; judul tidak boleh melompati level
+	Inserted text	Teks yang disisipkan
+	Key Agreement	Key Agreement
+	Key Encipherment	Key Encipherment
+	Margins (in)	Margin (in)
+	New bookmark (⌘B)	Bookmark baru (⌘B)
+	Next (⌘G)	Berikutnya (⌘G)
+	No PDFs found in {folder}	Tidak ada PDF yang ditemukan di {folder}
+	No document language is set	Bahasa dokumen belum diatur
+	No page has text: the document appears to be images of pages	Tidak ada halaman yang memiliki teks: dokumen tampaknya berupa gambar halaman
+	Non-Repudiation	Non-Repudiation
+	Only the document's owner can change its security (open it with the permissions password)	Hanya pemilik dokumen yang dapat mengubah keamanannya (buka dengan kata sandi izin)
+	Open a PDF (⌘O)	Buka PDF (⌘O)
+	Page {p} doesn't tab in structure order	Halaman {p} tidak memiliki tab dalam urutan struktur
+	Page {p}: {n} untagged content item	Halaman {p}: {n} item konten tanpa tag
+	Page {p}: {n} untagged content items	Halaman {p}: {n} item konten tanpa tag
+	Page {} has additional actions	Halaman {} memiliki tindakan tambahan
+	Panel layout could not be restored: {error}	Tata letak panel tidak dapat dipulihkan: {error}
+	Panel move was not applied: {error}	Pemindahan panel tidak diterapkan: {error}
+	PdfCraft can't check this signature yet: {}.	PdfCraft belum dapat memeriksa tanda tangan ini: {}.
+	Previous (⇧⌘G)	Sebelumnya (⇧⌘G)
+	Print (⌘P)	Cetak (⌘P)
+	Producer	Produsen
+	Redo {action}	Ulangi {action}
+	Rendering…	Merender…
+	Report created	Laporan dibuat
+	Rev. {rev}: Certified by an unknown signer	Rev. {rev}: Disertifikasi oleh penanda tangan yang tidak dikenal
+	Rev. {rev}: Certified by {name}	Rev. {rev}: Disertifikasi oleh {name}
+	Rev. {rev}: Signed by an unknown signer	Rev. {rev}: Ditandatangani oleh penanda tangan yang tidak dikenal
+	Rev. {rev}: Signed by {name}	Rev. {rev}: Ditandatangani oleh {name}
+	Rotate view clockwise (⇧⌘+)	Putar tampilan searah jarum jam (⇧⌘+)
+	Rule Name	Nama Aturan
+	Save (M4)	Simpan (M4)
+	Save as {level}	Simpan sebagai {level}
+	Signature is invalid	Tanda tangan tidak valid
+	Signature is valid	Tanda tangan valid
+	Signature validity is unknown	Keabsahan tanda tangan tidak diketahui
+	Signing time is from the clock on the signer's computer.	Waktu penandatanganan berasal dari jam pada komputer penanda tangan.
+	Still rendering — this page is unusually complex…	Masih merender — halaman ini sangat kompleks…
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	Tanda tangan ECDSA bukan DER kanonis (byte tambahan, padding, atau byte tanda yang hilang); tetapi tetap dibaca.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	Tanda tangan ECDSA berupa nilai r dan s mentah, bukan urutan DER; tetapi tetap dibaca.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	Nilai tanda tangan RSA tidak memiliki panjang sebesar modulus kunci (nol di depan dihapus atau ditambahkan); tetapi tetap dibaca.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo tanda tangan RSA tidak memiliki parameter NULL (penandatangan lama menulisnya demikian); tetapi tetap dibaca.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Sertifikat {} tidak mengizinkan jumlah sertifikat CA sebesar itu di bawahnya (panjang jalur), sehingga tidak digunakan untuk menjamin {}.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Sertifikat {} bukan sertifikat CA yang dapat menerbitkan sertifikat, sehingga tidak digunakan untuk menjamin {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Sertifikat {} tidak valid pada saat penandatanganan, sehingga tidak digunakan untuk menjamin {}.
+	The checker found problems which may prevent the document from being fully accessible.	Pemeriksa menemukan masalah yang mungkin membuat dokumen tidak sepenuhnya dapat diakses.
+	The document has been altered or corrupted since the signature was applied.	Dokumen telah diubah atau rusak sejak tanda tangan diterapkan.
+	The document has been altered or corrupted since the timestamp was applied.	Dokumen telah diubah atau rusak sejak stempel waktu diterapkan.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	Dokumen telah diubah sejak tanda tangan ini diterapkan dengan cara yang tidak diizinkan ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Dokumen telah diubah sejak stempel waktu ini diterapkan dengan cara yang tidak diizinkan ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	Dokumen telah dimodifikasi sejak tanda tangan ini diterapkan, tetapi perubahannya diizinkan ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Dokumen telah dimodifikasi sejak stempel waktu ini diterapkan, tetapi perubahannya diizinkan ({}).
+	The document has no tags (structure tree)	Dokumen tidak memiliki tag (pohon struktur)
+	The document has no title	Dokumen tidak memiliki judul
+	The document isn't marked as tagged (MarkInfo Marked)	Dokumen tidak ditandai sebagai bertag (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	Dokumen tidak diberi tag, sehingga tidak ada isinya yang diberi tag
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	Informasi pencabutan yang tertanam pada dokumen menunjukkan bahwa sertifikat penanda tangan belum dicabut.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Token stempel waktu yang tertanam valid dan otoritasnya dipercaya; waktu yang dipercaya adalah {}.
+	The font {} isn't embedded	Font {} tidak tertanam
+	The metadata doesn't identify the file as {}	Metadata tidak mengidentifikasi file sebagai {}
+	The password is incorrect.	Kata sandi salah.
+	The password must have at least 6 characters.	Kata sandi harus memiliki minimal 6 karakter.
+	The passwords do not match.	Kata sandi tidak cocok.
+	The security settings don't allow screen readers to read the text	Pengaturan keamanan tidak mengizinkan pembaca layar untuk membaca teks
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Algoritma tanda tangan dan algoritma digest SignerInfo menunjuk hash yang berbeda; tanda tangan dibuat dengan milik SignerInfo.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	Tanda tangan ini memuat stempel waktu yang belum diverifikasi ({}): otoritas stempel waktu tidak ada dalam daftar sertifikat tepercaya Anda, sehingga waktu penandatanganan yang diklaim oleh penanda tangan yang digunakan.
+	The signature contents are not hexadecimal.	Isi tanda tangan bukan heksadesimal.
+	The signature could not be checked ({}).	Tanda tangan tidak dapat diperiksa ({}).
+	The signature could not be read ({}).	Tanda tangan tidak dapat dibaca ({}).
+	The signature could not be verified ({}).	Tanda tangan tidak dapat diverifikasi ({}).
+	The signature has no valid byte range.	Tanda tangan tidak memiliki rentang byte yang valid.
+	The signature includes an embedded timestamp.	Tanda tangan menyertakan stempel waktu yang tertanam.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	Tanda tangan dikodekan dengan BER (panjang tidak tetap), bukan DER; tetap dibaca secara toleran.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	Tanda tangan menggunakan format lama adbe.x509.rsa_sha1.
+	The signature value does not match the signer's certificate: the signature is corrupt.	Nilai tanda tangan tidak cocok dengan sertifikat penanda tangan: tanda tangan rusak.
+	The signature's byte range does not exclude exactly its contents.	Rentang byte tanda tangan tidak mengecualikan tepat isi tanda tangan tersebut.
+	The signature's byte range does not match the file.	Rentang byte tanda tangan tidak cocok dengan file.
+	The signature's timestamp token could not be verified ({}).	Token stempel waktu tanda tangan tidak dapat diverifikasi ({}).
+	The signature's timestamp token does not cover the signature value.	Token stempel waktu tanda tangan tidak mencakup nilai tanda tangan.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Konten yang ditandatangani adalah OCTET STRING tersusun (bersegmen), sebagaimana diizinkan BER; tetap dibaca.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	Sertifikat penanda tangan tidak mengizinkan tanda tangan digital (penggunaan kuncinya tidak memuat digital signature maupun non-repudiation).
+	The signer's certificate has been revoked ({}).	Sertifikat penanda tangan telah dicabut ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Sertifikat penanda tangan memiliki ekstensi kritis yang tidak dikenali PdfCraft ({}).
+	The signer's certificate is not in the signature.	Sertifikat penanda tangan tidak ada di dalam tanda tangan.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Sertifikat penanda tangan tidak diterbitkan untuk menandatangani dokumen (penggunaan kunci ekstensifnya tidak memuat tujuan penandatanganan dokumen).
+	The signer's certificate was not valid at the time of signing.	Sertifikat penanda tangan tidak valid pada saat penandatanganan.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identitas penanda tangan tidak diketahui karena tidak disertakan dalam daftar sertifikat tepercaya Anda dan tidak ada sertifikat induknya yang merupakan sertifikat tepercaya.
+	The signer's identity is valid.	Identitas penanda tangan valid.
+	The timestamp authority's certificate was not valid at the time of timestamping.	Sertifikat otoritas stempel waktu tidak valid pada saat pembuatan stempel waktu.
+	The timestamp contents are not hexadecimal.	Isi stempel waktu bukan heksadesimal.
+	The timestamp has no valid byte range.	Stempel waktu tidak memiliki rentang byte yang valid.
+	The timestamp token could not be read ({}).	Token stempel waktu tidak dapat dibaca ({}).
+	The timestamp token is valid and its authority is trusted.	Token stempel waktu valid dan otoritasnya dipercaya.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Token stempel waktu valid, tetapi otoritas stempel waktu tidak ada dalam daftar sertifikat tepercaya Anda.
+	The timestamp's byte range does not exclude exactly its contents.	Rentang byte stempel waktu tidak mengecualikan tepat isinya.
+	The timestamp's byte range does not match the file.	Rentang byte stempel waktu tidak cocok dengan file.
+	The window shows the file name, not the title (Initial View > Show)	Jendela menampilkan nama file, bukan judul (Tampilan Awal > Tampilkan)
+	There is no folder to save the digital ID in.	Tidak ada folder untuk menyimpan ID digital.
+	This document has not been modified since this signature was applied.	Dokumen ini belum dimodifikasi sejak tanda tangan ini diterapkan.
+	This document has not been modified since this timestamp was applied.	Dokumen ini belum dimodifikasi sejak stempel waktu ini diterapkan.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Tanda tangan ini menggunakan RIPEMD-160, algoritme hash lama 160-bit yang tidak lagi direkomendasikan untuk tanda tangan. Tanda tangan ini tetap valid, tetapi tidak seharusnya diandalkan.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Tanda tangan ini menggunakan SHA-1, algoritme hash yang lemah: tabrakan pada algoritme ini telah dibuktikan. Tanda tangan ini tetap valid karena banyak dokumen yang ditandatangani bertahun-tahun lalu memakainya, tetapi tidak seharusnya diandalkan.
+	Undo {action}	Urungkan {action}
+	Unsigned signature field	Kolom tanda tangan yang belum ditandatangani
+	Unsigned signature field: {name}	Kolom tanda tangan yang belum ditandatangani: {name}
+	Zoom in (⌘+)	Perbesar (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Perbesar / perkecil (juga cubit atau ⌘-gulir)
+	Zoom out (⌘−)	Perkecil (⌘−)
+	alternate text hides an annotation inside it	teks alternatif menyembunyikan anotasi di dalamnya
+	alternate text on an element with no page content	teks alternatif pada elemen tanpa konten halaman
+	comments	komentar
+	document security store	penyimpanan keamanan dokumen
+	document structure	struktur dokumen
+	form fill	pengisian formulir
+	its alternate text is inside another element's and will never be read	teks alternatifnya berada di dalam elemen lain dan tidak akan pernah dibaca
+	links	tautan
+	metadata	metadata
+	no alternate text	tanpa teks alternatif
+	no header cells (TH)	tanpa sel header (TH)
+	no summary	tanpa ringkasan
+	not in a TR	bukan di dalam TR
+	not in a Table, THead, TBody or TFoot	bukan di dalam Table, THead, TBody, atau TFoot
+	not in an L (list)	bukan di dalam L (daftar)
+	not in an LI (list item)	bukan di dalam LI (item daftar)
+	other changes	perubahan lain
+	page content	konten halaman
+	page {n} is out of range (1–{count})	halaman {n} di luar rentang (1–{count})
+	pages added or removed	halaman ditambahkan atau dihapus
+	rows have between {min} and {max} columns	baris memiliki antara {min} dan {max} kolom
+	the first heading is an H{n}; headings should not skip levels	judul pertama adalah H{n}; judul tidak boleh melompati level
+	the signed version could not be read	versi yang ditandatangani tidak dapat dibaca
+	{n} pages and no bookmarks	{n} halaman dan tanpa bookmark
+	{page} is not a page number or label	{page} bukan nomor halaman atau label
+	{ty} element on page {p}: {what}	elemen {ty} pada halaman {p}: {what}
+	{ty} element: {what}	elemen {ty}: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, sertifikat diterbitkan oleh penerbit yang tidak dikenal.
+	{who}, certificate issued by {issuer}.	{who}, sertifikat diterbitkan oleh {issuer}.
+	{} annotation on page {p} isn't tagged	anotasi {} pada halaman {p} tidak diberi tag
+	{} annotations aren't allowed	anotasi {} tidak diizinkan
+	… and {n} more	… dan {n} lagi
+@plural	Delete {n} field|Delete {n} fields	Hapus {n} kolom
+@plural	{n} byte|{n} bytes	{n} byte
+@plural	{n} image optimized|{n} images optimized	{n} gambar dioptimalkan
+@plural	{n} item discarded|{n} items discarded	{n} item dibuang
+@plural	{n} pixel|{n} pixels	{n} piksel
+action wizard	Start	Mulai
+comment menu	Edit	Edit
+	A button	Sebuah tombol
+	A diagonal CONFIDENTIAL watermark on every page.	Watermark CONFIDENTIAL diagonal pada setiap halaman.
+	A document needs at least one page: copy instead	Dokumen memerlukan minimal satu halaman: gunakan salinan
+	A form field has additional actions	Sebuah kolom formulir memiliki tindakan tambahan
+	A link	Sebuah tautan
+	A script	Sebuah skrip
+	A selected field has no widget on any page, so the fields can't be edited together.	Kolom yang dipilih tidak memiliki widget di halaman mana pun, sehingga kolom tidak dapat diedit bersama.
+	A stream refers to an external file	Sebuah stream mengacu ke file eksternal
+	A stream uses LZW compression	Sebuah stream menggunakan kompresi LZW
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	Ringkasan menjelaskan tujuan dan tata letak tabel. Tambahkan atribut Ringkasan ke setiap tabel.
+	About	Tentang
+	Accepted	Diterima
+	Accessibility permission flag	Bendera izin aksesibilitas
+	Accessibility permission flag is set	Bendera izin aksesibilitas diaktifkan
+	Add Page Numbers	Tambahkan Nomor Halaman
+	Add arrow	Tambahkan panah
+	Add background	Tambahkan latar belakang
+	Add bookmark	Tambahkan bookmark
+	Add callout	Tambahkan kotak komentar
+	Add checkmark	Tambahkan tanda centang
+	Add cloud	Tambahkan awan
+	Add connected lines	Tambahkan garis terhubung
+	Add cross	Tambahkan silang
+	Add dot	Tambahkan titik
+	Add drawing	Tambahkan gambar
+	Add field	Tambahkan kolom
+	Add file attachment	Tambahkan lampiran file
+	Add footer	Tambahkan footer
+	Add header	Tambahkan header
+	Add header & footer	Tambahkan header & footer
+	Add highlight	Tambahkan sorotan
+	Add image	Tambahkan gambar
+	Add inserted text	Tambahkan teks yang disisipkan
+	Add line	Tambahkan garis
+	Add link	Tambahkan tautan
+	Add oval	Tambahkan oval
+	Add polygon	Tambahkan poligon
+	Add rectangle	Tambahkan persegi panjang
+	Add redaction mark	Tambahkan tanda sensor
+	Add signature	Tambahkan tanda tangan
+	Add squiggly underline	Tambahkan garis bawah bergelombang
+	Add stamp	Tambahkan stempel
+	Add sticky note	Tambahkan catatan tempel
+	Add strikethrough	Tambahkan coretan
+	Add text box	Tambahkan kotak teks
+	Add underline	Tambahkan garis bawah
+	Add watermark	Tambahkan tanda air
+	Add {what}	Tambahkan {what}
+	Added the first {n} files in {folder}	Menambahkan {n} file pertama di {folder}
+	Adding images arrives on the web with file pickers for images	Menambahkan gambar hadir di web bersama pemilih file untuk gambar
+	Algorithm	Algoritma
+	Align fields	Sejajarkan kolom
+	All annotations are tagged	Semua anotasi diberi tag
+	All form fields are tagged	Semua kolom formulir diberi tag
+	All form fields have description	Semua kolom formulir memiliki deskripsi
+	All multimedia objects are tagged	Semua objek multimedia diberi tag
+	All page content is tagged	Semua konten halaman diberi tag
+	Allowed	Diizinkan
+	Alternate Text	Teks Alternatif
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	Teks alternatif di dalam elemen yang sudah memiliki teks alternatif tidak akan pernah dibaca. Hapus teks alternatif di bagian dalam.
+	Alternate text must be associated with some content	Teks alternatif harus terkait dengan konten tertentu
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	Teks alternatif pada elemen yang memuat tautan atau kolom menyembunyikan anotasi tersebut dari teknologi bantu. Pindahkan teks alternatif.
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	Teks alternatif pada elemen tanpa konten halaman tidak akan pernah dijangkau. Hapus atau pasang elemen tersebut ke konten.
+	Alternate text should not hide annotation	Teks alternatif tidak boleh menyembunyikan anotasi
+	Alternate text that will never be read	Teks alternatif yang tidak akan pernah dibaca
+	An action is already running	Sebuah tindakan sedang berjalan
+	An embedded file has no AFRelationship	File tertanam tidak memiliki AFRelationship
+	An image asks to be interpolated	Sebuah gambar meminta untuk diinterpolasi
+	An image has alternates or OPI information	Sebuah gambar memiliki gambar alternatif atau informasi OPI
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	Animasi yang berkedip dapat menyebabkan kejang. Periksa skrip dan media untuk kedipan.
+	Another file dialog is still open. Finish with it first.	Dialog file lain masih terbuka. Selesaikan terlebih dahulu.
+	Application	Aplikasi
+	Applied 1 redaction mark. Save to remove the content from the file.	1 tanda sensor diterapkan. Simpan untuk menghapus konten dari file.
+	Applied {n} redaction marks. Save to remove the content from the file.	{n} tanda sensor diterapkan. Simpan untuk menghapus konten dari file.
+	Appropriate nesting	Penumpukan yang sesuai
+	Arbitrary Mask	Masker sembarang
+	Associated with content	terkait dengan konten
+	At least one signature has problems.	Setidaknya satu tanda tangan bermasalah.
+	At least one signature is invalid.	Setidaknya satu tanda tangan tidak valid.
+	Attachment	Lampiran
+	Basic constraints	Batasan dasar
+	Beveled	Miring
+	Black	Hitam
+	Black on white	Hitam di atas putih
+	Blue	Biru
+	Bookmarks are present in large documents	Bookmark ada pada dokumen besar
+	Both	Keduanya
+	Button Properties	Properti Tombol
+	Button Style:	Gaya Tombol:
+	Calculate	Hitung
+	Callout	Kotak komentar
+	Cancelled	Dibatalkan
+	Center Footer Text	Pusatkan Teks Footer
+	Center Header Text	Pusatkan Teks Header
+	Center horizontally	Pusatkan secara horizontal
+	Center vertically	Pusatkan secara vertikal
+	Certificate Viewer	Penampil Sertifikat
+	Certified by {by}	Disertifikasi oleh {by}
+	Change comment properties	Ubah properti komentar
+	Change document properties	Ubah properti dokumen
+	Change field properties	Ubah properti kolom
+	Change initial view	Ubah tampilan awal
+	Change link properties	Ubah properti tautan
+	Change tag properties	Ubah properti tag
+	Change {key}	Ubah {key}
+	Changing the document	Mengubah dokumen
+	Character encoding	Pengodean karakter
+	Character limit:	Batas karakter:
+	Check	Periksa
+	Check Box Properties	Properti Kotak Centang
+	Check Box Style:	Gaya Kotak Centang:
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Pastikan tag dibaca dalam urutan seperti yang akan dibaca pembaca yang melihat. Gunakan alat Urutan Baca atau panel Tag untuk memperbaikinya.
+	CheckBox	CheckBox
+	Checked	Dicentang
+	Choose a folder for the split files	Pilih folder untuk file hasil pisah
+	Choose a folder on this computer to pin	Pilih folder di komputer ini untuk disematkan
+	Click on the page to add a {tool}, or drag to set its size	Klik pada halaman untuk menambahkan {tool}, atau seret untuk mengatur ukurannya
+	Click text or an image to edit it	Klik teks atau gambar untuk mengeditnya
+	Color Images	Gambar berwarna
+	Color Spaces	Ruang warna
+	Color contrast	Kontras warna
+	Comb of characters	Sisir karakter
+	Combo	Kombo
+	Coming in milestone {m}. Items marked Ready work today.	Hadir di milestone {m}. Item bertanda Ready sudah dapat digunakan.
+	Command	Perintah
+	Commenting	Komentar
+	Comments and markups	Komentar dan anotasi
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	Komentar, tautan, dan kolom harus berada di pohon tag agar dapat diumumkan. Beri tag pada anotasi.
+	Completed	Selesai
+	Configure a Digital ID for Signing	Konfigurasikan ID Digital untuk Penandatanganan
+	Connected lines	Garis terhubung
+	Content Streams	Content Streams
+	Content copying	Penyalinan konten
+	Content copying for accessibility	Penyalinan konten untuk aksesibilitas
+	Contributors	Kontributor
+	Copied {what}	{what} disalin
+	Copy or cut pages first	Salin atau potong halaman terlebih dahulu
+	Could not save: {e}	Tidak dapat menyimpan: {e}
+	Couldn't add {name}: {e}	Tidak dapat menambahkan {name}: {e}
+	Couldn't combine files: {e}	Tidak dapat menggabungkan file: {e}
+	Couldn't create a PDF: {e}	Tidak dapat membuat PDF: {e}
+	Couldn't download {name}: {e}	Tidak dapat mengunduh {name}: {e}
+	Couldn't extract pages: {e}	Tidak dapat mengekstrak halaman: {e}
+	Couldn't fit the visible content: {e}	Tidak dapat menyesuaikan konten yang terlihat: {e}
+	Couldn't follow linked PDF: {reason}	Tidak dapat mengikuti PDF tertaut: {reason}
+	Couldn't import the signature image: {e}	Tidak dapat mengimpor gambar tanda tangan: {e}
+	Couldn't open revision {n}: {e}	Tidak dapat membuka revisi {n}: {e}
+	Couldn't open the result: {e}	Tidak dapat membuka hasil: {e}
+	Couldn't open the signed version: {e}	Tidak dapat membuka versi yang ditandatangani: {e}
+	Couldn't open {name}: {e}	Tidak dapat membuka {name}: {e}
+	Couldn't optimize the file	Tidak dapat mengoptimalkan file
+	Couldn't optimize the file: {e}	Tidak dapat mengoptimalkan file: {e}
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	Tidak dapat mencetak dari peramban ({e}); mengunduh {name} sebagai gantinya
+	Couldn't read {name}: {e}	Tidak dapat membaca {name}: {e}
+	Couldn't recover {name}: {e}	Tidak dapat memulihkan {name}: {e}
+	Couldn't reload {name}: {e}	Tidak dapat memuat ulang {name}: {e}
+	Couldn't save the image: {e}	Tidak dapat menyimpan gambar: {e}
+	Couldn't save {name}: {e}	Tidak dapat menyimpan {name}: {e}
+	Couldn't save: {e}	Tidak dapat menyimpan: {e}
+	Couldn't show the file picker. Please try again.	Tidak dapat menampilkan pemilih file. Silakan coba lagi.
+	Couldn't split: {e}	Tidak dapat memisah: {e}
+	Couldn't summarize comments: {e}	Tidak dapat meringkas komentar: {e}
+	Couldn't take the snapshot: {e}	Tidak dapat mengambil snapshot: {e}
+	Couldn't unlock {name}: {e}	Tidak dapat membuka kunci {name}: {e}
+	Couldn't use the photo: {e}	Tidak dapat menggunakan foto: {e}
+	Couldn't use {name}: {e}	Tidak dapat menggunakan {name}: {e}
+	Couldn't write {name}: {e}	Tidak dapat menulis {name}: {e}
+	Couldn't write {path}: {e}	Tidak dapat menulis {path}: {e}
+	Create link	Buat tautan
+	Created 1 link	1 tautan dibuat
+	Created a PDF from the first {n} files	PDF dibuat dari {n} file pertama
+	Created a comment summary	Ringkasan komentar dibuat
+	Created {n} links	{n} tautan dibuat
+	Credit Cards	Kartu Kredit
+	Crop page	Potong halaman
+	Custom font	Font kustom
+	Custom stamps arrive on the web with file pickers for images	Stempel kustom hadir di versi web dengan pemilih file untuk gambar
+	Cut {what}	Potong {what}
+	Dark gray theme	Tema abu-abu gelap
+	Dashed	Putus-putus
+	Dates	Tanggal
+	Delete bookmark	Hapus bookmark
+	Delete content	Hapus konten
+	Delete document JavaScript	Hapus JavaScript dokumen
+	Delete field	Hapus kolom
+	Delete image	Hapus gambar
+	Delete link	Hapus tautan
+	Delete page	Hapus halaman
+	Delete selected fields	Hapus kolom yang dipilih
+	Deleted	Dihapus
+	Detected 1 form field	1 kolom formulir terdeteksi
+	Detected {n} form fields	{n} kolom formulir terdeteksi
+	Device colour is used, but there is no PDF/A output intent	Warna perangkat digunakan, tetapi tidak ada output intent PDF/A
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	DeviceCMYK digunakan: diperlukan output intent CMYK (tidak ditambahkan otomatis)
+	Diagnostic details	Detail diagnostik
+	Digital Signature Properties	Properti Tanda Tangan Digital
+	Discard all comments, forms and multimedia	Buang semua komentar, formulir dan multimedia
+	Discard all links, actions and JavaScript	Buang semua tautan, aksi dan JavaScript
+	Discard all object data (file attachments)	Buang semua data objek (lampiran file)
+	Discard bookmarks	Buang bookmark
+	Discard document information and metadata	Buang informasi dokumen dan metadata
+	Discard hidden layer content	Buang konten lapisan tersembunyi
+	Discard hidden text	Buang teks tersembunyi
+	Discard private data of other applications	Buang data pribadi aplikasi lain
+	Distribute fields	Distribusikan kolom
+	Document Overhead	Beban dokumen
+	Document assembly	Penyusunan dokumen
+	Document has appropriate color contrast	Dokumen memiliki kontras warna yang sesuai
+	Document is not image-only PDF	Dokumen ini bukan PDF gambar saja
+	Document is tagged PDF	Dokumen ini PDF bertanda
+	Document sanitized. Save to finish: saving rewrites the whole file.	Dokumen dibersihkan. Simpan untuk menyelesaikan: penyimpanan menulis ulang seluruh file.
+	Document structure provides a logical reading order	Struktur dokumen menyediakan urutan baca logis
+	Document title is showing in title bar	Judul dokumen tampil di bilah judul
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	Dokumen dengan lebih dari 20 halaman memerlukan bookmark untuk navigasi. Tambahkan bookmark untuk bagian utama.
+	Double-click	Klik dua kali
+	Downloaded {name}	{name} diunduh
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Mengunduh lampiran di versi web hadir dengan M3.10 ({n} byte siap)
+	Drag a rectangle around the area to copy	Seret sebuah persegi panjang di sekitar area yang akan disalin
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Seret persegi panjang pada halaman untuk memotongnya; klik dua kali halaman untuk Kotak Halaman
+	Drag a rectangle to create a link; double-click a link to edit it	Seret persegi panjang untuk membuat tautan; klik dua kali tautan untuk mengeditnya
+	Drag the corners onto the document's edges, then choose Enhance page.	Seret sudutnya ke tepi dokumen, lalu pilih Peningkatan halaman.
+	Drag to draw the area where the signature should appear.	Seret untuk menggambar area tempat tanda tangan akan ditampilkan.
+	Dropdown Properties	Properti Dropdown
+	Duplicate field	Duplikat kolom
+	Duplicate page	Duplikat halaman
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	Setiap kolom memerlukan tooltip yang menjelaskan apa yang harus diisi. Tambahkan di Properti Kolom > Umum > Tooltip.
+	Edit comment	Edit komentar
+	Edit content	Edit konten
+	Edit document JavaScript	Edit JavaScript dokumen
+	Edit fields	Edit kolom
+	Edit script of {name}	Edit skrip {name}
+	Edit text	Edit teks
+	Editing	Mengedit
+	Email Addresses	Alamat Email
+	Embedded Files	File Tersemat
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	File tersemat harus berupa file PDF/A (gunakan PDF/A-3 untuk yang lain)
+	Encryption	Enkripsi
+	Endpoint	Endpoint
+	Erase	Hapus
+	Eraser	Penghapus
+	Even pages	Halaman genap
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	Semua yang ada di halaman harus bertanda atau ditandai sebagai artefak (dekorasi, header, footer). Tandai konten yang belum bertanda.
+	Execute a menu item	Jalankan item menu
+	Export certificate	Ekspor sertifikat
+	Exported to {path}	Diekspor ke {path}
+	Extended Graphics States	Status Grafik Diperluas
+	Field	Kolom
+	Field descriptions	Deskripsi kolom
+	Figures alternate text	Teks alternatif gambar
+	Figures require alternate text	Gambar memerlukan teks alternatif
+	File attachments	Lampiran file
+	Files are combined in this order. Leave Pages empty to take every page.	File digabungkan dalam urutan ini. Biarkan Halaman kosong untuk mengambil semua halaman.
+	Fill in {name}	Isi {name}
+	Filling of form fields	Pengisian kolom formulir
+	Flatten	Ratakan
+	Flip image	Balik gambar
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	Font harus memetakan karakternya ke Unicode agar teks dapat dibaca dan disalin. Perbaiki font atau buat ulang PDF.
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	Kolom formulir harus berada di pohon tag (tag Formulir) agar diumumkan. Tandai kolom formulir.
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Rumus dan elemen non-teks serupa memerlukan teks alternatif. Tambahkan teks alternatif ke elemen tersebut.
+	Gray	Abu-abu
+	Grayscale Images	Gambar Skala Abu-abu
+	Green	Hijau
+	Green on black	Hijau di atas hitam
+	H / Space (hold)	H / Space (tahan)
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Sel header (TH) memberi tahu pendengar isi setiap kolom atau baris. Tandai sel header.
+	Headers	Header
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	Tingkat judul tidak boleh melompat (H1 diikuti H3). Ubah lagi tag judul.
+	Headings	Judul
+	Hidden layers	Lapisan tersembunyi
+	Hidden text	Teks tersembunyi
+	Hide a field	Sembunyikan kolom
+	Hides annotation	Menyembunyikan anotasi
+	High	Tinggi
+	Home / End	Home / End
+	Horizontally	Horizontal
+	Image-only PDF	PDF gambar saja
+	Import {name}	Impor {name}
+	Importing data arrives on the web with file pickers for data files	Mengimpor data hadir di versi web dengan pemilih file untuk file data
+	Incorrect password. Try again.	Kata sandi salah. Coba lagi.
+	Insert pages from {name}	Sisipkan halaman dari {name}
+	Insert pages from {name} — 1 field renamed	Sisipkan halaman dari {name} — 1 kolom diganti namanya
+	Insert pages from {name} — fields renamed	Sisipkan halaman dari {name} — kolom diganti namanya
+	Inserted	Disisipkan
+	Inset	Inset
+	Intended usage	Penggunaan yang dimaksud
+	Intersection	Irisan
+	Invert	Balik
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	Tabel yang tidak rapi membingungkan navigasi sel. Berikan setiap baris jumlah sel yang sama (termasuk sel yang digabungkan).
+	Issued by	Diterbitkan oleh
+	Issued to	Diterbitkan kepada
+	Issuer	Penerbit
+	Key usage	Penggunaan kunci
+	Keywords	Kata kunci
+	LI must be a child of L	LI harus menjadi anak dari L
+	Landscape pages	Halaman lanskap
+	Lbl and LBody	Lbl dan LBody
+	Lbl and LBody must be children of LI	Lbl dan LBody harus menjadi anak dari LI
+	Left Footer Text	Teks Footer Kiri
+	Left Header Text	Teks Header Kiri
+	Light blue	Biru muda
+	Links, actions and JavaScripts	Tautan, aksi dan JavaScript
+	List	Daftar
+	List Box Properties	Properti Kotak Daftar
+	List items	Item daftar
+	List items belong in a list. Fix the list's tags.	Item daftar harus berada dalam daftar. Perbaiki tag daftar.
+	List labels and bodies belong in a list item. Fix the list's tags.	Label dan badan daftar harus berada dalam item daftar. Perbaiki tag daftar.
+	Lists	Daftar
+	Load document font	Muat font dokumen
+	Local cross-PDF links require the desktop app	Tautan antar-PDF lokal memerlukan aplikasi desktop
+	Lock comment	Kunci komentar
+	Logical Reading Order	Urutan Baca Logis
+	Low	Rendah
+	Make scans searchable, then make them smaller.	Buat hasil pindai dapat dicari, lalu perkecil ukurannya.
+	Mark all	Tandai semua
+	Mark as Confidential	Tandai sebagai Rahasia
+	Mark differences	Tandai perbedaan
+	Mark figure as decorative	Tandai gambar sebagai dekoratif
+	Mark for redaction	Tandai untuk disensor
+	Mark pages for redaction	Tandai halaman untuk disensor
+	Match field sizes	Samakan ukuran kolom
+	Maximum	Maksimum
+	Measuring tool	Alat pengukur
+	Merged 1 file into {path}	1 file digabungkan ke {path}
+	Merged {n} files into {path}	{n} file digabungkan ke {path}
+	Merging data files needs the desktop app	Menggabungkan file data memerlukan aplikasi desktop
+	Metadata	Metadata
+	Midpoint	Titik tengah
+	Minimum	Minimum
+	Models	Model
+	Mouse Down	Tetikus Turun
+	Mouse Enter	Tetikus Masuk
+	Mouse Exit	Tetikus Keluar
+	Mouse Up	Tetikus Naik
+	Move bookmark	Pindahkan bookmark
+	Move comment	Pindahkan komentar
+	Move image	Pindahkan gambar
+	Move page	Pindahkan halaman
+	Move pages	Pindahkan halaman
+	Named Destinations	Tujuan Bernama
+	Navigation links	Tautan navigasi
+	Navigation links are not repetitive	Tautan navigasi tidak berulang
+	Nested alternate text	Teks alternatif bersarang
+	New {tool} comments will look like this one	Komentar {tool} baru akan terlihat seperti yang ini
+	No PDFs, images or text files found in {folder}	Tidak ditemukan PDF, gambar atau file teks di {folder}
+	No form fields were detected	Tidak ada kolom formulir yang terdeteksi
+	No inaccessible scripts	Tidak ada skrip yang tidak dapat diakses
+	No links to remove	Tidak ada tautan untuk dihapus
+	No pages match those choices	Tidak ada halaman yang cocok dengan pilihan tersebut
+	No unlinked web addresses were found in the text	Tidak ditemukan alamat web tanpa tautan dalam teks
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Tidak ada file tersebut yang dapat dijadikan PDF; gunakan file PDF, gambar atau .txt
+	Note	Catatan
+	Number every page in the footer.	Beri nomor setiap halaman di footer.
+	Odd pages	Halaman ganjil
+	On Blur	Saat Kehilangan Fokus
+	On Focus	Saat Fokus
+	On the web, open or drop an image to convert it	Di versi web, buka atau seret gambar untuk mengonversinya
+	Open a web link	Buka tautan web
+	Opened with	Dibuka dengan
+	Opening the browser's print dialog…	Membuka dialog cetak browser…
+	Optimization cancelled	Optimalkan dibatalkan
+	Optimization is already running	Optimalkan sudah berjalan
+	Optimize Scanned Documents	Optimalkan Dokumen Hasil Pindai
+	Options	Opsi
+	Orange	Oranye
+	Other elements alternate text	Teks alternatif elemen lainnya
+	Other elements that require alternate text	Elemen lain yang memerlukan teks alternatif
+	Outline	Kerangka
+	PDF producer	Produsen PDF
+	PDF version	Versi PDF
+	Page Content	Konten Halaman
+	Page Range	Rentang Halaman
+	Page does not require timed responses	Halaman tidak memerlukan respons berjadwal
+	Page thumbnails	Miniatur halaman
+	Page will not cause screen flicker	Halaman tidak menyebabkan kedipan layar
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	Halaman yang hanya berisi gambar teks tidak dapat dibaca dengan suara atau dicari. Gunakan Pengenalan teks (OCR) untuk menambahkan lapisan teks.
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	Halaman dengan tautan, komentar atau kolom harus dapat di-tab dalam urutan struktur. Perbaikan mengatur urutan tab setiap halaman ke Gunakan Struktur Dokumen.
+	Passed	Lulus
+	Password protection will be applied when you save	Perlindungan kata sandi akan diterapkan saat Anda menyimpan
+	Path	Jalur
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft sedang menggambar tanpa akselerator grafis, jadi mungkin lambat. Memperbarui driver grafis mungkin membantu.
+	People may need more time to respond. Check that nothing has a time limit.	Orang mungkin membutuhkan lebih banyak waktu untuk merespons. Pastikan tidak ada yang memiliki batas waktu.
+	Phone Number	Nomor Telepon
+	Phone Numbers	Nomor Telepon
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	Gambar memerlukan teks alternatif yang menjelaskannya, atau harus ditandai sebagai dekoratif. Tambahkan teks alternatif ke setiap gambar.
+	Pink	Merah muda
+	Pinned folders need the desktop app	Folder yang disematkan memerlukan aplikasi desktop
+	Pinned {folder} to Home	{folder} disematkan ke Beranda
+	Place saved {what}	Tempatkan {what} yang tersimpan
+	Planned for milestone {m} — open to see what it will include	Direncanakan untuk milestone {m} — buka untuk melihat apa yang akan disertakan
+	Planned · {m}	Direncanakan · {m}
+	Polygon	Poligon
+	Polyline	Polyline
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	Mode portabel mati: {folder} tidak dapat ditulis ({error}). Pengaturan akan disimpan di folder pengguna Anda sebagai gantinya.
+	Portrait pages	Halaman potret
+	Position	Posisi
+	PostScript XObjects aren't allowed	XObjects PostScript tidak diizinkan
+	Prepare for Distribution	Siapkan untuk Distribusi
+	Preparing sheet {done} of {total} for printing…	Menyiapkan lembar {done} dari {total} untuk pencetakan…
+	Preparing {n} sheets for printing…	Menyiapkan {n} lembar untuk pencetakan…
+	Primary language	Bahasa utama
+	Printing	Mencetak
+	Private data of other applications	Data pribadi aplikasi lain
+	Public key	Kunci publik
+	Purple	Ungu
+	PushButton	PushButton
+	Radio	Radio
+	Radio Button Properties	Properti Tombol Radio
+	Re-type Password	Ketik Ulang Kata Sandi
+	Red	Merah
+	Redid {label}	Mengulangi {label}
+	Regularity	Keteraturan
+	Rejected	Ditolak
+	Reliable character encoding is provided	Pengodean karakter yang andal disediakan
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	Hapus informasi tersembunyi dan ratakan komentar serta kolom formulir agar penerima hanya melihat halaman.
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Hapus informasi tersembunyi, metadata, skrip dan konten tersemat, lalu tulis ulang file.
+	Remove redaction marks	Hapus tanda sensor
+	Remove saved {what}	Hapus {what} yang tersimpan
+	Removed 1 hidden item. Save to remove them from the file.	1 item tersembunyi dihapus. Simpan untuk menghapusnya dari file.
+	Removed 1 link	1 tautan dihapus
+	Removed {n} hidden items. Save to remove them from the file.	{n} item tersembunyi dihapus. Simpan untuk menghapusnya dari file.
+	Removed {n} links	{n} tautan dihapus
+	Rename bookmark	Ganti nama bookmark
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Render: hayro (bootstrap) · UI: egui · Ikon: Lucide (ISC) · Font: Inter, JetBrains Mono, Dancing Script (OFL)
+	Repairs	Perbaikan
+	Repeated navigation links should be skippable. Check links that appear on every page.	Tautan navigasi yang berulang harus dapat dilewati. Periksa tautan yang muncul di setiap halaman.
+	Replace page	Ganti halaman
+	Replace pages	Ganti halaman
+	Replaced	Diganti
+	Replacing images arrives on the web with image file pickers	Mengganti gambar hadir di versi web dengan pemilih file gambar
+	Replacing images on page {p} arrives on the web with image pickers ({i})	Mengganti gambar di halaman {p} hadir di versi web dengan pemilih gambar ({i})
+	Report Options	Opsi Laporan
+	Reset a form	Atur ulang formulir
+	Resize comment	Ubah ukuran komentar
+	Restrictions	Pembatasan
+	Restrictions lifted	Pembatasan dihapus
+	Reverted to the last saved version	Dikembalikan ke versi tersimpan terakhir
+	Right Footer Text	Teks Footer Kanan
+	Right Header Text	Teks Header Kanan
+	Rotate image	Putar gambar
+	Rotate page	Putar halaman
+	Rotate page {label} clockwise	Putar halaman {label} searah jarum jam
+	Rotate page {label} counterclockwise	Putar halaman {label} berlawanan arah jarum jam
+	Rows	Baris
+	Run	Jalankan
+	Run JavaScript	Jalankan JavaScript
+	Run a JavaScript	Jalankan sebuah JavaScript
+	Run form script	Jalankan skrip formulir
+	SHA-1 digest	Digest SHA-1
+	SHA-256 digest	Digest SHA-256
+	Sanitize	Bersihkan
+	Sanitize Documents	Bersihkan Dokumen
+	Save as PDF/A-1b	Simpan sebagai PDF/A-1b
+	Save as PDF/A-2b	Simpan sebagai PDF/A-2b
+	Save as PDF/A-3b	Simpan sebagai PDF/A-3b
+	Save image	Simpan gambar
+	Save or revert changes before selecting another tag.	Simpan atau kembalikan perubahan sebelum memilih tag lain.
+	Saved the print-ready PDF to {path}	PDF siap cetak disimpan ke {path}
+	Saved {name}	{name} disimpan
+	Saved {place}: {before} → {after} (not smaller){detail}	Disimpan {place}: {before} → {after} (tidak lebih kecil){detail}
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Disimpan {place}: {before} → {after} ({pct}% lebih kecil){detail}
+	Saved, but reopening failed: {e}	Tersimpan, tetapi membuka kembali gagal: {e}
+	Screen flicker	Kedipan layar
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	Pembaca layar memilih suaranya dari bahasa dokumen. Atur di Properti dokumen > Lanjutan > Bahasa.
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	Konten berskrip harus dapat digunakan dengan keyboard dan teknologi bantu. Periksa skrip dokumen.
+	Scripts	Skrip
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	Skrip berjalan di sandbox tanpa akses file atau jaringan. Dengan JavaScript nonaktif, fungsi format, validasi dan hitung bawaan Acrobat tetap berfungsi.
+	Security method	Metode keamanan
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Pengaturan keamanan harus mengizinkan teknologi bantu membaca konten ("Aktifkan akses teks untuk perangkat pembaca layar"). Ubah keamanan dokumen untuk mengizinkannya.
+	Security will be removed when you save	Keamanan akan dihapus saat Anda menyimpan
+	Self-signed	Ditandatangani sendiri
+	Serial number	Nomor seri
+	Set alternate text	Atur teks alternatif
+	Set bookmark destination	Atur tujuan bookmark
+	Set document title	Atur judul dokumen
+	Set status Accepted	Atur status Diterima
+	Set status Cancelled	Atur status Dibatalkan
+	Set status Completed	Atur status Selesai
+	Set status None	Atur status Tidak ada
+	Set status Rejected	Atur status Ditolak
+	Set status Unmarked	Atur status Belum ditandai
+	Set tab order	Atur urutan tab
+	Set the image of {name}	Atur gambar untuk {name}
+	Shadings	Pembayangan
+	Show a field	Tampilkan kolom
+	Sign with a Digital ID	Tanda tangani dengan ID Digital
+	Signed and all signatures are valid.	Ditandatangani dan semua tanda tangan valid.
+	Signed and saved to {path}	Ditandatangani dan disimpan ke {path}
+	Signer	Penanda tangan
+	Signing time	Waktu penandatanganan
+	Social Security Number	Nomor Jaminan Sosial
+	Social Security Numbers	Nomor Jaminan Sosial
+	Solid	Padat
+	Squiggly	Bergelombang
+	Star	Bintang
+	Strong	Kuat
+	Structure Info	Info struktur
+	Submit a form	Kirim formulir
+	TH and TD	TH dan TD
+	TH and TD must be children of TR	TH dan TD harus menjadi anak dari TR
+	TR must be a child of Table, THead, TBody, or TFoot	TR harus menjadi anak dari Table, THead, TBody, atau TFoot
+	Tab order	Urutan tab
+	Tab order is consistent with structure order	Urutan tab sesuai dengan urutan struktur
+	Table cells belong in a row. Fix the table's tags.	Sel tabel harus berada dalam satu baris. Perbaiki tag tabel.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Baris tabel harus berada langsung dalam tabel atau header, body, atau footer-nya. Perbaiki tag tabel.
+	Tables	Tabel
+	Tables must contain the same number of columns in each row and rows in each column	Tabel harus memiliki jumlah kolom yang sama di setiap baris dan jumlah baris yang sama di setiap kolom
+	Tables must have a summary	Tabel harus memiliki ringkasan
+	Tables should have headers	Tabel sebaiknya memiliki header
+	Tagged PDF	PDF bertag
+	Tagged annotations	Anotasi bertag
+	Tagged content	Konten bertag
+	Tagged form fields	Kolom formulir bertag
+	Tagged multimedia	Multimedia bertag
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	Tag memberi struktur logis pada dokumen yang diikuti teknologi bantu. Beri tag pada dokumen (Beri tag PDF secara otomatis).
+	Text Field Properties	Properti Kolom Teks
+	Text language is specified	Bahasa teks sudah ditentukan
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	Teks harus kontras cukup dengan latar belakangnya untuk orang dengan penglihatan rendah. Periksa warnanya dengan mata atau dengan alat kontras.
+	Text recognition is already running	Pengenalan teks sudah berjalan
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Pengenalan teks belum terpasang: modelnya tidak ada (jalankan `cargo xtask models`, atau atur PDFCRAFT_MODELS).
+	That didn't work: an internal error stopped it ({m}).	Itu tidak berhasil: kesalahan internal menghentikannya ({m}).
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	itu tidak berhasil: kesalahan internal menghentikannya ({m}). Dokumen Anda tidak berubah.
+	The Keychain's digital IDs couldn't be listed: {e}	ID digital Keychain tidak dapat ditampilkan: {e}
+	The Windows store's digital IDs couldn't be listed: {e}	ID digital di penyimpanan Windows tidak dapat ditampilkan: {e}
+	The clipboard has no image or text	Papan klip tidak berisi gambar atau teks
+	The document changed while you were choosing a file, so nothing was changed.	Dokumen berubah saat Anda memilih file, jadi tidak ada yang diubah.
+	The document changed while you were editing field properties.	Dokumen berubah saat Anda mengedit properti kolom.
+	The document has additional actions (/AA)	Dokumen memiliki tindakan tambahan (/AA)
+	The document has document-level JavaScript	Dokumen memiliki JavaScript tingkat dokumen
+	The document has no XMP metadata	Dokumen tidak memiliki metadata XMP
+	The document is encrypted	Dokumen terenkripsi
+	The document is no longer open.	Dokumen tidak lagi terbuka.
+	The document was closed before it could be saved.	Dokumen ditutup sebelum dapat disimpan.
+	The document's security settings don't allow filling in form fields	Pengaturan keamanan dokumen tidak mengizinkan pengisian kolom formulir
+	The field properties could not be changed.	Properti kolom tidak dapat diubah.
+	The field properties dialog is no longer open.	Dialog properti kolom tidak lagi terbuka.
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Formulir diminta untuk dikirim ke {u}; PdfCraft tidak mengirim data formulir. Simpan dokumen untuk mempertahankan isi Anda.
+	The form asks viewers to make appearances (NeedAppearances)	Formulir meminta penampil untuk membuat tampilan (NeedAppearances)
+	The linked PDF opened, but its named destination was not applied.	PDF tertaut terbuka, tetapi tujuan bernama tidak diterapkan.
+	The linked PDF opened, but its page destination was out of range.	PDF tertaut terbuka, tetapi tujuan halamannya di luar rentang.
+	The operation failed.	Operasi gagal.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Halaman diekstrak tetapi tidak dihapus, karena dokumen berubah saat Anda memilih folder.
+	The passwords don't match.	Kata sandi tidak cocok.
+	The selected area has been copied ({w} × {h} pixels)	Area yang dipilih telah disalin ({w} × {h} piksel)
+	The selected fields could not be found. Select them again.	Kolom yang dipilih tidak ditemukan. Pilih lagi.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Font standar tidak dapat menggambar “{c}” ({code}). Untuk saat ini hanya karakter Western European yang dapat ditambahkan sebagai teks.
+	The title in the metadata and the document information differ	Judul dalam metadata dan informasi dokumen berbeda
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	Jendela harus menampilkan judul yang bermakna, bukan nama file. Atur judul dan Tampilan Awal > Tampilkan: Judul Dokumen.
+	There are no redaction marks to apply	Tidak ada tanda penyensoran untuk diterapkan
+	This PDF uses the unsupported {s} action.	PDF ini menggunakan tindakan {s} yang tidak didukung.
+	This compatibility level supports only plain ASCII passwords.	Tingkat kompatibilitas ini hanya mendukung kata sandi ASCII biasa.
+	This document can't be checked: it couldn't be read for editing	Dokumen ini tidak dapat diperiksa: tidak dapat dibaca untuk diedit
+	This document has no attachments.	Dokumen ini tidak memiliki lampiran.
+	This document has no bookmarks.	Dokumen ini tidak memiliki bookmark.
+	This document has no form fields.	Dokumen ini tidak memiliki kolom formulir.
+	This document has no layers.	Dokumen ini tidak memiliki lapisan.
+	This file is already as small as it can be made ({size}). No copy was saved.	File ini sudah sekecil mungkin ({size}). Tidak ada salinan yang disimpan.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Formulir ini juga berisi data XFA, yang belum dibaca PdfCraft. Anda dapat mengisi kolomnya, tetapi Acrobat mungkin menampilkan nilai XFA sebagai gantinya.
+	Thumbnails	Thumbnail
+	Timed responses	Respons berjadwal
+	Type Password	Ketik Kata Sandi
+	Type a password.	Ketik kata sandi.
+	Typewriter	Mesin ketik
+	Unchecked	Tidak dicentang
+	Undid {label}	Membatalkan {label}
+	Unlock comment	Buka kunci komentar
+	Unlocked {n} of {m} files	Membuka kunci {n} dari {m} file
+	Update background	Perbarui latar belakang
+	Update header & footer	Perbarui header & footer
+	Update watermark	Perbarui tanda air
+	Use {what}	Gunakan {what}
+	Valid	Valid
+	Valid from	Valid mulai
+	Valid to	Valid sampai
+	Validate	Validasi
+	Validity ends	Validitas berakhir
+	Validity starts	Validitas dimulai
+	Vertically	Vertikal
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	Video, suara, dan media kaya harus diberi tag agar dapat diumumkan. Beri tag pada anotasi multimedia.
+	Viewing	Melihat
+	Weak	Lemah
+	White on black	Putih di atas hitam
+	Wrote 1 file to {dir}	Menulis 1 file ke {dir}
+	Wrote {n} files to {dir}	Menulis {n} file ke {dir}
+	X Object Forms	Formulir Objek X
+	Yellow	Kuning
+	Yellow on black	Kuning di atas hitam
+	You can pin up to {n} folders. Unpin one first.	Anda dapat menyematkan hingga {n} folder. Lepas sematan satu terlebih dahulu.
+	Your name	Nama Anda
+	Zip Code	Kode Pos
+	Zip Code + 4	Kode Pos + 4
+	`{command}` {when}	`{command}` {when}
+	a bookmark cannot be moved inside itself	bookmark tidak dapat dipindahkan ke dalam dirinya sendiri
+	a document must keep at least one page	dokumen harus mempertahankan setidaknya satu halaman
+	average	rata-rata
+	maximum	maksimum
+	minimum	minimum
+	no such document	tidak ada dokumen tersebut
+	nothing in the file matches this document	tidak ada yang di dalam file ini cocok dengan dokumen ini
+	nothing to redo	tidak ada yang perlu diulang
+	nothing to undo	tidak ada yang perlu dibatalkan
+	pages	halaman
+	product (x)	perkalian (x)
+	sum (+)	penjumlahan (+)
+	the document has no form fields	dokumen tidak memiliki kolom formulir
+	the document has no page tree	dokumen tidak memiliki pohon halaman
+	the document has no tags	dokumen tidak memiliki tag
+	the document is protected by a password	dokumen dilindungi kata sandi
+	the image is empty	gambarnya kosong
+	the password is incorrect	kata sandinya salah
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	model pengenalan teks belum terpasang (pasang ulang PdfCraft, atau atur PDFCRAFT_MODELS ke folder yang memuatnya)
+	the title must not be empty	judul tidak boleh kosong
+	there are no pages to print	tidak ada halaman untuk dicetak
+	there are no redaction marks to apply	tidak ada tanda penyensoran untuk diterapkan
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	dokumen ini ditandatangani: menulis ulang akan membatalkan tanda tangannya (simpan secara bertahap sebagai gantinya)
+	this file isn't XFDF, FDF, XML or text form data	file ini bukan XFDF, FDF, XML, atau data formulir teks
+	{0}: {1}	{0}: {1}
+	{field}: {e}	{field}: {e}
+	{file} is too large for a stamp (at most {n} MB)	{file} terlalu besar untuk stempel (maksimal {n} MB)
+	{folder} is already pinned to Home	{folder} sudah disematkan ke Beranda
+	{label} failed: {e}	{label} gagal: {e}
+	{name} has no action	{name} tidak memiliki tindakan
+	{name} is too large for a word list (at most 1 MB).	{name} terlalu besar untuk daftar kata (maksimal 1 MB).
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} mengirim formulir ke {url}; PdfCraft tidak mengirim data formulir. Simpan dokumen untuk mempertahankan isi Anda.
+	{name}: choosing images arrives on the web with file pickers for images	{name}: memilih gambar Herrera ke situs web dengan pemilih file untuk gambar
+	{name}: the {other} action isn't supported yet	{name}: tindakan {other} belum didukung
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} dalam dokumen ini mencoba membuka alamat yang tidak akan dibuka PdfCraft: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} dalam dokumen ini mencoba membuka alamat yang tidak akan dibuka PdfCraft: {e}. Hanya tautan web (http, https) dan email (mailto) yang terbuka dari dokumen.
+animation effects	Off	Nonaktif
+animation effects	On	Aktif
+	View more	Lihat lebih banyak
+	View less	Lihat lebih sedikit
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Lanjutkan hanya jika Anda memercayai dokumen ini. Alamat dapat membawa informasi dari dokumen, seperti yang Anda ketik ke formulirnya.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Cetak satu sisi. Pertahankan urutan lembarnya, potong pada tanda, lalu tumpuk tumpukan dari kiri ke kanan, dari atas ke bawah.
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Tandatangani selembar kertas putih dan ambil fotonya dengan cahaya terang dan merata (gunakan blitz). Pilih foto atau jatuhkan di sini: PdfCraft menemukan tanda tangan dan menghapus kertasnya.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Font kolom ini tidak dapat menggambar “{c}” ({code}), jadi PdfCraft menampilkan ? sebagai gantinya. Nilainya disimpan, dan penampil PDF lain menggambar ulang kolom dari nilai itu.
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} belum dapat ditulis ke PDF: teks Isi & Tanda Tangani hanya untuk Western European. Pilih format angka seperti dd.mm.yyyy.
+	January	Januari
+	February	Februari
+	March	Maret
+	April	April
+	May	Mei
+	June	Juni
+	July	Juli
+	August	Agustus
+	September	September
+	October	Oktober
+	November	November
+	December	Desember
+calendar date	January	Januari
+calendar date	February	Februari
+calendar date	March	Maret
+calendar date	April	April
+calendar date	May	Mei
+calendar date	June	Juni
+calendar date	July	Juli
+calendar date	August	Agustus
+calendar date	September	September
+calendar date	October	Oktober
+calendar date	November	November
+calendar date	December	Desember
+calendar weekday	Su	Su
+calendar weekday	Mo	Sen
+calendar weekday	Tu	Sel
+calendar weekday	We	Rab
+calendar weekday	Th	Kam
+calendar weekday	Fr	Jum
+	Next tab	Tab berikutnya
+	Previous tab	Tab sebelumnya
+calendar weekday	Sa	Sab
+signature pad	Type	Ketik
+scroll speed	Slow	Lambat
+scroll speed	Normal	Normal
+scroll speed	Fast	Cepat
+certificate	Subject	Subjek
+certificate	Issued to	Diterbitkan untuk
+certificate	Issued by	Diterbitkan oleh
+certificate	Valid from	Valid mulai
+certificate	Valid to	Valid sampai
+certificate	Intended usage	Kegunaan yang dimaksud
+certificate	Version	Versi
+certificate	Serial number	Nomor seri
+certificate	Issuer	Penerbit
+certificate	Validity starts	Validitas dimulai
+certificate	Validity ends	Validitas berakhir
+certificate	Public key	Kunci publik
+certificate	Basic constraints	Batasan dasar
+certificate	Key usage	Penggunaan kunci
+certificate	Self-signed	Ditandatangani sendiri
+certificate	SHA-1 digest	Ringkasan SHA-1
+certificate	SHA-256 digest	Ringkasan SHA-256
+	Certificate authority	Otoritas sertifikat
+	End entity	Entitas akhir
+	Float panel	Jadikan panel mengambang
+	Move to group	Pindahkan ke grup
+	Panels	Panel
+	Resize panel window	Ubah ukuran jendela panel
+	Resize panels	Ubah ukuran panel
+	Grab bag	Lain-lain
+	No contributor data was built into this copy.	Data kontributor tidak disertakan dalam salinan ini.
+	No model credits were built into this copy.	Kredit model tidak disertakan dalam salinan ini.
+	Reverse the order	Balik urutan
+	Show	Tampilkan
+	Sort	Urutkan
+	Table	Tabel
+	The field {name} no longer exists.	Kolom {name} tidak lagi ada.
+	{n} contributors · {c} commits	{n} kontributor · {c} commit
+	Username	Nama pengguna
+	Display name	Nama tampilan
+	Real name	Nama asli
+	Name (A–Z)	Nama (A–Z)
+	Merged PRs	PR yang digabung
+	PRs	PR
+	Commits	Commit
+	Lines added	Baris ditambahkan
+	+LOC	+LOC
+	Lines deleted	Baris dihapus
+	−LOC	−LOC
+	Line delta	Perubahan baris
+	ΔLOC	ΔLOC
+	Binary assets added	Aset biner ditambahkan
+	+Bin	+Bin
+	Binary assets removed	Aset biner dihapus
+	−Bin	−Bin
+	First commit	Commit pertama
+	First	Pertama
+	Last commit	Commit terakhir
+	Last	Terakhir
+	Company	Perusahaan
+	Model	Model
+	Version	Versi
+	% of all commits	% dari semua commit
+	Lines +/−	Baris +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} baris (Δ {delta}), +{bin_added} / −{bin_deleted} aset biner, {first} – {last}
+	of {name}	dari {name}
+	of {pages}	dari {pages}
+	on page {label}	di halaman {label}
+	open to see what it will include	buka untuk melihat apa yang akan disertakan
+	ships in milestone {m}	rilis di milestone {m}
+	signature	tanda tangan
+	sorted ascending	terurut naik
+	sorted descending	terurut menurun
+	to	hingga
+	to {n}	hingga {n}
+	watermark	tanda air
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy atau yy tahun · m atau mm bulan · mmm atau mmmm nama bulan · d atau dd hari · ddd atau dddd nama hari. H, h, M, s, dan t adalah huruf waktu dan tidak dapat digunakan sendiri: letakkan {escape} sebelum huruf untuk menampilkannya apa adanya.
+	{c} of {n}{more}	{c} dari {n}{more}
+	{dpi} pixels/inch	{dpi} piksel/inci
+	{kind} Properties	Properti {kind}
+	{kind} field	kolom {kind}
+	{kind} · page {p}	{kind} · halaman {p}
+	{kind} — click to show it on the page	{kind} — klik untuk menampilkannya di halaman
+	{k} of {n}	{k} dari {n}
+	{label} (1 issue)	{label} (1 masalah)
+	{label} ({n} issues)	{label} ({n} masalah)
+	{month} {day}, {y}	{month} {day}, {y}
+	{month} {y}	{month} {y}
+	{msg} to {dir}	{msg} ke {dir}
+	{name} (default)	{name} (bawaan)
+	{name} can't be combined: {why}	{name} tidak dapat digabungkan: {why}
+	{name} is read-only	{name} hanya baca
+	{name} — unsaved changes	{name} — perubahan belum disimpan
+	{n} days ago	{n} hari lalu
+	{n} differences found	{n} perbedaan ditemukan
+	{n} fields selected	{n} kolom dipilih
+	{n} files	{n} file
+	{n} files done	{n} file selesai
+	{n} files need attention	{n} file perlu perhatian
+	{n} h ago	{n} jam lalu
+	{n} instances	{n} instans
+	{n} issues	{n} masalah
+	{n} marks	{n} tanda
+	{n} match(es) marked for redaction.	{n} kecocokan ditandai untuk disensor.
+	{n} measurements use an unsupported format and are left out.	{n} pengukuran menggunakan format yang tidak didukung dan dikecualikan.
+	{n} min ago	{n} mnt lalu
+	{n} pages	{n} halaman
+	{n} pages selected.	{n} halaman dipilih.
+	{n} selected	{n} dipilih
+	{n} tags	{n} tag
+	{n} word(s) or phrase(s)	{n} kata atau frasa
+	{n} {kind}	{n} {kind}
+	{rule} - {status}	{rule} - {status}
+	{s} action	tindakan {s}
+	{verb} Background	{verb} Latar Belakang
+	{verb} Header and Footer	{verb} Header dan Footer
+	{verb} Watermark	{verb} Tanda Air
+	{verb} as "{name}"	{verb} sebagai "{name}"
+	{who} in this document wants to open this address in your browser:	{who} dalam dokumen ini ingin membuka alamat ini di browser Anda:
+	{who} in this document wants to open your email app with this address:	{who} dalam dokumen ini ingin membuka aplikasi email Anda dengan alamat ini:
+	{words} on {pages}	{words} di {pages}
+	— (protection is applied when you save)	— (perlindungan diterapkan saat Anda menyimpan)
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” memiliki pembatasan keamanan. Masukkan kata sandi izinnya untuk mencabut pembatasan tersebut.
+	“{name}” is protected. Enter a password to open it.	“{name}” dilindungi. Masukkan kata sandi untuk membukanya.
+@plural	{n} page|{n} pages	{n} halaman
+@plural	{n} file|{n} files	{n} file
+@plural	{n} field|{n} fields	{n} kolom
+@plural	{n} comment|{n} comments	{n} komentar
+@plural	{n} result|{n} results	{n} hasil
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nama kolom bertabrakan dengan file sebelumnya dan akan diganti nama: {list}
+@plural	{n} object selected|{n} objects selected	{n} objek dipilih
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF diunduh
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Space
+	the name is not a plain file name	nama tersebut bukan nama berkas biasa
+	Allow	Izinkan
+	Maximize	Maksimalkan
+	Minimize	Minimalkan
+	Move tag earlier	Pindahkan tag lebih awal
+	Move tag later	Pindahkan tag lebih lambat
+	Only allow this if you trust the source document.	Hanya izinkan ini jika Anda mempercayai dokumen sumber.
+	Open this local PDF?	Buka PDF lokal ini?
+	Remove "{name}" from this list? The file itself is not deleted.	Hapus "{name}" dari daftar ini? File itu sendiri tidak dihapus.
+	Restore	Pulihkan
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Tampilkan bilah judul sederhana untuk tombol jendela alih-alih strip tab. GNOME tidak menggambar bilah judul untuk aplikasi, jadi yang ini tidak mengikuti temanya.
+	This document is trying to open a local file:	Dokumen ini mencoba membuka file lokal:
+	Use system title bar	Gunakan bilah judul sistem
+	Hide hover previews for highlights without comment text	Sembunyikan pratinjau saat kursor diarahkan ke sorotan tanpa teks komentar
+	Set page transitions	Atur transisi halaman
+	What takes up the space in this file, by kind of content.	Apa yang memakan ruang dalam berkas ini, berdasarkan jenis konten.
+	Digitally signed by	Ditandatangani secara digital oleh
+	DN: 	DN: 
+	Reason: 	Alasan: 
+	Location: 	Lokasi: 
+	Date: 	Tanggal: 
+	The labels are in English: the signature's font can't draw them in this language.	Label ditampilkan dalam bahasa Inggris: font tanda tangan tidak dapat menggambarnya dalam bahasa ini.
+	Font size	Ukuran font
+	Make Properties Default	Jadikan properti default
+	Save over the changed file?	Simpan menimpa berkas yang berubah?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” telah berubah di disk setelah dibuka atau terakhir kali disimpan. Menyimpan sekarang akan mengganti versi yang lebih baru itu dengan versi ini.
+	Save anyway	Tetap simpan
+	Sending sheet {s} of {n} to {printer}…	Mengirim lembar {s} dari {n} ke {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Tidak ada printer yang ditemukan. Pastikan printer telah terinstal dan print spooler sedang berjalan, lalu buka Cetak lagi.
+	Collapse all pages	Ciutkan semua halaman
+	Expand all pages	Perluas semua halaman
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Berkas ini telah berubah di disk. Muat ulang akan menampilkan versi baru dan membuang perubahan Anda yang belum disimpan; Simpan akan menggantinya dengan versi ini.
+	Scroll speed (mouse wheel and arrow keys)	Kecepatan gulir (roda mouse dan tombol panah)
+	Cut Image	Potong gambar
+	Redact Image	Redaksi gambar
+	Create Link…	Buat tautan…
+	Recognize Text…	Kenali teks…
+	Open in Full Screen mode?	Buka dalam mode layar penuh?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Dokumen ini meminta untuk dibuka dalam mode layar penuh: halaman memenuhi layar dan tidak ada hal lain yang ditampilkan. Tekan Esc kapan saja untuk keluar.
+	Full Screen	Layar penuh
+	Not now	Jangan sekarang
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Anda melihat versi yang telah ditandatangani dari “{from}” (revisi {rev}). Ini adalah snapshot: perubahan di sini tidak akan memengaruhi berkas asli.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Anda melihat revisi {rev} dari “{from}”. Ini adalah snapshot: perubahan di sini tidak akan memengaruhi berkas asli.
+	Turn upside down (180°)	Putar terbalik (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Label 4 x 6 inci (101,6 x 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Memotong setiap halaman sesuai area cetaknya, menegakkannya, dan menyesuaikannya dengan lembar tanpa meregangkan. Satu label per lembar.
+	Find untagged content	Temukan konten tanpa tag
+	No untagged content was found.	Tidak ditemukan konten tanpa tag.
+	Found {n} untagged content problems.	Ditemukan {n} masalah konten tanpa tag.
+	Tag form fields	Beri tag pada kolom formulir
+	Mark as artifact	Tandai sebagai artefak
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Hapus tag daun ini dari urutan baca dan tandai konten langsungnya sebagai artefak
+	Mark content as artifact	Tandai konten sebagai artefak
+	Word count	Jumlah kata
+	Current page only	Hanya halaman saat ini
+	Exclude tagged tables	Kecualikan tabel bertag
+	Exclude tagged code blocks	Kecualikan blok kode bertag
+	Exclude image/OCR text	Kecualikan teks gambar/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Pengecualian menggunakan tag PDF. Tabel dan kode tanpa tag tetap disertakan. Pengecualian gambar juga menghapus teks tak terlihat.
+	Words	Kata
+	Characters	Karakter
+	Characters without spaces	Karakter tanpa spasi
+	Pages counted	Halaman yang dihitung
+	Some pages contain no countable text. Scanned images need OCR first.	Beberapa halaman tidak berisi teks yang dapat dihitung. Gambar hasil pemindaian memerlukan OCR terlebih dahulu.
+	Some content could not be classified safely and was kept in the count.	Beberapa konten tidak dapat diklasifikasikan dengan aman dan tetap dihitung.
+	Counting words… {n} pages read	Menghitung kata… {n} halaman dibaca
+	Word counting stopped unexpectedly.	Penghitungan kata berhenti secara tidak terduga.
+	Word count…	Hitung kata…
+@id	file.word_count	Hitung kata…
+	Standard	Standar
+	Mobile	Seluler
+	Merge image fragments	Gabungkan fragmen gambar
+	Optimizing… merging image fragments	Mengoptimalkan… menggabungkan fragmen gambar
+	Side by side	Berdampingan
+	New file only	Hanya berkas baru
+	Old file: {name}	Berkas lama: {name}
+	New file: {name}	Berkas baru: {name}
+	Print as image	Cetak sebagai gambar
+	Resolution:	Resolusi:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Gunakan saat printer melewatkan teks, arsiran atau transparansi. Hasil cetakan tidak lagi berupa teks yang dapat dicari; dengan Cetak dalam skala abu-abu, gambar menjadi abu-abu.
+	Crop Image	Pangkas gambar
+	Remove Crop	Hapus pangkasan
+	Trim the picture with its handles; Enter or Done applies	Pangkas gambar dengan pegangannya; Enter atau Selesai menerapkannya
+	Redaction mark appearance	Tampilan tanda redaksi
+	Outline colour:	Warna garis tepi:
+	Fill colour:	Warna isian:
+	Shown while the pointer is over a mark.	Ditampilkan saat pointer berada di atas tanda.
+	Opacity:	Opasitas:
+	Make properties default	Jadikan properti default
+	Pages selected	Halaman yang dipilih
+	Page properties	Properti halaman
+	The password must have at least 8 characters.	Kata sandi harus memiliki minimal 8 karakter.
+theme	Appearance	Tampilan

@@ -1,0 +1,2677 @@
+# Korean (ko) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   Clean-room translation written from the English source's meaning.
+#   License: MIT OR Apache-2.0.
+	Menu	메뉴
+	File	파일
+	Edit	편집
+	Pages	페이지
+	View	보기
+	Help	도움말
+	Preferences	환경설정
+	Preferences…	환경설정…
+	Interface language	인터페이스 언어
+	Interface size	인터페이스 크기
+	Auto ({percent}%)	자동 ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	자동 모드는 시스템의 텍스트 크기를 따릅니다. 페이지는 항상 디스플레이의 전체 해상도로 렌더링됩니다.
+	Identity	신원 정보
+	Name on new comments	새 주석에 사용할 이름
+	Open…	열기…
+	Open Recent	최근 파일 열기
+	Pin folder to Home…	홈에 폴더 고정…
+	Folders	폴더
+	Pin a folder…	폴더 고정…
+	Pin a folder to Home	홈에 폴더 고정
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	폴더를 고정하면 해당 폴더의 최신 PDF가 여기에 표시됩니다. 예를 들어 스캐너나 동기화된 클라우드 드라이브가 파일을 저장하는 폴더를 지정할 수 있습니다.
+	Unpin	고정 해제
+	Unpin {folder}	{folder} 고정 해제
+	Looking for PDFs…	PDF 찾는 중…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	현재 이 폴더를 사용할 수 없습니다. 폴더가 이동되었거나 해당 드라이브 또는 클라우드 동기화가 오프라인 상태일 수 있습니다.
+	No PDFs in this folder yet	이 폴더에는 아직 PDF가 없습니다
+	Show less	간략히 보기
+	Show {n} more	{n}개 더 보기
+	The newest {n} of {total} PDFs	전체 {total}개 PDF 중 최신 {n}개
+	Pinned folders need the desktop app	고정 폴더 기능에는 데스크톱 앱이 필요합니다
+	Choose a folder on this computer to pin	고정할 이 컴퓨터의 폴더를 선택하세요
+	{folder} is already pinned to Home	{folder}은(는) 이미 홈에 고정되어 있습니다
+	You can pin up to {n} folders. Unpin one first.	폴더는 최대 {n}개까지 고정할 수 있습니다. 먼저 하나를 고정 해제하세요.
+	Pinned {folder} to Home	{folder}을(를) 홈에 고정했습니다
+	No recent files	최근 파일이 없습니다
+	New blank PDF	새 빈 PDF
+	Create PDF from file…	파일에서 PDF 만들기…
+	Create PDF from images…	이미지에서 PDF 만들기…
+	Create PDF from clipboard	클립보드에서 PDF 만들기
+	Combine files…	파일 결합…
+	Save	저장
+	Save as…	다른 이름으로 저장…
+	Close file	파일 닫기
+	Close all	모두 닫기
+	Revert	되돌리기
+	Print…	인쇄…
+	Document properties…	문서 속성…
+	Undo	실행 취소
+	Redo	다시 실행
+	Find…	찾기…
+	Advanced search…	고급 검색…
+	Copy pages	페이지 복사
+	Cut pages	페이지 잘라내기
+	Paste pages	페이지 붙여넣기
+	Fit visible	보이는 부분에 맞춤
+	Marquee zoom	영역 확대
+	Take a snapshot	스냅샷 만들기
+	Column select	열 선택
+	Full screen mode	전체 화면 모드
+	Read mode	읽기 모드
+	Switch light / dark theme	밝은 / 어두운 테마 전환
+	Comments panel	주석 패널
+	Form fields panel	양식 필드 패널
+	Clear form	양식 지우기
+	Find tools and commands…	도구 및 명령 찾기…
+	Zoom	확대/축소
+	Actual size	실제 크기
+	Zoom to page level	페이지 크기에 맞춤
+	Fit to width	폭에 맞춤
+	Display theme	표시 테마
+	Side panels	측면 패널
+	Enable Acrobat JavaScript	Acrobat JavaScript 사용
+	OK	확인
+	Join our Discord	Discord 참여하기
+	Close	닫기
+	Next / previous match	다음 / 이전 일치 항목
+	Copy selected text	선택한 텍스트 복사
+	Double-click	두 번 클릭
+	Select a word	단어 선택
+	Clear selection / close find	선택 해제 / 찾기 닫기
+	Zoom in / out (also pinch or {key}-scroll)	확대 / 축소 (핀치 또는 {key} 키 + 스크롤)
+	Rotate view	보기 회전
+	First / last page	첫 페이지 / 마지막 페이지
+	Previous / next page	이전 / 다음 페이지
+	Delete selected pages (Organize)	선택한 페이지 삭제 (페이지 정리)
+	Select all pages (Organize)	모든 페이지 선택 (페이지 정리)
+	Home	홈
+	Open	열기
+	Open a PDF ({key})	PDF 열기 ({key})
+	Dark gray theme	어두운 회색 테마
+	Light theme	밝은 테마
+	Appearance mode	모양 모드
+	Light	밝게
+	Dark	어둡게
+	Active	활성
+	Dark theme	어두운 테마
+	Appearance settings…	모양 설정…
+	All tools	모든 도구
+	Read	읽기
+	Convert	변환
+	E-Sign	전자 서명
+	Print ({key})	인쇄 ({key})
+	Save ({key})	저장 ({key})
+	Document properties ({key})	문서 속성 ({key})
+	Find tools and commands	도구 및 명령 찾기
+	Fit to height	높이에 맞춤
+	Zoom in	확대
+	Zoom out	축소
+	Rotate view clockwise	보기 시계 방향으로 회전
+	Rotate view counterclockwise	보기 반시계 방향으로 회전
+	Page navigation	페이지 탐색
+	Previous view	이전 보기
+	Next view	다음 보기
+	Page display	페이지 표시
+	Continuous scrolling	연속 스크롤
+	Two-page view	두 페이지 보기
+	Single page	단일 페이지
+	Show cover page in two-page view	두 페이지 보기에서 표지 표시
+	Use system setting	시스템 설정 사용
+	Light gray	밝은 회색
+	Dark gray	어두운 회색
+	Comments	주석
+	Bookmarks	책갈피
+	Fields	필드
+	Layers	레이어
+	Attachments	첨부 파일
+	Signatures	서명
+	Accessibility Checker	접근성 검사기
+	Search	검색
+	Compare	비교
+	Page thumbnails	페이지 축소판
+	Form fields	양식 필드
+	Zoom out ({key})	축소 ({key})
+	Zoom in ({key})	확대 ({key})
+	Rotate view clockwise ({key})	보기 시계 방향으로 회전 ({key})
+	Toggle fit page / fit width	페이지 맞춤 / 폭 맞춤 전환
+	Next page	다음 페이지
+	Previous page	이전 페이지
+	Current page — type a page number or label (such as iv) and press Enter	현재 페이지 — 페이지 번호나 레이블(예: iv)을 입력한 후 Enter 키를 누르세요
+	Welcome to PdfCraft	PdfCraft에 오신 것을 환영합니다
+	An open-source PDF workbench — local, private, and scriptable.	오픈소스 PDF 워크벤치 — 로컬에서 작동하고, 프라이버시를 지키며, 스크립트를 지원합니다.
+	Join the ArtCraft community	ArtCraft 커뮤니티 참여
+	Get help, share feedback and follow development on Discord.	Discord에서 도움을 받고, 피드백을 공유하고, 개발 현황을 팔로우하세요.
+	Recommended tools	추천 도구
+	Use now	지금 사용
+	Open file	파일 열기
+	Recent	최근 항목
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	PdfCraft에서 연 파일이 여기에 표시됩니다. PDF를 아무 곳에나 끌어다 놓으면 열립니다.
+	Privacy	개인정보 보호
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft는 오프라인으로 작동합니다. 직접 공급자를 추가하지 않는 한 텔레메트리, 계정, 클라우드 처리가 없습니다.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	스크립트는 파일이나 네트워크 접근 없이 샌드박스에서 실행됩니다. JavaScript가 꺼져 있어도 Acrobat의 표준 형식, 유효성 검사 및 계산 함수는 계속 작동합니다.
+	Back to all tools	모든 도구로 돌아가기
+	Close panel	패널 닫기
+	View less	간략히 보기
+	View more	더 보기
+	Available	사용 가능
+	Ready	준비됨
+	Search tools and commands…	도구 및 명령 검색…
+	No matching tools	일치하는 도구가 없습니다
+	Tool	도구
+	Command	명령
+	Add a sticky note	스티커 메모 추가
+	Add a text box	텍스트 상자 추가
+	Highlight text	텍스트 강조 표시
+	Underline text	텍스트 밑줄
+	Strikethrough text	텍스트 취소선
+	Squiggly underline text	텍스트 물결 밑줄
+	Draw freehand	자유롭게 그리기
+	Draw a line	선 그리기
+	Draw an arrow	화살표 그리기
+	Draw a rectangle	사각형 그리기
+	Draw an oval	타원 그리기
+	Draw a polygon	다각형 그리기
+	Draw connected lines	연결선 그리기
+	Draw a cloud	구름 그리기
+	Add a callout	설명선 추가
+	Insert text	텍스트 삽입
+	Replace text	텍스트 바꾸기
+	Attach a file	파일 첨부
+	Erase drawings	그림 지우기
+	Flatten comments	주석 평탄화
+	Import comments…	주석 가져오기…
+	Add a stamp	스탬프 추가
+	Export all comments to data file…	모든 주석을 데이터 파일로 내보내기…
+	Hide all comments	모든 주석 숨기기
+	Summarize comments	주석 요약
+	Import form data…	양식 데이터 가져오기…
+	Export form data…	양식 데이터 내보내기…
+	PDF/A…	PDF/A…
+	Action Wizard…	작업 마법사…
+	Prepare for distribution…	배포 준비…
+	Optimize scanned documents…	스캔한 문서 최적화…
+	Compare files…	파일 비교…
+	Detect form fields	양식 필드 감지
+	Merge data files into spreadsheet…	데이터 파일을 스프레드시트로 병합…
+	Flatten form fields	양식 필드 평탄화
+	Prepare a form	양식 준비
+	Tab order: by rows	탭 순서: 행 기준
+	Tab order: by columns	탭 순서: 열 기준
+	Tab order: by document structure	탭 순서: 문서 구조 기준
+	Add text	텍스트 추가
+	Edit text & images	텍스트 및 이미지 편집
+	Add or edit links	링크 추가 또는 편집
+	Create links from URLs	URL로 링크 만들기
+	Remove all links	모든 링크 제거
+	No links to remove	제거할 링크가 없습니다
+	Removed 1 link	링크 1개를 제거했습니다
+	Removed {n} links	링크 {n}개를 제거했습니다
+	Add Bates numbering…	Bates 번호 매기기 추가…
+	Add image…	이미지 추가…
+	Redact text and images	텍스트·이미지 제거 대상 표시
+	Redact pages…	페이지 내용 제거 대상 표시…
+	Find text and redact…	텍스트를 찾아 제거 대상으로 표시…
+	Redaction properties…	민감 정보 제거 속성…
+	Apply redactions…	표시된 정보 영구 제거…
+	Clear redaction marks	제거 대상 표시 지우기
+	Remove hidden information…	숨겨진 정보 제거…
+	Sanitize document…	문서에서 숨겨진 정보 제거…
+	Field properties…	필드 속성…
+	Add a text field	텍스트 필드 추가
+	Add a checkbox	확인란 추가
+	Add a radio button	라디오 단추 추가
+	Add a drop-down list	드롭다운 목록 추가
+	Add a list box	목록 상자 추가
+	Add a button	단추 추가
+	Add an image field	이미지 필드 추가
+	Add a date field	날짜 필드 추가
+	Add a digital signature field	디지털 서명 필드 추가
+	Digitally sign	디지털 서명
+	Certify (visible signature)	인증 (보이는 서명)
+	Certify (invisible signature)	인증 (보이지 않는 서명)
+	Validate all signatures	모든 서명 유효성 검사
+	Signatures panel	서명 패널
+	Fill & Sign: add text	채우기 및 서명: 텍스트 추가
+	Fill & Sign: checkmark	채우기 및 서명: 확인 표시
+	Fill & Sign: cross	채우기 및 서명: X 표시
+	Fill & Sign: dot	채우기 및 서명: 점
+	Fill & Sign: line	채우기 및 서명: 선
+	Fill & Sign: date	채우기 및 서명: 날짜
+	Fill & Sign: sign	채우기 및 서명: 서명
+	Fill & Sign: initials	채우기 및 서명: 이니셜
+	Export to image…	이미지로 내보내기…
+	Reduce file size…	파일 크기 줄이기…
+	Optimize PDF…	PDF 최적화…
+	Export to text…	텍스트로 내보내기…
+	Export to Word…	Word로 내보내기…
+	Export to PowerPoint…	PowerPoint로 내보내기…
+	Export to HTML…	HTML로 내보내기…
+	Export to RTF…	RTF로 내보내기…
+	JavaScript console…	JavaScript 콘솔…
+	Document JavaScripts…	문서 JavaScript…
+	Recognize text…	텍스트 인식…
+	Recognize text in multiple files…	여러 파일에서 텍스트 인식…
+	Check for accessibility…	접근성 검사…
+	Open accessibility report	접근성 보고서 열기
+	Change reading options…	읽기 옵션 변경…
+	Add alternate text…	대체 텍스트 추가…
+	Export all images…	모든 이미지 내보내기…
+	Add header & footer…	머리글 및 바닥글 추가…
+	Update header & footer…	머리글 및 바닥글 업데이트…
+	Remove header & footer	머리글 및 바닥글 제거
+	Add watermark…	워터마크 추가…
+	Update watermark…	워터마크 업데이트…
+	Remove watermark	워터마크 제거
+	Add background…	배경 추가…
+	Update background…	배경 업데이트…
+	Remove background	배경 제거
+	Protect using password…	암호로 보호…
+	Remove security	보안 제거
+	Security properties…	보안 속성…
+	Organize pages	페이지 정리
+	New bookmark	새 책갈피
+	New bookmarks from structure	구조로 새 책갈피 만들기
+	Rotate pages clockwise	페이지 시계 방향으로 회전
+	Rotate pages counterclockwise	페이지 반시계 방향으로 회전
+	Delete pages	페이지 삭제
+	Insert blank page	빈 페이지 삽입
+	Rotate pages…	페이지 회전…
+	Duplicate pages	페이지 복제
+	Crop pages	페이지 자르기
+	Set page boxes…	페이지 상자 설정…
+	Insert pages from file…	파일에서 페이지 삽입…
+	Replace pages…	페이지 바꾸기…
+	Extract pages…	페이지 추출…
+	Split document…	문서 분할…
+	Number pages…	페이지 번호 매기기…
+	Keyboard shortcuts	키보드 단축키
+	Join the ArtCraft Discord	ArtCraft Discord 참여하기
+	PdfCraft web page	PdfCraft 웹 페이지
+	PdfCraft on GitHub	GitHub의 PdfCraft
+	ArtCraft website	ArtCraft 웹사이트
+	Check for updates…	업데이트 확인…
+	About PdfCraft	PdfCraft 정보
+	Export a PDF	PDF 내보내기
+	Export to	내보내기 형식
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	스프레드시트 (.xlsx)
+	Presentation (.pptx)	프레젠테이션 (.pptx)
+	Image (PNG)	이미지 (PNG)
+	Export all images	모든 이미지 내보내기
+	HTML web page	HTML 웹 페이지
+	Rich Text Format (.rtf)	서식 있는 텍스트 (.rtf)
+	Text (plain)	일반 텍스트
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	채우기 및 서명
+	Fill	채우기
+	Checkmark	확인 표시
+	Cross	X 표시
+	Dot	점
+	Line	선
+	Date	날짜
+	Signature	서명
+	Initials	이니셜
+	Edit a PDF	PDF 편집
+	Modify page	페이지 수정
+	Rotate pages	페이지 회전
+	Insert pages	페이지 삽입
+	Extract pages	페이지 추출
+	Add content	콘텐츠 추가
+	Text	텍스트
+	Image	이미지
+	Header and footer	머리글 및 바닥글
+	Watermark	워터마크
+	Link	링크
+	Bates numbering	Bates 번호 매기기
+	Background	배경
+	Attach file	파일 첨부
+	Create a PDF	PDF 만들기
+	Create from	다음에서 만들기
+	Single file	단일 파일
+	Multiple files	여러 파일
+	Separate PDFs	개별 PDF
+	Images	이미지
+	Clipboard	클립보드
+	Blank page	빈 페이지
+	Combine files	파일 결합
+	Combine	결합
+	Add files to combine	결합할 파일 추가
+	Page options	페이지 옵션
+	Page grid	페이지 그리드
+	Rotate	회전
+	Delete	삭제
+	Extract	추출
+	Insert	삽입
+	Replace	바꾸기
+	Split	분할
+	More	더 보기
+	Set page boxes	페이지 상자 설정
+	Page labels	페이지 레이블
+	Page transitions	페이지 전환
+	Add comments	주석 추가
+	Markup	마크업
+	Sticky note	스티커 메모
+	Underline	밑줄
+	Strikethrough	취소선
+	Squiggly underline	물결 밑줄
+	Text box	텍스트 상자
+	Drawing	그리기
+	Rectangle	사각형
+	Oval	타원
+	Arrow	화살표
+	Cloud	구름
+	Stamp	스탬프
+	Review	검토
+	Comment list	주석 목록
+	Scan & OCR	스캔 및 OCR
+	Recognize text	텍스트 인식
+	In this file	이 파일에서
+	In multiple files	여러 파일에서
+	Enhance scanned file	스캔한 파일 개선
+	Correct recognized text	인식된 텍스트 수정
+	Protect a PDF	PDF 보호
+	Protect	보호
+	Protect with password	암호로 보호
+	Remove hidden information	숨겨진 정보 제거
+	Advanced options	고급 옵션
+	Encrypt with certificate	인증서로 암호화
+	Security properties	보안 속성
+	Redact a PDF	PDF 민감 정보 제거
+	Redact	민감 정보 제거
+	Redact pages	페이지 내용 제거 대상 표시
+	Find text and redact	텍스트를 찾아 제거 대상으로 표시
+	Set properties	속성 설정
+	Sanitize document	문서 정리
+	Compress a PDF	PDF 압축
+	Optimize	최적화
+	Reduce file size	파일 크기 줄이기
+	Advanced optimization	고급 최적화
+	Audit space usage	공간 사용량 감사
+	Field list	필드 목록
+	Field properties	필드 속성
+	Tab order by rows	행 기준 탭 순서
+	Tab order by columns	열 기준 탭 순서
+	Import data	데이터 가져오기
+	Export data	데이터 내보내기
+	Add form components	양식 구성 요소 추가
+	Text field	텍스트 필드
+	Checkbox	확인란
+	Radio button	라디오 단추
+	Drop-down list	드롭다운 목록
+	List box	목록 상자
+	Button	단추
+	Image field	이미지 필드
+	Date field	날짜 필드
+	Digital signature	디지털 서명
+	Stamps	스탬프
+	Stamp palette	스탬프 팔레트
+	Use a certificate	인증서 사용
+	Certificates	인증서
+	Timestamp	타임스탬프
+	Use print production	인쇄 제작 사용
+	Print production	인쇄 제작
+	Output preview	출력 미리 보기
+	Preflight	프리플라이트
+	Convert colors	색상 변환
+	Add printer marks	인쇄용 표시 추가
+	Fix hairlines	헤어라인 수정
+	Measure objects	개체 측정
+	Measure	측정
+	Measuring tool	측정 도구
+	Geospatial location	지리 공간 위치
+	Compare files	파일 비교
+	Select files to compare	비교할 파일 선택
+	Use guided actions	단계별 작업 사용
+	Actions list	작업 목록
+	Action Wizard	작업 마법사
+	Make accessible	접근성 확보
+	Prepare for distribution	배포 준비
+	Optimize scanned documents	스캔한 문서 최적화
+	Archive documents	문서 보관
+	Prepare for accessibility	접근성 준비
+	Accessibility	접근성
+	Automatically tag PDF	PDF에 자동 태그 지정
+	Change reading options	읽기 옵션 변경
+	Check for accessibility	접근성 검사
+	Add alternate text	대체 텍스트 추가
+	Fix reading order	읽기 순서 수정
+	Apply PDF standards	PDF 표준 적용
+	Standards	표준
+	Save as PDF/A	PDF/A로 저장
+	Save as PDF/X	PDF/X로 저장
+	Save as PDF/UA	PDF/UA로 저장
+	Add search index	검색 색인 추가
+	Index	색인
+	Manage embedded index	포함된 색인 관리
+	Use JavaScript	JavaScript 사용
+	JavaScript	JavaScript
+	Console	콘솔
+	Document JavaScripts	문서 JavaScript
+	Document actions	문서 작업
+	AI assistant	AI 어시스턴트
+	Bring your own model (off by default)	자체 모델 사용(기본적으로 꺼져 있음)
+	Summarize	요약
+	Ask about this document	이 문서에 대해 질문
+	Translate	번역
+	pages	페이지
+	Planned	예정됨
+	Planned for milestone	마일스톤에 예정됨
+	open to see what it will include	열어서 포함될 내용을 확인하세요
+	Optional: needs an AI provider you configure	선택 사항: 사용자가 구성한 AI 공급자가 필요합니다
+	Coming in milestone	마일스톤에서 제공 예정
+	Items marked Ready work today.	“준비됨”으로 표시된 항목은 오늘 바로 사용할 수 있습니다.
+	Preview	미리 보기
+	Edit fields	필드 편집
+	Try the form as people filling it in will see it	양식을 작성하는 사용자에게 보이는 그대로 양식을 사용해 보세요
+	Redact all	표시된 정보 모두 영구 제거
+	Clear all	모두 지우기
+	Rotate page	페이지 회전
+	Delete page	페이지 삭제
+	Move page	페이지 이동
+	Move pages	페이지 이동
+	Duplicate page	페이지 복제
+	Replace page	페이지 바꾸기
+	Replace pages	페이지 바꾸기
+	Crop page	페이지 자르기
+	Cancel	취소
+	Don't save	저장 안 함
+	Apply	적용
+	Run	실행
+	Clear	지우기
+	Sanitize	정리
+	Mark all	모두 표시
+	Save changes to “{name}” before closing?	닫기 전에 “{name}”의 변경 사항을 저장하시겠습니까?
+	Your changes will be lost if you don't save them.	저장하지 않으면 변경 사항이 손실됩니다.
+	Password required	암호 필요
+	“{name}” is protected. Enter a password to open it.	“{name}”은(는) 보호되어 있습니다. 열려면 암호를 입력하세요.
+	Password	암호
+	Incorrect password. Try again.	암호가 올바르지 않습니다. 다시 시도하세요.
+	Recognize Text	텍스트 인식
+	Password protection will be applied when you save	저장할 때 암호 보호가 적용됩니다
+	Saved the print-ready PDF to {path}	인쇄 준비가 완료된 PDF를 {path}에 저장했습니다
+	Could not save: {e}	저장할 수 없습니다: {e}
+	Earlier in tab order	탭 순서에서 이전
+	Later in tab order	탭 순서에서 다음
+	From:	시작:
+	To:	종료:
+	High Resolution	고해상도
+	Print	인쇄
+	Verify to see what the document needs.	검증을 실행하면 문서에 필요한 사항을 확인할 수 있습니다.
+	Set Page Boxes	페이지 상자 설정
+	Signature panel	서명 패널
+	{month} {day}, {y}	{y}년 {month} {day}일
+	The document's security settings don't allow filling in form fields	문서의 보안 설정에서는 양식 필드 채우기를 허용하지 않습니다
+	{name} is read-only	{name}은(는) 읽기 전용입니다
+	{name} has no action	{name}에는 작업이 없습니다
+	Previous month	이전 달
+	Next month	다음 달
+	January	1월
+	February	2월
+	March	3월
+	April	4월
+	May	5월
+	June	6월
+	July	7월
+	August	8월
+	September	9월
+	October	10월
+	November	11월
+	December	12월
+	Done	완료
+	This certificate is in your list of trusted certificates.	이 인증서는 신뢰할 수 있는 인증서 목록에 있습니다.
+	This certificate is trusted through a certificate above it in the chain.	이 인증서는 체인의 상위 인증서를 통해 신뢰됩니다.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	이 인증서는 신뢰되지 않습니다. 이 인증서로 만든 서명은 알 수 없는 신원으로 표시됩니다.
+	Add to Trusted Certificates	신뢰할 수 있는 인증서에 추가
+	Export…	내보내기…
+	PDF Optimizer	PDF Optimizer
+	Discard Objects	개체 삭제
+	Discard User Data	사용자 데이터 삭제
+	Clean Up	정리
+	Color Images	컬러 이미지
+	Grayscale Images	회색조 이미지
+	Bicubic downsampling to	다음 값으로 바이큐빅 다운샘플링
+	for images above	다음 값을 초과하는 이미지에 적용
+	Compression	압축
+	ZIP	ZIP
+	Retain existing	기존 유지
+	Minimum	최소
+	Low	낮음
+	High	높음
+	Maximum	최대
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	각 이미지는 페이지에 실제로 그려지는 크기를 기준으로 측정되며, 결과가 더 작을 때만 이미지가 교체됩니다.
+	Discard all links, actions and JavaScript	모든 링크, 작업 및 JavaScript 삭제
+	Discard alternate images	대체 이미지 삭제
+	Discard embedded page thumbnails	포함된 페이지 축소판 삭제
+	Discard document tags	문서 태그 삭제
+	Discard embedded print settings	포함된 인쇄 설정 삭제
+	Discard bookmarks	책갈피 삭제
+	Discard hidden layer content	숨겨진 레이어 콘텐츠 삭제
+	Discard all comments, forms and multimedia	모든 주석, 양식 및 멀티미디어 삭제
+	Discard document information and metadata	문서 정보 및 메타데이터 삭제
+	Discard all object data (file attachments)	모든 개체 데이터(파일 첨부) 삭제
+	Discard private data of other applications	다른 응용 프로그램의 개인 데이터 삭제
+	Discard hidden text	숨겨진 텍스트 삭제
+	Use Flate to encode streams that are not encoded	인코딩되지 않은 스트림을 Flate로 인코딩
+	Remove invalid links and bookmarks	잘못된 링크 및 책갈피 제거
+	Remove unreferenced named destinations	참조되지 않은 이름이 지정된 대상 제거
+	Compress document structure (object streams)	문서 구조 압축(개체 스트림)
+	Remove unused objects and merge identical ones	사용하지 않는 개체 제거 및 동일한 개체 병합
+	Audit space usage…	공간 사용량 감사…
+	Space Audit	공간 감사
+	Bytes	바이트
+	Content Streams	콘텐츠 스트림
+	X Object Forms	XObject 양식
+	Structure Info	구조 정보
+	Thumbnails	축소판
+	Named Destinations	이름이 지정된 대상
+	Color Spaces	색상 공간
+	Shadings	음영
+	Patterns (graphics objects)	패턴(그래픽 개체)
+	Extended Graphics States	확장 그래픽 상태
+	Embedded Files	포함된 파일
+	Document Overhead	문서 오버헤드
+	Total	합계
+	Text Field Properties	텍스트 필드 속성
+	Check Box Properties	확인란 속성
+	Radio Button Properties	라디오 단추 속성
+	Dropdown Properties	드롭다운 속성
+	List Box Properties	목록 상자 속성
+	Button Properties	단추 속성
+	Digital Signature Properties	디지털 서명 속성
+	Position	위치
+	Options	옵션
+	Validate	유효성 검사
+	Calculate	계산
+	Actions	동작
+	This field is locked. Unlock it to change its properties.	이 필드는 잠겨 있습니다. 속성을 변경하려면 잠금을 해제하세요.
+	Tooltip:	도구 설명:
+	Common Properties	일반 속성
+	Read Only	읽기 전용
+	Required	필수
+	Font Size:	글꼴 크기:
+	Auto	자동
+	Text Color:	텍스트 색:
+	Borders and Colors	테두리 및 색상
+	Border Color:	테두리 색:
+	Fill Color:	채우기 색:
+	No color	색 없음
+	Beveled	베벨
+	Left:	왼쪽:
+	Bottom:	아래:
+	Width:	너비:
+	Height:	높이:
+	Points from the page's bottom-left corner.	페이지 왼쪽 아래 모서리를 기준으로 한 포인트 단위 위치입니다.
+	Alignment:	정렬:
+	Default Value:	기본값:
+	Multi-line	여러 줄
+	Scroll long text	긴 텍스트 스크롤
+	Allow Rich Text Formatting	리치 텍스트 서식 허용
+	Limit of	최대
+	characters	자
+	Field is used for file selection	파일 선택에 사용되는 필드
+	Check spelling	맞춤법 검사
+	Comb of	균등 배치
+	Export Value: {on}	내보내기 값: {on}
+	Check box is checked by default	확인란이 기본으로 선택됨
+	Button is checked by default	단추가 기본으로 선택됨
+	Buttons with the same name and value are selected in unison	이름과 값이 같은 단추는 함께 선택됩니다
+	Item:	항목:
+	Item List	항목 목록
+	Up	위로
+	Delete {o}	{o} 삭제
+	Add the choices people pick from.	사용자가 선택할 선택지를 추가합니다.
+	Default:	기본:
+	(none)	(없음)
+	Sort items	항목 정렬
+	Allow user to enter custom text	사용자 지정 텍스트 입력 허용
+	Multiple selection	여러 항목 선택
+	Commit selected value immediately	선택한 값을 즉시 적용
+	Number	숫자
+	Percentage	백분율
+	Time	시간
+	Special	특수
+	Select format category:	형식 카테고리 선택:
+	The value is shown as typed.	값은 입력한 대로 표시됩니다.
+	Decimal places:	소수 자릿수:
+	Separator style:	구분 기호 스타일:
+	Currency symbol:	통화 기호:
+	Before the number	숫자 앞
+	Negative number style:	음수 스타일:
+	Format:	형식:
+	Custom:	사용자 지정:
+	Zip Code	우편번호
+	Zip Code + 4	우편번호 + 4
+	Phone Number	전화번호
+	Social Security Number	사회 보장 번호
+	Arbitrary Mask	임의 마스크
+	Mask:	마스크:
+	9 digit, A letter, O letter or digit, X any character	9 숫자, A 문자, O 문자 또는 숫자, X 모든 문자
+	Example: {sample}	예: {sample}
+	Field value is not validated	필드 값이 검증되지 않습니다
+	Field value is in range:	필드 값이 다음 범위 안에 있습니다:
+	Add an Action	동작 추가
+	Select Trigger:	트리거 선택:
+	Mouse Up	마우스 놓기
+	Mouse Down	마우스 누르기
+	Mouse Enter	마우스 진입
+	Mouse Exit	마우스 이탈
+	On Focus	포커스 시
+	On Blur	포커스 해제 시
+	Select Action:	동작 선택:
+	Open a web link	웹 링크 열기
+	Reset a form	양식 재설정
+	Execute a menu item	메뉴 항목 실행
+	Show a field	필드 표시
+	Hide a field	필드 숨기기
+	Submit a form	양식 제출
+	Fields to reset (comma-separated; empty: all)	재설정할 필드(쉼표로 구분, 비워 두면 모두)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage 또는 LastPage
+	Field names (comma-separated)	필드 이름(쉼표로 구분)
+	URL to submit to	제출할 URL
+	Script:	스크립트:
+	Value:	값:
+	No actions	동작 없음
+	Value is not calculated	값이 계산되지 않습니다
+	Value is the	값은 다음 필드의
+	sum (+)	합계(+)
+	product (x)	곱(x)
+	average	평균
+	minimum	최솟값
+	maximum	최댓값
+	of the following fields:	입니다:
+	Simplified field notation:	단순화된 필드 표기법:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	+ - * / 및 괄호를 쓸 수 있는 필드 이름입니다. 이름 안의 공백 앞에는 \\를 넣으세요.
+	Finding document fonts…	문서 글꼴을 찾는 중…
+	Installed fonts…	설치된 글꼴…
+	Keep source fonts	원본 글꼴 유지
+	Load font…	글꼴 로드…
+	No openly licensed document fonts found. Load a font file.	오픈 라이선스 문서 글꼴을 찾지 못했습니다. 글꼴 파일을 로드하세요.
+	Format text	텍스트 서식
+	Bold	굵게
+	Italic	기울임꼴
+	Align left	왼쪽 정렬
+	Centre	가운데 정렬
+	Align right	오른쪽 정렬
+	Justify	양쪽 정렬
+	Thai and Arabic use regular fallback fonts when available.	태국어와 아랍어는 가능한 경우 일반 굵기 폴백 글꼴을 사용합니다.
+	Edit image	이미지 편집
+	Rotate counterclockwise	반시계 방향으로 회전
+	Rotate clockwise	시계 방향으로 회전
+	Flip horizontal	수평 뒤집기
+	Flip vertical	수직 뒤집기
+	Replace image	이미지 교체
+	Crop (% trimmed from each side)	자르기(각 면을 잘라낼 %)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	페이지를 클릭해 텍스트를 추가합니다. 클릭할 때마다 새 상자가 시작되며 ✓로 마칩니다. 항목을 끌어 이동하고, 모서리를 끌어 크기를 조정하고, 텍스트를 두 번 클릭해 편집합니다.
+	Choose an image	이미지 선택
+	Export to Image	이미지로 내보내기
+	Export to Text	텍스트로 내보내기
+	Export All Images	모든 이미지 내보내기
+	Resolution	해상도
+	Format	형식
+	Quality	품질
+	One {f} file per page, named after the document.	페이지당 하나의 {f} 파일이 문서 이름으로 저장됩니다.
+	Exclude images smaller than	다음보다 작은 이미지 제외
+	No limit	제한 없음
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	각 이미지를 한 번씩 문서 이름과 페이지 번호로 저장합니다. JPEG 이미지는 변경 없이 저장되며 나머지는 PNG로 저장됩니다.
+	Plain text in reading order; pages are separated by form feeds.	읽기 순서대로 된 일반 텍스트이며 페이지는 폼 피드 문자로 구분됩니다.
+	Create {what}	{what} 만들기
+	initials	이니셜
+	signature	서명
+	Create Custom Stamp	사용자 지정 스탬프 만들기
+	From {file}	{file}에서
+	Category:	범주:
+	e.g. My stamps	예: 내 스탬프
+	Name:	이름:
+	Custom	사용자 지정
+	Delete stamp	스탬프 삭제
+	Create custom stamp…	사용자 지정 스탬프 만들기…
+	From a PDF page or an image	PDF 페이지 또는 이미지에서
+	Line spacing	줄 간격
+	Character spacing	글자 간격
+	Horizontal scale	가로 배율
+	Rotate Clockwise	시계 방향으로 회전
+	Rotate Counterclockwise	반시계 방향으로 회전
+	Flip Horizontal	수평 뒤집기
+	Flip Vertical	수직 뒤집기
+	Replace Image…	이미지 교체…
+	Save Image As…	다른 이름으로 이미지 저장…
+	Copy Image	이미지 복사
+	The image has been copied ({w} × {h} pixels)	이미지가 복사되었습니다({w} × {h} 픽셀)
+	Couldn't copy the image: {e}	이미지를 복사할 수 없습니다: {e}
+	Copy Image in Original Format	원본 형식으로 이미지 복사
+	The image has been copied as a {ext} file	이미지가 {ext} 파일로 복사되었습니다
+	The page has changed; select the image again	페이지가 변경되었으므로 이미지를 다시 선택하세요
+	Check for updates	업데이트 확인
+	No check has run yet.	아직 확인이 실행되지 않았습니다.
+	Checking for a newer version…	새 버전이 있는지 확인하는 중…
+	PdfCraft {v} is available.	PdfCraft {v}을(를) 사용할 수 있습니다.
+	You have version {c}. Download the new version from its release page.	현재 버전은 {c}입니다. 릴리스 페이지에서 새 버전을 다운로드하세요.
+	PdfCraft {c} is up to date.	PdfCraft {c}은(는) 최신 버전입니다.
+	Couldn't check for updates: {e}	업데이트를 확인할 수 없습니다: {e}
+	You have version {c}. All releases are listed at {page}.	현재 버전은 {c}입니다. 모든 릴리스는 {page}에 표시됩니다.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub에 최신 릴리스를 요청합니다. 어떤 것도 자동으로 다운로드하거나 설치하지 않습니다.
+	Download	다운로드
+	Later	나중에
+	none	없음
+	Declared conformance: {shown}	선언된 적합성: {shown}
+	Output intent: {list}	출력 인텐트: {list}
+	Conformance level:	적합성 수준:
+	No problems found: the document conforms to {level}.	발견된 문제가 없습니다. 문서가 {level}을(를) 준수합니다.
+	 (page {p})	 (페이지 {p})
+	  · not fixable here	 · 여기서는 수정할 수 없음
+	Verify	검증
+	Box	박스
+	Units	단위
+	Set to zero	0으로 설정
+	Current page ({n})	현재 페이지({n})
+	Subset	하위 집합
+	Update	업데이트
+	Add	추가
+	{verb} Header and Footer	{verb}: 머리글 및 바닥글
+	{verb} Watermark	{verb}: 워터마크
+	{verb} Background	{verb}: 배경
+	Margins (in)	여백(인치)
+	Left Header Text	왼쪽 머리글 텍스트
+	Center Header Text	가운데 머리글 텍스트
+	Right Header Text	오른쪽 머리글 텍스트
+	Left Footer Text	왼쪽 바닥글 텍스트
+	Center Footer Text	가운데 바닥글 텍스트
+	Right Footer Text	오른쪽 바닥글 텍스트
+	Insert Page Number	페이지 번호 삽입
+	Insert Date	날짜 삽입
+	Start page number	시작 페이지 번호
+	Source	소스
+	Fit to page	페이지에 맞춤
+	Rotation	회전
+	Appear behind page	페이지 뒤에 표시
+	Appear on top of page	페이지 위에 표시
+	Offset from centre	중앙 기준 오프셋
+	From colour	색상 사용
+	Page Range Options	페이지 범위 옵션
+	Preview: page {p} of {n}	미리 보기: {n} 페이지 중 {p} 페이지
+	Applies to 1 page	1개 페이지에 적용됩니다
+	Applies to {n} pages	{n}개 페이지에 적용됩니다
+	Replaces the existing one on those pages.	해당 페이지의 기존 항목을 대체합니다.
+	PDF or image	PDF 또는 이미지
+	No file chosen	선택한 파일 없음
+	Page number	페이지 번호
+	Scale relative to target page	대상 페이지 기준 배율
+	Link Properties	링크 속성
+	Create Link	링크 만들기
+	Link Appearance	링크 모양
+	Link Type:	링크 유형:
+	Visible Rectangle	보이는 사각형
+	Invisible Rectangle	보이지 않는 사각형
+	Highlight Style:	강조 스타일:
+	Invert	반전
+	Outline	윤곽선
+	Inset	인세트
+	Line Thickness:	선 굵기:
+	Thin	얇게
+	Thick	굵게
+	Line Style:	선 스타일:
+	Solid	실선
+	Dashed	파선
+	Color:	색상:
+	Link Action	링크 동작
+	Open a web page	웹 페이지 열기
+	Go to a page view	페이지 보기로 이동
+	Type the web address.	웹 주소를 입력하세요.
+	This document has no signatures.	이 문서에는 서명이 없습니다.
+	The Keychain's digital IDs couldn't be listed: {e}	키체인의 디지털 ID를 나열할 수 없습니다: {e}
+	Signed and saved to {path}	서명되어 {path}에 저장되었습니다
+	Couldn't open revision {n}: {e}	수정 버전 {n}을(를) 열 수 없습니다: {e}
+	Couldn't open the signed version: {e}	서명된 버전을 열 수 없습니다: {e}
+	Sign with a Digital ID	디지털 ID로 서명
+	Choose the digital ID that you want to use for signing:	서명에 사용할 디지털 ID를 선택하세요:
+	Keychain  ·  	키체인  ·  
+	Windows store  ·  	Windows 스토어  ·  
+	Issued by: 	발급자: 
+	, Expires: 	, 만료일: 
+	No digital IDs yet.	아직 디지털 ID가 없습니다.
+	Configure New Digital ID	새 디지털 ID 구성
+	Continue	계속
+	Configure a Digital ID for Signing	서명용 디지털 ID 구성
+	Use a Digital ID from a file	파일의 디지털 ID 사용
+	Create a new Digital ID (self-signed, saved to a password-protected file)	새 디지털 ID 만들기(자체 서명, 암호로 보호되는 파일에 저장)
+	Name	이름
+	Organizational Unit	조직 단위
+	Organization Name	조직 이름
+	Email Address	이메일 주소
+	Country/Region	국가/지역
+	Key Algorithm	키 알고리즘
+	Confirm Password	암호 확인
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	디지털 서명용으로 5년간 유효합니다. 자체 서명 ID는 일반적으로 다른 사람이 신뢰하지 않습니다.
+	File (.p12, .pfx)	파일(.p12, .pfx)
+	Digital ID	디지털 ID
+	Browse…	찾아보기…
+	{verb} as "{name}"	"{name}"(으)로 {verb}
+	Certify	인증
+	The signature will be invisible.	서명이 보이지 않게 됩니다.
+	The existing action will be preserved.	기존 동작은 유지됩니다.
+	Distinguished name	고유 이름
+	Labels	레이블
+	Graphic	그래픽
+	Signer's name	서명자 이름
+	Fill & Sign signature	채우기 및 서명 서명
+	Choose image…	이미지 선택…
+	Permitted actions after certifying	인증 후 허용되는 동작
+	No changes allowed	변경 허용 안 함
+	Annotations, form fill-in, and digital signatures	주석, 양식 채우기 및 디지털 서명
+	Form fill-in and digital signatures	양식 채우기 및 디지털 서명
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	키가 macOS 키체인에 있으며, 이 키를 PdfCraft에서 사용할 수 있도록 허용할지 묻는 메시지가 표시될 수 있습니다.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	키가 Windows 인증서 저장소에 있으며, 이 키를 PdfCraft에서 사용할 수 있도록 허용할지 묻는 메시지가 표시될 수 있습니다.
+	Digital ID password	디지털 ID 암호
+	Back	뒤로
+	Validate all	모두 검증
+	Sign this field…	이 필드 서명…
+	Signature is valid:	서명이 유효합니다:
+	Signature validity is UNKNOWN:	서명 유효성을 알 수 없습니다:
+	Signature is INVALID:	서명이 유효하지 않습니다:
+	Signature Details	서명 세부 정보
+	Reason	이유
+	Signing time	서명 시간
+	Algorithm	알고리즘
+	Signer	서명자
+	Issued by	발급자
+	Valid	유효
+	Field	필드
+	Field: {field} on page {p}	필드: {p} 페이지의 {field}
+	Add to trusted certificates	신뢰할 수 있는 인증서에 추가
+	View signed version	서명된 버전 보기
+	Show certificate…	인증서 표시…
+	Export certificate…	인증서 내보내기…
+	Certificate Viewer	인증서 뷰어
+	This dialog shows the details of a certificate and its chain.	이 대화 상자는 인증서와 인증서 체인의 세부 정보를 표시합니다.
+	Trust	신뢰
+	Issued to	발급 대상
+	Valid from	유효 시작일
+	Valid to	유효 종료일
+	Intended usage	용도
+	Any	모두
+	Version	버전
+	Serial number	일련 번호
+	Issuer	발급자
+	Validity starts	유효 기간 시작
+	Validity ends	유효 기간 종료
+	Public key	공개 키
+	Key usage	키 용도
+	Not present	없음
+	Self-signed	자체 서명됨
+	Edit Action	동작 편집
+	New Action	새 동작
+	Action name:	동작 이름:
+	Description:	설명:
+	Steps	단계
+	Add the steps this action runs, in order.	이 동작이 실행할 단계를 순서대로 추가하세요.
+	Add Step	단계 추가
+	An action with this name already exists.	같은 이름의 동작이 이미 있습니다.
+	New Action…	새 동작…
+	Edit…	편집…
+	Add watermark	워터마크 추가
+	Add header	머리글 추가
+	Add footer	바닥글 추가
+	Set document title	문서 제목 설정
+	Run a JavaScript	JavaScript 실행
+	Prepare for Distribution	배포 준비
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	숨겨진 정보를 제거하고 주석과 양식 필드를 평탄화하여 받는 사람이 페이지만 보도록 합니다.
+	Optimize Scanned Documents	스캔한 문서 최적화
+	Make scans searchable, then make them smaller.	스캔본을 검색 가능하게 만든 다음 크기를 줄입니다.
+	Add Page Numbers	페이지 번호 추가
+	Number every page in the footer.	모든 페이지의 바닥글에 번호를 추가합니다.
+	Mark as Confidential	기밀로 표시
+	A diagonal CONFIDENTIAL watermark on every page.	모든 페이지에 대각선 CONFIDENTIAL 워터마크를 추가합니다.
+	Sanitize Documents	문서 정리
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	숨겨진 정보, 메타데이터, 스크립트, 포함된 콘텐츠를 제거하고 파일을 다시 씁니다.
+	Type text	텍스트 입력
+	Text to insert	삽입할 텍스트
+	Replacement text	교체할 텍스트
+	Edit text…	텍스트 편집…
+	Add a sticky note here	여기에 스티키 노트 추가
+	{kind} Properties	{kind} 속성
+	Appearance	모양
+	General	일반
+	Review History	검토 기록
+	This comment's appearance can't be changed yet.	이 주석의 모양은 아직 변경할 수 없습니다.
+	Icon	아이콘
+	Thickness	두께
+	Modified	수정됨
+	No status has been set.	상태가 설정되지 않았습니다.
+	Compare Files	파일 비교
+	Old file:	이전 파일:
+	Open the older version first	먼저 이전 버전을 여세요
+	New file:	새 파일:
+	Text is compared word by word; the differences are shown on the new file.	텍스트는 단어 단위로 비교되며 차이점은 새 파일에 표시됩니다.
+	Compare this file with an older version: Compare files… in All tools.	이 파일을 이전 버전과 비교하려면 모든 도구에서 파일 비교…를 사용하세요.
+	No differences in the text.	텍스트에 차이점이 없습니다.
+	{n} {kind}	{n} {kind}
+	Inserted	삽입됨
+	Deleted	삭제됨
+	Replaced	대체됨
+	Visual	시각적
+	Mark as comments	주석으로 표시
+	Report…	보고서…
+	{kind} · page {p}	{kind} · {p} 페이지
+	Set Alternate Text	대체 텍스트 설정
+	This document has no tagged figures.	이 문서에는 태그가 지정된 그림이 없습니다.
+	 on page {p}	 {p} 페이지
+	Figure {i} of {n}{page}	그림 {n}개 중 {i}{page}
+	No preview	미리 보기 없음
+	Alternate text	대체 텍스트
+	Describe the figure	그림 설명
+	Decorative figure	장식용 그림
+	Previous figure	이전 그림
+	Next figure	다음 그림
+	Save & Close	저장 후 닫기
+	Accessibility Checker Options	접근성 검사기 옵션
+	Report Options	보고서 옵션
+	Create accessibility report	접근성 보고서 만들기
+	Page Range	페이지 범위
+	All pages in document	문서의 모든 페이지
+	Checking Options ({on} of 32 in all categories)	검사 옵션(모든 범주 32개 중 {on}개)
+	Show this dialog when the Checker starts	검사기가 시작될 때 이 대화 상자 표시
+	Select All	모두 선택
+	Clear All	모두 지우기
+	Start Checking	검사 시작
+	This document hasn't been checked yet.	이 문서는 아직 검사되지 않았습니다.
+	No issues found	발견된 문제 없음
+	1 issue	문제 1개
+	{n} issues	문제 {n}개
+	{label} (1 issue)	{label} (문제 1개)
+	{label} ({n} issues)	{label} (문제 {n}개)
+	Check again	다시 검사
+	Report	보고서
+	Show the accessibility report	접근성 보고서 표시
+	Collapse	접기
+	Expand	확장
+	{rule} - {status}	{rule} - {status}
+	Passed	통과
+	Failed	실패
+	Needs manual check	수동 확인 필요
+	Skipped	건너뜀
+	Fix	수정
+	Skip Rule	규칙 건너뛰기
+	Explain	설명
+	Check Again	다시 검사
+	Show Report	보고서 표시
+	Options…	옵션…
+	Go to the page	페이지로 이동
+	Page Content	페이지 콘텐츠
+	Forms	양식
+	Alternate Text	대체 텍스트
+	Tables	표
+	Lists	목록
+	Headings	제목
+	Accessibility permission flag	접근성 권한 플래그
+	Accessibility permission flag is set	접근성 권한 플래그가 설정되어 있습니다
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	보안 설정은 보조 기술이 콘텐츠를 읽을 수 있도록 허용해야 합니다("화면 판독기 장치에 대한 텍스트 접근 허용"). 이를 허용하도록 문서 보안을 변경하세요.
+	Image-only PDF	이미지 전용 PDF
+	Document is not image-only PDF	문서가 이미지 전용 PDF가 아닙니다
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	텍스트가 사진으로만 되어 있는 페이지는 소리 내어 읽거나 검색할 수 없습니다. 텍스트 레이어를 추가하려면 텍스트 인식(OCR)을 실행하세요.
+	Document is tagged PDF	문서가 태그된 PDF입니다
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	태그는 문서에 보조 기술이 따를 수 있는 논리 구조를 부여합니다. 문서에 태그를 지정하세요(자동으로 PDF 태그 지정).
+	Logical Reading Order	논리적 읽기 순서
+	Document structure provides a logical reading order	문서 구조가 논리적 읽기 순서를 제공합니다
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	태그가 시각이 정상인 독자가 읽는 순서대로 읽히는지 확인하세요. 읽기 순서 도구나 태그 패널로 수정하세요.
+	Primary language	기본 언어
+	Text language is specified	텍스트 언어가 지정되었습니다
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	화면 판독기는 문서의 언어에 따라 음성을 선택합니다. 문서 속성 > 고급 > 언어에서 설정하세요.
+	Document title is showing in title bar	문서 제목이 제목 표시줄에 표시됩니다
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	창은 파일 이름이 아닌 의미 있는 제목을 표시해야 합니다. 제목을 설정하고 초기 보기 > 표시: 문서 제목을 선택하세요.
+	Bookmarks are present in large documents	큰 문서에 책갈피가 있습니다
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	20페이지가 넘는 문서에는 탐색용 책갈피가 필요합니다. 주요 섹션에 책갈피를 추가하세요.
+	Color contrast	색상 대비
+	Document has appropriate color contrast	문서에 적절한 색상 대비가 있습니다
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	텍스트는 저시력 사용자를 위해 배경과 충분한 대비를 이뤄야 합니다. 색상을 눈으로 또는 대비 검사 도구로 확인하세요.
+	Tagged content	태그된 콘텐츠
+	All page content is tagged	모든 페이지 콘텐츠에 태그가 지정되어 있습니다
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	페이지의 모든 요소는 태그가 지정되거나 아티팩트(장식, 머리글, 바닥글)로 표시되어야 합니다. 태그되지 않은 콘텐츠에 태그를 지정하세요.
+	Tagged annotations	태그된 주석
+	All annotations are tagged	모든 주석에 태그가 지정되어 있습니다
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	주석, 링크, 필드는 읽을 수 있도록 태그 트리에 있어야 합니다. 주석에 태그를 지정하세요.
+	Tab order	탭 순서
+	Tab order is consistent with structure order	탭 순서가 구조 순서와 일치합니다
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	링크, 주석 또는 필드가 있는 페이지는 구조 순서대로 탭 이동해야 합니다. 수정하면 각 페이지의 탭 순서가 문서 구조 사용으로 설정됩니다.
+	Character encoding	문자 인코딩
+	Reliable character encoding is provided	신뢰할 수 있는 문자 인코딩이 제공됩니다
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	글꼴은 텍스트를 읽고 복사할 수 있도록 문자를 Unicode에 매핑해야 합니다. 글꼴을 수정하거나 PDF를 다시 만드세요.
+	Tagged multimedia	태그된 멀티미디어
+	All multimedia objects are tagged	모든 멀티미디어 개체에 태그가 지정되어 있습니다
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	비디오, 소리, 리치 미디어는 읽을 수 있도록 태그가 지정되어야 합니다. 멀티미디어 주석에 태그를 지정하세요.
+	Screen flicker	화면 깜빡임
+	Page will not cause screen flicker	페이지가 화면 깜빡임을 유발하지 않습니다
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	깜빡이는 애니메이션은 발작을 유발할 수 있습니다. 스크립트와 미디어에 깜빡임이 없는지 확인하세요.
+	Scripts	스크립트
+	No inaccessible scripts	접근할 수 없는 스크립트가 없습니다
+	Timed responses	시간 제한 응답
+	Page does not require timed responses	페이지에 시간 제한 응답이 필요하지 않습니다
+	People may need more time to respond. Check that nothing has a time limit.	응답에 더 많은 시간이 필요할 수 있습니다. 시간 제한이 있는 요소가 없는지 확인하세요.
+	Navigation links	탐색 링크
+	Navigation links are not repetitive	탐색 링크가 반복적이지 않습니다
+	Repeated navigation links should be skippable. Check links that appear on every page.	반복되는 탐색 링크는 건너뛸 수 있어야 합니다. 모든 페이지에 나타나는 링크를 확인하세요.
+	Tagged form fields	태그된 양식 필드
+	All form fields are tagged	모든 양식 필드에 태그가 지정되어 있습니다
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	양식 필드는 읽을 수 있도록 태그 트리(Form 태그)에 있어야 합니다. 양식 필드에 태그를 지정하세요.
+	Field descriptions	필드 설명
+	All form fields have description	모든 양식 필드에 설명이 있습니다
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	각 필드에는 입력할 내용을 알려 주는 도구 설명이 필요합니다. 필드 속성 > 일반 > 도구 설명에서 추가하세요.
+	Figures alternate text	그림 대체 텍스트
+	Figures require alternate text	그림에 대체 텍스트가 필요합니다
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	그림은 내용을 설명하는 대체 텍스트가 필요하거나 장식용으로 표시되어야 합니다. 각 그림에 대체 텍스트를 추가하세요.
+	Nested alternate text	중첩된 대체 텍스트
+	Alternate text that will never be read	절대 읽히지 않는 대체 텍스트
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	이미 대체 텍스트가 있는 요소 안에 있는 대체 텍스트는 읽히지 않습니다. 안쪽 대체 텍스트를 제거하세요.
+	Associated with content	콘텐츠와 연결됨
+	Alternate text must be associated with some content	대체 텍스트는 일부 콘텐츠와 연결되어야 합니다
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	페이지 콘텐츠가 없는 요소의 대체 텍스트는 절대 읽히지 않습니다. 제거하거나 요소를 콘텐츠에 연결하세요.
+	Hides annotation	주석을 숨김
+	Alternate text should not hide annotation	대체 텍스트가 주석을 숨기지 않아야 합니다
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	링크나 필드가 포함된 요소의 대체 텍스트는 보조 기술에서 해당 주석을 숨깁니다. 대체 텍스트를 이동하세요.
+	Other elements alternate text	기타 요소 대체 텍스트
+	Other elements that require alternate text	대체 텍스트가 필요한 기타 요소
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	수식 등 텍스트가 아닌 요소에는 대체 텍스트가 필요합니다. 해당 요소에 대체 텍스트를 추가하세요.
+	Rows	행
+	TR must be a child of Table, THead, TBody, or TFoot	TR은 Table, THead, TBody 또는 TFoot의 하위 요소여야 합니다
+	Table cells belong in a row. Fix the table's tags.	표 셀은 행에 속해야 합니다. 표의 태그를 수정하세요.
+	Headers	머리글
+	Tables should have headers	표에 머리글이 있어야 합니다
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	머리글 셀(TH)은 각 열이나 행에 무엇이 있는지 듣는 사람에게 알려 줍니다. 머리글 셀을 표시하세요.
+	Regularity	규칙성
+	Tables must contain the same number of columns in each row and rows in each column	표의 각 행에는 같은 수의 열이, 각 열에는 같은 수의 행이 있어야 합니다
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	불규칙한 표는 셀 탐색을 어렵게 합니다. 모든 행에 같은 수의 셀이 있도록 하세요(병합 포함).
+	Summary	요약
+	Tables must have a summary	표에 요약이 있어야 합니다
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	요약은 표의 용도와 구조를 설명합니다. 각 표에 Summary 속성을 추가하세요.
+	List items	목록 항목
+	LI must be a child of L	LI는 L의 하위 요소여야 합니다
+	List items belong in a list. Fix the list's tags.	목록 항목은 목록에 속해야 합니다. 목록의 태그를 수정하세요.
+	Lbl and LBody	Lbl 및 LBody
+	Lbl and LBody must be children of LI	Lbl 및 LBody는 LI의 하위 요소여야 합니다
+	List labels and bodies belong in a list item. Fix the list's tags.	목록 레이블과 본문은 목록 항목에 속해야 합니다. 목록의 태그를 수정하세요.
+	Appropriate nesting	적절한 중첩
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	제목 수준을 건너뛰지 않아야 합니다(H1 다음에 H3이 오는 경우). 제목 태그를 다시 지정하세요.
+	TH and TD	TH 및 TD
+	TH and TD must be children of TR	TH 및 TD는 TR의 하위 요소여야 합니다
+	Mark Page Range	페이지 범위 표시
+	Pages from	시작 페이지
+	Single word or phrase	단어 또는 구문 하나
+	Text to find	찾을 텍스트
+	Patterns	패턴
+	Phone Numbers	전화번호
+	Email Addresses	이메일 주소
+	Credit Cards	신용 카드
+	Social Security Numbers	사회 보장 번호
+	Dates	날짜
+	Text in images isn't found; recognise text (OCR) first.	이미지 속 텍스트는 찾을 수 없습니다. 먼저 텍스트 인식(OCR)을 실행하세요.
+	No matches.	일치하는 항목이 없습니다.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	일부 책갈피는 여기에 표시되지 않습니다. 패널에 나열되는 개수와 중첩 깊이가 제한되어 있습니다.
+	{n} match(es) marked for redaction.	검색 결과 {n}건을 제거 대상으로 표시했습니다.
+	Multiple words or phrases	여러 단어 또는 구문
+	One word or phrase per line	한 줄에 단어 또는 구문 하나
+	Import list…	목록 가져오기…
+	{n} word(s) or phrase(s)	단어 또는 구문 {n}개
+	{name} is too large for a word list (at most 1 MB).	{name}은(는) 단어 목록으로 사용하기에 너무 큽니다(최대 1 MB).
+	Redaction Tool Properties	민감 정보 제거 도구 속성
+	Redacted area fill colour:	제거 영역 채우기 색:
+	Use overlay text	오버레이 텍스트 사용
+	Custom text:	사용자 지정 텍스트:
+	Redaction code:	제거 사유 코드:
+	Font:	글꼴:
+	Font size:	글꼴 크기:
+	Auto-size text to fit redaction region	제거 영역에 맞춰 표시 문구 크기 자동 조정
+	Font colour:	글꼴 색:
+	Repeat overlay text	오버레이 텍스트 반복
+	Text alignment:	텍스트 정렬:
+	Center	가운데
+	Apply redactions	표시된 정보 영구 제거
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	제거 대상 표시 1개를 적용하려고 합니다. 표시된 영역의 텍스트, 이미지, 그림과 겹치는 주석 및 양식 필드가 영구적으로 제거됩니다.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	제거 대상 표시 {n}개를 적용하려고 합니다. 표시된 영역의 텍스트, 이미지, 그림과 겹치는 주석 및 양식 필드가 영구적으로 제거됩니다.
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	그 후 문서를 저장하세요. 저장하면 파일 전체가 다시 쓰여져 제거된 콘텐츠의 흔적이 남지 않습니다.
+	Select the items to remove from this document.	이 문서에서 제거할 항목을 선택하세요.
+	Metadata	메타데이터
+	File attachments	파일 첨부
+	Comments and markups	주석 및 마크업
+	Hidden text	숨겨진 텍스트
+	Hidden layers	숨겨진 레이어
+	Links, actions and JavaScripts	링크, 동작, JavaScript
+	Private data of other applications	다른 응용 프로그램의 개인 데이터
+	None found	발견된 항목 없음
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	양식 필드가 평탄화되어 값은 계속 표시됩니다. 저장하면 파일 전체가 다시 쓰여집니다.
+	Remove	제거
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	정리는 문서에서 숨겨진 정보를 제거합니다: 메타데이터, 파일 첨부, 주석, 양식 필드(평탄화됨), 숨겨진 텍스트와 레이어, 책갈피, 링크, 동작과 스크립트, 응용 프로그램 개인 데이터 등입니다.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	그 후 문서를 저장하세요. 저장하면 파일 전체가 다시 쓰여져 제거된 항목이 남지 않습니다.
+	Printer:	프린터:
+	Save as PDF	PDF로 저장
+	{name} (default)	{name} (기본)
+	Copies:	매수:
+	Collate	한 부씩 인쇄
+	Print in grayscale	회색조로 인쇄
+	Two-sided:	양면:
+	Off	끄기
+	Flip on long edge	긴 가장자리 기준 넘기기
+	Flip on short edge	짧은 가장자리 기준 넘기기
+	Paper:	용지:
+	Pages to Print	인쇄할 페이지
+	More options:	추가 옵션:
+	All pages in range	범위의 모든 페이지
+	Odd pages only	홀수 페이지만
+	Even pages only	짝수 페이지만
+	Reverse pages	페이지 역순 인쇄
+	Page Sizing & Handling	페이지 크기 조정 및 처리
+	Size	크기
+	Poster	포스터
+	Multiple	여러 페이지
+	Booklet	소책자
+	Fit	맞춤
+	Shrink oversized pages	큰 페이지 축소
+	Custom scale:	사용자 지정 배율:
+	Tile scale:	타일 배율:
+	Overlap:	겹침:
+	Cut marks	재단 표시
+	Pages per sheet:	용지당 페이지 수:
+	Page order:	페이지 순서:
+	Horizontal	가로
+	Horizontal reversed	가로 역순
+	Vertical	세로
+	Vertical reversed	세로 역순
+	Print page border	페이지 테두리 인쇄
+	Auto-rotate pages	페이지 자동 회전
+	Booklet subset:	소책자 인쇄 면:
+	Both sides	양면
+	Front side only	앞면만
+	Back side only	뒷면만
+	Binding:	제본:
+	Left	왼쪽
+	Right	오른쪽
+	Orientation:	방향:
+	Auto portrait/landscape	자동 세로/가로
+	Portrait	세로
+	Landscape	가로
+	Comments & Forms	주석 및 양식
+	Document	문서
+	Document and markups	문서 및 변경 표시
+	Document and stamps	문서 및 스탬프
+	Form fields only	양식 필드만
+	Previous sheet	이전 용지
+	Next sheet	다음 용지
+	No sheets	용지 없음
+	Sheet {s} of {n}	용지 {s}/{n}
+	Removed 1 hidden item. Save to remove them from the file.	숨겨진 항목 1개를 제거했습니다. 파일에서 완전히 제거하려면 저장하세요.
+	Removed {n} hidden items. Save to remove them from the file.	숨겨진 항목 {n}개를 제거했습니다. 파일에서 완전히 제거하려면 저장하세요.
+	Document sanitized. Save to finish: saving rewrites the whole file.	문서가 정리되었습니다. 완료하려면 저장하세요: 저장하면 파일 전체가 다시 작성됩니다.
+	Applied 1 redaction mark. Save to remove the content from the file.	제거 대상 표시 1개가 적용되었습니다. 파일에서 콘텐츠를 제거하려면 저장하세요.
+	Applied {n} redaction marks. Save to remove the content from the file.	제거 대상 표시 {n}개가 적용되었습니다. 파일에서 콘텐츠를 제거하려면 저장하세요.
+	JavaScript Console	JavaScript 콘솔
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript가 꺼져 있습니다(기본 설정 ▸ JavaScript).
+	Output appears here.	출력이 여기에 표시됩니다.
+	Script Name:	스크립트 이름:
+	This document has no document-level scripts.	이 문서에는 문서 수준 스크립트가 없습니다.
+	No form fields were detected	양식 필드가 감지되지 않았습니다
+	Detected 1 form field	양식 필드 1개가 감지되었습니다
+	Detected {n} form fields	양식 필드 {n}개가 감지되었습니다
+	{field}: {e}	{field}: {e}
+	Current page	현재 페이지
+	Selected pages	선택한 페이지
+	Document language	문서 언어
+	Output	출력
+	Searchable Image (Exact)	검색 가능한 이미지(정확한)
+	Adds invisible text over each word; the page image is not changed	각 단어 위에 보이지 않는 텍스트를 추가하며 페이지 이미지는 변경되지 않습니다
+	Downsample to	다운샘플링
+	Also recognize pages that already have text	이미 텍스트가 있는 페이지도 인식
+	Pictures on those pages are recognized too; words already in the page's text are not added again	해당 페이지의 그림도 인식되며 페이지 텍스트에 이미 있는 단어는 다시 추가되지 않습니다
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	텍스트 인식이 설치되어 있지 않습니다: 모델 파일이 없습니다. PdfCraft를 다시 설치하거나 PDFCRAFT_MODELS를 모델 파일이 있는 폴더로 설정하세요.
+	Settings	설정
+	Optional	선택 사항
+	Planned · {m}	계획됨 · {m}
+	Planned for milestone {m} — open to see what it will include	마일스톤 {m}에 계획됨 — 열면 포함될 기능을 볼 수 있습니다
+	Coming in milestone {m}. Items marked Ready work today.	마일스톤 {m}에 제공됩니다. “준비됨”으로 표시된 항목은 현재 작동합니다.
+	1 mark	표시 1개
+	{n} marks	표시 {n}개
+	Dynamic	동적
+	Sign Here	여기에 서명
+	Standard Business	표준 비즈니스
+	Choose a stamp, then click on the page to place it.	스탬프를 선택한 다음 페이지를 클릭하여 배치하세요.
+	Note	메모
+	Polyline	폴리라인
+	Attachment	첨부
+	Callout	설명선
+	Typewriter	타자기
+	Checked	선택됨
+	Unchecked	선택 안 됨
+	Marked	표시됨
+	Locked	잠김
+	Search comments	주석 검색
+	Add a comment	주석 추가
+	No comments yet.	아직 주석이 없습니다.
+	Pick a tool in the quick bar, or type above.	빠른 도구 모음에서 도구를 선택하거나 위에 입력하세요.
+	No comments match.	일치하는 주석이 없습니다.
+	Unknown author	알 수 없는 작성자
+	No colour	색상 없음
+	Remove checkmark	확인 표시 제거
+	Mark with checkmark	확인 표시 설정
+	Reply	답글
+	Add a reply	답글 추가
+	Post	게시
+	Page {label}	페이지 {label}
+	{kind} — click to show it on the page	{kind} — 페이지에 표시하려면 클릭하세요
+	Set status	상태 설정
+	Copy text	텍스트 복사
+	Properties…	속성…
+	Make Current Properties Default	현재 속성을 기본값으로 설정
+	More options	추가 옵션
+	Sort by	정렬 기준
+	Author	작성자
+	Type	입력
+	Colour	색상
+	Show all comments	모든 주석 표시
+	Create PDF comment summary…	PDF 주석 요약 만들기…
+	Export all to data file…	모두 데이터 파일로 내보내기…
+	Filter comments	주석 필터
+	Status	상태
+	Accepted	수락됨
+	Rejected	거부됨
+	Cancelled	취소됨
+	Completed	완료됨
+	Show all	모두 표시
+	Yellow	노란색
+	Orange	주황색
+	Red	빨간색
+	Pink	분홍색
+	Purple	보라색
+	Blue	파란색
+	Light blue	연한 파란색
+	Green	초록색
+	Gray	회색
+	Black	검은색
+	Bookmark options	책갈피 옵션
+	Expand all bookmarks	모든 책갈피 확장
+	Expand top-level bookmarks	최상위 책갈피 확장
+	Collapse all bookmarks	모든 책갈피 축소
+	New bookmark ({key})	새 책갈피({key})
+	This document has no bookmarks.	이 문서에는 책갈피가 없습니다.
+	This document has no layers.	이 문서에는 레이어가 없습니다.
+	This document has no attachments.	이 문서에는 첨부 파일이 없습니다.
+	Hide layer	레이어 숨기기
+	Show layer	레이어 표시
+	Set layer visibility	레이어 표시 여부 설정
+	on page {label}	페이지 {label}
+	Save attachment…	첨부 파일 저장…
+	Open in a new tab	새 탭에서 열기
+	This document has no pages.	이 문서에는 페이지가 없습니다.
+	Find text	텍스트 찾기
+	No matches	일치 항목 없음
+	Searching… {s}/{p}	검색 중… {s}/{p}
+	{c} of {n}{more}	{c}/{n}{more}
+	Previous ({key})	이전({key})
+	Next ({key})	다음({key})
+	Find options	찾기 옵션
+	Whole words only	전체 단어만
+	Case-sensitive	대/소문자 구분
+	Close (Esc)	닫기(Esc)
+	Align	정렬
+	Top	위쪽
+	Bottom	아래쪽
+	Center horizontally	가로 가운데 맞춤
+	Center vertically	세로 가운데 맞춤
+	Distribute	분배
+	Horizontally	가로로
+	Vertically	세로로
+	Set Fields to Same Size	필드를 같은 크기로 설정
+	Height	높이
+	Width	너비
+	Both	둘 다
+	Duplicate…	복제…
+	All pages	모든 페이지
+	Odd pages	홀수 페이지
+	Even pages	짝수 페이지
+	Landscape pages	가로 페이지
+	Portrait pages	세로 페이지
+	Move earlier	앞으로 이동
+	Move later	뒤로 이동
+	Back to the document	문서로 돌아가기
+	Protect Using Password	암호로 보호
+	Requires user to enter a password for:	다음 항목에 대해 사용자가 암호를 입력하도록 요구:
+	Viewing	보기
+	Editing	편집
+	Type Password	암호 입력
+	Re-type Password	암호 재입력
+	Strength: {s}	강도: {s}
+	Strong	강함
+	Medium	중간
+	Weak	약함
+	Advanced Options {chevron}	고급 옵션 {chevron}
+	Compatibility	호환성
+	Acrobat X and later (256-bit AES)	Acrobat X 이상(256비트 AES)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 이상(128비트 AES)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 이상(128비트 RC4)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 이상(40비트 RC4)
+	Encrypt	암호화
+	All document contents	문서 콘텐츠 전체
+	All document contents except metadata	메타데이터를 제외한 문서 콘텐츠 전체
+	Printing allowed	인쇄 허용됨
+	Low Resolution (150 dpi)	저해상도(150 dpi)
+	Changes allowed	변경 허용됨
+	Inserting, deleting, and rotating pages	페이지 삽입, 삭제 및 회전
+	Filling in form fields and signing existing signature fields	양식 필드 채우기 및 기존 서명 필드에 서명
+	Commenting, filling in form fields, and signing existing signature fields	주석 달기, 양식 필드 채우기 및 기존 서명 필드에 서명
+	Any except extracting pages	페이지 추출을 제외한 모든 변경
+	Enable copying of text, images, and other content	텍스트, 이미지 및 기타 콘텐츠 복사 허용
+	Enable text access for screen reader devices for the visually impaired	시각 장애인용 화면 판독기의 텍스트 접근 허용
+	Type a password.	암호를 입력하세요.
+	The passwords don't match.	암호가 일치하지 않습니다.
+	This compatibility level supports only plain ASCII passwords.	이 호환성 수준은 일반 ASCII 암호만 지원합니다.
+	Anyone opening the document will need this password. It's applied when you save.	이 문서를 여는 모든 사람이 이 암호를 입력해야 합니다. 저장할 때 적용됩니다.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	문서는 암호 없이 열리며 이 암호는 제한을 변경할 때 필요합니다. 저장할 때 적용됩니다.
+	Recover unsaved documents?	저장되지 않은 문서를 복구하시겠습니까?
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft가 정상적으로 종료되지 않았습니다. 다음 문서의 변경 내용이 자동 저장되었습니다:
+	just now	방금
+	{n} min ago	{n}분 전
+	{n} h ago	{n}시간 전
+	 · password-protected	 · 암호로 보호됨
+	Recover	복구
+	Discard	버리기
+	Version {v}	버전 {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	클린룸 방식으로 개발된 Rust 기반 오픈 소스 PDF 응용 프로그램입니다. MIT OR Apache-2.0.
+	Part of	소속
+	Summarize Options	요약 옵션
+	Choose a layout:	레이아웃 선택:
+	Comments only	주석만
+	Sort comments by:	주석 정렬 기준:
+	Create PDF Comment Summary	PDF 주석 요약 만들기
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	“{name}”을(를) 마지막으로 저장된 버전으로 되돌리시겠습니까? 그 이후의 변경 내용은 나중에 되돌릴 수 없습니다.
+	Number pages	페이지 번호 매기기
+	Style	스타일
+	None (prefix only)	없음(접두사만)
+	Prefix	접두사
+	Start	시작
+	Labels: {preview}. Later pages keep their labels.	레이블: {preview}. 이후 페이지는 기존 레이블을 유지합니다.
+	Even and Odd Pages	짝수 및 홀수 페이지
+	Even Pages Only	짝수 페이지만
+	Odd Pages Only	홀수 페이지만
+	Landscape and Portrait Pages	가로 및 세로 페이지
+	Landscape Pages	가로 페이지
+	Portrait Pages	세로 페이지
+	Duplicate Field	필드 복제
+	Duplicate "{name}" onto:	“{name}”을(를) 다음에 복제:
+	1 page selected.	페이지 1개가 선택되었습니다.
+	{n} pages selected.	페이지 {n}개가 선택되었습니다.
+	Delete pages after extracting	추출 후 페이지 삭제
+	Extract pages as separate files	페이지를 별도 파일로 추출
+	Rotate Pages	페이지 회전
+	Direction:	방향:
+	Clockwise 90 degrees	시계 방향으로 90도
+	Counterclockwise 90 degrees	시계 반대 방향으로 90도
+	180 degrees	180도
+	Pages:	페이지:
+	All	전체
+	Selection	선택
+	From	시작
+	Rotate:	회전:
+	Repairs	복구
+	Repair log	복구 로그
+	Split document	문서 분할
+	Number of pages	페이지 수
+	Pages per file	파일당 페이지 수
+	File size	파일 크기
+	At most	최대
+	Top-level bookmarks ({n})	최상위 책갈피({n})
+	Before each selected page (select pages in Organize)	선택한 각 페이지 앞에(Organize에서 페이지 선택)
+	Creates 1 file from {n} pages.	{n}개의 페이지로 파일 1개가 만들어집니다.
+	Creates {f} files from {n} pages.	{n}개의 페이지로 파일 {f}개가 만들어집니다.
+	Each file holds as many of the {n} pages as fit.	각 파일에는 {n}개 페이지 중 들어갈 수 있는 만큼 포함됩니다.
+	Replace Pages	페이지 교체
+	Original: replace pages	원본: 페이지 교체
+	to	~
+	to {n}	~{n}
+	Replacement: pages of {name}	교체 내용: {name}의 페이지
+	of {name}	파일: {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	페이지 콘텐츠만 변경됩니다: 원본 페이지의 링크, 주석, 양식 필드 및 책갈피는 그대로 유지됩니다.
+	The replacement file doesn't have that many pages.	교체 파일에는 그만큼 많은 페이지가 없습니다.
+	Tagged PDF	태그된 PDF
+	Document Properties	문서 속성
+	Description	설명
+	Initial View	초기 보기
+	Security	보안
+	Fonts	글꼴
+	Advanced	고급
+	Title	제목
+	Subject	주체
+	Keywords	키워드
+	Application	응용 프로그램
+	PDF producer	PDF 생성기
+	Layout and Magnification	레이아웃 및 배율
+	Navigation tab	탐색 탭
+	Page Only	페이지만
+	Bookmarks Panel and Page	책갈피 패널 및 페이지
+	Pages Panel and Page	페이지 패널 및 페이지
+	Attachments Panel and Page	첨부 파일 패널 및 페이지
+	Layers Panel and Page	레이어 패널 및 페이지
+	Page layout	페이지 레이아웃
+	Default	기본값
+	Single Page	단일 페이지
+	Single Page Continuous	단일 연속 페이지
+	Two-Up (Facing)	두 페이지씩 보기(마주 보기)
+	Two-Up Continuous (Facing)	두 페이지씩 연속 보기(마주 보기)
+	Two-Up (Cover Page)	두 페이지씩 보기(표지 페이지)
+	Two-Up Continuous (Cover Page)	두 페이지씩 연속 보기(표지 페이지)
+	Magnification	배율
+	Actual Size	실제 크기
+	Fit Page	페이지에 맞춤
+	Fit Width	너비에 맞춤
+	Fit Height	높이에 맞춤
+	Fit Visible	보이는 부분에 맞춤
+	Open to page	다음 페이지로 열기
+	of {pages}	/{pages}
+	Window Options	창 옵션
+	Resize window to initial page	초기 페이지에 맞게 창 크기 조정
+	Center window on screen	화면 가운데에 창 배치
+	Open in Full Screen mode	전체 화면 모드로 열기
+	Show:	표시:
+	File Name	파일 이름
+	Document Title	문서 제목
+	User Interface Options	사용자 인터페이스 옵션
+	Hide menu bar	메뉴 모음 숨기기
+	Hide toolbars	도구 모음 숨기기
+	Hide window controls	창 컨트롤 숨기기
+	Security method	보안 방법
+	No security	보안 없음
+	Restrictions	제한
+	None — everything is allowed	없음 — 모든 작업이 허용됨
+	Password security	암호 보안
+	Encryption	암호화
+	Opened with	다음으로 열림
+	— (protection is applied when you save)	— (저장할 때 보호가 적용됨)
+	Owner password (no restrictions apply)	소유자 암호(제한이 적용되지 않음)
+	User password	사용자 암호
+	Change settings…	설정 변경…
+	Printing	인쇄
+	Not allowed	허용 안 됨
+	Allowed	허용됨
+	High resolution	고해상도
+	Low resolution	저해상도
+	Changing the document	문서 변경
+	Document assembly	문서 조합
+	Content copying	콘텐츠 복사
+	Content copying for accessibility	접근성을 위한 콘텐츠 복사
+	Commenting	주석 달기
+	Filling of form fields	양식 필드 채우기
+	No fonts are referenced by the pages.	페이지에서 참조하는 글꼴이 없습니다.
+	PDF version	PDF 버전
+	Location	위치
+	Page size	페이지 크기
+	Yes	예
+	No	아니요
+	Revisions	버전 기록
+	View revision {n}	버전 {n} 보기
+	Open the file as it was saved then	당시 저장된 상태로 파일을 엽니다
+	Binding	제본
+	Left Edge	왼쪽 가장자리
+	Right Edge	오른쪽 가장자리
+	Language	언어
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	{place}에 저장됨: {before} → {after} ({pct}% 작아짐){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	이 파일은 이미 최소 크기({size})입니다. 사본이 저장되지 않았습니다.
+	Saved {place}: {before} → {after} (not smaller){detail}	{place}에 저장됨: {before} → {after} (더 작아지지 않음){detail}
+	Couldn't save the image: {e}	이미지를 저장할 수 없습니다: {e}
+	Adding images arrives on the web with file pickers for images	이미지 추가는 웹에서 파일 선택 기능과 함께 제공될 예정입니다
+	Replacing images on page {p} arrives on the web with image pickers ({i})	페이지 {p}의 이미지 교체는 웹에서 이미지 선택 기능({i})과 함께 제공될 예정입니다
+	{name}: choosing images arrives on the web with file pickers for images	{name}: 이미지 선택은 웹에서 파일 선택 기능과 함께 제공될 예정입니다
+	Replacing images arrives on the web with image file pickers	이미지 교체는 웹에서 이미지 파일 선택 기능과 함께 제공될 예정입니다
+	Couldn't create a PDF: {e}	PDF를 만들 수 없습니다: {e}
+	The clipboard has no image or text	클립보드에 이미지나 텍스트가 없습니다
+	On the web, open or drop an image to convert it	웹에서는 이미지를 열거나 끌어다 놓아 변환하세요
+	Couldn't optimize the file: {e}	파일을 최적화할 수 없습니다: {e}
+	Couldn't write {path}: {e}	{path}을(를) 쓸 수 없습니다: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	이 양식은 {u}(으)로 제출을 요청합니다. PdfCraft는 양식 데이터를 보내지 않습니다. 입력한 내용을 유지하려면 문서를 저장하세요.
+	This PDF uses the unsupported {s} action.	이 PDF는 지원되지 않는 {s} 작업을 사용합니다.
+	{name}: the {other} action isn't supported yet	{name}: {other} 작업은 아직 지원되지 않습니다
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name}이(가) 양식을 {url}로 제출합니다. PdfCraft는 양식 데이터를 보내지 않습니다. 입력한 내용을 유지하려면 문서를 저장하세요.
+	Export stopped: {e}	내보내기가 중지되었습니다: {e}
+	Exported 1 image	이미지 1개를 내보냈습니다
+	Exported {n} images	이미지 {n}개를 내보냈습니다
+	 ({s} not exported: {first})	 ({s}개를 내보내지 못했습니다: {first})
+	Exported the text of 1 page	페이지 1개의 텍스트를 내보냈습니다
+	Exported the text of {n} pages	페이지 {n}개의 텍스트를 내보냈습니다
+	{msg} to {dir}	{msg} → {dir}
+	Exporting… {d} of {t}	내보내는 중… {d}/{t}
+	Choose a folder for the exported files	내보낸 파일을 저장할 폴더 선택
+	New {tool} comments will look like this one	새 {tool} 주석은 이 모양으로 만들어집니다
+	This document can't be checked: it couldn't be read for editing	이 문서는 검사할 수 없습니다: 편집을 위해 읽을 수 없습니다
+	The checker found no problems in this document.	검사에서 이 문서에 문제가 발견되지 않았습니다.
+	The checker found 1 problem which may prevent the document from being fully accessible.	검사에서 문서의 완전한 접근성을 저해할 수 있는 문제 1개가 발견되었습니다.
+	The checker found {n} problems which may prevent the document from being fully accessible.	검사에서 문서의 완전한 접근성을 저해할 수 있는 문제 {n}개가 발견되었습니다.
+	The text is the same	텍스트가 같습니다
+	1 difference found	차이점 1개가 발견되었습니다
+	{n} differences found	차이점 {n}개가 발견되었습니다
+	Added 1 comment	주석 1개를 추가했습니다
+	Added {n} comments	주석 {n}개를 추가했습니다
+	Choose a folder for the results	결과를 저장할 폴더 선택
+	Files for {name}	{name}의 파일
+	An action is already running	작업이 이미 실행 중입니다
+	Running action… file {d} of {t}	작업 실행 중… 파일 {d}/{t}
+	No unlinked web addresses were found in the text	텍스트에서 링크되지 않은 웹 주소를 찾지 못했습니다
+	Created 1 link	링크 1개를 만들었습니다
+	Created {n} links	링크 {n}개를 만들었습니다
+	Text recognition is already running	텍스트 인식이 이미 실행 중입니다
+	Recognizing text… file {d} of {t}	텍스트 인식 중… 파일 {d}/{t}
+	Recognizing text… page {d} of {t}	텍스트 인식 중… 페이지 {d}/{t}
+	Recognized 1 word	단어 1개를 인식했습니다
+	Recognized {n} words	단어 {n}개를 인식했습니다
+	{words} on {pages}	{pages}에 {words}
+	; 1 page already had text	; 페이지 1개에는 이미 텍스트가 있었습니다
+	; {n} pages already had text	; 페이지 {n}개에는 이미 텍스트가 있었습니다
+	Recognized {w} words in 1 file	파일 1개에서 단어 {w}개를 인식했습니다
+	Recognized {w} words in {n} files	파일 {n}개에서 단어 {w}개를 인식했습니다
+	; failed: {list}	; 실패: {list}
+	1 file done	파일 1개 완료
+	{n} files done	파일 {n}개 완료
+	The selected area has been copied ({w} × {h} pixels)	선택한 영역이 복사되었습니다({w} × {h}픽셀)
+	Couldn't take the snapshot: {e}	스냅샷을 만들 수 없습니다: {e}
+	Couldn't recover {name}: {e}	{name}을(를) 복구할 수 없습니다: {e}
+	The document now conforms to {level}; save it to keep the changes	문서가 이제 {level}을(를) 준수합니다. 변경 내용을 유지하려면 저장하세요.
+	Fixed what could be fixed; 1 problem remains	수정 가능한 문제를 모두 수정했습니다. 문제 1개가 남아 있습니다
+	Fixed what could be fixed; {n} problems remain	수정 가능한 문제를 모두 수정했습니다. 문제 {n}개가 남아 있습니다
+	Custom stamps arrive on the web with file pickers for images	사용자 지정 스탬프는 웹에서 파일 선택 기능과 함께 제공될 예정입니다
+	{file} is too large for a stamp (at most {n} MB)	{file}이(가) 스탬프로 사용하기에 너무 큽니다(최대 {n}MB)
+	Sent to {printer}	{printer}(으)로 보냈습니다
+	Sent to {printer}: {msg}	{printer}(으)로 보냈습니다: {msg}
+	Looking for printers…	프린터를 찾는 중…
+	Sending to {printer}…	{printer}(으)로 보내는 중…
+	Choose a folder for the searchable files	검색 가능한 파일을 저장할 폴더 선택
+	Files are combined from top to bottom. Leave Pages empty to take every page.	파일은 위에서 아래로 결합됩니다. 모든 페이지를 사용하려면 페이지를 비워 두세요.
+	Unlock…	잠금 해제…
+	Select a password-protected file first	먼저 암호로 보호된 파일을 선택하세요
+	Enter the permissions password to allow combining	결합을 허용하려면 권한 암호를 입력하세요
+	Enter the password that opens it	파일을 여는 암호를 입력하세요
+	Unlock {name}	{name} 잠금 해제
+	Unlock {n} files	파일 {n}개 잠금 해제
+	The same password is tried on each file.	각 파일에 같은 암호가 시도됩니다.
+	Hide password	암호 숨기기
+	Show password	암호 표시
+	Wrong password	잘못된 암호
+	The password is only used to read the file; it isn't saved.	암호는 파일을 읽는 데만 사용되며 저장되지 않습니다.
+	Unlock	잠금 해제
+	Opened, but its security settings don't allow combining. Enter the permissions password.	열렸지만 보안 설정에서 결합을 허용하지 않습니다. 권한 암호를 입력하세요.
+	Unlocked: the combined file won't be password-protected	잠금 해제됨: 결합된 파일은 암호로 보호되지 않습니다
+	Unlocked {n} of {m} files	파일 {m}개 중 {n}개를 잠금 해제했습니다
+	Drop PDFs, images, text files or folders here, or choose them.	PDF, 이미지, 텍스트 파일 또는 폴더를 여기로 끌어다 놓거나 선택하세요.
+	Add folder…	폴더 추가…
+	Add folder and subfolders…	폴더 및 하위 폴더 추가…
+	More ways to add files	파일을 추가하는 다른 방법
+	Every PDF, image and text file in the folder	폴더의 모든 PDF, 이미지 및 텍스트 파일
+	Every PDF, image and text file in the folder and the folders inside it	폴더 및 그 하위 폴더의 모든 PDF, 이미지 및 텍스트 파일
+	Add folder	폴더 추가
+	Add folder and subfolders	폴더 및 하위 폴더 추가
+	No PDFs, images or text files found in {folder}	{folder}에서 PDF, 이미지 또는 텍스트 파일을 찾지 못했습니다
+	Added the first {n} files in {folder}	{folder}에서 처음 {n}개 파일을 추가했습니다
+	Click to sort, drag to move the column. Drag its edge to resize it.	클릭하면 정렬되고 드래그하면 열이 이동됩니다. 가장자리를 드래그하면 크기가 조정됩니다.
+	Reset columns	열 초기화
+	Remove {n} files	파일 {n}개 제거
+	{n} selected	{n}개 선택됨
+	sorted ascending	오름차순 정렬됨
+	sorted descending	내림차순 정렬됨
+	Protected: the combined file won't keep its security settings	보호됨: 결합된 파일은 보안 설정을 유지하지 않습니다
+	Add open documents	열려 있는 문서 추가
+	All open documents	모든 열려 있는 문서
+	No documents are open	열려 있는 문서가 없습니다
+	Select a file first	먼저 파일을 선택하세요
+	1 file	파일 1개
+	{n} files	파일 {n}개
+	1 file needs attention	파일 1개에 주의가 필요합니다
+	{n} files need attention	파일 {n}개에 주의가 필요합니다
+	{name} can't be combined: {why}	{name}은(는) 결합할 수 없습니다: {why}
+	Check the pages of {name}: {why}	{name}의 페이지를 확인하세요: {why}
+	Add the files to combine	결합할 파일을 추가하세요
+	File name	파일 이름
+	Warnings	경고
+	Drag to reorder	드래그하여 순서 변경
+	{k} of {n}	{k}/{n}
+	? of {n}	?/{n}
+	Added more than once	두 번 이상 추가됨
+	yesterday	어제
+	{n} days ago	{n}일 전
+	No pages selected	선택한 페이지가 없습니다
+	Password-protected	암호로 보호됨
+	Its security settings don't allow copying pages	보안 설정에서 페이지 복사를 허용하지 않습니다
+	Can't be read: {e}	읽을 수 없음: {e}
+	Leave out files that can't be read?	읽을 수 없는 파일을 제외하시겠습니까?
+	These files can't be read, so they won't be in the combined PDF:	다음 파일은 읽을 수 없어 결합된 PDF에 포함되지 않습니다:
+	Combine the rest	나머지 결합
+	and {n} more	외 {n}개
+	Includes unsaved changes	저장되지 않은 변경 내용 포함
+	Pages of {name} to combine, e.g. 1-3, 6	결합할 {name}의 페이지(예: 1-3, 6)
+	Remove {name}	{name} 제거
+	Add files…	파일 추가…
+	Add at least two files	파일을 두 개 이상 추가하세요
+	Couldn't add {name}: {e}	{name}을(를) 추가할 수 없습니다: {e}
+	Couldn't combine files: {e}	파일을 결합할 수 없습니다: {e}
+	Export comments	주석 내보내기
+	Export form data	양식 데이터 내보내기
+	Comment and form data	주석 및 양식 데이터
+	Export	내보내기
+	Select data files to merge	병합할 데이터 파일 선택
+	Form data and PDF forms	양식 데이터 및 PDF 양식
+	Save the spreadsheet	스프레드시트 저장
+	Save the accessibility report	접근성 보고서 저장
+	Save image	이미지 저장
+	Export certificate	인증서 내보내기
+	Choose a folder for the extracted pages	추출한 페이지를 저장할 폴더 선택
+	Choose a folder for the split files	분할된 파일을 저장할 폴더 선택
+	Couldn't use {name}: {e}	{name}을(를) 사용할 수 없습니다: {e}
+	Couldn't extract pages: {e}	페이지를 추출할 수 없습니다: {e}
+	Couldn't write {name}: {e}	{name}을(를) 쓸 수 없습니다: {e}
+	Wrote 1 file to {dir}	파일 1개를 {dir}에 썼습니다
+	Wrote {n} files to {dir}	파일 {n}개를 {dir}에 썼습니다
+	No pages match those choices	이 선택 조건에 일치하는 페이지가 없습니다
+	Couldn't split: {e}	분할할 수 없습니다: {e}
+	Couldn't summarize comments: {e}	주석을 요약할 수 없습니다: {e}
+	Couldn't open the result: {e}	결과를 열 수 없습니다: {e}
+	Importing data arrives on the web with file pickers for data files	데이터 가져오기는 웹에서 데이터 파일 선택 기능과 함께 제공될 예정입니다
+	Exported to {path}	{path}에 내보냈습니다
+	Merging data files needs the desktop app	데이터 파일 병합에는 데스크톱 앱이 필요합니다
+	Merged 1 file into {path}	파일 1개를 {path}에 병합했습니다
+	Merged {n} files into {path}	파일 {n}개를 {path}에 병합했습니다
+	Combined {n} files	파일 {n}개를 결합했습니다
+	Extracted 1 page	페이지 1개를 추출했습니다
+	Extracted {n} pages	페이지 {n}개를 추출했습니다
+	Created a comment summary	주석 요약을 만들었습니다
+	Couldn't open {name}: {e}	{name}을(를) 열 수 없습니다: {e}
+	Couldn't read {name}: {e}	{name}을(를) 읽을 수 없습니다: {e}
+	Couldn't save: {e}	저장할 수 없습니다: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	웹에서의 첨부 파일 다운로드는 M3.10에 제공될 예정입니다(준비된 바이트: {n})
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	마일스톤 {m}에 제공됩니다
+	needs an AI provider (off by default)	AI 공급자가 필요합니다(기본적으로 꺼져 있음)
+	is available	사용할 수 있습니다
+	is not available yet	아직 사용할 수 없습니다
+	{label} failed: {e}	{label} 실패: {e}
+	Undid {label}	{label} 작업을 취소했습니다
+	Redid {label}	{label} 작업을 다시 실행했습니다
+	A document needs at least one page: copy instead	문서에는 페이지가 최소한 하나 있어야 합니다. 대신 복사하세요.
+	Cut {what}	{what}를 잘라냈습니다
+	Copied {what}	{what}를 복사했습니다
+	1 page	페이지 1개
+	{n} pages	페이지 {n}개
+	Copy or cut pages first	먼저 페이지를 복사하거나 잘라내세요
+	Couldn't save {name}: {e}	{name}을(를) 저장할 수 없습니다: {e}
+	Saved {name}	{name}을(를) 저장했습니다
+	Saved, but reopening failed: {e}	저장했지만 다시 여는 데 실패했습니다: {e}
+	Downloaded {name}	{name}을(를) 다운로드했습니다
+	Couldn't download {name}: {e}	{name}을(를) 다운로드할 수 없습니다: {e}
+	Reverted to the last saved version	마지막으로 저장한 버전으로 되돌렸습니다
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	작동하지 않았습니다: 내부 오류로 중지되었습니다({m}). 문서는 변경되지 않았습니다.
+	Nothing to undo	취소할 작업이 없습니다
+	Nothing to redo	다시 실행할 작업이 없습니다
+	This document has no form fields you can fill in	이 문서에는 채울 수 있는 양식 필드가 없습니다
+	This document has no comments to flatten	이 문서에는 평탄화할 주석이 없습니다
+	This document has no form fields to flatten	이 문서에는 평탄화할 양식 필드가 없습니다
+	There are no redaction marks (mark text, areas or pages first)	제거 대상 표시가 없습니다(먼저 텍스트, 영역 또는 페이지를 표시하세요)
+	This document has no {kind} to change	이 문서에는 변경할 {kind}이(가) 없습니다
+	header or footer	머리글 또는 바닥글
+	watermark	워터마크
+	background	배경
+	This document isn't password-protected	이 문서는 암호로 보호되어 있지 않습니다
+	Enter permissions password…	권한 암호 입력…
+	Permissions password	권한 암호
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}”에 보안 제한이 있습니다. 제한을 해제하려면 권한 암호를 입력하세요.
+	Restrictions lifted	제한이 해제되었습니다
+	Couldn't unlock {name}: {e}	{name}의 잠금을 해제할 수 없습니다: {e}
+	This document has no restrictions to lift	이 문서에는 해제할 제한이 없습니다
+	The document's security settings don't allow this change	문서의 보안 설정에서 이 변경을 허용하지 않습니다
+	The document's security settings don't allow copying text and images	문서의 보안 설정에서 텍스트와 이미지 복사를 허용하지 않습니다
+	Open a document first	먼저 문서를 열어 주세요
+	Security will be removed when you save	저장할 때 보안이 제거됩니다
+	Click text or an image to edit it	텍스트나 이미지를 클릭하여 편집하세요
+	Drag a rectangle to create a link; double-click a link to edit it	드래그하여 사각형을 그려 링크를 만들고, 링크를 두 번 클릭하여 편집하세요
+	There are no redaction marks to apply	적용할 제거 대상 표시가 없습니다
+	Drag to draw the area where the signature should appear.	서명이 표시될 영역을 드래그하여 그리세요.
+	Couldn't fit the visible content: {e}	보이는 콘텐츠를 맞출 수 없습니다: {e}
+	Drag a rectangle around the area to copy	복사할 영역 주위에 사각형을 드래그하세요
+	Click on the page to add a {tool}, or drag to set its size	페이지를 클릭하여 {tool}을(를) 추가하거나 드래그하여 크기를 지정하세요
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	페이지에 사각형을 드래그하여 자르고, 두 번 클릭하면 페이지 상자를 설정합니다
+	Keep tool selected: on	도구 선택 유지: 켬
+	Keep tool selected	도구 선택 유지
+	Opacity	불투명도
+	Line thickness	선 굵기
+	What word or phrase would you like to search for?	어떤 단어나 구문을 검색하시겠습니까?
+	Searching… {s} of {p} pages	검색 중… {p}페이지 중 {s}
+	 (searching… {s} of {p} pages)	 (검색 중… {p}페이지 중 {s})
+	1 instance	일치 항목 1개
+	{n} instances	일치 항목 {n}개
+	Go to this result	이 결과로 이동
+	Highlight	형광펜
+	Draw	그리기
+	Polygon	다각형
+	Connected lines	연결선
+	Eraser	지우개
+	Sign	서명
+	Certified by {by}	{by}이(가) 인증함
+	At least one signature is invalid.	하나 이상의 서명이 유효하지 않습니다.
+	Signed and all signatures are valid.	서명되었으며 모든 서명이 유효합니다.
+	At least one signature has problems.	하나 이상의 서명에 문제가 있습니다.
+	This document is secured. Some changes are restricted by its security settings.	이 문서는 보호되어 있습니다. 일부 변경은 보안 설정에 의해 제한됩니다.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	동적 XFA 양식으로, PdfCraft가 아직 표시할 수 없습니다. 지금 보이는 것은 파일의 자리 표시 페이지입니다.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	이 양식에는 PdfCraft가 아직 읽지 못하는 XFA 데이터도 들어 있습니다. 필드는 채울 수 있지만 Acrobat이 대신 XFA 값을 표시할 수 있습니다.
+	This document contains {n} interactive form fields.	이 문서에는 대화형 양식 필드 {n}개가 들어 있습니다.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	이 파일은 손상되었다가 복구되었습니다. 저장하면 복구된 버전이 유지됩니다.
+	Dismiss	닫기
+	Hide field highlights	필드 강조 숨기기
+	Highlight fields	필드 강조 표시
+	Security settings	보안 설정
+	Details	세부 정보
+	Select (V)	선택 (V)
+	Hand (H)	손 도구 (H)
+	Delete pages (Delete)	페이지 삭제 (Delete)
+	Insert a blank page after the selection	선택 항목 뒤에 빈 페이지 삽입
+	Insert pages from a file…	파일에서 페이지 삽입…
+	Extract pages to a new document	새 문서로 페이지 추출
+	Split into files…	파일로 분할…
+	Select pages	페이지 선택
+	Cut	잘라내기
+	Copy	복사
+	Paste after	뒤에 붙여넣기
+	Rename	이름 바꾸기
+	Set to current page ({n})	현재 페이지({n})로 설정
+	Move up	위로 이동
+	Move down	아래로 이동
+	Indent	들여쓰기
+	Outdent	내어쓰기
+	This document has no form fields.	이 문서에는 양식 필드가 없습니다.
+	Tab order: move a field with its arrows.	탭 순서: 필드의 화살표로 필드를 이동하세요.
+	Unplaced	배치되지 않음
+	Has JavaScript actions (run in M6)	JavaScript 동작 있음(M6에서 실행)
+	Page	페이지
+	None	없음
+	Delete selected fields	선택한 필드 삭제
+	Diagnostic details	진단 세부 정보
+	The operation failed.	작업이 실패했습니다.
+	no such document	해당 문서 없음
+	nothing to undo	실행 취소할 작업 없음
+	nothing to redo	다시 실행할 작업 없음
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	이 문서는 서명되어 있음: 다시 쓰면 서명이 무효화됨(대신 증분 저장 사용)
+	the document is protected by a password	문서가 암호로 보호되어 있음
+	the password is incorrect	암호가 잘못됨
+	the document has no page tree	문서에 페이지 트리가 없음
+	a document must keep at least one page	문서는 페이지를 하나 이상 유지해야 함
+	a bookmark cannot be moved inside itself	책갈피를 자기 자신 안으로 이동할 수 없음
+	the title must not be empty	제목은 비워 둘 수 없음
+	the document has no form fields	문서에 양식 필드가 없음
+	there are no redaction marks to apply	적용할 제거 대상 표시가 없음
+	there are no pages to print	인쇄할 페이지가 없음
+	the document has no tags	문서에 태그가 없음
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	텍스트 인식 모델이 설치되어 있지 않음(PdfCraft를 다시 설치하거나 PDFCRAFT_MODELS를 모델이 있는 폴더로 설정하세요)
+	the image is empty	이미지가 비어 있음
+	this file isn't XFDF, FDF, XML or text form data	이 파일은 XFDF, FDF, XML 또는 텍스트 양식 데이터가 아님
+	nothing in the file matches this document	파일에서 이 문서와 일치하는 항목이 없음
+	This page couldn't be displayed.\n{e}	이 페이지를 표시할 수 없습니다.\n{e}
+	Go to page {p}	페이지 {p}로 이동
+	{s} action	{s} 동작
+	Page {p} of {n}	페이지 {p} / {n}
+	1 page selected	페이지 1개 선택됨
+	{n} pages selected	페이지 {n}개 선택됨
+	{name} — unsaved changes	{name} — 저장되지 않은 변경 내용
+	{kind} field	{kind} 필드
+	Select a file for the stamp	스탬프로 사용할 파일을 선택하세요
+	JavaScript, e.g. getField("total").value	JavaScript, 예: getField("total").value
+	Font: Helvetica	글꼴: Helvetica
+	e.g. en-US	예: en-US
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	렌더링: hayro(부트스트랩) · UI: egui · 아이콘: Lucide(ISC) · 글꼴: Inter, JetBrains Mono, Dancing Script(OFL)
+	CheckBox	확인란
+	Radio	라디오 단추
+	PushButton	누름 단추
+	Combo	드롭다운
+	List	목록
+	Unknown	알 수 없음
+	The document has no XMP metadata	문서에 XMP 메타데이터가 없습니다
+	The title in the metadata and the document information differ	메타데이터의 제목과 문서 정보가 서로 다릅니다
+	The document is encrypted	문서가 암호화되어 있습니다
+	Device colour is used, but there is no PDF/A output intent	장치 색상이 사용되지만 PDF/A 출력 의도가 없습니다
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	DeviceCMYK가 사용됩니다: CMYK 출력 의도가 필요합니다(자동으로 추가되지 않음)
+	The document has additional actions (/AA)	문서에 추가 동작(/AA)이 있습니다
+	The document has document-level JavaScript	문서에 문서 수준 JavaScript가 있습니다
+	The form asks viewers to make appearances (NeedAppearances)	양식이 뷰어에게 필드 모양 생성을 요청합니다(NeedAppearances)
+	A form field has additional actions	양식 필드에 추가 동작이 있습니다
+	A stream uses LZW compression	스트림이 LZW 압축을 사용합니다
+	A stream refers to an external file	스트림이 외부 파일을 참조합니다
+	An image asks to be interpolated	이미지가 보간을 요청합니다
+	An image has alternates or OPI information	이미지에 대체 항목 또는 OPI 정보가 있습니다
+	PostScript XObjects aren't allowed	PostScript XObject는 허용되지 않습니다
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	포함된 파일 자체도 PDF/A 파일이어야 합니다(다른 파일에는 PDF/A-3 사용)
+	An embedded file has no AFRelationship	포함된 파일에 AFRelationship이 없습니다
+	Select Icon	아이콘 선택
+	Choose images	이미지 선택
+	{dpi} pixels/inch	인치당 {dpi}픽셀
+	Type your {what}.	{what}을(를) 입력하세요.
+	Draw your {what} below.	아래에 {what}을(를) 그리세요.
+	Your name	이름
+	Images and text (converted to PDF)	이미지 및 텍스트(PDF로 변환)
+	Images and text	이미지 및 텍스트
+	Check Box Style:	확인란 스타일:
+	Button Style:	단추 스타일:
+	Check	체크 표시
+	Circle	원
+	Diamond	마름모
+	Square	사각형
+	Star	별
+	{month} {y}	{month} {y}
+	Change {key}	{key} 변경
+	Insert pages from {name}	{name}에서 페이지 삽입
+	Insert pages from {name} — 1 field renamed	{name}에서 페이지 삽입 — 필드 1개 이름 변경됨
+	Insert pages from {name} — fields renamed	{name}에서 페이지 삽입 — 필드 이름 변경됨
+	Fill in {name}	{name} 채우기
+	Set the image of {name}	{name}의 이미지 설정
+	Edit script of {name}	{name}의 스크립트 편집
+	Import {name}	{name} 가져오기
+	Add bookmark	책갈피 추가
+	Rename bookmark	책갈피 이름 바꾸기
+	Delete bookmark	책갈피 삭제
+	Move bookmark	책갈피 이동
+	Set bookmark destination	책갈피 대상 설정
+	Add stamp	스탬프 추가
+	Delete comment	주석 삭제
+	Edit comment	주석 편집
+	Erase	지우기
+	Lock comment	주석 잠금
+	Unlock comment	주석 잠금 해제
+	Move comment	주석 이동
+	Resize comment	주석 크기 조정
+	Change comment properties	주석 속성 변경
+	Add field	필드 추가
+	Change field properties	필드 속성 변경
+	Delete field	필드 삭제
+	Duplicate field	필드 복제
+	Set tab order	탭 순서 설정
+	Change initial view	초기 보기 변경
+	Set alternate text	대체 텍스트 설정
+	Mark figure as decorative	그림을 장식용으로 표시
+	Run JavaScript	JavaScript 실행
+	Delete document JavaScript	문서 JavaScript 삭제
+	Edit document JavaScript	문서 JavaScript 편집
+	Edit text	텍스트 편집
+	Load document font	문서 글꼴 불러오기
+	Move image	이미지 이동
+	Rotate image	이미지 회전
+	Flip image	이미지 뒤집기
+	Delete image	이미지 삭제
+	Add header & footer	머리글 및 바닥글 추가
+	Update header & footer	머리글 및 바닥글 업데이트
+	Update watermark	워터마크 업데이트
+	Add background	배경 추가
+	Update background	배경 업데이트
+	Add image	이미지 추가
+	Edit content	콘텐츠 편집
+	Delete content	콘텐츠 삭제
+	Remove redaction marks	제거 대상 표시 삭제
+	Add link	링크 추가
+	Change link properties	링크 속성 변경
+	Delete link	링크 삭제
+	Create link	링크 만들기
+	Flatten	평탄화
+	Add sticky note	스티커 메모 추가
+	Add highlight	형광펜 추가
+	Add underline	밑줄 추가
+	Add strikethrough	취소선 추가
+	Add squiggly underline	물결 밑줄 추가
+	Add rectangle	사각형 추가
+	Add oval	타원 추가
+	Add arrow	화살표 추가
+	Add line	선 추가
+	Add drawing	그리기 추가
+	Add text box	텍스트 상자 추가
+	Add checkmark	체크 표시 추가
+	Add cross	X 표시 추가
+	Add dot	점 추가
+	Add signature	서명 추가
+	Add redaction mark	제거 대상 표시 추가
+	Add cloud	구름 추가
+	Add polygon	다각형 추가
+	Add connected lines	연결선 추가
+	Add callout	설명선 추가
+	Add inserted text	삽입 텍스트 추가
+	Add file attachment	파일 첨부 추가
+	Set status Accepted	상태를 수락됨으로 설정
+	Set status Rejected	상태를 거부됨으로 설정
+	Set status Cancelled	상태를 취소됨으로 설정
+	Set status Completed	상태를 완료로 설정
+	Set status None	상태를 없음으로 설정
+	Set status Unmarked	상태를 표시 안 함으로 설정
+	Save as PDF/A-1b	PDF/A-1b로 저장
+	Save as PDF/A-2b	PDF/A-2b로 저장
+	Save as PDF/A-3b	PDF/A-3b로 저장
+	Fill & Sign: change signature	채우기 및 서명: 서명 변경
+	Fill & Sign: change initials	채우기 및 서명: 이니셜 변경
+	Fill & Sign: remove saved signature	채우기 및 서명: 저장된 서명 제거
+	Fill & Sign: remove saved initials	채우기 및 서명: 저장된 이니셜 제거
+	Change signature	서명 변경
+	Change initials	이니셜 변경
+	Measure distance	거리 측정
+	Measure perimeter	둘레 측정
+	Measure area	면적 측정
+	Set measurement scale	측정 축척 설정
+	Measurement information	측정 정보
+	Measurement snapping	측정 스냅
+	Export measurements as CSV	측정값을 CSV로 내보내기
+	Distance	거리
+	Perimeter	둘레
+	Area	면적
+	Drawing scale	도면 축척
+	Snapping	스냅
+	Export measurements	측정값 내보내기
+	Open a PDF to measure it.	측정할 PDF를 여세요.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	꼭짓점을 클릭하세요. Enter 키 또는 두 번 클릭으로 둘레나 면적을 마칩니다. 첫 번째 점을 클릭하면 영역이 닫힙니다.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift 키를 누르면 45도 각도로 제한됩니다. Backspace 키는 꼭짓점을 지웁니다. Esc 키를 누르면 취소됩니다.
+	Angle	각도
+	Click the first point to begin.	시작하려면 첫 번째 점을 클릭하세요.
+	Snap to drawing	도면에 스냅
+	Endpoints	끝점
+	Midpoints	중점
+	Intersections	교차점
+	Paths	경로
+	Sensitivity	민감도
+	Unit	단위
+	Decimals	소수 자릿수
+	Calibrate from two points	두 점으로 보정
+	Entire page	전체 페이지
+	Viewport rectangle in page points (x, y, width, height)	페이지 포인트 단위의 뷰포트 사각형(x, y, 너비, 높이)
+	Viewport	뷰포트
+	Apply scale	축척 적용
+	Saved measurements	저장된 측정값
+	Saved measurements.	측정값이 저장되었습니다.
+	Endpoint	끝점
+	Midpoint	중점
+	Intersection	교차점
+	Path	경로
+	This drawing exceeds the snapping limit; only the first paths are used.	이 도면은 스냅 한도를 초과하여 처음 경로만 사용됩니다.
+	Some page content couldn't be read; snapping uses the rest.	일부 페이지 콘텐츠를 읽을 수 없어서 스냅은 나머지를 사용합니다.
+	Unsupported measurements	지원되지 않는 측정값
+	Label	레이블
+	{n} measurements use an unsupported format and are left out.	측정값 {n}개가 지원되지 않는 형식을 사용하여 제외됩니다.
+	This area has too many overlapping paths; intersection snapping is limited.	이 영역에는 겹치는 경로가 너무 많아 교차점 스냅이 제한됩니다.
+	This measurement needs at least {n} points.	이 측정에는 {n}개 이상의 점이 필요합니다.
+	Change {what}	{what} 변경
+	Cut and stack	재단 및 쌓기
+	Default workspace mode	기본 작업 영역 모드
+	Documents and view	문서 및 보기
+	Open email app	이메일 앱 열기
+	Open link	링크 열기
+	Open this web page?	이 웹 페이지를 여시겠습니까?
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	스크립트는 파일이나 네트워크에 접근할 수 없는 샌드박스에서 실행됩니다. 웹 페이지를 열려는 스크립트는 먼저 사용자의 허가를 받아야 합니다. JavaScript가 꺼져 있어도 Acrobat의 표준 형식, 유효성 검사 및 계산 함수는 계속 작동합니다.
+	Sign yourself	직접 서명
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	PDF를 열 때 사용됩니다. 명시적으로 지정한 시작 또는 제어 모드가 세션 동안 우선 적용됩니다.
+	Write this email?	이 이메일을 작성하시겠습니까?
+	{who} in this document wants to open this address in your browser:	이 문서의 {who}이(가) 브라우저에서 이 주소를 열려고 합니다:
+	{who} in this document wants to open your email app with this address:	이 문서의 {who}이(가) 이 주소로 이메일 앱을 열려고 합니다:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	이 웹 주소에는 서로 다른 문자 체계의 글자가 섞여 있습니다. 다른 사이트 이름을 가장하는 흔한 수법입니다.
+	This web address uses letters from another alphabet, which can look like familiar ones.	이 웹 주소는 다른 문자 체계의 글자를 사용하며 익숙한 글자처럼 보일 수 있습니다.
+	Create PDF from images	이미지로 PDF 만들기
+	Selected image files: {count}	선택한 이미지 파일: {count}개
+	Use image resolution	이미지 해상도 사용
+	Use each image's embedded DPI; use 72 DPI when it is absent.	각 이미지에 포함된 DPI를 사용합니다. 없을 때는 72 DPI를 사용합니다.
+	Use 72 DPI (one point per pixel)	72 DPI 사용(픽셀당 1포인트)
+	Use custom DPI	사용자 지정 DPI 사용
+	DPI sets the printed page size without resampling the image.	DPI는 이미지를 다시 샘플링하지 않고 인쇄되는 페이지 크기를 정합니다.
+	Create	만들기
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	템플릿에 따라 배치된 동적 XFA 양식: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	스크립트 하나가 너무 오래 실행되어 이 양식의 스크립트가 꺼졌습니다. 다시 실행하려면 문서를 다시 여세요.
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 양식: 필드와 XFA 데이터가 동기화되어 다른 뷰어에도 입력한 내용이 표시됩니다.
+	Switch to two-page view first to show the cover page	표지를 표시하려면 먼저 두 페이지 보기로 전환
+	Page display: {layout}	페이지 표시: {layout}
+	Fit to width scrolling	너비에 맞춘 스크롤
+	Fit one full page	한 페이지 전체 맞춤
+	Default page display	기본 페이지 표시
+	Default zoom	기본 확대/축소
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF가 레이아웃이나 확대/축소를 지정하지 않을 때 사용됩니다. 연속 스크롤에서는 페이지 사이에 스냅되지 않습니다.
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG 또는 JPEG 이미지를 선택하세요(최대 4 MiB). 투명도는 유지됩니다.
+	Couldn't import the signature image: {e}	서명 이미지를 가져올 수 없습니다: {e}
+@plural	{n} page|{n} pages	{n}페이지
+@plural	{n} field|{n} fields	필드 {n}개
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	필드 이름 {n}개가 앞선 파일과 충돌하여 이름이 바뀝니다: {list}
+	Create PDF from multiple files…	여러 파일로 PDF 만들기…
+	Create separate PDFs…	개별 PDF 만들기…
+	Optimizing… removing user data	최적화 중… 사용자 데이터 제거
+	Optimizing… image {d} of {t}	최적화 중… 이미지 {t}개 중 {d}개
+	Optimizing… cleaning up	최적화 중… 정리 중
+	Optimizing… merging identical objects	최적화 중… 동일한 개체 병합 중
+	Optimizing… writing the copy	최적화 중… 사본 작성 중
+	Cancelling…	취소하는 중…
+	Created a PDF from {n} files	파일 {n}개로 PDF를 만들었습니다
+	PDF, images and text	PDF, 이미지 및 텍스트
+	Insert a file before page {label}	{label} 페이지 앞에 파일 삽입
+	Insert a file at the end	끝에 파일 삽입
+	Save pages	페이지 저장
+	Save these pages as one PDF	이 페이지를 PDF 한 개로 저장
+	No changes to save	저장할 변경 내용이 없습니다
+	Created a PDF from {n} files; left out: {names}	파일 {n}개로 PDF를 만들었습니다. 제외: {names}
+	Created a PDF from the first {n} files	처음 {n}개 파일로 PDF를 만들었습니다
+	Go to page…	페이지로 이동…
+	Optimization is already running	최적화가 이미 실행 중입니다
+	Optimization cancelled	최적화가 취소되었습니다
+	Couldn't optimize the file	파일을 최적화할 수 없습니다
+	Files are combined in this order. Leave Pages empty to take every page.	파일은 이 순서대로 결합됩니다. 모든 페이지를 사용하려면 페이지를 비워 두세요.
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	휴대용 모드가 꺼져 있습니다: {folder}에 쓸 수 없습니다({error}). 대신 사용자 폴더에 설정이 보관됩니다.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft가 그래픽 프로세서 없이 그리고 있어 느릴 수 있습니다. 그래픽 드라이버를 업데이트하면 도움이 될 수 있습니다.
+	Show	표시
+	Sort	정렬
+	Reverse the order	순서 반전
+	Grab bag	기타
+	Table	표
+	Username	사용자 이름
+	Display name	표시 이름
+	Real name	실명
+	Name (A–Z)	이름 (A–Z)
+	Merged PRs	병합된 PR
+	PRs	PR
+	Commits	커밋
+	Lines added	추가된 줄
+	+LOC	+LOC
+	Lines deleted	삭제된 줄
+	−LOC	−LOC
+	Line delta	줄 증감
+	ΔLOC	ΔLOC
+	Binary assets added	추가된 바이너리 자산
+	+Bin	+Bin
+	Binary assets removed	제거된 바이너리 자산
+	−Bin	−Bin
+	First commit	첫 커밋
+	First	처음
+	Last commit	마지막 커밋
+	Last	마지막
+	No contributor data was built into this copy.	이 사본에는 기여자 데이터가 포함되어 있지 않습니다.
+	No model credits were built into this copy.	이 사본에는 모델 크레딧이 포함되어 있지 않습니다.
+	{n} contributors · {c} commits	기여자 {n}명 · 커밋 {c}개
+	Company	회사
+	Model	모델
+	% of all commits	전체 커밋의 %
+	Lines +/−	줄 +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: PR {prs}개, 커밋 {commits}개, 줄 +{added} / −{deleted} (Δ {delta}), 바이너리 자산 +{bin_added} / −{bin_deleted}, {first} – {last}
+	None of those files can be made into a PDF; use PDFs, images or .txt files	이 파일들은 어느 것도 PDF로 만들 수 없습니다. PDF, 이미지 또는 .txt 파일을 사용하세요
+	About	정보
+	Contributors	기여자
+	Models	모델
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	이 문서를 신뢰하는 경우에만 계속하세요. 주소에는 양식에 입력한 내용처럼 문서의 정보가 담길 수 있습니다.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	단면으로 인쇄하세요. 용지 순서를 유지하고 표시선에서 자른 다음, 더미를 왼쪽에서 오른쪽으로, 위에서 아래로 쌓으세요.
+comment menu	Edit	편집
+	Undo {action}	{action} 실행 취소
+	Redo {action}	{action} 다시 실행
+signature pad	Type	입력
+action wizard	Start	시작
+calendar date	January	1월
+calendar date	February	2월
+calendar date	March	3월
+calendar date	April	4월
+calendar date	May	5월
+calendar date	June	6월
+calendar date	July	7월
+calendar date	August	8월
+calendar date	September	9월
+calendar date	October	10월
+calendar date	November	11월
+calendar date	December	12월
+	Reopen the files that were open when PdfCraft last closed	PdfCraft를 마지막으로 닫을 때 열려 있던 파일 다시 열기
+	Clear Recent Files	최근 파일 목록 지우기
+	Remove from Recent	최근 항목에서 제거
+	Remove {name} from Recent	최근 항목에서 {name} 제거
+	Inserted text	삽입 텍스트
+	Add {what}	{what} 추가
+	Use {what}	{what} 사용
+	Place saved {what}	저장된 {what} 배치
+	Remove saved {what}	저장된 {what} 제거
+	A link	링크
+	A button	단추
+	A script	스크립트
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	이 문서의 {who}이(가) PdfCraft가 열지 않는 주소를 열려고 했습니다: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	이 문서의 {who}이(가) PdfCraft가 열지 않는 주소를 열려고 했습니다: {e}. 문서에서는 웹(http, https) 및 이메일(mailto) 링크만 열립니다.
+	Another file dialog is still open. Finish with it first.	다른 파일 대화 상자가 아직 열려 있습니다. 먼저 그 대화 상자를 마치세요.
+	Couldn't show the file picker. Please try again.	파일 선택 창을 표시할 수 없습니다. 다시 시도해 주세요.
+	The document changed while you were choosing a file, so nothing was changed.	파일을 선택하는 동안 문서가 변경되어 아무것도 변경되지 않았습니다.
+	The document was closed before it could be saved.	문서가 저장되기 전에 닫혔습니다.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	폴더를 선택하는 동안 문서가 변경되어 페이지가 추출되었지만 삭제되지는 않았습니다.
+	That didn't work: an internal error stopped it ({m}).	실패했습니다: 내부 오류로 중단되었습니다({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	Windows 저장소의 디지털 ID를 나열할 수 없습니다: {e}
+	Align fields	필드 정렬
+	Distribute fields	필드 분배
+	Match field sizes	필드 크기 맞춤
+	Mark for redaction	제거할 영역 표시
+	Mark pages for redaction	페이지 내용 제거 대상으로 표시
+	Change document properties	문서 속성 변경
+	Mark differences	차이점 표시
+	Run form script	양식 스크립트 실행
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	스크립트로 만든 콘텐츠는 키보드와 보조 기술로 사용할 수 있어야 합니다. 문서의 스크립트를 확인하세요.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	표 행은 표 또는 표의 머리글, 본문, 바닥글에 직접 속해야 합니다. 표 태그를 수정하세요.
+	Basic constraints	기본 제약 조건
+	Certificate authority	인증 기관
+	End entity	최종 엔터티
+	SHA-1 digest	SHA-1 다이제스트
+	SHA-256 digest	SHA-256 다이제스트
+	Squiggly	물결선
+	Home / End	Home / End
+	H / Space (hold)	H / 스페이스 (누르고 있기)
+	Rotation:	회전:
+	Line ending	선 끝
+	Open arrow	열린 화살표
+	Closed arrow	닫힌 화살표
+	Butt	직선 끝
+	Reverse open arrow	역방향 열린 화살표
+	Reverse closed arrow	역방향 닫힌 화살표
+	Slash	사선
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 텍스트 글꼴이 “{c}”({code})를 그릴 수 없습니다. 지원되는 텍스트를 선택하세요.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	표준 글꼴이 “{c}”({code})를 그릴 수 없습니다. 현재는 서유럽 문자만 텍스트로 추가할 수 있습니다.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	이 필드의 글꼴은 “{c}”({code})를 그릴 수 없어 PdfCraft가 그 자리에 ?를 표시합니다. 값은 저장되며 다른 PDF 뷰어에서 이를 기준으로 필드를 다시 그립니다.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	PdfCraft가 사용하는 글꼴은 “{c}”({code})를 그릴 수 없어 모든 PDF 뷰어에서 ?로 표시됩니다. 텍스트는 저장됩니다.
+	Larger pages	더 큰 페이지
+	Smaller pages	더 작은 페이지
+	Reset page size	페이지 크기 재설정
+	Flatten Fill & Sign when saving	저장 시 채우기 및 서명 평탄화
+	Text, marks and signatures become part of the page. Other comments stay editable.	텍스트, 표시 및 서명이 페이지의 일부가 됩니다. 다른 주석은 계속 편집할 수 있습니다.
+	Date format	날짜 형식
+	Fill & Sign dates	채우기 및 서명 날짜
+	Pattern	패턴
+	Today: {date}	오늘: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 또는 yy는 연도 · m 또는 mm은 월 · mmm 또는 mmmm은 월 이름 · d 또는 dd는 일 · ddd 또는 dddd는 요일입니다. H, h, M, s, t는 시간 문자이므로 단독으로 사용할 수 없습니다. 문자를 그대로 표시하려면 앞에 {escape}를 붙이세요.
+	Same as interface ({language})	인터페이스와 동일({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars}은(는) 아직 PDF에 쓸 수 없습니다. 채우기 및 서명 텍스트는 서유럽 문자만 지원합니다. dd.mm.yyyy 같은 숫자 형식을 선택하세요.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	프린터 드라이버 기본 설정을 엽니다. 이 설정은 이 컴퓨터에서 인쇄할 때마다 저장되어 사용되며, 여기서 선택한 복사 매수, 양면, 회색조 및 용지도 계속 적용됩니다.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	이번 인쇄의 프린터 드라이버 자체 설정: 용지함, 용지 종류, 마감 처리 등.
+	Couldn't open the printer's preferences: {e}	프린터 기본 설정을 열 수 없습니다: {e}
+	Printer properties	프린터 속성
+	Reset to printer defaults	프린터 기본값으로 재설정
+	This printer offers no settings of its own.	이 프린터에는 자체 설정이 없습니다.
+	Margins	여백
+	For page sizes and margins.	페이지 크기 및 여백에 사용됩니다.
+certificate	Subject	주체
+	Scroll tabs left	탭 왼쪽으로 스크롤
+	Scroll tabs right	탭 오른쪽으로 스크롤
+	Shared Field Properties	공유 필드 속성
+	{n} fields selected	필드 {n}개 선택됨
+	Mixed	혼합
+	Custom font	사용자 지정 글꼴
+	Only checked properties will change. Mixed means the selected fields have different values.	체크한 속성만 변경됩니다. '혼합'은 선택한 필드가 서로 다른 값을 가진다는 뜻입니다.
+	Shift- or Ctrl/Command-click to select several fields.	Shift 키 또는 Ctrl/Command 키를 누른 채 클릭하면 여러 필드를 선택할 수 있습니다.
+	Font size 0 uses automatic sizing.	글꼴 크기 0은 자동 크기 조정을 사용합니다.
+	Character limit:	문자 제한:
+	Character limit 0 means no limit. A comb of characters needs a limit.	문자 제한 0은 제한이 없다는 뜻입니다. 문자 빗살에는 제한이 필요합니다.
+	To change locked fields, also set Locked to No.	잠긴 필드를 변경하려면 잠금도 '아니요'로 설정하세요.
+	Comb of characters	문자 빗살
+	The document changed while you were editing field properties.	필드 속성을 편집하는 동안 문서가 변경되었습니다.
+	The document is no longer open.	문서가 더 이상 열려 있지 않습니다.
+	The field properties dialog is no longer open.	필드 속성 대화 상자가 더 이상 열려 있지 않습니다.
+	The field properties could not be changed.	필드 속성을 변경할 수 없습니다.
+	The selected fields could not be found. Select them again.	선택한 필드를 찾을 수 없습니다. 다시 선택하세요.
+	The field {name} no longer exists.	{name} 필드가 더 이상 존재하지 않습니다.
+	A selected field has no widget on any page, so the fields can't be edited together.	선택한 필드 중 하나가 어느 페이지에도 위젯이 없어 필드를 함께 편집할 수 없습니다.
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n}, {dpi}dpi, 그릴 수 있는 최대 크기)
+@plural	{n} object selected|{n} objects selected	개체 {n}개 선택됨
+	Drag the selection to move it. Esc clears the selection.	선택 영역을 끌어 이동하세요. Esc 키를 누르면 선택이 해제됩니다.
+	Shift-click to select several objects. Drag empty space to select an area.	Shift 키를 누른 채 클릭하면 여러 개체를 선택할 수 있습니다. 빈 곳을 끌면 영역을 선택합니다.
+	Select at most 1000 objects at a time.	한 번에 최대 1000개 개체를 선택하세요.
+	Finish or discard the text being edited before selecting several objects.	여러 개체를 선택하기 전에 편집 중인 텍스트를 완료하거나 취소하세요.
+	Move object	개체 이동
+	Move objects	개체 여러 개 이동
+	Vertical text cannot be moved with this selection.	세로 텍스트는 이 선택 항목과 함께 이동할 수 없습니다.
+	Text used as a clipping path cannot be moved with this selection.	클리핑 경로로 사용되는 텍스트는 이 선택 항목과 함께 이동할 수 없습니다.
+	These objects could not be moved. Select them again and try a smaller move.	이 개체를 이동할 수 없습니다. 다시 선택한 뒤 더 짧은 거리로 옮겨 보세요.
+	This page contains objects that cannot be selected together.	이 페이지에는 함께 선택할 수 없는 개체가 있습니다.
+	Fill colour	채우기 색상
+	No fill	채우기 없음
+	Fill colour: none	채우기 색상: 없음
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	스페이스
+	Grid view	격자 보기
+	List view	목록 보기
+	Files are combined in the order shown. Drag them to change it.	파일은 표시된 순서대로 결합됩니다. 끌어서 순서를 바꾸세요.
+	Preview unavailable: {e}	미리 보기를 사용할 수 없습니다: {e}
+	Pages: {k} of {n}	페이지: {n}개 중 {k}개
+	Check the pages	페이지 확인
+	Switch to List view to change the pages it takes.	가져올 페이지를 바꾸려면 목록 보기로 전환하세요.
+	Expand all	모두 펼치기
+	Collapse all	모두 접기
+	Remove page	페이지 제거
+	Remove {n} pages	페이지 {n}개 제거
+	Reset panel layout	패널 레이아웃 재설정
+	Float panel	패널 띄우기
+	Move to group	그룹으로 이동
+	Panels	패널
+	Resize panels	패널 크기 조정
+	Resize panel window	패널 창 크기 조정
+	PDF page: {size}	PDF 페이지: {size}
+	Match page at 100%	100% 배율로 페이지에 맞춤
+	PDF scale: {scale}%	PDF 배율: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	프린터 용지와 배율이 다를 수 있습니다. 드라이버 설정을 확인하세요.
+	Drawing scale changes. Use Actual size for full-scale plans.	도면 축척이 변경됩니다. 실제 크기 도면에는 '실제 크기'를 사용하세요.
+	Reload documents when their files change on disk	파일이 디스크에서 변경되면 문서 다시 불러오기
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	이 파일이 디스크에서 변경되었습니다. 새 버전을 보려면 다시 불러오세요. 저장하지 않은 변경 내용은 손실됩니다.
+	Reload	다시 불러오기
+	Couldn't reload {name}: {e}	{name}을(를) 다시 불러올 수 없습니다: {e}
+	Select page {label}	{label} 페이지 선택
+	Rotate page {label} counterclockwise	{label} 페이지 반시계 방향으로 회전
+	Rotate page {label} clockwise	{label} 페이지 시계 방향으로 회전
+	Delete page {label}	{label} 페이지 삭제
+	Mouse wheel scroll speed	마우스 휠 스크롤 속도
+scroll speed	Slow	느리게
+scroll speed	Normal	보통
+scroll speed	Fast	빠르게
+	Animation effects	애니메이션 효과
+animation effects	On	켜기
+animation effects	Off	끄기
+	Enhance camera image	카메라 이미지 개선
+	Drag the corners onto the document's edges, then choose Enhance page.	모서리를 문서 가장자리에 끌어 놓은 다음 페이지 개선을 선택하세요.
+	Enhance page	페이지 개선
+	Done adding text	텍스트 추가 완료
+	Discard this text (Esc)	이 텍스트 취소 (Esc)
+	Clean-up	정리
+	Original	원본
+	Greyscale	회색조
+	Black and white	흑백
+	Reading colours	읽기 색상
+	Replace document colours	문서 색상 바꾸기
+	Black on white	흰 바탕에 검은 글자
+	White on black	검은 바탕에 흰 글자
+	Yellow on black	검은 바탕에 노란 글자
+	Green on black	검은 바탕에 초록 글자
+	Page background	페이지 배경
+	Only change the colour of black text or line art	검은색 텍스트 또는 선 그림의 색상만 변경
+	Change the colour of line art as well as text	텍스트뿐 아니라 선 그림의 색상도 변경
+	Colours are remapped while rendering; the document itself never changes.	색상은 렌더링할 때 다시 매핑되며 문서 자체는 절대 변경되지 않습니다.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	이 프린터의 드라이버는 다른 프로그램의 양면 인쇄 설정을 받지 않으므로 자체 설정이 적용됩니다. 변경하려면 속성…
+	Browser's print dialog	브라우저 인쇄 대화 상자
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	복사 매수, 양면 인쇄 및 색상은 브라우저의 인쇄 대화 상자에서 선택합니다.
+	Preparing {n} sheets for printing…	인쇄할 용지 {n}장 준비 중…
+	Preparing sheet {done} of {total} for printing…	인쇄할 용지 {total}장 중 {done}장 준비 중…
+	Opening the browser's print dialog…	브라우저의 인쇄 대화 상자를 여는 중…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	브라우저에서 인쇄할 수 없습니다({e}). 대신 인쇄용으로 {name}을(를) 내려받았습니다
+	Tools panel side	도구 패널 위치
+	Add comment	주석 추가
+	Change tag properties	태그 속성 변경
+	Tags panel	태그 패널
+	Tags	태그
+	Tag type	태그 유형
+	Actual text	실제 텍스트
+	Find a tag	태그 찾기
+	Collapse tag	태그 접기
+	Expand tag	태그 펼치기
+	Revert changes	변경 내용 되돌리기
+	Save tag properties	태그 속성 저장
+	This document has no editable structure tags.	이 문서에는 편집 가능한 구조 태그가 없습니다.
+	{n} tags	태그 {n}개
+	Save or revert changes before selecting another tag.	다른 태그를 선택하기 전에 변경 내용을 저장하거나 되돌리세요.
+	Left out: {names}	제외: {names}
+	already a PDF	이미 PDF임
+	no unused output name	사용 가능한 출력 파일 이름 없음
+	no output folder was chosen	출력 폴더가 선택되지 않음
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	PDF {n}개 내려받음
+	Scan	스캔
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	흰 종이에 서명한 뒤 밝고 고른 조명에서 사진을 찍으세요(플래시 사용). 사진을 선택하거나 여기로 끌어다 놓으세요. PdfCraft가 서명을 찾아 종이를 제거합니다.
+	Choose photo…	사진 선택…
+	No photo chosen	사진이 선택되지 않았습니다
+	Photo	사진
+	Ink sensitivity	잉크 민감도
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	프레임 안에서 서명을 찾지 못했습니다. 프레임을 서명 위로 옮기거나 잉크 민감도를 높이세요.
+	Couldn't use the photo: {e}	사진을 사용할 수 없습니다: {e}
+	Close Tab	탭 닫기
+	Reopen Closed Tab	닫은 탭 다시 열기
+	Reveal in Finder	Finder에서 보기
+	Reveal in File Explorer	파일 탐색기에서 보기
+	Other colour…	다른 색상…
+	Recent colours	최근 사용한 색상
+	Couldn't follow linked PDF: {reason}	연결된 PDF를 열 수 없습니다: {reason}
+	The linked PDF opened, but its named destination was not applied.	연결된 PDF가 열렸지만 이름이 지정된 대상이 적용되지 않았습니다.
+	The linked PDF opened, but its page destination was out of range.	연결된 PDF가 열렸지만 페이지 대상이 범위를 벗어났습니다.
+	Local cross-PDF links require the desktop app	PDF 간 로컬 링크에는 데스크톱 앱이 필요합니다
+	Paste	붙여넣기
+	Select all	모두 선택
+	Next	다음
+	Previous	이전
+	Choose…	선택…
+	Refresh	새로 고침
+	Loading…	불러오는 중…
+	Save changes?	변경 내용을 저장할까요?
+	Page {n}	{n}페이지
+	of	/
+	Comment	주석
+	Font	글꼴
+	Color	색상
+	Theme	테마
+	System	시스템
+	Save file	파일 저장
+	Import	가져오기
+	Help…	도움말…
+	Automatically	자동
+	Never	안 함
+	Always	항상
+	On	켜짐
+	Enabled	사용
+	Disabled	사용 안 함
+	Error	오류
+	Warning	경고
+	Information	정보
+	Success	성공
+	Folder	폴더
+	Choose a file…	파일 선택…
+	Choose a folder…	폴더 선택…
+	Open folder	폴더 열기
+	Create folder	폴더 만들기
+	Duplicate	복제
+	Move	이동
+	Copy to clipboard	클립보드에 복사
+	Copied to clipboard	클립보드에 복사됨
+	Organize	구성
+	Comment and review	주석 및 검토
+	Search results	검색 결과
+	No results	결과 없음
+	Page {n} of {total}	{n}/{total}페이지
+	Tools	도구
+	Inspector	검사기
+	 on page {label}	 {label}페이지
+	A font isn't embedded	글꼴이 포함되어 있지 않습니다
+	A {} action isn't allowed	{} 동작은 허용되지 않습니다
+	A {} annotation has additional actions	{} 주석에 추가 동작이 있습니다
+	A {} annotation has no appearance stream	{} 주석에 모양 스트림이 없습니다
+	A {} annotation isn't set to print, or is hidden	{} 주석이 인쇄되지 않도록 설정되었거나 숨겨져 있습니다
+	Accessibility Report	접근성 보고서
+	Add the PDFs to combine	결합할 PDF를 추가하세요
+	Added the first {n} PDFs in {folder}	{folder}의 처음 {n}개 PDF를 추가했습니다
+	CRL Signing	CRL 서명
+	Certificate Signing	인증서 서명
+	Change Author	작성자 변경
+	Change Keywords	키워드 변경
+	Change Subject	주제 변경
+	Change Title	제목 변경
+	Choose a digital ID.	디지털 ID를 선택하세요.
+	Create links	링크 만들기
+	Creator	작성 프로그램
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	잘라서 쌓기는 양면 인쇄를 꺼야 합니다. 단면 용지로 인쇄하세요.
+	Data Encipherment	데이터 암호화
+	Decipher Only	복호화만
+	Detailed Report	상세 보고서
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	DeviceCMYK를 사용하지만 PDF/A 출력 인텐트가 CMYK 프로필이 아닙니다
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	DeviceRGB를 사용하지만 PDF/A 출력 인텐트가 RGB 프로필이 아닙니다
+	Digital Signature	디지털 서명
+	Document properties (⌘D)	문서 속성 (⌘D)
+	Drop PDFs or folders here, or choose them.	PDF 또는 폴더를 여기에 놓거나 직접 선택하세요.
+	Encipher Only	암호화만
+	English	영어
+	Enter a URL	URL을 입력하세요
+	Enter a name.	이름을 입력하세요.
+	Enter a page number	페이지 번호를 입력하세요
+	Enter the field names	필드 이름을 입력하세요
+	Every PDF in the folder	폴더의 모든 PDF
+	Every PDF in the folder and the folders inside it	폴더와 그 안의 폴더에 있는 모든 PDF
+	Field "{}" on page {p} has no description (tooltip)	{p}페이지의 필드 "{}"에 설명(도구 설명)이 없습니다
+	Filename	파일 이름
+	Flatten Fill & Sign	채우기 및 서명 평탄화
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	{p}페이지의 글꼴(이름 없음)이 문자를 유니코드에 매핑하지 않습니다
+	Font {} on page {p} doesn't map its characters to Unicode	{p}페이지의 글꼴 {}이(가) 문자를 유니코드에 매핑하지 않습니다
+	Form field on page {p} isn't tagged	{p}페이지의 양식 필드에 태그가 없습니다
+	H{n} follows an H{d}; headings should not skip levels	H{n}이(가) H{d} 뒤에 옵니다. 제목 수준을 건너뛰면 안 됩니다
+	Key Agreement	키 합의
+	Key Encipherment	키 암호화
+	New bookmark (⌘B)	새 책갈피 (⌘B)
+	Next (⌘G)	다음 (⌘G)
+	No PDFs found in {folder}	{folder}에서 PDF를 찾을 수 없습니다
+	No document language is set	문서 언어가 설정되지 않았습니다
+	No page has text: the document appears to be images of pages	텍스트가 있는 페이지가 없습니다. 문서가 페이지 이미지로 보입니다
+	Non-Repudiation	부인 방지
+	Only the document's owner can change its security (open it with the permissions password)	문서 소유자만 보안을 변경할 수 있습니다(권한 암호로 여세요)
+	Open a PDF (⌘O)	PDF 열기 (⌘O)
+	Page {p} doesn't tab in structure order	{p}페이지가 구조 순서대로 탭 이동되지 않습니다
+	Page {p}: {n} untagged content item	{p}페이지: 태그 없는 콘텐츠 항목 {n}개
+	Page {p}: {n} untagged content items	{p}페이지: 태그 없는 콘텐츠 항목 {n}개
+	Page {} has additional actions	{}페이지에 추가 동작이 있습니다
+	Panel layout could not be restored: {error}	패널 레이아웃을 복원할 수 없습니다: {error}
+	Panel move was not applied: {error}	패널 이동이 적용되지 않았습니다: {error}
+	PdfCraft can't check this signature yet: {}.	PdfCraft에서 아직 이 서명을 확인할 수 없습니다: {}.
+	Previous (⇧⌘G)	이전 (⇧⌘G)
+	Print (⌘P)	인쇄 (⌘P)
+	Producer	변환 프로그램
+	Rendering…	렌더링 중…
+	Report created	보고서가 만들어졌습니다
+	Rev. {rev}: Certified by an unknown signer	개정 {rev}: 알 수 없는 서명자가 인증함
+	Rev. {rev}: Certified by {name}	개정 {rev}: {name}이(가) 인증함
+	Rev. {rev}: Signed by an unknown signer	개정 {rev}: 알 수 없는 서명자가 서명함
+	Rev. {rev}: Signed by {name}	개정 {rev}: {name}이(가) 서명함
+	Rotate view clockwise (⇧⌘+)	보기를 시계 방향으로 회전 (⇧⌘+)
+	Rule Name	규칙 이름
+	Save (M4)	저장 (M4)
+	Save as {level}	{level}(으)로 저장
+	Signature is invalid	서명이 유효하지 않습니다
+	Signature is valid	서명이 유효합니다
+	Signature validity is unknown	서명의 유효성을 알 수 없습니다
+	Signing time is from the clock on the signer's computer.	서명 시간은 서명자 컴퓨터의 시계를 따른 것입니다.
+	Still rendering — this page is unusually complex…	아직 렌더링 중입니다. 이 페이지는 이례적으로 복잡합니다…
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	ECDSA 서명이 표준 DER 형식이 아닙니다(후행 바이트, 패딩 또는 부호 바이트 누락). 그래도 읽었습니다.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	ECDSA 서명이 DER 시퀀스가 아니라 원시 r 및 s 값입니다. 그래도 읽었습니다.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	RSA 서명 값의 길이가 키 모듈러스의 길이와 다릅니다(앞쪽 0 바이트가 제거되었거나 추가됨). 그래도 읽었습니다.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	RSA 서명의 DigestInfo에 NULL 매개변수가 없습니다(오래된 서명자는 이렇게 기록합니다). 그래도 읽었습니다.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	{}의 인증서는 그 아래에 이만큼의 CA 인증서를 허용하지 않으므로(경로 길이) {}을(를) 보증하는 데 사용되지 않습니다.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	{}의 인증서는 인증서를 발급할 수 있는 CA 인증서가 아니므로 {}을(를) 보증하는 데 사용되지 않습니다.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	{}의 인증서는 서명 당시 유효하지 않았으므로 {}을(를) 보증하는 데 사용되지 않습니다.
+	The checker found problems which may prevent the document from being fully accessible.	검사에서 문서를 완전히 접근 가능하게 만드는 데 방해가 될 수 있는 문제가 발견되었습니다.
+	The document has been altered or corrupted since the signature was applied.	서명이 적용된 이후 문서가 변경되었거나 손상되었습니다.
+	The document has been altered or corrupted since the timestamp was applied.	타임스탬프가 적용된 이후 문서가 변경되었거나 손상되었습니다.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	이 서명이 적용된 이후 허용되지 않는 방식으로 문서가 변경되었습니다({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	이 타임스탬프가 적용된 이후 허용되지 않는 방식으로 문서가 변경되었습니다({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	이 서명이 적용된 이후 문서가 수정되었지만 변경 내용은 허용됩니다({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	이 타임스탬프가 적용된 이후 문서가 수정되었지만 변경 내용은 허용됩니다({}).
+	The document has no tags (structure tree)	문서에 태그(구조 트리)가 없습니다
+	The document has no title	문서에 제목이 없습니다
+	The document isn't marked as tagged (MarkInfo Marked)	문서가 태그된 문서로 표시되어 있지 않습니다(MarkInfo Marked)
+	The document isn't tagged, so none of its content is	문서가 태그되어 있지 않으므로 콘텐츠도 태그되어 있지 않습니다
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	문서에 포함된 해지 정보에 따르면 서명자의 인증서는 해지되지 않았습니다.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	포함된 타임스탬프 토큰이 유효하며 해당 기관을 신뢰할 수 있습니다. 신뢰할 수 있는 시간은 {}입니다.
+	The font {} isn't embedded	글꼴 {}이(가) 포함되어 있지 않습니다
+	The metadata doesn't identify the file as {}	메타데이터가 파일을 {}(으)로 식별하지 않습니다
+	The password is incorrect.	암호가 올바르지 않습니다.
+	The password must have at least 6 characters.	암호는 6자 이상이어야 합니다.
+	The passwords do not match.	암호가 일치하지 않습니다.
+	The security settings don't allow screen readers to read the text	보안 설정에서 화면 낭독기가 텍스트를 읽는 것을 허용하지 않습니다
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	서명 알고리즘과 SignerInfo의 다이제스트 알고리즘이 서로 다른 해시를 가리킵니다. 서명은 SignerInfo의 해시로 만들어졌습니다.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	서명에 확인되지 않은 타임스탬프({})가 있습니다. 타임스탬프 기관이 신뢰할 수 있는 인증서 목록에 없으므로 서명자가 주장하는 서명 시간을 대신 사용합니다.
+	The signature contents are not hexadecimal.	서명 내용이 16진수가 아닙니다.
+	The signature could not be checked ({}).	서명을 검사할 수 없습니다({}).
+	The signature could not be read ({}).	서명을 읽을 수 없습니다({}).
+	The signature could not be verified ({}).	서명을 확인할 수 없습니다({}).
+	The signature has no valid byte range.	서명에 유효한 바이트 범위가 없습니다.
+	The signature includes an embedded timestamp.	서명에 포함된 타임스탬프가 있습니다.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	서명이 DER이 아니라 BER로 인코딩되어 있습니다(길이 미정). 관대하게 읽었습니다.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	서명이 레거시 adbe.x509.rsa_sha1 형식을 사용합니다.
+	The signature value does not match the signer's certificate: the signature is corrupt.	서명 값이 서명자의 인증서와 일치하지 않습니다. 서명이 손상되었습니다.
+	The signature's byte range does not exclude exactly its contents.	서명의 바이트 범위가 서명 내용만 정확히 제외하지 않습니다.
+	The signature's byte range does not match the file.	서명의 바이트 범위가 파일과 일치하지 않습니다.
+	The signature's timestamp token could not be verified ({}).	서명의 타임스탬프 토큰을 확인할 수 없습니다({}).
+	The signature's timestamp token does not cover the signature value.	서명의 타임스탬프 토큰이 서명 값을 포함하지 않습니다.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	서명된 콘텐츠가 BER에서 허용하는 구성된(분할된) OCTET STRING입니다. 그래도 읽었습니다.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	서명자의 인증서가 디지털 서명을 허용하지 않습니다(키 용도에 디지털 서명도 부인 방지도 없음).
+	The signer's certificate has been revoked ({}).	서명자의 인증서가 해지되었습니다({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	서명자의 인증서에 PdfCraft가 인식하지 못하는 중요 확장이 있습니다({}).
+	The signer's certificate is not in the signature.	서명자의 인증서가 서명에 없습니다.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	서명자의 인증서가 문서 서명용으로 발급되지 않았습니다(확장 키 용도에 문서 서명 목적이 없음).
+	The signer's certificate was not valid at the time of signing.	서명자의 인증서는 서명 당시 유효하지 않았습니다.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	서명자의 신원은 신뢰할 수 있는 인증서 목록에 포함되어 있지 않고 상위 인증서도 신뢰할 수 있는 인증서가 아니므로 알 수 없습니다.
+	The signer's identity is valid.	서명자의 신원이 유효합니다.
+	The timestamp authority's certificate was not valid at the time of timestamping.	타임스탬프 기관의 인증서는 타임스탬프 시점에 유효하지 않았습니다.
+	The timestamp contents are not hexadecimal.	타임스탬프 내용이 16진수가 아닙니다.
+	The timestamp has no valid byte range.	타임스탬프에 유효한 바이트 범위가 없습니다.
+	The timestamp token could not be read ({}).	타임스탬프 토큰을 읽을 수 없습니다({}).
+	The timestamp token is valid and its authority is trusted.	타임스탬프 토큰이 유효하며 해당 기관을 신뢰할 수 있습니다.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	타임스탬프 토큰은 유효하지만 타임스탬프 기관이 신뢰할 수 있는 인증서 목록에 없습니다.
+	The timestamp's byte range does not exclude exactly its contents.	타임스탬프의 바이트 범위가 타임스탬프 내용만 정확히 제외하지 않습니다.
+	The timestamp's byte range does not match the file.	타임스탬프의 바이트 범위가 파일과 일치하지 않습니다.
+	The window shows the file name, not the title (Initial View > Show)	창에 제목이 아니라 파일 이름이 표시됩니다(초기 보기 > 표시)
+	There is no folder to save the digital ID in.	디지털 ID를 저장할 폴더가 없습니다.
+	This document has not been modified since this signature was applied.	이 서명이 적용된 이후 이 문서는 수정되지 않았습니다.
+	This document has not been modified since this timestamp was applied.	이 타임스탬프가 적용된 이후 이 문서는 수정되지 않았습니다.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	이 서명은 서명용으로 더 이상 권장되지 않는 레거시 160비트 해시 알고리즘인 RIPEMD-160을 사용합니다. 여전히 검증되지만 의존해서는 안 됩니다.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	이 서명은 약한 해시 알고리즘인 SHA-1을 사용합니다. 충돌이 실제로 입증되었습니다. 오래전에 서명된 많은 문서가 사용하므로 여전히 검증되지만 의존해서는 안 됩니다.
+	Unsigned signature field	서명되지 않은 서명 필드
+	Unsigned signature field: {name}	서명되지 않은 서명 필드: {name}
+	Zoom in (⌘+)	확대 (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	확대/축소 (핀치 또는 ⌘-스크롤도 가능)
+	Zoom out (⌘−)	축소 (⌘−)
+	alternate text hides an annotation inside it	대체 텍스트가 그 안의 주석을 가립니다
+	alternate text on an element with no page content	페이지 콘텐츠가 없는 요소의 대체 텍스트
+	comments	주석
+	document security store	문서 보안 저장소
+	document structure	문서 구조
+	form fill	양식 채우기
+	its alternate text is inside another element's and will never be read	대체 텍스트가 다른 요소의 대체 텍스트 안에 있어 읽히지 않습니다
+	links	링크
+	metadata	메타데이터
+	no alternate text	대체 텍스트 없음
+	no header cells (TH)	헤더 셀(TH) 없음
+	no summary	요약 없음
+	not in a TR	TR 안에 없음
+	not in a Table, THead, TBody or TFoot	Table, THead, TBody 또는 TFoot 안에 없음
+	not in an L (list)	L(목록) 안에 없음
+	not in an LI (list item)	LI(목록 항목) 안에 없음
+	other changes	기타 변경
+	page content	페이지 콘텐츠
+	page {n} is out of range (1–{count})	{n}페이지가 범위를 벗어났습니다(1–{count})
+	pages added or removed	추가되거나 삭제된 페이지
+	rows have between {min} and {max} columns	행의 열 수가 {min}~{max}개입니다
+	the first heading is an H{n}; headings should not skip levels	첫 제목이 H{n}입니다. 제목 수준을 건너뛰면 안 됩니다
+	the signed version could not be read	서명된 버전을 읽을 수 없습니다
+	{n} pages and no bookmarks	{n}페이지, 책갈피 없음
+	{page} is not a page number or label	{page}은(는) 페이지 번호나 레이블이 아닙니다
+	{ty} element on page {p}: {what}	{p}페이지의 {ty} 요소: {what}
+	{ty} element: {what}	{ty} 요소: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, 알 수 없는 발급자가 발급한 인증서입니다.
+	{who}, certificate issued by {issuer}.	{who}, {issuer}이(가) 발급한 인증서입니다.
+	{} annotation on page {p} isn't tagged	{p}페이지의 {} 주석에 태그가 없습니다
+	{} annotations aren't allowed	{} 주석은 허용되지 않습니다
+	… and {n} more	… 외 {n}개
+@plural	Delete {n} field|Delete {n} fields	필드 {n}개 삭제
+@plural	{n} byte|{n} bytes	{n}바이트
+@plural	{n} image optimized|{n} images optimized	이미지 {n}개 최적화됨
+@plural	{n} item discarded|{n} items discarded	항목 {n}개 삭제됨
+@plural	{n} pixel|{n} pixels	{n}픽셀
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	텍스트 인식이 설치되어 있지 않습니다. 모델이 없습니다(`cargo xtask models`를 실행하거나 PDFCRAFT_MODELS를 설정하세요).
+calendar weekday	Su	일
+calendar weekday	Mo	월
+calendar weekday	Tu	화
+calendar weekday	We	수
+calendar weekday	Th	목
+calendar weekday	Fr	금
+	Next tab	다음 탭
+	Previous tab	이전 탭
+calendar weekday	Sa	토
+certificate	Issued to	발급 대상
+certificate	Issued by	발급자
+certificate	Valid from	유효 시작일
+certificate	Valid to	유효 종료일
+certificate	Intended usage	사용 목적
+certificate	Version	버전
+certificate	Serial number	일련 번호
+certificate	Issuer	발급자
+certificate	Validity starts	유효 기간 시작
+certificate	Validity ends	유효 기간 종료
+certificate	Public key	공개 키
+certificate	Basic constraints	기본 제약 조건
+certificate	Key usage	키 용도
+certificate	Self-signed	자체 서명됨
+certificate	SHA-1 digest	SHA-1 다이제스트
+certificate	SHA-256 digest	SHA-256 다이제스트
+	the name is not a plain file name	이름이 일반 파일 이름이 아닙니다
+@plural	{n} file|{n} files	파일 {n}개
+@plural	{n} comment|{n} comments	주석 {n}개
+@plural	{n} result|{n} results	결과 {n}개
+	Allow	허용
+	Maximize	최대화
+	Minimize	최소화
+	Move tag earlier	태그를 앞으로 이동
+	Move tag later	태그를 뒤로 이동
+	Only allow this if you trust the source document.	원본 문서를 신뢰하는 경우에만 이를 허용하세요.
+	Open this local PDF?	이 로컬 PDF를 여시겠습니까?
+	Remove "{name}" from this list? The file itself is not deleted.	"{name}"을(를) 이 목록에서 제거하시겠습니까? 파일 자체는 삭제되지 않습니다.
+	Restore	복원
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	탭 스트립 대신 창 버튼이 있는 기본 제목 표시줄을 표시합니다. GNOME은 앱에 제목 표시줄을 그리지 않으므로 이 표시줄은 해당 테마를 따르지 않습니다.
+	This document is trying to open a local file:	이 문서가 로컬 파일을 열려고 합니다:
+	Use system title bar	시스템 제목 표시줄 사용
+	Hide hover previews for highlights without comment text	주석 텍스트가 없는 강조 표시의 마우스오버 미리 보기 숨기기
+	Set page transitions	페이지 전환 설정
+	What takes up the space in this file, by kind of content.	이 파일의 공간을 어떤 종류의 콘텐츠가 차지하는지 보여 줍니다.
+	Digitally signed by	디지털 서명자
+	DN: 	DN: 
+	Reason: 	사유: 
+	Location: 	위치: 
+	Date: 	날짜: 
+	The labels are in English: the signature's font can't draw them in this language.	레이블은 영어로 표시됩니다. 서명에 사용된 글꼴이 이 언어의 문자를 표시할 수 없기 때문입니다.
+	Font size	글꼴 크기
+	Make Properties Default	속성을 기본값으로 설정
+	Save over the changed file?	변경된 파일을 덮어쓸까요?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” 파일이 열리거나 마지막으로 저장된 후 디스크에서 변경되었습니다. 지금 저장하면 디스크의 최신 버전이 이 버전으로 대체됩니다.
+	Save anyway	그래도 저장
+	Sending sheet {s} of {n} to {printer}…	용지 {n}장 중 {s}장을 {printer}(으)로 보내는 중…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	프린터를 찾을 수 없습니다. 프린터가 설치되어 있고 인쇄 스풀러가 실행 중인지 확인한 다음 인쇄를 다시 여세요.
+	Collapse all pages	모든 페이지 접기
+	Expand all pages	모든 페이지 펼치기
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	이 파일이 디스크에서 변경되었습니다. 다시 로드하면 새 버전이 표시되고 저장하지 않은 변경 내용은 사라지며, 저장하면 디스크의 버전이 이 버전으로 대체됩니다.
+	Scroll speed (mouse wheel and arrow keys)	스크롤 속도(마우스 휠 및 화살표 키)
+	Cut Image	이미지 잘라내기
+	Redact Image	이미지 제거 표시
+	Create Link…	링크 만들기…
+	Recognize Text…	텍스트 인식…
+	Open in Full Screen mode?	전체 화면 모드로 여시겠습니까?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	이 문서에서 전체 화면 모드로 열기를 요청합니다. 페이지가 화면을 가득 채우고 다른 내용은 표시되지 않습니다. 언제든 Esc 키를 눌러 종료할 수 있습니다.
+	Full Screen	전체 화면
+	Not now	지금은 안 함
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	서명된 “{from}”(리비전 {rev}) 버전을 보고 있습니다. 이는 스냅샷이므로 여기서 변경해도 원본에 영향을 주지 않습니다.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	“{from}”의 리비전 {rev}을(를) 보고 있습니다. 이는 스냅샷이므로 여기서 변경해도 원본에 영향을 주지 않습니다.
+	Turn upside down (180°)	거꾸로 뒤집기(180°)
+	4 x 6 in label (101.6 x 152.4 mm)	4 x 6인치 라벨(101.6 x 152.4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	각 페이지를 인쇄 영역에 맞게 자르고 바로 세운 다음 늘리지 않고 용지에 맞춥니다. 용지마다 라벨 하나가 인쇄됩니다.
+	Find untagged content	태그 없는 콘텐츠 찾기
+	No untagged content was found.	태그 없는 콘텐츠를 찾지 못했습니다.
+	Found {n} untagged content problems.	태그 없는 콘텐츠 문제 {n}개를 찾았습니다.
+	Tag form fields	양식 필드 태그 지정
+	Mark as artifact	아티팩트로 표시
+	Remove this leaf tag from reading order and mark its direct content as an artifact	이 리프 태그를 읽기 순서에서 제거하고 직접 콘텐츠를 아티팩트로 표시
+	Mark content as artifact	콘텐츠를 아티팩트로 표시
+	Word count	단어 수
+	Current page only	현재 페이지만
+	Exclude tagged tables	태그 있는 표 제외
+	Exclude tagged code blocks	태그 있는 코드 블록 제외
+	Exclude image/OCR text	이미지/OCR 텍스트 제외
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	제외는 PDF 태그를 기준으로 합니다. 태그 없는 표와 코드는 계속 포함됩니다. 이미지 제외 시 보이지 않는 텍스트도 함께 제거됩니다.
+	Words	단어
+	Characters	문자
+	Characters without spaces	공백 제외 문자
+	Pages counted	계산된 페이지
+	Some pages contain no countable text. Scanned images need OCR first.	일부 페이지에 계산 가능한 텍스트가 없습니다. 스캔한 이미지는 먼저 OCR을 실행해야 합니다.
+	Some content could not be classified safely and was kept in the count.	일부 콘텐츠는 안전하게 분류할 수 없어 개수에 그대로 포함되었습니다.
+	Counting words… {n} pages read	단어 수 계산 중… {n}페이지 읽음
+	Word counting stopped unexpectedly.	단어 수 계산이 예기치 않게 중지되었습니다.
+	Word count…	단어 수 계산…
+@id	file.word_count	단어 개수…
+	Standard	표준
+	Mobile	모바일
+	Merge image fragments	이미지 조각 병합
+	Optimizing… merging image fragments	최적화 중… 이미지 조각 병합 중
+	Side by side	나란히 보기
+	New file only	새 파일만
+	Old file: {name}	이전 파일: {name}
+	New file: {name}	새 파일: {name}
+	Print as image	이미지로 인쇄
+	Resolution:	해상도:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	프린터에서 텍스트, 음영 또는 투명 효과가 누락될 때 사용하세요. 인쇄물은 더 이상 검색 가능한 텍스트가 아니며, 회색조로 인쇄하면 그림이 회색으로 인쇄됩니다.
+	Crop Image	이미지 자르기
+	Remove Crop	자르기 제거
+	Trim the picture with its handles; Enter or Done applies	핸들로 그림을 다듬으세요. Enter 또는 완료를 누르면 적용됩니다
+	Redaction mark appearance	제거 대상 표시 모양
+	Outline colour:	윤곽선 색:
+	Fill colour:	채우기 색:
+	Shown while the pointer is over a mark.	포인터를 표시 위에 올리면 나타납니다.
+	Opacity:	불투명도:
+	Make properties default	속성을 기본값으로 설정
+	Pages selected	선택한 페이지
+	Page properties	페이지 속성
+	The password must have at least 8 characters.	암호는 8자 이상이어야 합니다.
+theme	Appearance	모양
