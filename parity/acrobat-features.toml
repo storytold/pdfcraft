@@ -10125,11 +10125,11 @@ title = "Send the file by email (system mail client)"
 area = "N"
 tier = "P3"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["file.send_email"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/send_email.rs::an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown", "crates/ui-egui/tests/send_email.rs::unsaved_edits_go_as_a_copy_and_the_open_file_is_left_alone", "crates/ui-egui/tests/send_email.rs::every_failure_is_said_and_close_closes", "crates/platform/src/mail.rs::macos_scripts_mail_and_outlook_and_falls_back_for_any_other_default", "crates/platform/src/mail.rs::windows_uses_the_new_outlook_then_simple_mapi_then_falls_back", "crates/platform/src/mail.rs::linux_and_the_bsds_use_xdg_email_and_fall_back_without_it", "crates/platform/src/mail.rs::a_missing_file_or_a_bad_recipient_is_refused_before_anything_runs"]
+notes = "File ▸ Send by email… attaches the open document (a temporary copy when it has unsaved edits, so nobody is asked to save) to a new message in the computer's default email program: on macOS the mailto: handler (Mail and Outlook through AppleScript), on Windows the new Outlook through an unsent .eml or else the default Simple MAPI client, on Linux and the BSDs xdg-email. A default that can't take a file (a webmail site, an unknown program), no program, or one that doesn't answer brings a dialog offering a mailto: message without the file and the file shown in its folder. Nothing is sent by PdfCraft and it uses no network. Not yet: recipients or a message body chosen in PdfCraft, sending several files or a form's data, a scripted attachment for other macOS programs (Thunderbird, Spark), the web build, and an automation tool (it would open a window on the person's desktop). The Windows and Linux routes are tested as plans, not against real mail programs."
 
 [[feature]]
 id = "misc.user-docs"
