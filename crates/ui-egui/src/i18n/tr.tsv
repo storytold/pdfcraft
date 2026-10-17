@@ -777,6 +777,12 @@
 	Applies to 1 page	1 sayfaya uygulanır
 	Applies to {n} pages	{n} sayfaya uygulanır
 	Replaces the existing one on those pages.	Bu sayfalardaki mevcut olanın yerini alır.
+	Checking pages…	Sayfalar denetleniyor…
+	This page paints its own white backdrop, which would hide the background. Replace it	Bu sayfanın arka planı gizleyecek kendi beyaz dolgusu var. Değiştir
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	{n} sayfanın arka planı gizleyecek kendi beyaz dolgusu var. Değiştir
+	Removing the background puts the page's own backdrop back.	Arka planı kaldırmak, sayfanın kendi beyaz dolgusunu geri getirir.
+	A picture covers this page (a scan?), so the background won't show there.	Bu sayfayı bir resim kaplıyor (tarama mı?), bu yüzden arka plan orada görünmez.
+	A picture covers {n} pages (scans?), so the background won't show there.	{n} sayfayı resimler kaplıyor (tarama mı?), bu yüzden arka plan orada görünmez.
 	PDF or image	PDF veya resim
 	No file chosen	Dosya seçilmedi
 	Page number	Sayfa numarası

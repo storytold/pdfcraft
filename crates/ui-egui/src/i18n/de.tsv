@@ -800,6 +800,12 @@
 	Applies to 1 page	Gilt für 1 Seite
 	Applies to {n} pages	Gilt für {n} Seiten
 	Replaces the existing one on those pages.	Ersetzt das Vorhandene auf diesen Seiten.
+	Checking pages…	Seiten werden geprüft…
+	This page paints its own white backdrop, which would hide the background. Replace it	Diese Seite hat eine eigene weiße Fläche, die den Hintergrund verdecken würde. Ersetzen
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	{n} Seiten haben eine eigene weiße Fläche, die den Hintergrund verdecken würde. Ersetzen
+	Removing the background puts the page's own backdrop back.	Wird der Hintergrund entfernt, kehrt die eigene weiße Fläche der Seite zurück.
+	A picture covers this page (a scan?), so the background won't show there.	Ein Bild bedeckt diese Seite (ein Scan?), daher ist der Hintergrund dort nicht zu sehen.
+	A picture covers {n} pages (scans?), so the background won't show there.	Bilder bedecken {n} Seiten (Scans?), daher ist der Hintergrund dort nicht zu sehen.
 	PDF or image	PDF oder Bild
 	No file chosen	Keine Datei ausgewählt
 	Page number	Seitenzahl

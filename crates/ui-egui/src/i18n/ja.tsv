@@ -823,6 +823,12 @@
 	Applies to 1 page	1 ページに適用
 	Applies to {n} pages	{n} ページに適用
 	Replaces the existing one on those pages.	対象ページの既存の項目を置き換えます。
+	Checking pages…	ページを確認しています…
+	This page paints its own white backdrop, which would hide the background. Replace it	このページには独自の白い塗りがあり、背景が隠れてしまいます。置き換える
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	{n} ページに独自の白い塗りがあり、背景が隠れてしまいます。置き換える
+	Removing the background puts the page's own backdrop back.	背景を削除すると、ページ独自の白い塗りが元に戻ります。
+	A picture covers this page (a scan?), so the background won't show there.	このページは画像（スキャン？）で覆われているため、背景は表示されません。
+	A picture covers {n} pages (scans?), so the background won't show there.	{n} ページが画像（スキャン？）で覆われているため、そこでは背景は表示されません。
 	PDF or image	PDF または画像
 	No file chosen	ファイルが選択されていません
 	Page number	ページ番号

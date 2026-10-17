@@ -958,6 +958,12 @@
 	Replacement text	Pakaitinis tekstas
 	Replacement: pages of {name}	Pakaitinis dokumentas: {name} puslapiai
 	Replaces the existing one on those pages.	Tuose puslapiuose pakeičia esamą.
+	Checking pages…	Tikrinami puslapiai…
+	This page paints its own white backdrop, which would hide the background. Replace it	Šis puslapis turi savo baltą užpildą, kuris paslėptų foną. Pakeisti
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	Puslapiai su savo baltu užpildu, kuris paslėptų foną: {n}. Pakeisti
+	Removing the background puts the page's own backdrop back.	Pašalinus foną, grąžinamas paties puslapio baltas užpildas.
+	A picture covers this page (a scan?), so the background won't show there.	Šį puslapį dengia paveikslėlis (nuskaitytas?), todėl fonas ten nesimatys.
+	A picture covers {n} pages (scans?), so the background won't show there.	Paveikslėliais padengti puslapiai (nuskaityti?): {n}; fonas ten nesimatys.
 	Report	Ataskaita
 	Report…	Ataskaita…
 	Requires user to enter a password for:	Naudotojas turi įvesti slaptažodį, kad galėtų:

@@ -814,6 +814,12 @@
 	Applies to 1 page	Dotyczy 1 strony
 	Applies to {n} pages	Liczba objętych stron: {n}
 	Replaces the existing one on those pages.	Zastępuje istniejący element na tych stronach.
+	Checking pages…	Sprawdzanie stron…
+	This page paints its own white backdrop, which would hide the background. Replace it	Ta strona ma własne białe wypełnienie, które zasłoniłoby tło. Zastąp
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	Strony z własnym białym wypełnieniem, które zasłoniłoby tło: {n}. Zastąp
+	Removing the background puts the page's own backdrop back.	Usunięcie tła przywraca własne białe wypełnienie strony.
+	A picture covers this page (a scan?), so the background won't show there.	Tę stronę zakrywa obraz (skan?), więc tło nie będzie tam widoczne.
+	A picture covers {n} pages (scans?), so the background won't show there.	Strony zakryte obrazami (skany?): {n}; tło nie będzie tam widoczne.
 	PDF or image	PDF lub obraz
 	No file chosen	Nie wybrano pliku
 	Page number	Numer strony

@@ -820,6 +820,12 @@
 	Applies to 1 page	Застосовується до 1 сторінки
 	Applies to {n} pages	Застосовується до {n} сторінок
 	Replaces the existing one on those pages.	Замінює наявний елемент на цих сторінках.
+	Checking pages…	Перевірка сторінок…
+	This page paints its own white backdrop, which would hide the background. Replace it	Ця сторінка має власну білу заливку, яка приховає тло. Замінити
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	Сторінки з власною білою заливкою, яка приховає тло: {n}. Замінити
+	Removing the background puts the page's own backdrop back.	Вилучення тла повертає власну білу заливку сторінки.
+	A picture covers this page (a scan?), so the background won't show there.	Цю сторінку закриває зображення (скан?), тому тло там не буде видно.
+	A picture covers {n} pages (scans?), so the background won't show there.	Сторінки, закриті зображеннями (скани?): {n}; тло там не буде видно.
 	PDF or image	PDF або зображення
 	No file chosen	Файл не вибрано
 	Page number	Номер сторінки

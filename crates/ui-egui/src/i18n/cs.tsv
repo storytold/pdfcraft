@@ -896,6 +896,12 @@ key	Space	Mezerník
 	Applies to 1 page	Týká se 1 stránky
 	Applies to {n} pages	Počet dotčených stránek: {n}
 	Replaces the existing one on those pages.	Nahradí stávající na těchto stránkách.
+	Checking pages…	Kontrola stránek…
+	This page paints its own white backdrop, which would hide the background. Replace it	Tato stránka má vlastní bílou výplň, která by zakryla pozadí. Nahradit ji
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	Stránky s vlastní bílou výplní, která by zakryla pozadí: {n}. Nahradit ji
+	Removing the background puts the page's own backdrop back.	Odebráním pozadí se vrátí vlastní bílá výplň stránky.
+	A picture covers this page (a scan?), so the background won't show there.	Tuto stránku pokrývá obrázek (sken?), takže pozadí na ní nebude vidět.
+	A picture covers {n} pages (scans?), so the background won't show there.	Stránky pokryté obrázky (skeny?): {n}; pozadí na nich nebude vidět.
 	PDF or image	PDF nebo obrázek
 	No file chosen	Není vybrán žádný soubor
 	Page number	Číslo stránky

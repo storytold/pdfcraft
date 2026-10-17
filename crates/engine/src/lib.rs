@@ -63,7 +63,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
-pub use pdfcraft_edit::{BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, first_undrawable};
+pub use pdfcraft_edit::{Backdrop, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
@@ -497,6 +497,20 @@ impl Document {
     /// PDF Optimizer ▸ Audit space usage.
     pub fn audit_space(&self) -> Vec<optimize::SpaceUse> {
         self.editor.as_ref().map(|e| optimize::audit_space(&e.cos, self.bytes.len() as u64)).unwrap_or_default()
+    }
+
+    /// The backdrop `page` (0-based) paints itself, which hides a background (Add Background).
+    pub fn page_backdrop(&self, page: usize) -> Option<pdfcraft_edit::Backdrop> {
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::page_backdrop(&e.cos, page).ok().flatten())
+    }
+
+    /// [`Self::page_backdrop`] for each of `pages`, in order, walking the page tree once: the
+    /// way to check many pages. A page out of range has none.
+    pub fn page_backdrops(&self, pages: &[usize]) -> Vec<Option<pdfcraft_edit::Backdrop>> {
+        match &self.editor {
+            Some(e) => pdfcraft_edit::page_backdrops(&e.cos, pages),
+            None => vec![None; pages.len()],
+        }
     }
 
     /// Edit a PDF: the images `page` draws (0-based).

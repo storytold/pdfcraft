@@ -451,6 +451,12 @@
 	Applies to 1 page	Aplica-se a 1 página
 	Applies to {n} pages	Aplica-se a {n} páginas
 	Replaces the existing one on those pages.	Substitui o existente nessas páginas.
+	Checking pages…	Verificando páginas…
+	This page paints its own white backdrop, which would hide the background. Replace it	Esta página tem um preenchimento branco próprio, que esconderia o plano de fundo. Substituí-lo
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	{n} páginas têm um preenchimento branco próprio, que esconderia o plano de fundo. Substituí-lo
+	Removing the background puts the page's own backdrop back.	Remover o plano de fundo restaura o preenchimento branco da página.
+	A picture covers this page (a scan?), so the background won't show there.	Uma imagem cobre esta página (uma digitalização?), então o plano de fundo não aparecerá nela.
+	A picture covers {n} pages (scans?), so the background won't show there.	Imagens cobrem {n} páginas (digitalizações?), então o plano de fundo não aparecerá nelas.
 	PDF or image	PDF ou imagem
 	No file chosen	Nenhum arquivo escolhido
 	Page number	Número da página

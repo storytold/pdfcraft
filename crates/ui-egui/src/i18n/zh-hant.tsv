@@ -455,6 +455,12 @@
 	Applies to 1 page	套用於 1 頁
 	Applies to {n} pages	套用於 {n} 頁
 	Replaces the existing one on those pages.	替換這些頁面上的現有內容。
+	Checking pages…	正在檢查頁面…
+	This page paints its own white backdrop, which would hide the background. Replace it	此頁面有自己的白色填色，會遮住背景。取代它
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	{n} 個頁面有自己的白色填色，會遮住背景。取代它
+	Removing the background puts the page's own backdrop back.	移除背景後，頁面自己的白色填色會恢復。
+	A picture covers this page (a scan?), so the background won't show there.	此頁面被一張圖片覆蓋（掃描檔？），因此那裡不會顯示背景。
+	A picture covers {n} pages (scans?), so the background won't show there.	{n} 個頁面被圖片覆蓋（掃描檔？），因此那裡不會顯示背景。
 	PDF or image	PDF 或圖片
 	No file chosen	未選擇檔案
 	Page number	頁碼

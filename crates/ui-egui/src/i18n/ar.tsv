@@ -822,6 +822,12 @@
 	Applies to 1 page	يُطبَّق على صفحة واحدة
 	Applies to {n} pages	يُطبَّق على {n} صفحات
 	Replaces the existing one on those pages.	يستبدل الموجود على تلك الصفحات.
+	Checking pages…	جارٍ فحص الصفحات…
+	This page paints its own white backdrop, which would hide the background. Replace it	ترسم هذه الصفحة تعبئة بيضاء خاصة بها ستُخفي الخلفية. استبدالها
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	عدد الصفحات التي ترسم تعبئة بيضاء خاصة بها ستُخفي الخلفية: {n}. استبدالها
+	Removing the background puts the page's own backdrop back.	إزالة الخلفية تعيد التعبئة البيضاء الخاصة بالصفحة.
+	A picture covers this page (a scan?), so the background won't show there.	تغطي صورة هذه الصفحة (مسح ضوئي؟)، لذا لن تظهر الخلفية فيها.
+	A picture covers {n} pages (scans?), so the background won't show there.	عدد الصفحات التي تغطيها صور (مسح ضوئي؟): {n}؛ لن تظهر الخلفية فيها.
 	PDF or image	PDF أو صورة
 	No file chosen	لم يُختر ملف
 	Page number	رقم الصفحة

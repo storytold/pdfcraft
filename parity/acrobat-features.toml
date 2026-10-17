@@ -2495,9 +2495,9 @@ tier = "P0"
 milestone = "M7"
 status = "shipped"
 commands = ["edit.background"]
-tools = ["doc_background"]
-evidence = ["crates/ui-egui/tests/ui_group/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/ui_group/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright"]
-notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page"
+tools = ["doc_background", "doc_backdrops"]
+evidence = ["crates/ui-egui/tests/ui_group/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/ui_group/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright", "crates/automation/tests/backdrop.rs::a_background_shows_on_a_page_that_paints_its_own_white_backdrop", "crates/ui-egui/tests/ui_group/marks.rs::the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scans", "crates/edit/src/backdrop_tests.rs::content_that_is_not_a_page_backdrop_is_left_alone"]
+notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page. A page that paints its own opaque white backdrop (browsers' Save as PDF, print drivers) used to hide the background entirely; the dialog now offers to replace that fill (on by default; Remove puts it back unless the content was edited since). Our own choice: Acrobat's behaviour on such pages has not been observed. Still hidden: scanned pages (warned), backdrops drawn inside a form XObject, by a non-rectangular path, or in a named colour space; the dialog preview is a schematic, not the page"
 
 [[feature]]
 id = "edit.background-update-remove"
@@ -2508,8 +2508,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.background.update", "edit.background.remove"]
 tools = ["doc_background", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove"]
-notes = ""
+evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/edit/src/backdrop_tests.rs::a_white_fill_backdrop_is_replaced_and_put_back_when_the_background_goes", "crates/edit/src/backdrop_tests.rs::a_backdrop_copy_edited_since_is_kept_when_the_background_goes"]
+notes = "Remove also restores a page backdrop Add replaced"
 
 [[feature]]
 id = "edit.decoration-profiles"

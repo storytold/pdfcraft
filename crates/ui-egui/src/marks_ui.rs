@@ -3,7 +3,7 @@
 //! preview of the current page. "Update" opens the same dialog in replace mode.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -72,6 +72,75 @@ impl PageRange {
     }
 }
 
+/// How many pages a frame the Background dialog checks for a backdrop of their own, so a long
+/// document never stalls the dialog.
+const BACKDROP_PAGES_PER_FRAME: usize = 24;
+
+/// Which pages paint their own backdrop (it hides a background), for the document and edit
+/// generation they were checked in. Filled a few pages a frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BackdropCheck {
+    key: Option<(DocId, u64)>,
+    /// Per page: `None` until checked.
+    pages: Vec<Option<Option<Backdrop>>>,
+}
+
+/// What the check found among the pages a background goes on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BackdropCount {
+    /// Pages with a white backdrop that can be replaced.
+    pub fills: usize,
+    /// Pages covered by a picture (scans): the background stays hidden there.
+    pub images: usize,
+    /// Pages not checked yet.
+    pub pending: usize,
+}
+
+impl BackdropCheck {
+    /// Check up to [`BACKDROP_PAGES_PER_FRAME`] more of `pages` (0-based) and count them.
+    pub fn update(&mut self, doc: &pdfcraft_engine::Document, pages: &[usize]) -> BackdropCount {
+        let key = (doc.id, doc.edit_generation());
+        let count = doc.info.pages.len();
+        if self.key != Some(key) || self.pages.len() != count {
+            self.key = Some(key);
+            self.pages = vec![None; count];
+        }
+        // One batch a frame: finding a page walks the page tree, so the batch shares one walk.
+        let mut batch = Vec::with_capacity(BACKDROP_PAGES_PER_FRAME);
+        for &p in pages {
+            if batch.len() >= BACKDROP_PAGES_PER_FRAME {
+                break;
+            }
+            if matches!(self.pages.get(p), Some(None)) && !batch.contains(&p) {
+                batch.push(p);
+            }
+        }
+        if !batch.is_empty() {
+            for (p, found) in batch.iter().zip(doc.page_backdrops(&batch)) {
+                if let Some(slot) = self.pages.get_mut(*p) {
+                    *slot = Some(found);
+                }
+            }
+        }
+        let mut n = BackdropCount::default();
+        for &p in pages {
+            let Some(slot) = self.pages.get(p) else { continue };
+            match slot {
+                None => n.pending += 1,
+                Some(Some(Backdrop::Fill)) => n.fills += 1,
+                Some(Some(Backdrop::Image)) => n.images += 1,
+                Some(None) => {}
+            }
+        }
+        n
+    }
+}
+
+/// "1 page" or "{n} pages", in a message.
+fn pages_phrase(n: usize, one: &str, many: &str) -> String {
+    if n == 1 { one.to_string() } else { crate::i18n::fmt(many, &[("n", &n.to_string())]) }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarksDraft {
     pub hf: HeaderFooter,
@@ -90,6 +159,8 @@ pub struct MarksDraft {
     pub use_file: bool,
     pub file: Option<(String, std::sync::Arc<Vec<u8>>)>,
     pub file_page: usize,
+    /// Background: pages that paint their own backdrop.
+    pub backdrops: BackdropCheck,
 }
 
 impl Default for MarksDraft {
@@ -107,6 +178,7 @@ impl Default for MarksDraft {
             use_file: false,
             file: None,
             file_page: 1,
+            backdrops: BackdropCheck::default(),
         }
     }
 }
@@ -299,6 +371,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.bg.opacity = pct / 100.0;
                 }
             });
+            if let Some(doc) = app.session.get(id) {
+                backdrop_options(ui, t, d, doc, count);
+            }
         }
     }
     ui.add_space(8.0);
@@ -364,6 +439,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             }
             MarkKind::Background => {
                 p.rect_filled(r, CornerRadius::ZERO, rgb32(bg.color).gamma_multiply(bg.opacity as f32));
+                // Schematic lines of text on top: the colour goes behind the content.
+                let (gap, inset) = (r.height() / 9.0, r.width() * 0.12);
+                for k in 1..8 {
+                    let y = r.top() + gap * k as f32;
+                    let end = if k % 3 == 0 { r.center().x } else { r.right() - inset };
+                    p.line_segment([pos2(r.left() + inset, y), pos2(end, y)], Stroke::new((gap * 0.3).clamp(1.0, 3.0), Color32::from_gray(90)));
+                }
             }
         });
         ui.vertical(|ui| {
@@ -475,6 +557,35 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) -> bool {
         }
     });
     browse
+}
+
+/// Pages that paint their own backdrop would hide the background: offer to replace a white one,
+/// and say where a picture (a scan) will still hide it.
+fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdfcraft_engine::Document, count: usize) {
+    let n = d.backdrops.update(doc, &d.range.pages(count));
+    if n.pending > 0 {
+        ui.label(egui::RichText::new(tl!("Checking pages…")).small().color(t.text_faint));
+        ui.ctx().request_repaint();
+    }
+    if n.fills > 0 {
+        ui.add_space(4.0);
+        let label = pages_phrase(
+            n.fills,
+            tl!("This page paints its own white backdrop, which would hide the background. Replace it"),
+            tl!("{n} pages paint their own white backdrop, which would hide the background. Replace it"),
+        );
+        ui.add(widgets::checkbox(&mut d.bg.replace_backdrop, &label));
+        ui.label(egui::RichText::new(tl!("Removing the background puts the page's own backdrop back.")).small().color(t.text_faint));
+    }
+    if n.images > 0 {
+        ui.add_space(4.0);
+        let text = pages_phrase(
+            n.images,
+            tl!("A picture covers this page (a scan?), so the background won't show there."),
+            tl!("A picture covers {n} pages (scans?), so the background won't show there."),
+        );
+        ui.label(egui::RichText::new(text).small().color(crate::content_ui::UNDRAWABLE));
+    }
 }
 
 /// The edit the dialog's OK makes.

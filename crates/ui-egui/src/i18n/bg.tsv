@@ -496,6 +496,12 @@
 	Applies to 1 page	Прилага се към 1 страница
 	Applies to {n} pages	Прилага се към {n} страници
 	Replaces the existing one on those pages.	Заменя съществуващия на тези страници.
+	Checking pages…	Проверка на страниците…
+	This page paints its own white backdrop, which would hide the background. Replace it	Тази страница има собствено бяло запълване, което би скрило фона. Замяна
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	Страници със собствено бяло запълване, което би скрило фона: {n}. Замяна
+	Removing the background puts the page's own backdrop back.	Премахването на фона връща собственото бяло запълване на страницата.
+	A picture covers this page (a scan?), so the background won't show there.	Изображение покрива тази страница (сканиране?), затова фонът няма да се вижда там.
+	A picture covers {n} pages (scans?), so the background won't show there.	Страници, покрити с изображения (сканирания?): {n}; фонът няма да се вижда там.
 	PDF or image	PDF или изображение
 	No file chosen	Не е избран файл
 	Page number	Номер на страница

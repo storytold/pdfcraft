@@ -793,6 +793,12 @@
 	Applies to 1 page	1 oldalra vonatkozik
 	Applies to {n} pages	{n} oldalra vonatkozik
 	Replaces the existing one on those pages.	Lecseréli a meglévőt ezeken az oldalakon.
+	Checking pages…	Oldalak ellenőrzése…
+	This page paints its own white backdrop, which would hide the background. Replace it	Ennek az oldalnak saját fehér kitöltése van, amely eltakarná a hátteret. Csere
+	{n} pages paint their own white backdrop, which would hide the background. Replace it	{n} oldalnak saját fehér kitöltése van, amely eltakarná a hátteret. Csere
+	Removing the background puts the page's own backdrop back.	A háttér eltávolítása visszaállítja az oldal saját fehér kitöltését.
+	A picture covers this page (a scan?), so the background won't show there.	Egy kép fedi le ezt az oldalt (szkennelt?), így ott nem látszik a háttér.
+	A picture covers {n} pages (scans?), so the background won't show there.	Képek fednek le {n} oldalt (szkenneltek?), így ott nem látszik a háttér.
 	PDF or image	PDF vagy kép
 	No file chosen	Nincs fájl kiválasztva
 	Page number	Oldalszám
