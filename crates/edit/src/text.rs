@@ -1237,12 +1237,14 @@ fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError
         path: Vec<pdfcraft_cos::ObjRef>,
         visits: usize,
     }
-    fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: usize) {
+    /// `stream` gives the stream number of the operator at an index of `ops`.
+    fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: &dyn Fn(usize) -> usize) {
         let fonts_res = resources.get(b"Font").map(|f| w.doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
         let mut cache = HashMap::new();
         let mut invoked = Vec::new();
         let shown = interpret(w.doc, ops, &fonts_res, &mut cache, carry, Some(&mut invoked), true);
         let mut last = None;
+        let mut last_stream = None;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
             while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
@@ -1250,7 +1252,12 @@ fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError
                 // Text after a form starts a new line.
                 last = None;
             }
-            add_shown(&mut w.lines, &mut last, s, stream);
+            let si = stream(s.op);
+            // Text from another stream starts a new line, as when each stream was read alone.
+            if last_stream.replace(si).is_some_and(|prev| prev != si) {
+                last = None;
+            }
+            add_shown(&mut w.lines, &mut last, s, si);
         }
         for (_, name, ts) in forms {
             enter(w, resources, &name, ts);
@@ -1266,7 +1273,7 @@ fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError
         if let Some(r) = form.obj {
             w.path.push(r);
         }
-        walk(w, &ops, &form.resources, &mut carry, stream);
+        walk(w, &ops, &form.resources, &mut carry, &|_| stream);
         if form.obj.is_some() {
             w.path.pop();
         }
@@ -1276,9 +1283,14 @@ fn reading_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError
     let streams = content_streams(doc, &p.dict);
     let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), visits: 0 };
     let mut carry = Carry::new();
-    for (si, (_, data)) in streams.into_iter().enumerate() {
-        walk(&mut w, &parse(&data).ops, &res, &mut carry, si);
-    }
+    // Read the page's streams as the one stream they are, in one pass, as rendering and editing
+    // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
+    // can run on from one stream into the next. Text still counts as the stream its operator
+    // starts in, which keeps lines from different streams apart.
+    let pieces = Pieces::join(&streams.into_iter().map(|(_, data)| data).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
+    walk(&mut w, &ops, &res, &mut carry, &stream_of);
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.
     for l in lines.iter_mut().filter(|l| l.visual_order && !l.actual_text) {

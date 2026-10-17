@@ -327,7 +327,37 @@ fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Optio
 }
 
 const WRAP_OPEN: &[u8] = b"q %PdfCraft\n";
-const WRAP_CLOSE: &[u8] = b"Q %PdfCraft\n";
+/// Starts with an end of line, so a comment left open at the end of the content before it
+/// can't swallow the `Q`. Older files have the close without it.
+const WRAP_CLOSE: &[u8] = b"\nQ %PdfCraft\n";
+const OLD_WRAP_CLOSE: &[u8] = b"Q %PdfCraft\n";
+
+/// Whether `bytes` are a wrapper's close: [`WRAP_CLOSE`] after a `Q` for each `q` the wrapped
+/// content left open, or [`OLD_WRAP_CLOSE`].
+fn is_wrap_close(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    loop {
+        if rest == WRAP_CLOSE || rest == OLD_WRAP_CLOSE {
+            return true;
+        }
+        match rest.strip_prefix(b"\nQ".as_slice()) {
+            Some(shorter) => rest = shorter,
+            None => return false,
+        }
+    }
+}
+
+/// A `Wrap`-tagged stream's role from its exact bytes: `Some(true)` for an open, `Some(false)`
+/// for a close.
+fn wrapper_role(doc: &Document, o: &Object) -> Option<bool> {
+    if stream_tag(doc, o).as_deref() != Some("Wrap") {
+        return None;
+    }
+    let Object::Stream(stream) = &*doc.resolve(o) else { return None };
+    // Wrappers are a few bytes; one that decodes to more isn't PdfCraft's.
+    let bytes = stream.decoded_within(64 * 1024).ok()?;
+    if bytes == WRAP_OPEN { Some(true) } else { is_wrap_close(&bytes).then_some(false) }
+}
 
 #[cfg(test)]
 fn stream_bytes(doc: &Document, o: &Object) -> Option<Vec<u8>> {
@@ -350,27 +380,138 @@ fn tagged(tag: &str) -> Dict {
     d
 }
 
+/// What placing a mark on top needs, from the page's actual operators (not the `/PCMark` tags,
+/// which another writer may keep, copy or forge).
+enum Isolation {
+    /// The content parses cleanly with balanced `q`/`Q` and closed text objects and paths.
+    /// `suffix`: the stream from which the content leaves graphics state set (or a comment open)
+    /// that a mark on top must not inherit, so it needs a wrapper from there to the end.
+    /// `wrappers`: PdfCraft wrapper pairs (open, close) as stream indexes.
+    Clean { suffix: Option<usize>, wrappers: Vec<(usize, usize)> },
+    /// The content could not be read that precisely (it doesn't decode, is too large, or has
+    /// stray bytes, unbalanced `q`/`Q` or an unfinished text object or path). `unclosed` is
+    /// the count of `q` left open at the end, when known.
+    Unknown { unclosed: usize },
+}
+
+const ISOLATION_MAX_STREAMS: usize = 100_000;
+const ISOLATION_MAX_BYTES: usize = 128 * 1024 * 1024;
+const ISOLATION_MAX_OPS: usize = 1_000_000;
+const ISOLATION_MAX_DEPTH: usize = 10_000;
+
+fn isolation(doc: &Document, list: &[Object]) -> Isolation {
+    let unknown = Isolation::Unknown { unclosed: 0 };
+    if list.len() > ISOLATION_MAX_STREAMS {
+        return unknown;
+    }
+    let mut remaining = ISOLATION_MAX_BYTES;
+    let mut data = Vec::with_capacity(list.len());
+    for object in list {
+        let resolved = doc.resolve(object);
+        let Object::Stream(stream) = &*resolved else { return unknown };
+        let Ok(bytes) = stream.decoded_within(remaining) else { return unknown };
+        let Some(left) = remaining.checked_sub(bytes.len().saturating_add(1)) else { return unknown };
+        remaining = left;
+        data.push(bytes);
+    }
+    let pieces = pdfcraft_content::Pieces::join(&data);
+    let parsed = pieces.parse();
+    if parsed.skipped != 0 || parsed.ops.len() > ISOLATION_MAX_OPS {
+        return unknown;
+    }
+    let edges = pieces.comment_edges(&parsed);
+    let (mut text_open, mut path_open, mut dirty, mut malformed) = (false, false, false, false);
+    let mut stack: Vec<usize> = Vec::new();
+    let mut split = 0;
+    let mut previous_last = None;
+    let mut wrappers = Vec::new();
+    for op in &parsed.ops {
+        let (first, last) = pieces.pieces_of(op);
+        // A wrapper can only go in before a whole stream, at the top level, between operators,
+        // and where no comment runs into the stream (it would swallow the wrapper's `q`).
+        if stack.is_empty()
+            && !text_open
+            && !path_open
+            && !dirty
+            && previous_last.is_none_or(|previous| first > previous)
+            && !edges.get(first).is_some_and(|edge| edge.0)
+        {
+            split = first;
+        }
+        previous_last = Some(last);
+        match op.op.as_slice() {
+            b"BT" if !text_open => text_open = true,
+            b"ET" if text_open => text_open = false,
+            b"BT" | b"ET" => malformed = true,
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*" => path_open = true,
+            b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => path_open = false,
+            _ => {}
+        }
+        match op.op.as_slice() {
+            b"q" if op.operands.is_empty() && stack.len() < ISOLATION_MAX_DEPTH => stack.push(first),
+            b"Q" if op.operands.is_empty() => match stack.pop() {
+                Some(open) => {
+                    // Only a standalone PdfCraft wrapper pair may later be removed again.
+                    let wrap = |i: usize| list.get(i).is_some_and(|o| stream_tag(doc, o).as_deref() == Some("Wrap"));
+                    if wrap(open)
+                        && wrap(first)
+                        && data.get(open).is_some_and(|d| d == WRAP_OPEN)
+                        && data.get(first).is_some_and(|d| is_wrap_close(d))
+                    {
+                        wrappers.push((open, first));
+                    }
+                }
+                None => malformed = true,
+            },
+            b"q" | b"Q" => malformed = true,
+            _ if stack.is_empty() => dirty = true,
+            _ => {}
+        }
+    }
+    if malformed || text_open || path_open || !stack.is_empty() {
+        return Isolation::Unknown { unclosed: if malformed { 0 } else { stack.len() } };
+    }
+    let comment_open = edges.last().is_some_and(|edge| edge.1);
+    Isolation::Clean { suffix: (dirty || comment_open).then_some(split), wrappers }
+}
+
 /// Put a mark's content on a page: behind (prepended) or on top (appended, after wrapping the
 /// original content in q/Q).
 fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
     place_tagged(doc, page, kind.tag(), content, behind)
 }
 
-/// Put content on a page, tagged `tag` (see [`place`]).
+/// Put content on a page, tagged `tag` (see [`place`]). On top, whatever graphics state the
+/// content before leaves set (a `cm`, a clip, text state…) must not reach the mark, including
+/// content appended after an earlier PdfCraft wrapper by another tool (#3084): the stretch of
+/// content that leaves state set is wrapped in q/Q, once.
 fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
     let mut list = contents(doc, page)?;
+    let wrap = if behind {
+        None
+    } else {
+        match isolation(doc, &list) {
+            Isolation::Clean { suffix, .. } => suffix.map(|split| (split, 0)),
+            // Content that can't be read precisely is wrapped whole, as before: after the
+            // behind-marks at the start. A `q` it leaves open is closed at its end, where
+            // closing it changes nothing already drawn.
+            Isolation::Unknown { unclosed } => {
+                let behind_kinds = [MarkKind::Background.tag(), MarkKind::Watermark.tag()];
+                let split = list.iter().position(|o| !stream_tag(doc, o).is_some_and(|t| behind_kinds.contains(&t.as_str()))).unwrap_or(list.len());
+                (split < list.len()).then_some((split, unclosed))
+            }
+        }
+    };
     let mark = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), &content))));
     if behind {
         list.insert(0, mark);
     } else {
-        let wrapped = list.iter().any(|o| stream_tag(doc, o).as_deref() == Some("Wrap"));
-        let original = list.iter().any(|o| stream_tag(doc, o).is_none());
-        if !wrapped && original {
+        if let Some((split, unclosed)) = wrap {
+            let mut close_bytes = b"\nQ".repeat(unclosed);
+            close_bytes.extend_from_slice(WRAP_CLOSE);
             let open = Object::Ref(doc.add(Object::Stream(Stream::from_raw(tagged("Wrap"), WRAP_OPEN.to_vec()))));
-            let close = Object::Ref(doc.add(Object::Stream(Stream::from_raw(tagged("Wrap"), WRAP_CLOSE.to_vec()))));
-            // Behind-marks stay outside the wrapper.
-            let split = list.iter().position(|o| stream_tag(doc, o).is_none()).unwrap_or(list.len());
-            list.insert(split, open);
+            let close = Object::Ref(doc.add(Object::Stream(Stream::from_raw(tagged("Wrap"), close_bytes))));
+            list.insert(split.min(list.len()), open);
             list.push(close);
         }
         list.push(mark);
@@ -613,8 +754,9 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
     Ok(())
 }
 
-/// Remove marks of `kind` from `pages`; returns how many were removed. When no mark is left on
-/// top of a page, the q/Q wrapper goes too, restoring the original content list.
+/// Remove marks of `kind` from `pages`; returns how many were removed. Wrappers left with
+/// nothing after them go too, restoring the original content list; a wrapper that content
+/// after it still relies on (another tool's appended stream) stays.
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -625,12 +767,41 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         let before = list.len();
         let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
         removed += before - kept.len();
-        // Marks on top come after the closing wrapper; without any, the wrapper has no purpose.
-        let is_wrap = |o: &Object| stream_tag(doc, o).as_deref() == Some("Wrap");
-        let close = kept.iter().rposition(&is_wrap);
-        let marks_on_top = close.is_some_and(|c| kept[c + 1..].iter().any(|o| stream_tag(doc, o).is_some_and(|t| t != "Wrap")));
-        if !marks_on_top {
-            kept.retain(|o| !is_wrap(o));
+        // Strip only wrapper pairs whose close ends the list (after stripping the pairs after
+        // it): nothing comes after them to need the state they restore. Pairs come from the
+        // operators; for content that can't be read that precisely, from the wrapper streams
+        // alone, so updating a mark there doesn't nest another wrapper each time.
+        if before != kept.len() {
+            let wrappers = match isolation(doc, &kept) {
+                Isolation::Clean { wrappers, .. } => wrappers,
+                Isolation::Unknown { .. } => {
+                    let mut opens = Vec::new();
+                    let mut pairs = Vec::new();
+                    for (i, o) in kept.iter().enumerate() {
+                        match wrapper_role(doc, o) {
+                            Some(true) => opens.push(i),
+                            Some(false) => pairs.extend(opens.pop().map(|open| (open, i))),
+                            None => {}
+                        }
+                    }
+                    pairs
+                }
+            };
+            let pairs: std::collections::HashMap<usize, usize> = wrappers.into_iter().map(|(open, close)| (close, open)).collect();
+            let mut discarded = std::collections::HashSet::new();
+            let mut end = kept.len();
+            while let Some(close) = end.checked_sub(1) {
+                if discarded.contains(&close) {
+                    end = close;
+                } else if let Some(&open) = pairs.get(&close) {
+                    discarded.insert(open);
+                    discarded.insert(close);
+                    end = close;
+                } else {
+                    break;
+                }
+            }
+            kept = kept.into_iter().enumerate().filter(|(i, _)| !discarded.contains(i)).map(|(_, o)| o).collect();
         }
         if before != kept.len() {
             doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept)))?;

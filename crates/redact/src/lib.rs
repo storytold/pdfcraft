@@ -400,7 +400,8 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             // Tags must not keep what the page no longer shows.
             let after = doc.get(page.obj).as_dict().cloned().unwrap_or_default();
             let (_, new_data) = page_streams(doc, &after, pi)?;
-            let (changed_ids, empty_ids) = tags::touched(doc, &resources, &data.join(&b'\n'), &new_data.join(&b'\n'));
+            let (changed_ids, empty_ids) =
+                tags::touched(doc, &resources, pdfcraft_content::Pieces::join(&data).data(), pdfcraft_content::Pieces::join(&new_data).data());
             report.tags += tags::clean(doc, page.obj, None, &changed_ids, &empty_ids)?;
         }
 

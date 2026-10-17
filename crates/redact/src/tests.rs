@@ -1117,3 +1117,42 @@ fn masks_and_alternates_outside_redaction_stay() {
     assert!(image.dict.contains(b"SMask") && image.dict.contains(b"Alternates"));
     assert_eq!(image.decoded().unwrap(), b"PUBLIC_TOPBOTTOM");
 }
+
+#[test]
+fn stream_boundary_comment_stays_inert_after_unrelated_redaction() {
+    for tail in [b"BT /F1 10 Tf 10 200 Td (HIDDEN) Tj ET".as_slice(), b"BT /F1 10 Tf 10 200 Td (HIDDEN) Tj ET\nBT /F1 10 Tf 10 250 Td (LIVE) Tj ET"] {
+        let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (REMOVE) Tj ET % note", "", vec![]);
+        let hidden = doc.add(Object::Stream(Stream::from_raw(Dict::new(), tail.to_vec())));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(hidden)]))).unwrap();
+        mark(&mut doc, 0, &[[9.0, 95.0, 50.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6);
+        let reopened = reopen(&doc);
+        let page = &pdfcraft_model::pages(&reopened)[0];
+        let (_, data) = page_streams(&reopened, &page.dict, 0).unwrap();
+        // Independent of Pieces::join: the renderer concatenates streams with spaces.
+        let ops = pdfcraft_content::parse(&data.join(&b' ')).ops;
+        assert!(!ops.iter().any(|o| o.operands.iter().any(|v| v.as_string().is_some_and(|s| s.bytes == b"HIDDEN"))), "hidden text became executable");
+        let live = ops.iter().any(|o| o.operands.iter().any(|v| v.as_string().is_some_and(|s| s.bytes == b"LIVE")));
+        assert_eq!(live, tail.contains(&b'\n'));
+    }
+}
+
+#[test]
+fn rewriting_a_piece_keeps_its_leading_comment_terminator() {
+    for eol in [b"\n".as_slice(), b"\r", b"\r\n"] {
+        let mut doc = one_page(b"q Q % note", "", vec![]);
+        let mut tail = eol.to_vec();
+        tail.extend(b"BT /F1 10 Tf 10 100 Td (REMOVE) Tj ET BT /F1 10 Tf 10 200 Td (KEEP) Tj ET");
+        let second = doc.add(Object::Stream(Stream::from_raw(Dict::new(), tail)));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(second)]))).unwrap();
+        mark(&mut doc, 0, &[[9.0, 95.0, 50.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6);
+        let p = &pdfcraft_model::pages(&doc)[0];
+        let (_, data) = page_streams(&doc, &p.dict, 0).unwrap();
+        let ops = pdfcraft_content::parse(&data.join(&b' ')).ops;
+        assert_eq!(ops.iter().filter(|o| o.is("BT")).count(), 2, "leading EOL lost; first live operator swallowed");
+        assert!(ops.iter().any(|o| o.operands.iter().any(|v| v.as_string().is_some_and(|s| s.bytes == b"KEEP"))));
+    }
+}

@@ -380,6 +380,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
+    // A rewritten piece loses its comments, so keep where they began and ended: a comment that
+    // ran on into the next piece still hides that piece's first line.
+    let comment_edges = joined.comment_edges(&parsed);
     if !scope.hidden_layers.is_empty() {
         let props = res_dict(doc, resources, b"Properties");
         let (kept, removed) = strip_hidden_layers(doc, scope, parsed.ops, &props);
@@ -405,7 +408,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         }
     }
 
-    for (piece, mut changed) in pieces.into_iter().zip(rewrite) {
+    for ((piece, mut changed), (comment_in, comment_out)) in pieces.into_iter().zip(rewrite).zip(comment_edges) {
         let mut ops: Vec<Op> = Vec::with_capacity(piece.len());
         for op in piece {
             let o = op.op.as_slice();
@@ -622,7 +625,16 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         if !path.is_empty() {
             ops.append(&mut path);
         }
-        out.streams.push(changed.then(|| serialize_ops(&ops)));
+        out.streams.push(changed.then(|| {
+            // The piece before still ends inside a comment: end it before the first operator.
+            let mut bytes = if comment_in { b"\n".to_vec() } else { Vec::new() };
+            bytes.extend(serialize_ops(&ops));
+            // The piece ended inside a comment that hid the start of the next one: keep it open.
+            if comment_out {
+                bytes.push(b'%');
+            }
+            bytes
+        }));
     }
     out
 }

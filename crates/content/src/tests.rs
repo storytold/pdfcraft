@@ -283,3 +283,108 @@ fn pieces_parse_as_one_stream_and_splice_back() {
     assert_eq!(out.len(), 3);
     assert!(Pieces::join::<&[u8]>(&[]).splice([(0..1, b"x".to_vec())]).is_empty());
 }
+
+#[test]
+fn stream_boundary_comment_matches_space_concatenation() {
+    for eol in [b"\n".as_slice(), b"\r", b"\r\n"] {
+        let mut tail = b"(HIDDEN) Tj".to_vec();
+        tail.extend(eol);
+        tail.extend(b"(LIVE) Tj");
+        let pieces = Pieces::join(&[b"BT % comment".as_slice(), b"(ALSO HIDDEN) Tj", &tail, b"ET"]);
+        let parsed = pieces.parse();
+        let shown: Vec<_> = parsed.ops.iter().filter(|op| op.is("Tj")).collect();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].operands[0].as_string().unwrap().bytes, b"LIVE");
+    }
+}
+
+#[test]
+fn comment_edges_terminate_at_next_piece_byte_zero() {
+    for eol in [b"\n".as_slice(), b"\r", b"\r\n"] {
+        let mut next = eol.to_vec();
+        next.extend_from_slice(b"q Q");
+        let pieces = Pieces::join(&[b"% outgoing".as_slice(), next.as_slice()]);
+        let parsed = pieces.parse();
+        assert_eq!(pieces.comment_edges(&parsed), vec![(false, true), (true, false)], "EOL {eol:?}");
+        assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), vec![b"q".as_slice(), b"Q"]);
+    }
+}
+
+#[test]
+fn comment_edges_span_empty_pieces_and_end_of_content() {
+    let pieces = Pieces::join(&[b"q % outgoing".as_slice(), b"", b"", b"ignored\nQ"]);
+    let parsed = pieces.parse();
+    assert_eq!(pieces.comment_edges(&parsed), vec![(false, true), (true, true), (true, true), (true, false)]);
+    assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), vec![b"q".as_slice(), b"Q"]);
+
+    let pieces = Pieces::join(&[b"% outgoing".as_slice(), b"", b"still ignored"]);
+    let parsed = pieces.parse();
+    assert_eq!(pieces.comment_edges(&parsed), vec![(false, true), (true, true), (true, true)]);
+    assert!(parsed.ops.is_empty());
+
+    let pieces = Pieces::join::<&[u8]>(&[]);
+    assert!(pieces.comment_edges(&pieces.parse()).is_empty());
+}
+
+#[test]
+fn comment_edges_ignore_percent_inside_operands_and_image_data() {
+    for first in [
+        b"(literal % not a comment) Tj".as_slice(),
+        b"/Percent#25Name MP",
+        b"[(literal % not a comment)] TJ",
+        b"/P << /ActualText (literal % not a comment) >> BDC EMC",
+        b"BI /W 1 /H 1 /BPC 8 /CS /G ID % EI",
+    ] {
+        let pieces = Pieces::join(&[first, b"q Q"]);
+        let parsed = pieces.parse();
+        assert_eq!(pieces.comment_edges(&parsed), vec![(false, false), (false, false)], "{first:?}");
+        assert_eq!(parsed.ops.last().unwrap().op, b"Q");
+        assert_eq!(parsed.skipped, 0);
+    }
+}
+
+#[test]
+fn compound_operand_comment_split_is_owned_by_spanning_operator() {
+    for parts in [[b"[(A) % ignored".as_slice(), b"still ignored\n(B)] TJ"], [b"/P << /MCID 0 % ignored".as_slice(), b"still ignored\n>> BDC"]] {
+        let pieces = Pieces::join(&parts);
+        let parsed = pieces.parse();
+        // The object lexer consumes this nested comment. Its containing operator spans
+        // both pieces, which forces both to be rewritten together by the redactor.
+        assert_eq!(pieces.comment_edges(&parsed), vec![(false, false), (false, false)]);
+        assert_eq!(parsed.ops.len(), 1);
+        assert_eq!(pieces.pieces_of(&parsed.ops[0]), (0, 1));
+        assert_eq!(parsed.skipped, 0);
+    }
+}
+
+#[test]
+fn comment_edges_do_not_confuse_local_comments_with_boundary_comments() {
+    let pieces = Pieces::join(&[b"% local\nq % crossing".as_slice(), b"ignored\n% local again\nQ\n% final local\n", b"q Q"]);
+    let parsed = pieces.parse();
+    assert_eq!(pieces.comment_edges(&parsed), vec![(false, true), (true, false), (false, false)]);
+    assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), vec![b"q".as_slice(), b"Q", b"q", b"Q"]);
+}
+
+#[test]
+fn comment_edge_storage_depends_on_piece_count_not_comment_count() {
+    let mut first = b"%\n".repeat(16_384);
+    first.extend_from_slice(b"q % crossing");
+    let pieces = Pieces::join(&[first.as_slice(), b"ignored\nQ"]);
+    let parsed = pieces.parse();
+    assert_eq!(pieces.comment_edges(&parsed), vec![(false, true), (true, false)]);
+    assert_eq!(parsed.ops.len(), 2);
+    // Also exercise public parsing without piece-boundary metadata.
+    assert_eq!(parse(&first).ops.len(), 1);
+}
+
+#[test]
+fn piece_lookup_preserves_exact_boundary_and_empty_piece_mapping() {
+    // Joined layout: q<space><space>Q<space>; separator belongs to prior piece.
+    let pieces = Pieces::join(&[b"q".as_slice(), b"", b"Q"]);
+    for (at, expected) in [(0, 0), (1, 0), (2, 1), (3, 2), (4, 2), (5, 2), (usize::MAX, 2)] {
+        assert_eq!(pieces.piece_of(at), expected, "position {at}");
+    }
+    let empty = Pieces::join::<&[u8]>(&[]);
+    assert_eq!(empty.piece_of(0), 0);
+    assert_eq!(empty.piece_of(usize::MAX), 0);
+}
