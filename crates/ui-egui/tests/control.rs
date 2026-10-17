@@ -106,26 +106,28 @@ fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
 #[test]
 fn control_focus_traverses_real_widgets_and_keyboard_activates() {
     let (mut h, c) = harness();
-    ok(&mut h, &c, "ui.focus", json!({"label": "Read"}));
-    let read = ok(&mut h, &c, "ui.inspect", json!({"query": "Read", "role": "Button"}));
-    assert_eq!(read["widgets"][0]["focused"], true, "{read}");
-    assert_eq!(read["widgets"][0]["focusable"], true);
+    ok(&mut h, &c, "ui.focus", json!({"label": "Convert"}));
+    let convert = ok(&mut h, &c, "ui.inspect", json!({"query": "Convert", "role": "Button"}));
+    let focused =
+        |found: &serde_json::Value, label: &str| found["widgets"].as_array().unwrap().iter().any(|w| w["label"] == label && w["focused"] == true);
+    assert!(focused(&convert, "Convert"), "{convert}");
+    assert!(convert["widgets"].as_array().unwrap().iter().any(|w| w["label"] == "Convert" && w["focusable"] == true));
     ok(&mut h, &c, "ui.key", json!({"key": "Tab"}));
-    let edit = ok(&mut h, &c, "ui.inspect", json!({"query": "Edit", "role": "Button"}));
-    assert!(edit["widgets"].as_array().unwrap().iter().any(|w| w["label"] == "Edit" && w["focused"] == true), "{edit}");
+    let sign = ok(&mut h, &c, "ui.inspect", json!({"query": "E-Sign", "role": "Button"}));
+    assert!(focused(&sign, "E-Sign"), "{sign}");
     ok(&mut h, &c, "ui.key", json!({"key": "Tab", "modifiers": ["shift"]}));
-    let read = ok(&mut h, &c, "ui.inspect", json!({"query": "Read", "role": "Button"}));
-    assert_eq!(read["widgets"][0]["focused"], true);
+    let convert = ok(&mut h, &c, "ui.inspect", json!({"query": "Convert", "role": "Button"}));
+    assert!(focused(&convert, "Convert"), "{convert}");
     ok(&mut h, &c, "ui.key", json!({"key": "Enter"}));
     let state = ok(&mut h, &c, "ui.state", json!({}));
-    assert_eq!(state["mode"], "Read");
+    assert_eq!(state["mode"], "Convert");
     assert_eq!(state["documents"][0]["dirty"], false);
 }
 
 #[test]
 fn control_button_focus_preserves_document_undo_redo_shortcuts() {
     let (mut h, c) = harness_pages(2);
-    ok(&mut h, &c, "ui.focus", json!({"label": "Read"}));
+    ok(&mut h, &c, "ui.focus", json!({"label": "Convert"}));
     ok(&mut h, &c, "ui.key", json!({"key": "Enter"}));
     ok(&mut h, &c, "ui.click", json!({"label": "All tools"}));
     assert!(h.ctx.egui_wants_keyboard_input());
@@ -163,9 +165,9 @@ fn control_focus_rejects_missing_ambiguous_disabled_and_nonfocusable_targets() {
         json!({"label": "does not exist"}),
         json!({"id": "not a number"}),
         json!({"id": 0}),
-        json!({"id": 1, "label": "Read"}),
+        json!({"id": 1, "label": "Convert"}),
         json!({"label": false}),
-        json!({"label": "Read", "force": true}),
+        json!({"label": "Convert", "force": true}),
         json!([]),
     ] {
         assert!(call(&mut h, &c, "ui.focus", params).is_err());
@@ -173,9 +175,10 @@ fn control_focus_rejects_missing_ambiguous_disabled_and_nonfocusable_targets() {
     let widgets = ok(&mut h, &c, "ui.inspect", json!({}));
     let nonfocusable = widgets["widgets"].as_array().unwrap().iter().find(|w| w["focusable"] == false).unwrap();
     assert!(call(&mut h, &c, "ui.focus", json!({"id": nonfocusable["id"]})).is_err());
-    let read = widgets["widgets"].as_array().unwrap().iter().find(|w| w["label"] == "Read").unwrap();
-    ok(&mut h, &c, "ui.focus", json!({"id": read["id"]}));
-    assert_eq!(ok(&mut h, &c, "ui.inspect", json!({"query": "Read", "role": "Button"}))["widgets"][0]["focused"], true);
+    let convert = widgets["widgets"].as_array().unwrap().iter().find(|w| w["label"] == "Convert").unwrap();
+    ok(&mut h, &c, "ui.focus", json!({"id": convert["id"]}));
+    let found = ok(&mut h, &c, "ui.inspect", json!({"query": "Convert", "role": "Button"}));
+    assert!(found["widgets"].as_array().unwrap().iter().any(|w| w["label"] == "Convert" && w["focused"] == true), "{found}");
     // Home has no active document, so its document-only toolbar controls are disabled.
     ok(&mut h, &c, "ui.click", json!({"label": "Home"}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["home"], true);
@@ -727,8 +730,8 @@ fn japanese_controls_and_search_keep_command_ids() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "ja");
-    ok(&mut h, &c, "ui.click", json!({ "label": "閲覧" }));
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    ok(&mut h, &c, "ui.click", json!({ "label": "変換" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
 
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
     let prefs = ok(&mut h, &c, "ui.inspect", json!({ "query": "表示言語" }));
@@ -753,8 +756,8 @@ fn japanese_controls_and_search_keep_command_ids() {
 fn german_preferences_and_search_keep_command_ids() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
-    ok(&mut h, &c, "ui.click", json!({ "label": "Lesen" }));
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    ok(&mut h, &c, "ui.click", json!({ "label": "Konvertieren" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
     let prefs = ok(&mut h, &c, "ui.inspect", json!({ "query": "Sprache der Oberfläche" }));
     assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
@@ -945,23 +948,24 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
 #[test]
 fn inspect_and_click_by_label_and_id() {
     let (mut h, c) = harness();
-    let found = ok(&mut h, &c, "ui.inspect", json!({ "query": "read" }));
-    let read = found["widgets"].as_array().unwrap().iter().find(|w| w["label"] == "Read" && w["clickable"] == true).cloned().expect("a Read tab");
-    let rect = read["rect"].as_array().unwrap();
+    let found = ok(&mut h, &c, "ui.inspect", json!({ "query": "convert" }));
+    let convert =
+        found["widgets"].as_array().unwrap().iter().find(|w| w["label"] == "Convert" && w["clickable"] == true).cloned().expect("a Convert tab");
+    let rect = convert["rect"].as_array().unwrap();
     assert!(rect[2].as_f64().unwrap() > rect[0].as_f64().unwrap());
 
-    ok(&mut h, &c, "ui.click", json!({ "label": "Read" }));
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    ok(&mut h, &c, "ui.click", json!({ "label": "Convert" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
 
     let all = ok(&mut h, &c, "ui.inspect", json!({ "query": "all tools" }));
     let id = all["widgets"].as_array().unwrap().iter().find(|w| w["label"] == "All tools" && w["clickable"] == true).unwrap()["id"].clone();
     ok(&mut h, &c, "ui.click", json!({ "id": id }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "AllTools");
 
-    // Clicking a point works too (here: the Read tab's centre).
+    // Clicking a point works too (here: the Convert tab's centre).
     let [x0, y0, x1, y1] = [0, 1, 2, 3].map(|i| rect[i].as_f64().unwrap());
     ok(&mut h, &c, "ui.click", json!({ "x": (x0 + x1) / 2.0, "y": (y0 + y1) / 2.0 }));
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
 
     let err = call(&mut h, &c, "ui.click", json!({ "label": "No such button" })).unwrap_err();
     assert!(err.contains("no enabled clickable widget"), "{err}");
@@ -1570,10 +1574,10 @@ fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
         let e = call(&mut h, &c, method, params.clone()).expect_err(&format!("{method} {params} is refused"));
         assert!(e.starts_with(&format!("{method}: ")) && e.contains("finite"), "{e}");
         h.run_steps(4);
-        assert_eq!(ok(&mut h, &c, "ui.inspect", json!({ "query": "Read", "role": "Button" }))["count"], 1);
+        assert_eq!(ok(&mut h, &c, "ui.inspect", json!({ "query": "Convert", "role": "Button" }))["count"], 1);
     }
-    let read = ok(&mut h, &c, "ui.inspect", json!({ "query": "Read", "role": "Button" }))["widgets"][0]["rect"].clone();
-    let (x, y) = (read[0].as_f64().unwrap() + 4.0, read[1].as_f64().unwrap() + 4.0);
+    let convert = ok(&mut h, &c, "ui.inspect", json!({ "query": "Convert", "role": "Button" }))["widgets"][0]["rect"].clone();
+    let (x, y) = (convert[0].as_f64().unwrap() + 4.0, convert[1].as_f64().unwrap() + 4.0);
     assert_eq!(ok(&mut h, &c, "ui.click", json!({ "x": x, "y": y }))["clicked"], json!([x, y]));
     ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
 }

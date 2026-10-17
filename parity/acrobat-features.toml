@@ -1094,8 +1094,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.read_mode"]
 tools = []
-evidence = ["crates/ui-egui/tests/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/commands.rs::every_registered_command_is_implemented"]
-notes = ""
+evidence = ["crates/ui-egui/tests/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/commands.rs::every_registered_command_is_implemented", "crates/ui-egui/tests/ui.rs::the_mode_bar_has_no_read_tab"]
+notes = "View ▸ Read mode (and the Read mode workspace) hides the panes and tool chrome. The mode bar has no Read tab, as in Acrobat, where reading is the viewer with no tool in use: its tabs are All tools, Edit, Convert and E-Sign."
 
 [[feature]]
 id = "view.full-screen"
