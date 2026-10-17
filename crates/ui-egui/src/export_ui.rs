@@ -1,4 +1,4 @@
-//! Export a PDF ▸ Image (PNG, JPEG, TIFF) and Text (Acrobat's Export a PDF tool, first formats).
+//! Export a PDF ▸ Image (PNG, JPEG, TIFF), Text and Excel (Acrobat's Export a PDF tool).
 //!
 //! On the desktop the export runs on a worker thread and reports progress in the notice bar;
 //! on the web it runs in place and downloads the files.
@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
+use pdfcraft_engine::compare::XlsxSheets;
 use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 
 use crate::marks_ui::PageRange;
@@ -18,6 +19,8 @@ pub enum ExportKind {
     Text,
     /// Export all images: the images pages use, as files.
     AllImages,
+    /// Excel: the pages on one sheet or a sheet each, saved as one workbook.
+    Excel,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,11 +30,13 @@ pub struct ExportDraft {
     pub format: ImageFormat,
     /// Export all images ▸ skip images with fewer pixels than this on their shorter side.
     pub min_side: u32,
+    /// Excel ▸ one sheet for the whole document (the default) or a sheet per page.
+    pub sheets: XlsxSheets,
 }
 
 impl Default for ExportDraft {
     fn default() -> Self {
-        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0 }
+        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0, sheets: XlsxSheets::default() }
     }
 }
 
@@ -46,6 +51,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
             ExportKind::Image => tl!("Export to Image"),
             ExportKind::Text => tl!("Export to Text"),
             ExportKind::AllImages => tl!("Export All Images"),
+            ExportKind::Excel => tl!("Export to Excel"),
         })
         .font(theme::semibold(18.0)),
     );
@@ -103,6 +109,26 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
             egui::RichText::new(tl!("Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG."))
                 .small()
                 .color(t.text_faint),
+        );
+    } else if kind == ExportKind::Excel {
+        ui.label(egui::RichText::new(tl!("Sheets")).font(theme::semibold(12.5)));
+        for (sheets, label, line) in [
+            (
+                XlsxSheets::WholeDocument,
+                tl!("One sheet for the whole document"),
+                tl!("A table that runs across pages stays together; the pages follow one another down the sheet."),
+            ),
+            (XlsxSheets::PerPage, tl!("One sheet per page"), tl!("Each page on its own sheet, named Page 1, Page 2…")),
+        ] {
+            widgets::radio_value(ui, &mut d.sheets, sheets, label);
+            ui.indent(label, |ui| ui.label(egui::RichText::new(line).small().color(t.text_faint)));
+        }
+        ui.label(
+            egui::RichText::new(tl!(
+                "Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page."
+            ))
+            .small()
+            .color(t.text_faint),
         );
     } else {
         ui.label(egui::RichText::new(tl!("Plain text in reading order; pages are separated by form feeds.")).small().color(t.text_faint));
@@ -173,8 +199,8 @@ fn run(
     }
     let mut ex = Exporter::from_source(src);
     match kind {
-        // Handled above.
-        ExportKind::AllImages => String::new(),
+        // Handled above (all images) or in `start_export` (Excel).
+        ExportKind::AllImages | ExportKind::Excel => String::new(),
         ExportKind::Image => {
             for (k, p) in pages.iter().enumerate() {
                 set(k, None);
@@ -227,6 +253,14 @@ impl PdfCraftApp {
             return;
         }
         let Some(doc) = self.session.get(id) else { return };
+        // Excel: one workbook of the pages chosen, written through the save dialog.
+        if kind == ExportKind::Excel {
+            let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
+            let pages = self.export_draft.range.pages(doc.info.pages.len());
+            let bytes = doc.export_xlsx(self.export_draft.sheets, Some(&pages));
+            self.save_export_file(&stem, "xlsx", bytes);
+            return;
+        }
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let pages = self.export_draft.range.pages(src.pages);

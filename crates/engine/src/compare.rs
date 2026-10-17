@@ -121,10 +121,14 @@ impl Session {
     }
 }
 
-/// Export a PDF ▸ Word, PowerPoint, HTML or RTF.
+/// How an Excel export lays the document out on sheets.
+pub use pdfcraft_export::XlsxSheets;
+
+/// Export a PDF ▸ Word, Excel, PowerPoint, HTML or RTF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfficeFormat {
     Docx,
+    Xlsx,
     Pptx,
     Html,
     Rtf,
@@ -134,6 +138,7 @@ impl OfficeFormat {
     pub fn extension(self) -> &'static str {
         match self {
             OfficeFormat::Docx => "docx",
+            OfficeFormat::Xlsx => "xlsx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
             OfficeFormat::Rtf => "rtf",
@@ -143,6 +148,7 @@ impl OfficeFormat {
     pub fn from_extension(ext: &str) -> Option<OfficeFormat> {
         match ext.to_ascii_lowercase().as_str() {
             "docx" => Some(OfficeFormat::Docx),
+            "xlsx" => Some(OfficeFormat::Xlsx),
             "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
@@ -213,9 +219,21 @@ impl crate::Document {
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         match format {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Xlsx => pdfcraft_export::xlsx(&pages, &title, XlsxSheets::default()),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
         }
+    }
+
+    /// Export a PDF ▸ Excel with the sheets chosen: the whole document on one sheet, or a sheet
+    /// per page; `pages` (0-based) limits it to some pages, in document order.
+    pub fn export_xlsx(&self, sheets: XlsxSheets, pages: Option<&[usize]>) -> Vec<u8> {
+        let mut all = self.export_pages();
+        if let Some(keep) = pages {
+            all = all.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, p)| p).collect();
+        }
+        let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
+        pdfcraft_export::xlsx(&all, &title, sheets)
     }
 }

@@ -6997,11 +6997,11 @@ title = "Export to Excel (.xlsx) with table detection"
 area = "J"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["export.xlsx"]
+tools = ["doc_export_office"]
+evidence = ["crates/export/src/lib.rs::xlsx_is_a_workbook_with_real_tables_and_numbers", "crates/export/src/lib.rs::xlsx_one_sheet_for_the_whole_document_or_one_per_page", "crates/export/src/lib.rs::xlsx_values_as_another_reader_sees_them", "crates/export/src/lib.rs::xlsx_stays_within_excels_limits", "crates/export/src/cells.rs::leading_zeros_and_long_numbers_stay_text", "crates/export/src/cells.rs::amounts_in_dollars_euros_and_pounds", "crates/export/src/cells.rs::unambiguous_dates_become_dates_and_the_rest_stay_text", "crates/ui-egui/tests/export.rs::export_to_excel_offers_the_sheets", "crates/automation/tests/automation.rs::exporting_to_word_html_and_rtf"]
+notes = "File > Export to Excel asks for the pages and the sheets: one sheet for the whole document (the default, named after it; a table that runs across pages stays together) or one sheet per page (Page N); doc_export_office takes the same choice as sheets document/page. The tables the Word/HTML export already detects become rows of cells (a cell spanning columns merged across them), paragraphs rows with their text in column A, in reading order; size, bold, italic and colour as cell fonts; column widths from the table grid; images left out. Each cell is read by crates/export/src/cells.rs: plain numbers become numbers; dollar, euro and pound amounts, negatives in parentheses or with a trailing minus, and percentages become numbers with a number format that shows the same text; ISO and English month-name dates become real dates; leading zeros, more than 15 significant digits and numeric dates that could be read two ways stay text. Excel limits hold (1,048,576 rows: the rest goes on on a new sheet; 16,384 columns; 32,767 characters a cell; sheet names by Excel rules); characters XML cannot hold are dropped. Written by hand like the Word export (no spreadsheet crate; calamine reads the result back in tests only). Missing: formulas, images, charts, font families and mixed formatting within a cell."
 
 [[feature]]
 id = "create.export-pptx"
