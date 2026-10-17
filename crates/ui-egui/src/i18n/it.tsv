@@ -902,6 +902,9 @@
 	Signature is valid:	La firma è valida:
 	Signature validity is UNKNOWN:	La validità della firma è SCONOSCIUTA:
 	Signature is INVALID:	La firma NON È VALIDA:
+	Signature valid	Firma valida
+	Validity unknown	Validità sconosciuta
+	Signature invalid	Firma non valida
 	Signature Details	Dettagli firma
 	Reason	Motivo
 	Signing time	Data e ora della firma

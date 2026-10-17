@@ -586,6 +586,9 @@
 	Signature is valid:	签名有效：
 	Signature validity is UNKNOWN:	签名有效性未知：
 	Signature is INVALID:	签名无效：
+	Signature valid	签名有效
+	Validity unknown	有效性未知
+	Signature invalid	签名无效
 	Signature Details	签名详细信息
 	Reason	原因
 	Signing time	签署时间

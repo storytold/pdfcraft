@@ -532,6 +532,9 @@
 	Signature is valid:	A assinatura é válida:
 	Signature validity is UNKNOWN:	A validade da assinatura é DESCONHECIDA:
 	Signature is INVALID:	A assinatura é INVÁLIDA:
+	Signature valid	Assinatura válida
+	Validity unknown	Validade desconhecida
+	Signature invalid	Assinatura inválida
 	Signature Details	Detalhes da assinatura
 	Reason	Motivo
 	Signing time	Hora da assinatura

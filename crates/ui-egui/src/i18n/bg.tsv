@@ -579,6 +579,9 @@
 	Signature is valid:	Подписът е валиден:
 	Signature validity is UNKNOWN:	Валидността на подписа е НЕИЗВЕСТНА:
 	Signature is INVALID:	Подписът е НЕВАЛИДЕН:
+	Signature valid	Валиден подпис
+	Validity unknown	Неизвестна валидност
+	Signature invalid	Невалиден подпис
 	Signature Details	Подробности за подписа
 	Reason	Причина
 	Signing time	Час на подписване

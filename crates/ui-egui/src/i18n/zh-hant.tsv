@@ -537,6 +537,9 @@
 	Signature is valid:	簽名有效：
 	Signature validity is UNKNOWN:	簽名有效性未知：
 	Signature is INVALID:	簽名無效：
+	Signature valid	簽名有效
+	Validity unknown	有效性未知
+	Signature invalid	簽名無效
 	Signature Details	簽名詳細資訊
 	Reason	原因
 	Signing time	簽署時間

@@ -203,7 +203,7 @@ impl TrustStore {
 }
 
 /// Acrobat's three verdicts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Status {
     /// Intact, signed by a trusted identity, and any later changes are permitted.
     Valid,
@@ -448,6 +448,9 @@ pub struct SignatureInfo {
     pub timestamp_time: Option<Time>,
     pub status: Status,
     pub modification: Modification,
+    /// The display copy draws this verdict into the signature's appearance (its named status
+    /// layers, see [`crate::status_layers`]).
+    pub verdict_shown: bool,
     /// Acrobat-style sentences explaining the verdict, each one ready to read in English and ready to
     /// be said in another language (see [`Detail`]).
     pub details: Vec<Detail>,
@@ -479,12 +482,12 @@ pub(crate) fn text(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-struct Field {
-    name: String,
+pub(crate) struct Field {
+    pub(crate) name: String,
     /// The field dictionary (and its widget(s)).
     r: Option<ObjRef>,
     dict: Dict,
-    widgets: Vec<(Option<ObjRef>, Dict)>,
+    pub(crate) widgets: Vec<(Option<ObjRef>, Dict)>,
 }
 
 impl Field {
@@ -502,7 +505,7 @@ impl Field {
 }
 
 /// Every signature field, depth first in `/Fields` order.
-fn sig_fields(doc: &Document) -> Vec<Field> {
+pub(crate) fn sig_fields(doc: &Document) -> Vec<Field> {
     let mut out = Vec::new();
     let Some(root) = doc.root() else { return out };
     let Some(af) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()) else {
@@ -608,6 +611,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             timestamp_time: None,
             status: Status::Unknown,
             modification: Modification::None,
+            verdict_shown: false,
             details: Vec::new(),
         };
         if let Some(v) = v {
@@ -651,6 +655,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             timestamp_time: None,
             status: Status::Unknown,
             modification: Modification::None,
+            verdict_shown: false,
             details: Vec::new(),
         };
         validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust);

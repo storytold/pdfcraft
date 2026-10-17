@@ -153,7 +153,7 @@ pub use pdfcraft_redact::patterns::{
 };
 pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
-pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
+pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, StatusCaptions, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
@@ -384,6 +384,9 @@ pub struct Document {
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
     trust: Arc<TrustStore>,
+    /// The words signature status layers are drawn with (the session's, see
+    /// [`Session::set_signature_captions`]).
+    captions: Arc<StatusCaptions>,
     sig_cache: Arc<pdfcraft_sign::DigestCache>,
     editor: Option<Editor>,
     config: RenderConfig,
@@ -872,21 +875,66 @@ fn is_placeholder_title(title: &str) -> bool {
     address || t == "untitled"
 }
 
-/// The working file plus appearances for comments that have none. Signature artwork
-/// is preserved; validation badges belong to the viewer and never enter these bytes,
-/// which image/text exports and Print as Image also consume.
-fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
+/// What is displayed: the working file plus, in memory only and never saved, the appearances
+/// PdfCraft draws for comments that have none ([`pdfcraft_annot::with_missing_appearances`])
+/// and the signature states drawn into named-layer signature appearances
+/// ([`pdfcraft_sign::show_status_layers`]). The working file is unchanged, and so is everything
+/// that reads it (saving, signatures, …). Image and text exports and Print as Image read these
+/// bytes, so they show the page as displayed.
+///
+/// `signatures` is input and output: each one whose state gets drawn comes back marked
+/// (`verdict_shown`). A mark describes the bytes returned, so every mark is cleared first and a
+/// copy that cannot be written takes its marks with it.
+fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>, signatures: &mut [SignatureInfo], captions: &StatusCaptions) -> Arc<Vec<u8>> {
+    for sig in signatures.iter_mut() {
+        sig.verdict_shown = false;
+    }
     let Some(e) = editor else { return bytes.clone() };
-    let Some(display) = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances) else {
+    if let Some(mut display) = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances) {
+        // Written whether or not a signature changed: the copy exists for the comments.
+        let _ = pdfcraft_sign::show_status_layers(&mut display, signatures, captions);
+        return write_display_copy(e, bytes, &display, signatures);
+    }
+    // No comment needed an appearance, so there is no copy yet: build one only when a
+    // signature's state would change it.
+    if !pdfcraft_sign::has_status_layers(&e.cos, signatures) {
         return bytes.clone();
-    };
-    match write_incremental(&display, &SaveOptions::default()) {
+    }
+    let mut display = e.cos.clone();
+    if !pdfcraft_sign::show_status_layers(&mut display, signatures, captions) {
+        return bytes.clone();
+    }
+    write_display_copy(e, bytes, &display, signatures)
+}
+
+/// Write the display copy, or keep the working file when it cannot be written. The page then
+/// shows the file's own artwork, so the marks are cleared and the badges come back. Losing the
+/// copy is a repair, so it is logged.
+fn write_display_copy(e: &mut Editor, bytes: &Arc<Vec<u8>>, display: &pdfcraft_cos::Document, signatures: &mut [SignatureInfo]) -> Arc<Vec<u8>> {
+    match write_incremental(display, &SaveOptions::default()) {
         Ok(written) => Arc::new(written),
         Err(err) => {
-            e.cos.note_repair(format!("missing comment appearances could not be drawn ({err})"));
+            for sig in signatures.iter_mut() {
+                sig.verdict_shown = false;
+            }
+            e.cos.note_repair(format!("missing comment appearances and signature states could not be drawn ({err})"));
             bytes.clone()
         }
     }
+}
+
+/// Carry the marks across a revalidation that leaves the display copy alone, when it may: only
+/// when every verdict is the one the copy was drawn with. Returns whether it did; otherwise the
+/// copy has to be drawn again.
+fn carry_verdict_marks(previous: &[SignatureInfo], next: &mut [SignatureInfo]) -> bool {
+    let unchanged = previous.len() == next.len()
+        && previous.iter().zip(next.iter()).all(|(p, n)| p.field == n.field && p.revision == n.revision && p.status == n.status);
+    if unchanged {
+        for (p, n) in previous.iter().zip(next.iter_mut()) {
+            n.verdict_shown = p.verdict_shown;
+        }
+    }
+    unchanged
 }
 
 /// The reader shows the same pages in `a` and `b`: count, displayed size and rotation.
@@ -2891,6 +2939,8 @@ pub struct Session {
     utc_offset: Option<fn() -> i64>,
     /// Certificates trusted for signing (Acrobat: Trusted Certificates).
     trust: Arc<TrustStore>,
+    /// The words signature status layers are drawn with, in the interface language.
+    captions: Arc<StatusCaptions>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     js_off: bool,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).
@@ -2905,6 +2955,7 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    captions: Arc<StatusCaptions>,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -3299,7 +3350,7 @@ impl Session {
 
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone() }
+        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), captions: self.captions.clone() }
     }
 
     /// Prepare a document without adding it to this session.
@@ -3319,6 +3370,14 @@ impl Session {
         let id = DocId(self.next_id);
         let mut document = prepared.document;
         document.id = id;
+        // Trust or the interface language may have changed while it was prepared on another
+        // thread.
+        if !Arc::ptr_eq(&document.trust, &self.trust) {
+            document.captions = self.captions.clone();
+            Self::revalidate(&mut document, self.trust.clone());
+        } else if *document.captions != *self.captions {
+            Self::draw_captions(&mut document, self.captions.clone());
+        }
         self.docs.push(document);
         id
     }
@@ -3491,7 +3550,7 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document = Self::build_document(&context.trust, name, path, bytes, info, cos, render_password, password, xfa);
+        let mut document = Self::build_document(context, name, path, bytes, info, cos, render_password, password, xfa);
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -3506,7 +3565,7 @@ impl Session {
     /// The last step of opening: build the document record and register it.
     #[allow(clippy::too_many_arguments)]
     fn build_document(
-        trust: &Arc<TrustStore>,
+        context: &OpenContext,
         name: String,
         path: Option<String>,
         bytes: Arc<Vec<u8>>,
@@ -3539,8 +3598,8 @@ impl Session {
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
-        let display = display_bytes(editor.as_mut(), &bytes);
+        let mut signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        let display = display_bytes(editor.as_mut(), &bytes, &mut signatures, &context.captions);
         let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
         let (form, adopted) = editor
             .as_ref()
@@ -3578,7 +3637,8 @@ impl Session {
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),
             signatures: Arc::new(signatures),
-            trust: trust.clone(),
+            trust: context.trust.clone(),
+            captions: context.captions.clone(),
             sig_cache,
             editor,
             config,
@@ -3875,7 +3935,14 @@ impl Session {
             doc.info.producer = info("Producer");
             doc.info.file_size = bytes.len();
             if !doc.signatures.is_empty() {
-                let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                // The display copy is kept for a metadata edit, and so are its marks, unless the
+                // edit changed a verdict (a certification can forbid it): the page then draws the
+                // new one.
+                if !carry_verdict_marks(&doc.signatures, &mut signatures) {
+                    doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
+                    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+                }
                 doc.signatures = Arc::new(signatures);
             }
             doc.bytes = bytes;
@@ -3919,8 +3986,8 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
@@ -3964,8 +4031,8 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
@@ -3987,6 +4054,15 @@ impl Session {
         doc.renderer = RenderPool::new_inline(Arc::new(Vec::new()), doc.config.clone());
         doc.display = original.clone();
         doc.bytes = original;
+        // The page shows the original's own artwork again, so its badges have to come back, even
+        // if the refresh that follows fails.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            let mut cleared = doc.signatures.to_vec();
+            for sig in &mut cleared {
+                sig.verdict_shown = false;
+            }
+            doc.signatures = Arc::new(cleared);
+        }
     }
 
     /// After a refresh failed: draw the display bytes it left (the original, once released),
@@ -4039,8 +4115,8 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        doc.display = display_bytes(Some(editor), &bytes);
+        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
@@ -4332,12 +4408,17 @@ impl Session {
             };
             return pdfcraft_print::impose(&pictures, &remapped).map_err(|e| EditError::Print(e.to_string()));
         }
-        let cos = match doc.editor.as_ref() {
+        let mut cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
             None => {
                 pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
             }
         };
+        // Signature states as the screen shows them, so not when its display copy could not be
+        // written. This copy is only printed, never saved.
+        if doc.signatures.iter().any(|s| s.verdict_shown) {
+            pdfcraft_sign::show_status_layers(&mut cos, &mut doc.signatures.to_vec(), &doc.captions);
+        }
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
     }
 
@@ -4779,15 +4860,47 @@ impl Session {
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
-            doc.trust = self.trust.clone();
-            let Some(editor) = doc.editor.as_mut() else { continue };
-            // Keep verdict refresh and renderer refresh together. Viewer caches are
-            // invalidated by the UI trust path; trust alone changes no document artwork.
-            let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
-            doc.display = display_bytes(Some(editor), &doc.bytes);
-            doc.signatures = Arc::new(signatures);
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+            Self::revalidate(doc, self.trust.clone());
         }
+    }
+
+    /// Validate `doc`'s signatures against `trust`, and rebuild its display copy and renderer
+    /// with them: the verdicts choose what the copy draws. Viewer caches are invalidated by the
+    /// UI trust path.
+    fn revalidate(doc: &mut Document, trust: Arc<TrustStore>) {
+        doc.trust = trust;
+        let Some(editor) = doc.editor.as_mut() else { return };
+        let mut signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
+        doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
+        doc.signatures = Arc::new(signatures);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+    }
+
+    /// The words the caption of a named-layer signature appearance is drawn with
+    /// ([`pdfcraft_sign::show_status_layers`]), in the interface language. When they change, every
+    /// open document's display copy and renderer are rebuilt; like trust, this is not an edit.
+    pub fn set_signature_captions(&mut self, captions: StatusCaptions) {
+        if *self.captions == captions {
+            return;
+        }
+        self.captions = Arc::new(captions);
+        for doc in &mut self.docs {
+            Self::draw_captions(doc, self.captions.clone());
+        }
+    }
+
+    /// Draw `doc`'s signature status layers with `captions`: the display copy and renderer are
+    /// rebuilt when it has signatures (working file, generation and dirty unchanged).
+    fn draw_captions(doc: &mut Document, captions: Arc<StatusCaptions>) {
+        doc.captions = captions;
+        let Some(editor) = doc.editor.as_mut() else { return };
+        if doc.signatures.is_empty() {
+            return;
+        }
+        let mut signatures = doc.signatures.to_vec();
+        doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
+        doc.signatures = Arc::new(signatures);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).

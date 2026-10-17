@@ -147,6 +147,16 @@ pub fn arabic_glyph(id: u32) -> Result<GlyphOutline, GlyphError> {
 /// A bounded outline from the same face that produced the shaped glyph id.
 pub fn shaped_glyph(script: ShapedScript, id: u32) -> Result<GlyphOutline, GlyphError> {
     let (font, _) = face(script).ok_or(GlyphError::NoFont)?;
+    glyph(font, id)
+}
+
+/// Glyph `id` of the face in `bytes`, bounded like [`shaped_glyph`]: for text shaped with
+/// [`crate::source_shaping::shape`] in a face no [`ShapedScript`] names.
+pub fn face_glyph(bytes: &[u8], id: u32) -> Result<GlyphOutline, GlyphError> {
+    glyph(&FontRef::new(bytes).map_err(|_| GlyphError::NoFont)?, id)
+}
+
+fn glyph(font: &FontRef, id: u32) -> Result<GlyphOutline, GlyphError> {
     if font.maxp().map_or(true, |m| id >= u32::from(m.num_glyphs())) {
         return Err(GlyphError::Missing);
     }

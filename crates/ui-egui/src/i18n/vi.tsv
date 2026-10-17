@@ -1080,6 +1080,9 @@ theme	Appearance	Giao diện
 	Signature is valid:	Chữ ký hợp lệ:
 	Signature panel	Bảng chữ ký
 	Signature validity is UNKNOWN:	Tính hợp lệ của chữ ký KHÔNG RÕ:
+	Signature valid	Chữ ký hợp lệ
+	Validity unknown	Không rõ tính hợp lệ
+	Signature invalid	Chữ ký không hợp lệ
 	Signer's name	Tên người ký
 	Simplified field notation:	Ký hiệu trường rút gọn:
 	Single Page	Một trang

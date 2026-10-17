@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
 
 use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -549,6 +549,19 @@ impl PdfCraftApp {
         }
     }
 
+    /// Draw signature status captions in `lang` ([`status_captions`]) and redraw the pages, once
+    /// per language change: the session rebuilds the documents whose captions it draws.
+    pub(crate) fn apply_status_captions(&mut self, lang: crate::i18n::Lang) {
+        if self.status_captions_lang == Some(lang) {
+            return;
+        }
+        self.status_captions_lang = Some(lang);
+        self.session.set_signature_captions(status_captions(lang));
+        for view in &mut self.views {
+            view.invalidate_content();
+        }
+    }
+
     /// A file name without its PDF extension, for snapshot tab names.
     fn file_stem(name: &str) -> String {
         name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string()
@@ -918,6 +931,19 @@ pub(crate) fn appearance_labels(lang: crate::i18n::Lang) -> (AppearanceLabels, b
     }
 }
 
+/// The words a named-layer signature appearance's status caption is drawn with: all three in
+/// `lang`, or all three in English when `lang` misses one of them. The sign crate picks the
+/// face, and shapes right-to-left words itself.
+pub(crate) fn status_captions(lang: crate::i18n::Lang) -> StatusCaptions {
+    let english = StatusCaptions::default();
+    if lang == crate::i18n::Lang::EN {
+        return english;
+    }
+    let said = |s: &str| crate::i18n::has(lang, s).then(|| crate::i18n::tr(lang, s).to_string());
+    (|| Some(StatusCaptions { valid: said(&english.valid)?, unknown: said(&english.unknown)?, invalid: said(&english.invalid)? }))()
+        .unwrap_or(english)
+}
+
 /// The detail lines of a visible signature, as `sign::pdf` stamps them (the distinguished name
 /// aside, which the dialog doesn't know before the ID is opened): the label above the name, then
 /// the reason, location and date, each after its label. `reason` and `location` are as typed.
@@ -1160,11 +1186,14 @@ fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
 /// One look per signature verdict, shared by the Signatures panel and the page badges so
 /// the two can't drift apart.
 pub(crate) fn signature_status_style(status: SignatureStatus) -> (&'static str, Color32) {
-    match status {
-        SignatureStatus::Valid => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
-        SignatureStatus::Unknown => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
-        SignatureStatus::Invalid => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),
-    }
+    // The colours the regenerated status layers draw with, so the page and the panel agree.
+    let [r, g, b] = sign::status_rgb(status);
+    let icon = match status {
+        SignatureStatus::Valid => "circle-check",
+        SignatureStatus::Unknown => "triangle-alert",
+        SignatureStatus::Invalid => "circle-x",
+    };
+    (icon, Color32::from_rgb(r, g, b))
 }
 
 /// What the Signatures panel asks the app to do.
@@ -1524,6 +1553,31 @@ mod tests {
         assert_eq!(signature_status_style(SignatureStatus::Valid).0, "circle-check");
         assert_eq!(signature_status_style(SignatureStatus::Unknown).0, "triangle-alert");
         assert_eq!(signature_status_style(SignatureStatus::Invalid).0, "circle-x");
+    }
+
+    #[test]
+    fn status_captions_are_translated_or_all_english() {
+        use crate::i18n::{Lang, tr};
+        let english = StatusCaptions::default();
+        assert_eq!(status_captions(Lang::EN), english);
+        // Every catalogue has all three, so each language gets its own; whether a face draws
+        // them is the sign crate's call.
+        for lang in Lang::all() {
+            let ours = status_captions(lang);
+            if lang == Lang::EN {
+                assert_eq!(ours, english, "{}", lang.code());
+            } else {
+                assert_eq!(
+                    [ours.valid.as_str(), ours.unknown.as_str(), ours.invalid.as_str()],
+                    [tr(lang, &english.valid), tr(lang, &english.unknown), tr(lang, &english.invalid)],
+                    "{}",
+                    lang.code()
+                );
+                assert_ne!(ours, english, "{}", lang.code());
+            }
+        }
+        let de = status_captions(Lang::from_code("de").unwrap());
+        assert_eq!((de.valid.as_str(), de.invalid.as_str()), ("Signatur gültig", "Signatur ungültig"));
     }
 
     #[test]

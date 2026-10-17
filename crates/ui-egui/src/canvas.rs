@@ -324,6 +324,9 @@ pub(crate) struct SignatureBadge {
     pub rect: [f64; 4],
     pub status: pdfcraft_engine::SignatureStatus,
     pub summary: &'static str,
+    /// The appearance draws the state itself, with its caption across the top: the mark goes
+    /// to the bottom-right corner, clear of it.
+    pub mark_below: bool,
 }
 
 /// The validation badges drawn over one page's signature widgets: signed, visible widgets
@@ -332,15 +335,53 @@ pub(crate) struct SignatureBadge {
 pub(crate) fn signature_badges(signatures: &[pdfcraft_engine::SignatureInfo], page: usize) -> Vec<SignatureBadge> {
     signatures
         .iter()
-        .filter(|s| s.signed && s.visible && s.page == Some(page))
+        // A valid signature whose appearance draws its state needs no badge. Any other keeps it:
+        // the document controls its own layers and could cover the drawn state with its own
+        // artwork, which it cannot do to the badge.
+        .filter(|s| s.signed && s.visible && s.page == Some(page) && !(s.verdict_shown && s.status == pdfcraft_engine::SignatureStatus::Valid))
         .filter_map(|s| {
             s.rect.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() < f32::MAX as f64)).map(|rect| SignatureBadge {
                 rect,
                 status: s.status,
                 summary: s.summary(),
+                mark_below: s.verdict_shown,
             })
         })
         .collect()
+}
+
+/// The mark's side as a share of the widget's shorter side.
+const MARK_SIDE_SHARE: f32 = 0.25;
+
+/// The largest side of the mark, in screen points, so zooming in stops enlarging it.
+const MARK_SIDE_MAX: f32 = 48.0;
+
+/// The smallest legible side of the mark, in screen points; a smaller widget keeps only its
+/// outline. A field over it at 100% can fall under it when the page is zoomed out to fit.
+const MARK_SIDE_MIN: f32 = 8.0;
+
+/// The gap between the mark and the widget's edges, as a share of the mark's side.
+const MARK_INSET_SHARE: f32 = 0.2;
+
+/// The icon's size as a share of the mark's side; the icon is centred in it.
+const MARK_ICON_SHARE: f32 = 0.64;
+
+/// Where the validation mark sits in a signature widget's screen rectangle, or `None` when the
+/// widget is too small for a legible one. It goes in the top-right corner, off the middle where a
+/// signer's artwork usually is, or in the bottom-right one when `below`.
+fn verdict_mark_rect(widget: Rect, below: bool) -> Option<Rect> {
+    // A NaN or infinite corner has no place on screen.
+    if !widget.is_finite() {
+        return None;
+    }
+    let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
+    // Also refuses the negative side of an inverted rectangle.
+    if !(MARK_SIDE_MIN..).contains(&side) {
+        return None;
+    }
+    let inset = side * MARK_INSET_SHARE;
+    let top = if below { widget.max.y - inset - side } else { widget.min.y + inset };
+    Some(Rect::from_min_max(pos2(widget.max.x - side - inset, top), pos2(widget.max.x - inset, top + side)))
 }
 
 /// The name shown for a document tab, the window title and the Combine picker.
@@ -3398,18 +3439,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             for badge in signature_badges(&doc.signatures, i) {
                 let [x0, y0, x1, y1] = badge.rect;
                 let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
-                let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
-                painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
-                // A widget too small for the mark keeps its outline: the verdict still shows.
-                if sr.width() < 4.0 || sr.height() < 4.0 {
+                // The page transform can turn a finite widget into one the screen cannot place;
+                // stroking it would put NaN into the mesh.
+                if !sr.is_finite() {
                     continue;
                 }
-                // Big enough to read at a glance, small enough to leave the signer's own
-                // text visible around it.
-                let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
-                let mark = Rect::from_center_size(sr.center(), vec2(side, side));
-                icons::paint(ui, mark, icon, side * 0.64, color);
-                if let Some(p) = pointer.filter(|p| mark.expand(2.0).contains(*p)) {
+                let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
+                painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
+                if let Some(mark) = verdict_mark_rect(sr, badge.mark_below) {
+                    icons::paint(ui, mark, icon, mark.width() * MARK_ICON_SHARE, color);
+                }
+                // The whole widget answers the pointer, so a field too small for a mark still
+                // shows its verdict on hover.
+                if let Some(p) = pointer.filter(|p| sr.expand(2.0).contains(*p)) {
                     badge_hover = Some((p, badge.summary.to_string()));
                 }
             }
@@ -5176,6 +5218,7 @@ mod tests {
             timestamp_time: None,
             status: pdfcraft_engine::SignatureStatus::Valid,
             modification: pdfcraft_engine::sign::Modification::None,
+            verdict_shown: false,
             details: Vec::new(),
         }
     }
@@ -5216,6 +5259,103 @@ mod tests {
         let signatures: Vec<_> = hostile.into_iter().map(|rect| signature(true, true, Some(0), Some(rect))).collect();
         let badges = signature_badges(&signatures, 0);
         assert_eq!(badges.len(), 1);
+    }
+
+    #[test]
+    fn signature_badges_skip_valid_verdicts_the_appearance_already_shows() {
+        let mut shown = signature(true, true, Some(0), Some([10.0, 10.0, 100.0, 50.0]));
+        shown.verdict_shown = true;
+        assert!(signature_badges(&[shown], 0).is_empty());
+    }
+
+    #[test]
+    fn signature_badges_keep_unknown_and_invalid_verdicts_the_appearance_shows() {
+        for status in [pdfcraft_engine::SignatureStatus::Unknown, pdfcraft_engine::SignatureStatus::Invalid] {
+            let mut shown = signature(true, true, Some(0), Some([10.0, 10.0, 100.0, 50.0]));
+            (shown.verdict_shown, shown.status) = (true, status);
+            let badges = signature_badges(&[shown.clone()], 0);
+            assert_eq!(badges.len(), 1, "{status:?}");
+            assert!(badges[0].mark_below, "{status:?}: the mark keeps clear of the drawn caption");
+            shown.verdict_shown = false;
+            assert!(!signature_badges(&[shown], 0)[0].mark_below, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn the_verdict_mark_below_sits_in_the_bottom_right_corner() {
+        let widget = Rect::from_min_max(pos2(40.0, 60.0), pos2(540.0, 760.0));
+        let mark = verdict_mark_rect(widget, true).expect("a widget this size carries a mark");
+        let centre = widget.center();
+        // egui's y grows downwards: below the middle is the larger y.
+        assert!(mark.min.y > centre.y && mark.min.x > centre.x, "{mark:?} in {widget:?}");
+        assert!(widget.contains_rect(mark), "{mark:?} in {widget:?}");
+        assert_eq!(mark.size(), verdict_mark_rect(widget, false).unwrap().size());
+    }
+
+    #[test]
+    fn the_verdict_mark_keeps_off_the_middle_of_the_signers_artwork() {
+        let widget = Rect::from_min_max(pos2(40.0, 60.0), pos2(540.0, 760.0));
+        let mark = verdict_mark_rect(widget, false).expect("a widget this size carries a mark");
+        assert!(!mark.contains(widget.center()), "the mark covers the artwork it annotates: {mark:?} in {widget:?}");
+        // egui's y grows downwards: above the middle is the smaller y.
+        let centre = widget.center();
+        assert!(mark.max.y < centre.y, "the mark is above the middle: {mark:?} in {widget:?}");
+        assert!(mark.min.x > centre.x, "the mark is right of the middle: {mark:?} in {widget:?}");
+        assert!(mark.max.x <= widget.max.x && mark.min.y >= widget.min.y, "the mark stays inside the widget: {mark:?} in {widget:?}");
+    }
+
+    #[test]
+    fn the_verdict_mark_scales_with_the_widget_until_the_cap() {
+        let side_of = |shorter: f32| {
+            let widget = Rect::from_min_max(pos2(0.0, 0.0), pos2(shorter, shorter * 2.0));
+            verdict_mark_rect(widget, false).expect("a widget this size carries a mark").width()
+        };
+        // Literal values, not the constants, so a change to the share or the cap fails here.
+        assert!((side_of(96.0) - 24.0).abs() < 1e-3, "under the cap the mark is a quarter of the widget");
+        assert!((side_of(384.0) - 48.0).abs() <= 1e-3, "the mark stops at the 48pt the documentation promises");
+    }
+
+    #[test]
+    fn the_legible_floor_is_the_exact_shortest_side_that_still_holds_a_mark() {
+        // The sweep below skips widgets without a mark, so the floor is pinned from both sides
+        // here.
+        let at_floor = MARK_SIDE_MIN / MARK_SIDE_SHARE;
+        let widget = |shorter: f32| Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + shorter, 70.0));
+        let mark = verdict_mark_rect(widget(at_floor), false).expect("a widget exactly at the floor holds a mark");
+        assert!((mark.width() - MARK_SIDE_MIN).abs() < 1e-3, "the mark at the floor is the floor, not less: {mark:?}");
+        assert_eq!(verdict_mark_rect(widget(at_floor - 0.5), false), None, "a notch under the floor is not legible");
+    }
+
+    #[test]
+    fn the_verdict_mark_is_none_for_a_rectangle_the_screen_cannot_hold() {
+        // Each of these leaves the shorter side finite (`f32::min` returns the other operand for
+        // NaN), so only the `is_finite` check refuses them; one per corner.
+        let unplaceable = [
+            Rect { min: pos2(f32::NAN, 0.0), max: pos2(40.0, 20.0) },
+            Rect { min: pos2(0.0, 0.0), max: pos2(40.0, f32::NAN) },
+            Rect { min: pos2(0.0, f32::NEG_INFINITY), max: pos2(40.0, 100.0) },
+            Rect { min: pos2(0.0, 0.0), max: pos2(f32::INFINITY, 100.0) },
+        ];
+        for widget in unplaceable {
+            assert_eq!(verdict_mark_rect(widget, false), None, "{widget:?} has no place to sit at");
+        }
+    }
+
+    #[test]
+    fn the_verdict_mark_stays_inside_its_widget_at_every_finite_size() {
+        // 50 and 56 are where a mark always taking the 48pt cap would no longer fit.
+        let sizes = [0.5, 3.0, 6.0, 12.0, 20.0, 32.0, 40.0, 50.0, 56.0, 90.0, 200.0, 500.0, 5_000.0];
+        for &w in &sizes {
+            for &h in &sizes {
+                let widget = Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + w, 10.0 + h));
+                let Some(mark) = verdict_mark_rect(widget, false) else { continue };
+                assert!(widget.contains_rect(mark), "{mark:?} is not inside {widget:?} for a {w}x{h} widget");
+                assert!(mark.width() <= widget.width() && mark.height() <= widget.height(), "{mark:?} is larger than {widget:?}");
+                // A quarter of the shorter side each way: at most 6.25% of a square widget.
+                let share = mark.width() * mark.height() / (widget.width() * widget.height());
+                assert!(share <= MARK_SIDE_SHARE * MARK_SIDE_SHARE * 1.0001, "the mark covers {:.2}% of a {w}x{h} widget", share * 100.0);
+            }
+        }
     }
 
     #[test]

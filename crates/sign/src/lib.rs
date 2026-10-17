@@ -19,6 +19,7 @@ pub mod pdf;
 pub mod pkcs12;
 pub mod revocation;
 mod rsa_pad;
+pub mod status_layers;
 pub mod timestamp;
 #[cfg(target_os = "windows")]
 pub mod windows;
@@ -32,6 +33,7 @@ pub use pdf::{
     in_english, kind, list as signatures, sign, sign_with_timestamp, timestamp_document, validate,
 };
 pub use pkcs12::DigitalId;
+pub use status_layers::{StatusCaptions, has_status_layers, show_status_layers, status_rgb};
 pub use timestamp::{TimestampAuthority, TimestampQuery, TimestampToken};
 pub use x509::{Certificate, Name};
 

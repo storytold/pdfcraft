@@ -905,6 +905,9 @@
 	Signature is valid:	التوقيع صالح:
 	Signature validity is UNKNOWN:	صلاحية التوقيع غير معروفة:
 	Signature is INVALID:	التوقيع غير صالح:
+	Signature valid	التوقيع صالح
+	Validity unknown	الصلاحية غير معروفة
+	Signature invalid	التوقيع غير صالح
 	Signature Details	تفاصيل التوقيع
 	Reason	السبب
 	Signing time	وقت التوقيع
