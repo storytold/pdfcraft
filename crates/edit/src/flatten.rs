@@ -63,9 +63,15 @@ enum Which {
 fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
     let subtype = d.name(b"Subtype").unwrap_or_default();
     match which {
+        // Comments are what the comment list calls comments: links, pop-ups and the non-markup
+        // multimedia and print-production annotations (3D, Screen, Movie, RichMedia,
+        // PrinterMark, TrapNet, Watermark) are neither comments nor fields, and stay (#3087).
         Which::Comments { comments, fields } => {
-            let widget = subtype == b"Widget";
-            !matches!(subtype, b"Link" | b"Popup") && (!widget || fields) && (widget || comments)
+            if subtype == b"Widget" {
+                fields
+            } else {
+                comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
+            }
         }
         Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
     }

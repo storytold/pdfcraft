@@ -4249,3 +4249,43 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
         }
     }
 }
+
+/// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
+/// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
+/// TrapNet, Watermark), which it used to bake into the page and delete with their data.
+/// Flattening fields only leaves them alone too; real comments are still flattened.
+#[test]
+fn flattening_comments_keeps_annotations_that_are_not_comments() {
+    let kept = ["Widget", "Link", "3D", "Screen", "Movie", "RichMedia", "PrinterMark", "TrapNet", "Watermark"];
+    let flattened = ["Text", "Square", "FileAttachment"];
+    let all: Vec<&str> = flattened.iter().chain(kept.iter()).copied().collect();
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 40 20] /Length 26 >>\nstream\n0 0 1 rg 0 0 40 20 re f\nendstream";
+    let annots: Vec<String> = all
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            format!("<< /Type /Annot /Subtype /{s} /Rect [{x} 700 {r} 720] /AP << /N 4 0 R >> /Contents ({s}) >>", x = 20 + 50 * i, r = 60 + 50 * i)
+        })
+        .collect();
+    let refs: Vec<String> = (0..all.len()).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 5 0 R /Annots [{}] >>", refs.join(" "));
+    let content = stream("", " ");
+    let mut objs: Vec<&str> = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", &page, form, &content];
+    objs.extend(annots.iter().map(String::as_str));
+    let left = |doc: &Document| -> Vec<String> {
+        let p = &pdfcraft_model::pages(doc)[0];
+        let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a)) else { return Vec::new() };
+        a.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| doc.resolve(o).as_dict().and_then(|d| d.name(b"Subtype")).map(|s| String::from_utf8_lossy(s).into_owned()))
+            .collect()
+    };
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), flattened.len());
+    assert_eq!(left(&reopen(&doc)), kept, "only the comments were flattened");
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "the widget");
+    let without_widget: Vec<&str> = all.iter().copied().filter(|s| *s != "Widget").collect();
+    assert_eq!(left(&reopen(&doc)), without_widget, "flattening fields touches no annotation that isn't a widget");
+}

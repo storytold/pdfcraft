@@ -4208,8 +4208,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.flatten"]
 tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_an_undrawn_reply_to_a_flattened_comment", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/automation.rs::flattening_through_tools"]
-notes = "appearances become page content; pop-ups and replies removed; a comment or reply whose appearance cannot be drawn (a cloudy border, an unsupported subtype) stays as it is instead of being deleted"
+evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_an_undrawn_reply_to_a_flattened_comment", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/automation.rs::flattening_through_tools", "crates/edit/src/tests.rs::flattening_comments_keeps_annotations_that_are_not_comments"]
+notes = "appearances become page content; pop-ups and replies removed; a comment or reply whose appearance cannot be drawn (a cloudy border, an unsupported subtype) stays as it is instead of being deleted; annotations that are not comments (links, 3D, Screen, Movie, RichMedia, PrinterMark, TrapNet, Watermark) are left in place (#3087)"
 
 [[feature]]
 id = "comment.migrate"
