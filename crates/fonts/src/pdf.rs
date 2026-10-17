@@ -1077,6 +1077,11 @@ fn glyph_component(part: &str) -> Option<String> {
     if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)) {
         return char::from_u32(crate::encodings::NAMES[i].1).map(String::from);
     }
+    // The Latin Extended-A letters of the standard fonts (`/ccaron`, `/dcroat`, `/Lcaron`…), which
+    // PdfCraft writes through `/Differences` (#2098) and other producers do too.
+    if let Some(c) = crate::latin::extra_letter_named(part) {
+        return Some(String::from(c));
+    }
     // `from_str_radix` accepts a leading `+`, which is not a glyph name, so the digits are checked.
     let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
     if let Some(hex) = part.strip_prefix("uni").filter(|h| h.len() >= 4 && h.len() % 4 == 0 && hexish(h)) {

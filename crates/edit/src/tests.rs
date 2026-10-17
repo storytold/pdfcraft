@@ -4249,3 +4249,69 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
         }
     }
 }
+
+/// #2098: the Central European letters the standard fonts carry but WinAnsi has no code for
+/// (č ć đ ł ő …) are added in those fonts, through an `/Encoding` whose `/Differences` names
+/// them. Two items with different letters get different font entries, so neither redraws the
+/// other's codes; the text reads back as typed; letters the renderer can't draw yet (comma
+/// accents) are still refused.
+#[test]
+fn central_european_letters_are_added_in_the_standard_fonts() {
+    let mut doc = fixture();
+    let item = |text: &str, top: f64| AddedText { rect: [72.0, top - 40.0, 500.0, top], text: text.into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(item("Đakovo: čćđ ČĆĐ", 700.0))).unwrap();
+    add_content(&mut doc, 0, &Content::Text(item("Łódź, Győr, Plzeň, ťuk", 640.0))).unwrap();
+    add_content(&mut doc, 0, &Content::Text(item("Zagreb šuma", 580.0))).unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for want in ["Đakovo: čćđ ČĆĐ", "Łódź, Győr, Plzeň, ťuk", "Zagreb šuma"] {
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+    }
+    let page = page_list(&doc).swap_remove(0);
+    let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap();
+    let fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    let ours: Vec<(Vec<u8>, Dict)> = fonts
+        .iter()
+        .filter(|(k, _)| k.starts_with(b"PCFHelvetica"))
+        .filter_map(|(k, v)| doc.resolve(v).as_dict().cloned().map(|d| (k.clone(), d)))
+        .collect();
+    // Plain WinAnsi text keeps the plain font; each set of extra letters has its own.
+    assert_eq!(ours.len(), 3, "{:?}", ours.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect::<Vec<_>>());
+    let encoding = |name: &[u8]| ours.iter().find(|(k, _)| k == name).map(|(_, d)| doc.resolve(d.get(b"Encoding").unwrap()));
+    assert_eq!(encoding(b"PCFHelvetica").and_then(|e| e.as_name().map(<[u8]>::to_vec)), Some(b"WinAnsiEncoding".to_vec()));
+    let names: Vec<Vec<String>> = ours
+        .iter()
+        .filter(|(k, _)| k != b"PCFHelvetica")
+        .map(|(_, d)| {
+            let e = doc.resolve(d.get(b"Encoding").unwrap());
+            let e = e.as_dict().unwrap();
+            assert_eq!(e.name(b"BaseEncoding"), Some(&b"WinAnsiEncoding"[..]));
+            let diffs = doc.resolve(e.get(b"Differences").unwrap());
+            diffs.as_array().unwrap().iter().filter_map(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())).collect()
+        })
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains(&"dcroat".to_string()) && n.contains(&"Dcroat".to_string()) && n.contains(&"cacute".to_string())),
+        "{names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains(&"Lslash".to_string()) && n.contains(&"ohungarumlaut".to_string()) && n.contains(&"tcaron".to_string())),
+        "{names:?}"
+    );
+    // Retyped with other letters, an item reads back as typed and the other items are unchanged.
+    let mut doc = doc;
+    update_content(&mut doc, 0, 0, &Content::Text(item("Kraków: ąę żź", 700.0))).unwrap();
+    let doc = reopen(&doc);
+    let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for want in ["Kraków: ąę żź", "Łódź, Győr, Plzeň, ťuk", "Zagreb šuma"] {
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+    }
+    // Measured with the letters' standard widths (Helvetica ď is 643/1000 em), so wrapping and
+    // alignment place them right.
+    let wide = AddedText { text: "ďďďď".into(), size: 10.0, ..AddedText::default() };
+    assert!((crate::added::text_width(&wide) - 25.72).abs() < 1e-9, "{}", crate::added::text_width(&wide));
+    // A comma accent (Romanian ș) is still refused, as before.
+    let mut doc = doc;
+    let err = add_content(&mut doc, 0, &Content::Text(item("Brașov", 520.0))).unwrap_err().to_string();
+    assert!(err.contains("U+0219"), "{err}");
+}

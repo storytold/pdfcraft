@@ -463,6 +463,34 @@ impl StandardKind {
         let (dx, dy) = match place {
             Place::Below => (b.center().x - a.center().x, 0.0),
             Place::Ogonek => (b.x1 - a.x1, 0.0),
+            Place::Same => return Some(path),
+            Place::Stroke => {
+                // Across the ascender, halfway between the x-height and the top, ending a
+                // little past the stem (the stem of d is its right edge).
+                let x_top = outline("x")
+                    .filter(|x| !x.elements().is_empty())
+                    .map_or(b.y1 * 0.7, |x| x.bounding_box().y1);
+                let y = x_top + (b.y1 - x_top) * 0.5;
+                (b.x1 + a.width() * 0.12 - a.x1, y - a.center().y)
+            }
+            Place::Apostrophe => {
+                // A caron written as an apostrophe: after the stem of L (Ľ); otherwise ending at
+                // the letter's standard advance (ď ľ ť, so it doesn't run into the next letter),
+                // its top at the ascender.
+                let ascender = outline("l")
+                    .filter(|l| !l.elements().is_empty())
+                    .map_or(b.y1, |l| l.bounding_box().y1);
+                let x = if base == "L" {
+                    b.x0 + b.width() * 0.45
+                } else {
+                    let advance = self
+                        .code_to_ps_name(code)
+                        .and_then(|n| self.base_font.get_width(n))
+                        .map_or(b.x1 + a.width(), f64::from);
+                    (advance - a.width() * 1.05).max(b.x1 - a.width() * 0.5)
+                };
+                (x - a.x0, b.y1.max(ascender) - a.y1)
+            }
             Place::Above => {
                 let x_top = outline("x")
                     .filter(|x| !x.elements().is_empty())
@@ -588,6 +616,12 @@ enum Place {
     Above,
     Below,
     Ogonek,
+    /// PdfCraft patch: the base letter's own outline under another name (Đ is drawn as Ð).
+    Same,
+    /// PdfCraft patch: a bar across the ascender (đ).
+    Stroke,
+    /// PdfCraft patch: an apostrophe-shaped caron after the letter (ď ľ ť) or its stem (Ľ).
+    Apostrophe,
 }
 
 /// PdfCraft patch: the stand-ins for the standard fonts (PDFium's Foxit fonts) carry only the
@@ -596,7 +630,7 @@ enum Place {
 /// iText 2 writes Turkish text with Times New Roman left unembedded) drew nothing for them. Each of
 /// these Latin Extended-A letters is a base letter the stand-ins have plus one of their accents,
 /// as Type 1 `seac` composites and the composites of the standard-14 AFM files are built.
-/// Letters whose accent isn't a plain one (ď ľ ť and the comma accents) aren't here.
+/// ď ľ Ľ ť take an apostrophe-shaped caron, đ a bar and Đ is Ð; the comma accents aren't here.
 const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Amacron", "A", "macron", Place::Above),
     ("amacron", "a", "macron", Place::Above),
@@ -613,6 +647,9 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Ccaron", "C", "caron", Place::Above),
     ("ccaron", "c", "caron", Place::Above),
     ("Dcaron", "D", "caron", Place::Above),
+    ("dcaron", "d", "quoteright", Place::Apostrophe),
+    ("Dcroat", "Eth", "Eth", Place::Same),
+    ("dcroat", "d", "macron", Place::Stroke),
     ("Emacron", "E", "macron", Place::Above),
     ("emacron", "e", "macron", Place::Above),
     ("Ebreve", "E", "breve", Place::Above),
@@ -643,6 +680,8 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Jcircumflex", "J", "circumflex", Place::Above),
     ("Lacute", "L", "acute", Place::Above),
     ("lacute", "l", "acute", Place::Above),
+    ("Lcaron", "L", "quoteright", Place::Apostrophe),
+    ("lcaron", "l", "quoteright", Place::Apostrophe),
     ("Nacute", "N", "acute", Place::Above),
     ("nacute", "n", "acute", Place::Above),
     ("Ncaron", "N", "caron", Place::Above),
@@ -666,6 +705,7 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Tcedilla", "T", "cedilla", Place::Below),
     ("tcedilla", "t", "cedilla", Place::Below),
     ("Tcaron", "T", "caron", Place::Above),
+    ("tcaron", "t", "quoteright", Place::Apostrophe),
     ("Utilde", "U", "tilde", Place::Above),
     ("utilde", "u", "tilde", Place::Above),
     ("Umacron", "U", "macron", Place::Above),

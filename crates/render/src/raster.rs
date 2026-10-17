@@ -5415,6 +5415,67 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    /// #2098 (vendored hayro-interpret patch 26): the Central European letters whose mark isn't
+    /// a plain accent are drawn too: Đ as Ð, đ with a bar across its ascender, and ď ľ Ľ ť with
+    /// their apostrophe-shaped caron. Each drew nothing in a font that isn't embedded.
+    #[test]
+    fn letters_with_a_bar_or_an_apostrophe_caron_are_built_from_their_parts() {
+        let letters = ["D", "Dcroat", "d", "dcroat", "d", "dcaron", "l", "lcaron", "L", "Lcaron", "t", "tcaron"];
+        for base_font in ["Helvetica", "Times-Roman", "Courier-Bold"] {
+            let mut content = String::new();
+            for (i, _) in letters.iter().enumerate() {
+                content.push_str(&format!("BT /F1 40 Tf {} 20 Td <{:02X}> Tj ET\n", 10 + 40 * i, 65 + i));
+            }
+            let differences = letters.iter().map(|n| format!("/{n}")).collect::<Vec<_>>().join(" ");
+            let pdf = format!(
+                "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 500 80] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /{base_font}
+  /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [65 {differences}] >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+                content.len()
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            // The dark pixels of the i-th letter: how many, its top row (y down) and right column.
+            let ink = |i: u32| {
+                let (mut count, mut top, mut right) = (0u32, u32::MAX, 0u32);
+                for y in 0..p.height {
+                    for x in (8 + 40 * i)..(48 + 40 * i).min(p.width) {
+                        if p.rgba[((y * p.width + x) * 4) as usize] < 128 {
+                            count += 1;
+                            top = top.min(y);
+                            right = right.max(x);
+                        }
+                    }
+                }
+                (count, top, right)
+            };
+            for pair in 0..letters.len() as u32 / 2 {
+                let (base, built) = (ink(2 * pair), ink(2 * pair + 1));
+                let name = letters[2 * pair as usize + 1];
+                assert!(base.0 > 0, "{base_font} {name}: the base letter draws");
+                assert!(built.0 > base.0, "{base_font} {name} draws its letter and its mark: {built:?} vs {base:?}");
+                match name {
+                    // The bar crosses the ascender: nothing above the letter.
+                    "dcroat" => assert!(built.1 + 1 >= base.1, "{base_font} đ: the bar stays within the letter: {built:?} vs {base:?}"),
+                    // The apostrophe stands right of the letter (ď ť) or of L's stem.
+                    "dcaron" | "lcaron" | "tcaron" => assert!(built.2 > base.2, "{base_font} {name}: the apostrophe is right of the letter"),
+                    _ => {}
+                }
+                if name == "tcaron" {
+                    assert!(built.1 + 2 < base.1, "{base_font} ť: the apostrophe reaches above the t: {built:?} vs {base:?}");
+                }
+            }
+        }
+    }
+
     // Contributor-original classic-xref vector fixtures; no embedded or external assets.
     fn raw_crop_unit_pdf(unit: f64, rotation: i32, crop: [f64; 4], marker: Option<[f64; 4]>) -> Vec<u8> {
         let bounds = crop.map(|n| n.to_string()).join(" ");

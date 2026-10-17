@@ -6495,3 +6495,26 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #2098: `page_add_text` takes the Central European letters of the standard fonts (č ć đ ł ő
+/// …): the saved file reopens with the text as typed, in every face, and a comma accent is still
+/// refused with the character named.
+#[test]
+fn page_add_text_writes_central_european_letters() {
+    let dir = workdir("central-european-text");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank"}))["doc"].as_u64().unwrap();
+    let samples = [("helvetica", "Đakovo čćđ ČĆĐ"), ("times", "Łódź zażółć gęślą jaźń"), ("courier", "Ďáblice ťuk Ľubica")];
+    for (i, (font, text)) in samples.iter().enumerate() {
+        ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":text,"font":font,"bold":i == 1,"at":[40, 60 + 40 * i],"width":500,"size":16}));
+    }
+    let err = a.call("page_add_text", &json!({"doc":doc,"page":1,"text":"Brașov","at":[40,300]})).unwrap_err().to_string();
+    assert!(err.contains("U+0219"), "{err}");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"ce.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"ce.pdf"}))["doc"].as_u64().unwrap();
+    let lines = ok(&mut a, "text_lines", json!({"doc":reopened,"page":1}));
+    let texts: Vec<&str> = lines["lines"].as_array().unwrap().iter().filter_map(|l| l["text"].as_str()).collect();
+    for (_, want) in samples {
+        assert!(texts.contains(&want), "{want:?} in {texts:?}");
+    }
+}

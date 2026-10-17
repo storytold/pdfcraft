@@ -412,7 +412,7 @@ pub(crate) fn undrawable(c: char) -> EditError {
 
 /// The wording of the refusal for text with `c`, which the standard fonts can't draw.
 pub fn undrawable_message(c: char) -> String {
-    format!("the standard fonts can't draw \"{c}\" (U+{:04X}); only Western European characters can be added as text for now", u32::from(c))
+    format!("the standard fonts can't draw \"{c}\" (U+{:04X})", u32::from(c))
 }
 
 fn text_op(x: f64, y: f64, text: &str) -> Vec<u8> {
