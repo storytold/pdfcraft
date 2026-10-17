@@ -52,6 +52,9 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// AI provider setup and document translation (desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    Ai,
 }
 
 /// Quick-action bar tools (the vertical floating strip).

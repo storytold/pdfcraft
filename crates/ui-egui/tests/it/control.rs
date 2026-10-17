@@ -429,6 +429,37 @@ fn a_save_prompt_answered_in_the_background_withdraws_its_attention_request() {
     assert_eq!(left, [(json!("third.pdf"), json!(true))], "Don't save closed doc.pdf and second.pdf; Cancel kept third.pdf");
 }
 
+/// The AI tab is reachable headlessly: `ui.state` reports its configuration and the
+/// curated models, `ai.panel` opens and closes the right panel, `ai-lang` sets the
+/// target language, and `ai.translate` without a provider fails cleanly instead of
+/// reaching for the network.
+#[test]
+fn control_ai_reports_state_and_drives_the_panel() {
+    let (mut h, c) = harness();
+    let ai = ok(&mut h, &c, "ui.state", json!({}))["ai"].clone();
+    assert_eq!(ai["ready"], false, "{ai}");
+    assert_eq!(ai["lang"], "English", "{ai}");
+    assert!(ai["models"].as_array().unwrap().len() > 1, "{ai}");
+    assert_eq!(ai["models"][0]["downloaded"], false, "{ai}");
+
+    ok(&mut h, &c, "ui.command", json!({"id": "ai.panel"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["right_panel"], "Ai");
+
+    ok(&mut h, &c, "ui.set", json!({"key": "ai-lang", "value": "French"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["ai"]["lang"], "French");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "ai-lang", "value": "  "})).is_err());
+
+    // A document is open, but no provider is configured: the command runs, logs the
+    // reason, and leaves state untouched — no silent cloud call, no crash.
+    ok(&mut h, &c, "ui.command", json!({"id": "ai.translate"}));
+    let ai = ok(&mut h, &c, "ui.state", json!({}))["ai"].clone();
+    assert_eq!(ai["ready"], false, "{ai}");
+    assert_eq!(ai["translation"], Value::Null, "{ai}");
+
+    ok(&mut h, &c, "ui.command", json!({"id": "ai.panel"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["right_panel"], Value::Null);
+}
+
 #[test]
 fn control_quit_clean_document_requests_normal_window_close() {
     for params in [json!({}), Value::Null] {

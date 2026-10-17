@@ -1,0 +1,20 @@
+Label = "AI"
+Label = "Use an API provider"
+Label = "OpenAI, Azure, Ollama, LM Studio — any OpenAI-compatible endpoint"
+Label = "Endpoint:"
+TextInput = "http://localhost:11434/v1"
+Label = "Model:"
+TextInput
+Label = "API token:"
+PasswordInput
+CheckBox "Remember token in app settings (stored unencrypted)" [off]
+Button "Test connection"
+Button "Use this provider"
+Label = "Run on this PC"
+Label = "One click downloads a curated open model — everything then runs offline"
+Button "Detect this PC"
+Label = "Translate document"
+Label = "To:"
+ComboBox "To:" = "English"
+Button "Translate" [disabled]
+Label = "Activity log"

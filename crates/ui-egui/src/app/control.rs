@@ -72,6 +72,8 @@ impl PdfCraftApp {
                     "tags" => Some(RightPanel::Tags),
                     "search" => Some(RightPanel::Search),
                     "compare" => Some(RightPanel::Compare),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    "ai" => Some(RightPanel::Ai),
                     "none" => None,
                     other => return Err(format!("unknown panel {other}")),
                 }
@@ -87,6 +89,14 @@ impl PdfCraftApp {
             }
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
+            }
+            // `--ai-lang French`: the target language of the AI tab's document translation.
+            #[cfg(not(target_arch = "wasm32"))]
+            ("ai-lang", _) => {
+                if value.trim().is_empty() {
+                    return Err("ai-lang needs a language name".into());
+                }
+                self.ai.lang = value.trim().to_string();
             }
             ("date-format", _) => self.session.set_date_format(value)?,
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,

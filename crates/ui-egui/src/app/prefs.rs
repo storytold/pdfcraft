@@ -199,6 +199,10 @@ impl PdfCraftApp {
         v["print"] = print;
         // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
         v["print_printers"] = crate::print_ui::setups_to_json(&self.print_draft.setups);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            v["ai"] = self.ai.persist_json();
+        }
         v.to_string()
     }
 
@@ -247,6 +251,8 @@ impl PdfCraftApp {
         self.restore_view_prefs(&v);
         self.restore_comment_prefs(&v);
         self.restore_signature_prefs(&v);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.ai.restore(&v["ai"]);
     }
 
     /// The panels, combine view, zoom and recent files.

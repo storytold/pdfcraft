@@ -7,6 +7,20 @@ use super::{
 /// Draw the selected right-hand panel and apply its navigation, layer, bookmark or edit actions.
 pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // The AI tab stands alone: provider setup works without an open document.
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.right == Some(RightPanel::Ai) {
+        egui::Frame::NONE
+            .fill(t.panel)
+            .inner_margin(egui::Margin { left: 14, right: 12, top: 12, bottom: 8 })
+            .stroke(Stroke::new(1.0, t.divider))
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("AI")).font(theme::semibold(15.5)));
+                ui.add_space(6.0);
+                crate::ai::panel(app, ui);
+            });
+        return;
+    }
     let Some((index, id)) = app.active_ids() else { return };
     let Some(panel) = app.right else { return };
     let mut nav: Option<Nav> = None;
@@ -60,6 +74,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Tags => ("Tags", None),
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    RightPanel::Ai => ("AI", None),
                 };
                 // Comments count like Acrobat (no replies); the replies go in small text below.
                 let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
@@ -306,6 +322,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    RightPanel::Ai => {} // dispatched before the document check above
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
                         if attachable {
