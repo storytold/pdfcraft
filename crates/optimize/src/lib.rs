@@ -32,7 +32,7 @@ pub use audit::{SpaceCategory, SpaceUse, audit_space};
 
 use pdfcraft_cos::{Document, ObjRef, Object, Stream, serialize};
 
-pub use images::effective_resolutions;
+pub use images::{ImageTarget, effective_resolutions, recolour_image};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {

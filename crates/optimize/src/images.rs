@@ -409,3 +409,68 @@ pub(crate) fn run(
     }
     Ok(())
 }
+
+/// The space a picture is re-encoded in by [`recolour_image`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageTarget {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+/// Re-encode an 8-bit gray or RGB picture (Flate or JPEG, no mask, no decode array) in
+/// `target`: gray and RGB pictures keep their compression (JPEG stays JPEG), CMYK is written
+/// lossless. `None` when the picture is not one this handles, or already in the target space.
+pub fn recolour_image(doc: &Document, s: &Stream, target: ImageTarget) -> Option<Stream> {
+    let d = &s.dict;
+    if d.contains(b"Mask") || matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) || d.int(b"BitsPerComponent") != Some(8) {
+        return None;
+    }
+    if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, 3)) && d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, 1)) {
+        return None;
+    }
+    let n = components(doc, d.get(b"ColorSpace")?)?;
+    let want = match target {
+        ImageTarget::Gray => 1,
+        ImageTarget::Rgb => 3,
+        ImageTarget::Cmyk => 4,
+    };
+    if n == want {
+        return None;
+    }
+    let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
+    let px = pixels(s, n)?;
+    let was_dct = is_dct(s)?;
+    let out: Vec<u8> = match (n, target) {
+        (3, ImageTarget::Gray) => {
+            px.as_chunks::<3>().0.iter().map(|p| ((299 * p[0] as u32 + 587 * p[1] as u32 + 114 * p[2] as u32) / 1000) as u8).collect()
+        }
+        (1, ImageTarget::Rgb) => px.iter().flat_map(|g| [*g, *g, *g]).collect(),
+        (1, ImageTarget::Cmyk) => px.iter().flat_map(|g| [0, 0, 0, 255 - *g]).collect(),
+        (3, ImageTarget::Cmyk) => px
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| {
+                let k = 255 - p.iter().copied().max().unwrap_or(0) as u32;
+                if k >= 255 {
+                    return [0u8, 0, 0, 255];
+                }
+                let f = |v: u8| (((255 - v as u32 - k) * 255) / (255 - k)).min(255) as u8;
+                [f(p[0]), f(p[1]), f(p[2]), k as u8]
+            })
+            .collect(),
+        _ => return None,
+    };
+    let mut dict = d.clone();
+    dict.set(
+        b"ColorSpace".to_vec(),
+        Object::name(match target {
+            ImageTarget::Gray => "DeviceGray",
+            ImageTarget::Rgb => "DeviceRGB",
+            ImageTarget::Cmyk => "DeviceCMYK",
+        }),
+    );
+    let compression = if want == 4 { Compression::Flate } else { Compression::Retain };
+    image_stream(&dict, &out, want, w, h, compression, was_dct)
+}

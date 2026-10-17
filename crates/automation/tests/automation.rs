@@ -6495,3 +6495,20 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Convert colours through the tools: counts, converts, reports nothing to do.
+#[test]
+fn convert_colours_through_tools() {
+    let dir = workdir("convert-colours");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The fixture sets no colour of its own: nothing to convert yet.
+    let r = ok(&mut a, "doc_convert_colours", json!({ "doc": doc, "to": "gray" }));
+    assert_eq!((r["colours"].as_u64(), r["undo"].is_null()), (Some(0), true), "{r}");
+    // Red text added as page content converts.
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Red", "at": [20, 20], "color": "#FF0000" }));
+    let r = ok(&mut a, "doc_convert_colours", json!({ "doc": doc, "to": "gray", "pages": [1] }));
+    assert!(r["colours"].as_u64().unwrap_or(0) >= 1 && r["pages"].as_u64() == Some(1), "{r}");
+    assert_eq!(r["undo"], "Convert colours");
+    assert!(matches!(a.call("doc_convert_colours", &json!({ "doc": doc, "to": "lab" })), Err(ToolError::InvalidArgs(_))));
+}

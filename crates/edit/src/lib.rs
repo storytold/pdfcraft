@@ -659,6 +659,9 @@ pub use text::{
     BlockStyle, LineEdit, RangeStyle, TextBlock, TextLine, clear_block, reading_blocks, replace_block, replace_line, rewrite_block, text_blocks,
     text_lines,
 };
+mod colour;
+pub mod convert_colours;
+pub use convert_colours::{ColourTarget, ConvertColours, Converted as ColoursConverted, ImageRecolour, convert_colours};
 pub mod added;
 pub use added::{
     Added, AddedImage, AddedText, Align, Content, Family, MarkerScan, add_content, delete_content, first_undrawable, list_added, scan_markers,

@@ -129,6 +129,16 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
+        t("doc_convert_colours", "Convert colours", "Print production: every colour operator in the pages' content and the artwork it draws rewritten in the target space (to: gray, rgb or cmyk) by the standard device formulas (device spaces, ICC by component count, Lab, Indexed, Separation and DeviceN tints; patterns and shadings stay); preserve_black (default true) keeps pure black as 100% K / gray 0; images (default true) re-encodes 8-bit gray and RGB pictures (JPEG stays JPEG, CMYK written lossless); annotations also converts the pages' comment and field appearances. Returns how many colours and pictures changed on how many pages. Undoable.")
+            .cmd("prepress.convert_colors")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to convert (default all)"),
+                    "to": { "type": "string", "enum": ["gray", "rgb", "cmyk"] },
+                    "preserve_black": { "type": "boolean" }, "images": { "type": "boolean" }, "annotations": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
