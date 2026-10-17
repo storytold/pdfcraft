@@ -4586,7 +4586,11 @@ trailer << /Root 1 0 R >>
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
             let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
-        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a self-painting form must not stall the renderer");
+        // Only a guard against a hang: the shared budget is checked by the warnings below, which
+        // come out the same on every machine. The render decodes and reads 512 MiB of content,
+        // a third of a second on a desktop, and a busy FreeBSD VM in CI ran past the minute this
+        // used to allow.
+        let page = rx.recv_timeout(std::time::Duration::from_secs(600)).expect("a self-painting form must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the skipped nested content is observable");
         assert_eq!(
@@ -4657,30 +4661,73 @@ trailer << /Root 1 0 R >>
     /// pdf.js corpus spent most of its 1.5 s hashing them. The samples are now one flat array
     /// indexed by strides: this page paints a 2,097,152-sample ramp (the most a table may hold)
     /// 30 times, which took 38 seconds through the hash map.
+    ///
+    /// The build each paint does is timed against reading the function's samples, the part of it
+    /// no table can skip, not against a deadline: through the hash map it took about a hundred
+    /// times as long as the read, through the flat array about as long. A deadline can't tell
+    /// them apart on every machine: the hash map's 30 paints took 14 s on one desktop, the flat
+    /// array's over 10 s on a busy FreeBSD VM in CI. No counter does either (both read every
+    /// sample on every build), so the test compares two times taken on this thread, the fastest
+    /// of several rounds of each: a stall from other work (other tests, swapping) would have to
+    /// slow every build and spare a read to fail it.
     #[test]
     fn shadings_with_large_sampled_functions_paint_quickly() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::bit_reader::BitReader;
+        use hayro_syntax::object::{FromBytes, Object};
+        use std::time::{Duration, Instant};
+
         const SAMPLES: usize = 1 << 21;
         let samples = zlib_zeros(SAMPLES);
+        let function = format!(
+            "<< /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [{SAMPLES}] /BitsPerSample 8 /Filter /FlateDecode /Length {} >>",
+            samples.len()
+        );
         // Black ramp on the left half, 30 times over; a red square after it.
         let content = "q 0 0 20 40 re W n /Sh0 sh Q\n".repeat(30) + "1 0 0 rg 36 36 4 4 re f";
         let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
         pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
         pdf.extend_from_slice(b"5 0 obj << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 40 0] /Function 6 0 R >> endobj\n");
-        pdf.extend_from_slice(
-            format!("6 0 obj << /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [{SAMPLES}] /BitsPerSample 8 /Filter /FlateDecode /Length {} >> stream\n", samples.len())
-                .as_bytes(),
-        );
+        pdf.extend_from_slice(format!("6 0 obj {function} stream\n").as_bytes());
         pdf.extend_from_slice(&samples);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(render_first_page(pdf));
-        });
-        let page =
-            rx.recv_timeout(std::time::Duration::from_secs(10)).expect("painting a large sampled function must not rebuild a hash map each time");
+        let page = render_first_page(pdf);
         assert_eq!(rgb_at(&page.rgba, 40, 5, 20), [0, 0, 0], "the ramp is drawn");
         assert_eq!(rgb_at(&page.rgba, 40, 30, 20), [255, 255, 255], "outside the clip");
         assert_eq!(rgb_at(&page.rgba, 40, 38, 2), [255, 0, 0], "the rest of the page draws");
+
+        // What each paint does: build the function from its stream. Timed against reading the
+        // stream's samples, the part of the build no table can skip.
+        let mut bytes = format!("{function} stream\n").into_bytes();
+        bytes.extend_from_slice(&samples);
+        bytes.extend_from_slice(b"\nendstream");
+        let object = Object::from_bytes(&bytes).expect("a stream object");
+        let Object::Stream(stream) = &object else { panic!("the function is a stream") };
+        let (mut build, mut read) = (Duration::MAX, Duration::MAX);
+        for _ in 0..8 {
+            let started = Instant::now();
+            let function = Function::new(&object);
+            assert!(function.is_some(), "a sampled function");
+            drop(function);
+            build = build.min(started.elapsed());
+
+            let started = Instant::now();
+            let decoded = stream.decoded().expect("the samples decode");
+            let mut reader = BitReader::new(&decoded);
+            let mut values = Vec::new();
+            while values.len() < SAMPLES
+                && let Some(value) = reader.read(8)
+            {
+                values.push(value);
+            }
+            assert_eq!(std::hint::black_box(&values).len(), SAMPLES);
+            drop(values);
+            read = read.min(started.elapsed());
+        }
+        assert!(
+            build < read * 10,
+            "building a {SAMPLES}-sample function took {build:?}, over ten times the {read:?} reading its samples takes (a hash map took a hundred times)"
+        );
     }
 
     /// Patch 31's flat table gives every sampled function the values the hash map gave: points
@@ -6186,6 +6233,8 @@ endstream endobj
     /// each of a 3304 × 4105 background's pixels, every page took four seconds and 430 MB to
     /// draw, again after each field was filled. This image (2048 × 2048, a 9,000-operator
     /// program) took about 40 seconds that way; from a 256-entry table it takes milliseconds.
+    /// The runs are counted (patch 34) rather than timed: a deadline also failed when a slow,
+    /// busy CI machine took longer than it allowed, and the count is the same on every machine.
     #[test]
     fn spot_colour_images_run_their_tint_transform_once_per_sample_value() {
         const SIDE: usize = 2048;
@@ -6202,11 +6251,11 @@ endstream endobj
         let function = format!("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length {} >>", program.len());
         let pdf =
             image_cache_pdf("q 130 0 0 70 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data), (&function, program.as_bytes())]);
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(render_first_page(pdf));
-        });
-        let out = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a spot-colour image must not run its tint transform for every pixel");
+        // The count is per thread, and this render runs on this one.
+        let before = hayro::hayro_interpret::color::tint_transform_runs();
+        let out = render_first_page(pdf);
+        let runs = hayro::hayro_interpret::color::tint_transform_runs() - before;
+        assert_eq!(runs, 256, "the tint transform runs once per possible sample value, not once for each of the {} pixels", SIDE * SIDE);
         let w = out.width as usize;
         assert_eq!(rgb_at(&out.rgba, w, 10, 35), [255, 0, 0], "tint 0");
         assert_eq!(rgb_at(&out.rgba, w, 120, 35), [0, 255, 0], "tint 1");

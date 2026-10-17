@@ -22,6 +22,25 @@ use std::sync::{Arc, LazyLock, OnceLock};
 /// A storage for the components of colors.
 pub type ColorComponents = SmallVec<[f32; 4]>;
 
+std::thread_local! {
+    // PdfCraft patch (34): see `tint_transform_runs`.
+    static TINT_TRANSFORM_RUNS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (34): how many colours this thread has run through a Separation or DeviceN
+/// tint transform, for diagnostics and tests. An image converted through patch (28)'s lookup
+/// table runs it once per possible sample value, not once per pixel. Per thread, so a caller
+/// counting its own render is not disturbed by renders on other threads.
+pub fn tint_transform_runs() -> u64 {
+    TINT_TRANSFORM_RUNS.with(core::cell::Cell::get)
+}
+
+/// PdfCraft patch (34): count `colours` runs of a tint transform (called once per batch).
+fn count_tint_transform_runs(colours: usize) {
+    let colours = u64::try_from(colours).unwrap_or(u64::MAX);
+    TINT_TRANSFORM_RUNS.with(|runs| runs.set(runs.get().saturating_add(colours)));
+}
+
 /// An RGB color with an alpha channel.
 #[derive(Debug, Copy, Clone)]
 pub struct AlphaColor {
@@ -857,6 +876,7 @@ impl Separation {
 
 impl ToRgb for Separation {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
+        count_tint_transform_runs(input.len());
         let evaluated = input
             .iter()
             .flat_map(|n| {
@@ -911,6 +931,8 @@ impl DeviceN {
 
 impl ToRgb for DeviceN {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
+        let colours = input.len().checked_div(usize::from(self.num_components));
+        count_tint_transform_runs(colours.unwrap_or(0));
         let evaluated = input
             .chunks_exact(self.num_components as usize)
             .flat_map(|n| {

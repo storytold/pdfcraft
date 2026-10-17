@@ -52,7 +52,10 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
-                if !matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_)) {
+                    // A released drawing's raster can come now: it will have the annotation.
+                    view.comments.drawings_committed();
+                } else {
                     // Only a new drawing waits on its raster; any other edit may remove or move it.
                     view.comments.settling.clear();
                 }
@@ -163,6 +166,10 @@ impl PdfCraftApp {
                 true
             }
             Err(e) => {
+                if let Some(view) = self.views.get_mut(i) {
+                    // A drawing whose annotation wasn't added must not stay painted.
+                    view.comments.drawings_refused();
+                }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false

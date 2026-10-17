@@ -7,6 +7,8 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_render::Annotation;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
+mod support;
+
 /// Two 300×200 pages of Helvetica text.
 const TEXT_FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -406,8 +408,11 @@ fn shapes_and_ink_are_drawn_by_dragging() {
     assert!((r[0] - 40.0).abs() < 3.0 && (r[1] - 40.0).abs() < 3.0 && (r[2] - 140.0).abs() < 3.0 && (r[3] - 100.0).abs() < 3.0, "{r:?}");
 }
 
-/// Press, drag and release a stroke, running only one frame after the release.
+/// Press, drag and release a stroke, running only one frame after the release. Finished
+/// renders are held back from the view (`hold_rasters`), so the raster the commit asks for can't
+/// arrive before the test looks, however fast it renders; a test lets it through by clearing it.
 fn stroke_without_settling(h: &mut Harness<'static, PdfCraftApp>, a: (f32, f32), b: (f32, f32)) {
+    h.state_mut().views[0].hold_rasters = true;
     let (from, to) = (at(h, a.0, a.1), at(h, b.0, b.1));
     h.hover_at(from);
     h.run_steps(1);
@@ -429,7 +434,10 @@ fn a_released_pen_stroke_stays_drawn_until_the_page_raster_has_it() {
     stroke_without_settling(&mut h, (40.0, 100.0), (140.0, 60.0));
     assert_eq!(comments(&h).len(), 1, "the stroke is committed");
     assert_eq!(h.state().views[0].comments.settling_len(), 1, "still drawn from its points");
-    settle(&mut h);
+    h.run_steps(5);
+    assert_eq!(h.state().views[0].comments.settling_len(), 1, "drawn from its points for as long as its raster takes");
+    h.state_mut().views[0].hold_rasters = false;
+    support::wait_until(&mut h, "the page raster with the stroke", |app| app.views[0].comments.settling_len() == 0);
     assert_eq!(h.state().views[0].comments.settling_len(), 0, "the raster draws it now");
 }
 
