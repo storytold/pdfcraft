@@ -8305,11 +8305,11 @@ title = "Add printer marks (crop, bleed, registration, colour bars)"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["prepress.marks", "prepress.marks.remove"]
+tools = ["doc_printer_marks", "doc_remove_marks"]
+evidence = ["crates/edit/src/tests.rs::printer_marks_are_drawn_outside_the_trim_box_and_removable", "crates/ui-egui/tests/editing.rs::printer_marks_are_added_from_the_dialog_and_removed", "crates/automation/tests/automation.rs::printer_marks_through_tools"]
+notes = "Print production ▸ Add printer marks…: trim marks at the trim box's corners, dashed bleed marks at the bleed box, registration targets centred on each side, a C/M/Y/K + 75/50/25 % K colour bar and a page-information line (file name, page n of N, date), at 0.25/0.5/1 pt, outside the trim box as a removable page mark (Remove printer marks; adding again replaces); the page is widened by 36 pt a side when the marks would fall outside it, the trim box kept; all, current or a range of pages; tool doc_printer_marks and doc_remove_marks kind printer_marks. Still missing against Acrobat: the Japanese-style and Eastern-style mark variants, and the choice of marks per page box (always the trim box)."
 
 [[feature]]
 id = "print.fix-hairlines"
