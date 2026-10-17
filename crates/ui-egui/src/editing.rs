@@ -10,6 +10,7 @@ mod close;
 mod save;
 
 pub use close::CloseRequest;
+pub use save::PendingLock;
 #[cfg(not(target_arch = "wasm32"))]
 pub use save::PendingOverwrite;
 #[cfg(target_arch = "wasm32")]
@@ -669,12 +670,18 @@ impl PdfCraftApp {
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
+        let doc_id = self.views.get(i).map(|v| v.id);
         let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
         let typed = match (&edit, &committed) {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
         if self.apply_edit(edit) {
+            if signature_page.is_some()
+                && let Some(id) = doc_id
+            {
+                self.placed_signatures.insert(id);
+            }
             // Tab can wrap to the same field (including another widget of that field).
             // Its new editor was opened before this edit ran, so it still holds the old
             // value. Refresh from the accepted form before Save can commit that stale draft.

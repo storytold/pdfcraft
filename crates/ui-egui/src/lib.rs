@@ -326,6 +326,15 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
+    /// them into the page (#2149). Off once the user says not to ask again.
+    pub ask_to_lock_signatures: bool,
+    /// Documents with a signature or initials placed by Fill & Sign since they were last saved
+    /// (or asked about).
+    pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
+    /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
+    pub(crate) pending_lock: Option<editing::PendingLock>,
+    pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     /// Colour for new Fill & Sign text and dates, kept across launches.

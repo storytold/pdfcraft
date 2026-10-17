@@ -398,6 +398,8 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
         });
         ui.add_space(4.0);
     }
+    // Where the signing happens, not only in Preferences (#2149).
+    ui.add(crate::widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Lock into the page when saving")));
     command
 }
 

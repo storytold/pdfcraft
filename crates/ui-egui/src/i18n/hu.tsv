@@ -2255,6 +2255,13 @@ action wizard	Start	Indítás
 	Smaller pages	Kisebb oldalak
 	Reset page size	Oldalméret visszaállítása
 	Flatten Fill & Sign when saving	Kitöltés és aláírás beégetése mentéskor
+	Lock your signature into the page?	Rögzíti az aláírását az oldalba?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Az elhelyezett aláírás megjegyzés, amíg nincs rögzítve: bárki egy PDF-szerkesztővel áthelyezheti vagy eltávolíthatja. A rögzítés a Kitöltés és aláírás szövegét, jeleit és aláírásait az oldal részévé teszi.
+	Don't ask again	Ne kérdezzen többet
+	Lock and save	Rögzítés és mentés
+	Keep editable	Szerkeszthető marad
+	Lock into the page when saving	Mentéskor rögzítés az oldalba
+	Otherwise, ask on the first save after a signature is placed	Különben kérdezzen rá az aláírás elhelyezése utáni első mentéskor
 	Text, marks and signatures become part of the page. Other comments stay editable.	A szöveg, a jelek és az aláírások az oldal részévé válnak. A többi megjegyzés szerkeszthető marad.
 	Date format	Dátumformátum
 	Fill & Sign dates	Kitöltés és aláírás dátumai
