@@ -60,7 +60,10 @@ running app), so the roots cover every server it starts. The desktop app is not 
 What the roots do not cover: tools that take no path still read and change the open documents, and
 `text_extract` and the other inspection tools return their content. Keychain and Windows
 certificate-store identities for `sign_document` are not files and are not checked. Sending a job
-to a printer is not a file write. Every path a tool reads or writes goes through
+to a printer is not a file write. No tool reaches the network on its own: `sign_document` sends one
+RFC 3161 request (a hash of the signature value, never the document) only to the
+`timestamp_server` it is given, and it is the one tool whose annotations say `openWorldHint: true`
+(as does the compact mode's `tool_call`, which can run it). Every path a tool reads or writes goes through
 `Automation::resolve`, and a unit test keeps the tool modules from touching the file system
 without it.
 

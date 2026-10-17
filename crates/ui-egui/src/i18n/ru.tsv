@@ -2346,3 +2346,18 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Сервер времени
+	None (use this computer's clock)	Нет (использовать часы этого компьютера)
+	Another server…	Другой сервер…
+	Server address	Адрес сервера
+	Type the server's address. Until then, no time server is used.	Введите адрес сервера. До тех пор сервер времени не используется.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Это не адрес сервера времени: он начинается с http:// или https:// и указывает сервер. Пока адрес неверен, сервер времени не используется.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Выключено, пока вы не выберете сервер. Затем PdfCraft обращается к нему только при подписании и отправляет ему отпечаток (хеш) подписи, но никогда не сам документ. Если сервер недоступен, документ подписывается без доверенного времени, и вы получаете уведомление.
+	Trusted time from {server}	Доверенное время от {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	На сервер времени отправляется только отпечаток (хеш) подписи, но никогда не сам документ.
+	Trusted time from a time server	Доверенное время от сервера времени
+	No time server is chosen, so the signing time is this computer's clock.	Сервер времени не выбран, поэтому время подписи берётся из часов этого компьютера.
+	Choose one in Preferences ▸ Signatures	Выберите его в разделе Настройки > Подписи
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Подписано и сохранено в {path}, но без доверенного времени: {reason}. Время подписи взято из часов этого компьютера.

@@ -4510,6 +4510,67 @@ fn digital_ids_signing_and_validation_through_tools() {
     assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
 }
 
+/// A loopback RFC 3161 time server signing with a test digital ID.
+fn loopback_time_server() -> pdfcraft_tsa_http::test_server::TestServer {
+    use pdfcraft_engine::sign;
+    pdfcraft_tsa_http::test_server::serve(|request| {
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12")).unwrap();
+        let tsa = sign::pkcs12::open(&p12, "test").unwrap();
+        let q = sign::timestamp::parse_request(request).unwrap();
+        let time = sign::Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
+        (200, sign::timestamp::respond(&tsa.key, &tsa.certificate, &tsa.chain, sign::DigestAlg::Sha256, &q, "1.2.3.4", time, 7).unwrap())
+    })
+    .unwrap()
+}
+
+/// `sign_document`'s `timestamp_server` is opt-in: with it the signature carries the server's
+/// trusted time; a server that can't be reached costs only the timestamp, and says so; a bad
+/// address is refused before anything is sent or written; without it nothing is sent.
+#[test]
+fn signing_with_a_time_server_through_tools() {
+    let dir = workdir("signing-time-server");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let server = loopback_time_server();
+    let args = |server: Option<&str>, out: &str| {
+        let mut args = json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": out });
+        if let Some(url) = server {
+            args["timestamp_server"] = json!(url);
+        }
+        args
+    };
+
+    // Without a server: no request, and no timestamp in the result.
+    let r = ok(&mut a, "sign_document", args(None, "plain.pdf"));
+    assert_eq!((r.get("timestamp"), &r["signature"]["timestamp"]), (None, &json!(false)), "{r}");
+    assert_eq!(server.requests(), 0);
+
+    // A bad address is refused before anything is sent or written.
+    for bad in [json!("ftp://example.com/tsa"), json!("http://user:pw@example.com"), json!("not a url"), json!(""), json!(42)] {
+        let mut wrong = args(None, "bad.pdf");
+        wrong["timestamp_server"] = bad.clone();
+        let r = a.call("sign_document", &wrong);
+        assert!(matches!(r, Err(ToolError::InvalidArgs(ref m)) if m.contains("timestamp_server")), "{bad}: {r:?}");
+    }
+    assert!(!dir.join("bad.pdf").exists());
+    assert_eq!(server.requests(), 0);
+
+    // With the server: its token is embedded.
+    let r = ok(&mut a, "sign_document", args(Some(&server.url), "stamped.pdf"));
+    assert_eq!(r["timestamp"], json!({ "server": server.url, "embedded": true }), "{r}");
+    assert_eq!(r["signature"]["timestamp"], true, "{r}");
+    assert_eq!(server.requests(), 1);
+
+    // A server that can't be reached: still signed, without the timestamp, and why.
+    let gone = pdfcraft_tsa_http::test_server::unreachable_url().unwrap();
+    let r = ok(&mut a, "sign_document", args(Some(&gone), "unstamped.pdf"));
+    assert_eq!((r["timestamp"]["server"].as_str(), r["timestamp"]["embedded"].as_bool()), (Some(gone.as_str()), Some(false)), "{r}");
+    assert!(r["timestamp"]["reason"].as_str().is_some_and(|m| m.contains("could not be reached")), "{r}");
+    assert_eq!(r["signature"]["timestamp"], false, "{r}");
+    assert!(dir.join("unstamped.pdf").exists());
+}
+
 /// The decoded text of every visible signature appearance (Helvetica forms) in a signed file.
 fn signature_appearances(path: &Path) -> String {
     use pdfcraft_cos::{Document, ObjRef, Object};

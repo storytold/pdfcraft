@@ -18,6 +18,8 @@ pub struct ToolDef {
     pub read_only: bool,
     /// May remove content or overwrite files.
     pub destructive: bool,
+    /// May reach the network: only when an argument names a server (MCP's `openWorldHint`).
+    pub open_world: bool,
     /// The registry command this tool automates, if any.
     pub command: Option<&'static str>,
 }
@@ -80,11 +82,12 @@ struct T {
     description: &'static str,
     read_only: bool,
     destructive: bool,
+    open_world: bool,
     command: Option<&'static str>,
 }
 
 const fn t(name: &'static str, title: &'static str, description: &'static str) -> T {
-    T { name, title, description, read_only: false, destructive: false, command: None }
+    T { name, title, description, read_only: false, destructive: false, open_world: false, command: None }
 }
 
 impl T {
@@ -94,6 +97,10 @@ impl T {
     }
     const fn destructive(mut self) -> Self {
         self.destructive = true;
+        self
+    }
+    const fn open_world(mut self) -> Self {
+        self.open_world = true;
         self
     }
     const fn cmd(mut self, id: &'static str) -> Self {
@@ -108,6 +115,7 @@ impl T {
             input_schema,
             read_only: self.read_only,
             destructive: self.destructive,
+            open_world: self.open_world,
             command: self.command,
         }
     }
@@ -691,8 +699,9 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("sign.digital")
             .with(schema(json!({}), &[])),
-        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. appearance chooses what a visible signature shows (default: name, date and labels; reason, location and distinguished_name are off unless turned on). labels gives the words of its labels, e.g. in another language (default English: \"Digitally signed by\", \"DN: \", \"Reason: \", \"Location: \", \"Date: \"; include the separator); each must be in Western European characters (Windows-1252), the only ones the signature's font draws, or the call is refused naming the label and character. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
+        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. appearance chooses what a visible signature shows (default: name, date and labels; reason, location and distinguished_name are off unless turned on). labels gives the words of its labels, e.g. in another language (default English: \"Digitally signed by\", \"DN: \", \"Reason: \", \"Location: \", \"Date: \"; include the separator); each must be in Western European characters (Windows-1252), the only ones the signature's font draws, or the call is refused naming the label and character. PAdES B-B, SHA-256 (SHA-384 for P-384 keys). timestamp_server (an http:// or https:// RFC 3161 time server, e.g. one the user chose) adds that server's trusted time (PAdES B-T): only a SHA-256 hash of the signature value is sent to it, never the document; if it can't be reached or answers wrongly, the document is still signed, without the timestamp, and `timestamp.reason` says why. Without timestamp_server nothing is sent anywhere.")
             .cmd("sign.digital")
+            .open_world()
             .with(schema(
                 json!({
                     "doc": doc(),
@@ -704,6 +713,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "reason": { "type": "string" },
                     "location": { "type": "string" },
                     "contact": { "type": "string" },
+                    "timestamp_server": { "type": "string", "maxLength": pdfcraft_tsa_http::MAX_URL_CHARS, "description": "An RFC 3161 time server's http:// or https:// address. Opt-in: omitted, nothing is sent anywhere." },
                     "certify": { "type": "string", "enum": ["no_changes", "form_fill", "comments"] },
                     "graphic": {
                         "type": "object",

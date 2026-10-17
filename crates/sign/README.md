@@ -28,7 +28,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
   responses and TSTInfo tokens (size-capped, imprint- and signature-checked). `sign_with_timestamp`
   attaches the TSA's token as an unsigned attribute over the signature value; the transport is
-  the caller's (`TimestampAuthority` — this crate never opens a socket). Validation verifies
+  the caller's (`TimestampAuthority` — this crate never opens a socket; the opt-in HTTP
+  transport is `crates/tsa-http`). Each request carries a fresh random nonce, which the answer
+  must repeat. Validation verifies
   embedded tokens; when the TSA chains to the trust store it reports the trusted time in
   `SignatureInfo::timestamp_time`, which then anchors certificate-validity and revocation
   checks. An untrusted TSA's time is reported as an unverified timestamp and never used as the

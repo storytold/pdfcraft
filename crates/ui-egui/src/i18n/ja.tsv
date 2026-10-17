@@ -2433,3 +2433,18 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	タイムサーバー
+	None (use this computer's clock)	なし（このコンピューターの時計を使用）
+	Another server…	その他のサーバー…
+	Server address	サーバーのアドレス
+	Type the server's address. Until then, no time server is used.	サーバーのアドレスを入力してください。それまではタイムサーバーは使用されません。
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	これはタイムサーバーのアドレスではありません。アドレスは http:// または https:// で始まり、サーバーを指定します。有効になるまでタイムサーバーは使用されません。
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	サーバーを選ぶまではオフです。選ぶと、PdfCraft は署名するときだけそのサーバーに接続し、文書ではなく署名のフィンガープリント（ハッシュ）だけを送信します。サーバーに接続できない場合は、信頼できる時刻なしで文書に署名し、そのことをお知らせします。
+	Trusted time from {server}	{server} の信頼できる時刻
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	タイムサーバーに送信されるのは署名のフィンガープリント（ハッシュ）だけで、文書は送信されません。
+	Trusted time from a time server	タイムサーバーの信頼できる時刻
+	No time server is chosen, so the signing time is this computer's clock.	タイムサーバーが選ばれていないため、署名時刻はこのコンピューターの時計によります。
+	Choose one in Preferences ▸ Signatures	環境設定 → 署名 で選択
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	署名して {path} に保存しましたが、信頼できる時刻は付いていません（{reason}）。署名時刻はこのコンピューターの時計によります。

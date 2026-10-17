@@ -262,7 +262,7 @@ Press <kbd>⌘K</kbd> to search every tool and command, or browse the **All tool
 ## Runs everywhere, stays yours
 
 - **Native on macOS, Windows, Linux and FreeBSD**, and **in the browser** through WebAssembly, from the same Rust codebase. Windows builds come for x64, x86 and ARM64 (Windows on ARM, no emulation); every ARM64 change is tested on ARM64 hardware in CI.
-- **Private by design.** Documents never leave your machine. There's no account, no telemetry and no cloud processing.
+- **Private by design.** Documents never leave your machine. There's no account, no telemetry and no cloud processing. If you choose a time server for trusted signing times (off by default), PdfCraft sends it a hash of each signature you make, never the document.
 - **Engine first.** Parsing, rendering and editing live in reusable library crates. The interface is one swappable layer on top.
 - **Scriptable.** The `pdfcraft-cli` tool (see [Built for agents, too](#built-for-agents-too)) covers inspecting, rendering, extracting text, editing, combining, extracting pages and splitting. Robustness sweeps run on the same engine as the app.
 

@@ -2438,3 +2438,18 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Časovni strežnik
+	None (use this computer's clock)	Brez (uporabi uro tega računalnika)
+	Another server…	Drug strežnik…
+	Server address	Naslov strežnika
+	Type the server's address. Until then, no time server is used.	Vnesite naslov strežnika. Do takrat se časovni strežnik ne uporablja.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	To ni naslov časovnega strežnika: začne se s http:// ali https:// in navaja strežnik. Dokler ni veljaven, se časovni strežnik ne uporablja.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Izklopljeno, dokler ne izberete strežnika. Nato PdfCraft vzpostavi stik z njim le ob podpisovanju in mu pošlje prstni odtis (zgoščeno vrednost) podpisa, nikoli dokumenta. Če strežnik ni dosegljiv, se dokument podpiše brez zaupanja vrednega časa, o čemer ste obveščeni.
+	Trusted time from {server}	Zaupanja vreden čas s strežnika {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Časovnemu strežniku se pošlje le prstni odtis (zgoščena vrednost) podpisa, nikoli dokument.
+	Trusted time from a time server	Zaupanja vreden čas s časovnega strežnika
+	No time server is chosen, so the signing time is this computer's clock.	Časovni strežnik ni izbran, zato je čas podpisa vzet z ure tega računalnika.
+	Choose one in Preferences ▸ Signatures	Izberite ga v Nastavitve > Podpisi
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Podpisano in shranjeno v {path}, vendar brez zaupanja vrednega časa: {reason}. Čas podpisa je vzet z ure tega računalnika.

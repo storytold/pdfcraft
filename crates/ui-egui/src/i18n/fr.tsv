@@ -2433,3 +2433,18 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Serveur d'horodatage
+	None (use this computer's clock)	Aucun (utiliser l'horloge de cet ordinateur)
+	Another server…	Autre serveur…
+	Server address	Adresse du serveur
+	Type the server's address. Until then, no time server is used.	Saisissez l'adresse du serveur. D'ici là, aucun serveur d'horodatage n'est utilisé.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Ce n'est pas une adresse de serveur d'horodatage : elle commence par http:// ou https:// et désigne un serveur. Tant qu'elle n'est pas valide, aucun serveur d'horodatage n'est utilisé.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Désactivé tant que vous n'avez pas choisi de serveur. Ensuite, PdfCraft ne le contacte que lorsque vous signez, et lui envoie une empreinte (hash) de la signature, jamais le document. Si le serveur est injoignable, le document est signé sans l'heure de confiance, et vous en êtes averti.
+	Trusted time from {server}	Heure de confiance de {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Seule une empreinte (hash) de la signature est envoyée au serveur d'horodatage, jamais le document.
+	Trusted time from a time server	Heure de confiance d'un serveur d'horodatage
+	No time server is chosen, so the signing time is this computer's clock.	Aucun serveur d'horodatage n'est choisi : l'heure de signature est celle de l'horloge de cet ordinateur.
+	Choose one in Preferences ▸ Signatures	En choisir un dans Préférences > Signatures
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Signé et enregistré dans {path}, mais sans heure de confiance : {reason}. L'heure de signature est celle de l'horloge de cet ordinateur.

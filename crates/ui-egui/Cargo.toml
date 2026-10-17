@@ -19,6 +19,8 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
+# Sign as ▸ Trusted time: the RFC 3161 time server chosen in Preferences (off by default).
+pdfcraft-tsa-http = { workspace = true }
 egui = { workspace = true, features = ["bytemuck"] }
 egui_extras = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
@@ -75,6 +77,8 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 
 [dev-dependencies]
 pdfcraft-xfa = { workspace = true }
+# A loopback time server for the signing tests.
+pdfcraft-tsa-http = { workspace = true, features = ["test-server"] }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.

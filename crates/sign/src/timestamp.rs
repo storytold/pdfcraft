@@ -34,6 +34,18 @@ impl TimestampQuery {
         Ok(Self { digest, imprint, policy: None, nonce: None, certificate_request: true })
     }
 
+    /// The same query with a fresh random nonce (RFC 3161 §2.4.1), which [`parse_response`] then
+    /// requires the answer to repeat, so an old or misdirected answer is refused. Without
+    /// randomness the query goes without one, as RFC 3161 allows.
+    pub fn with_fresh_nonce(mut self) -> Self {
+        let mut bytes = [0u8; 8];
+        if getrandom::fill(&mut bytes).is_ok() {
+            // 63 bits: a positive INTEGER that never needs a ninth byte.
+            self.nonce = Some(u64::from_be_bytes(bytes) >> 1);
+        }
+        self
+    }
+
     /// Encode a DER `TimeStampReq` (RFC 3161 §2.4.1).
     pub fn encode(&self) -> Result<Vec<u8>, SignError> {
         let alg = self.digest.algorithm();
@@ -170,7 +182,25 @@ pub fn parse_response(bytes: &[u8], query: &TimestampQuery) -> Result<TimestampT
     if token.digest != query.digest || token.imprint != query.imprint {
         return Err(bad("message imprint does not match the requested digest"));
     }
+    if let Some(nonce) = query.nonce
+        && token_nonce(&token.raw)? != Some(nonce)
+    {
+        return Err(bad("the answer does not repeat the request's nonce"));
+    }
     Ok(token)
+}
+
+/// The TSTInfo `nonce` of an already parsed token: the INTEGER after `genTime`, past the
+/// optional `accuracy` (a SEQUENCE) and `ordering` (a BOOLEAN).
+fn token_nonce(raw: &[u8]) -> Result<Option<u64>, SignError> {
+    let token = SignedData::parse(raw)?;
+    let info = token.content.as_deref().ok_or_else(|| bad("token has no TSTInfo content"))?;
+    let fields = Tlv::parse_all(info)?.expect(tag::SEQUENCE, "TSTInfo")?.children()?;
+    match fields.iter().skip(5).find(|f| f.tag == tag::INTEGER) {
+        // A nonce too large for 64 bits can't be the one asked for.
+        Some(f) => Ok(f.u64().ok()),
+        None => Ok(None),
+    }
 }
 
 /// The TSA side: sign a `TimeStampResp` for `query` at `gen_time`. Used by deterministic test

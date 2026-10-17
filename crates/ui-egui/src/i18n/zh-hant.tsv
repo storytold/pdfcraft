@@ -2383,3 +2383,18 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	時間伺服器
+	None (use this computer's clock)	無（使用這部電腦的時鐘）
+	Another server…	其他伺服器…
+	Server address	伺服器位址
+	Type the server's address. Until then, no time server is used.	請輸入伺服器位址。在此之前不會使用任何時間伺服器。
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	這不是時間伺服器位址：位址以 http:// 或 https:// 開頭並指明伺服器。在位址有效之前，不會使用任何時間伺服器。
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	在您選擇伺服器之前保持關閉。選擇後，PdfCraft 只會在您簽名時連線到該伺服器，且只傳送簽章的指紋（雜湊），絕不傳送文件。如果無法連線到伺服器，文件會在沒有受信任時間的情況下簽署，並會通知您。
+	Trusted time from {server}	來自 {server} 的受信任時間
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	只會將簽章的指紋（雜湊）傳送到時間伺服器，絕不傳送文件。
+	Trusted time from a time server	來自時間伺服器的受信任時間
+	No time server is chosen, so the signing time is this computer's clock.	尚未選擇時間伺服器，因此簽署時間取自這部電腦的時鐘。
+	Choose one in Preferences ▸ Signatures	在 偏好設定 → 簽章 中選擇一個
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	已簽名並儲存到{path}，但沒有受信任的時間：{reason}。簽署時間取自這部電腦的時鐘。

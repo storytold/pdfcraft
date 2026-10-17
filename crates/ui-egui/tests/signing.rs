@@ -629,3 +629,175 @@ fn an_imported_digital_id_can_be_removed() {
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure));
     h.get_by_label("Configure a Digital ID for Signing");
 }
+
+/// A loopback RFC 3161 time server signing with a test digital ID.
+fn loopback_time_server() -> pdfcraft_tsa_http::test_server::TestServer {
+    use pdfcraft_engine::sign;
+    pdfcraft_tsa_http::test_server::serve(|request| {
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12")).unwrap();
+        let tsa = sign::pkcs12::open(&p12, "test").unwrap();
+        let q = sign::timestamp::parse_request(request).unwrap();
+        let time = sign::Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
+        (200, sign::timestamp::respond(&tsa.key, &tsa.certificate, &tsa.chain, sign::DigestAlg::Sha256, &q, "1.2.3.4", time, 7).unwrap())
+    })
+    .unwrap()
+}
+
+/// Sign as, for an invisible signature with the test ID `ec-p256.p12`.
+fn sign_as_invisibly(h: &mut Harness<'static, PdfCraftApp>) {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let app = h.state_mut();
+    app.start_signing(0, None, None, None);
+    let entry = app.add_digital_id(p12, &id.certificate);
+    let d = app.sign_draft.as_mut().unwrap();
+    (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
+    // egui centres the dialog from the previous frame's size: let it settle before clicking.
+    h.run_steps(6);
+}
+
+/// The newest signature on the first document.
+fn newest_signature(h: &Harness<'static, PdfCraftApp>) -> pdfcraft_engine::SignatureInfo {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().signatures.iter().filter(|x| x.signed).max_by_key(|x| x.revision).cloned().expect("signed")
+}
+
+/// Without a time server, Sign as's trusted time box is off and disabled, and its hint opens
+/// Preferences, which lead back to signing. With one, the box is on and the signature carries the
+/// server's time; unticked, nothing is sent.
+#[test]
+fn the_trusted_time_box_needs_a_time_server_chosen_in_preferences() {
+    let dir = dir();
+    let mut h = harness(dir.clone());
+    let server = loopback_time_server();
+    sign_as_invisibly(&mut h);
+    let disabled = |h: &Harness<'static, PdfCraftApp>| {
+        h.query_by(|n| n.label().as_deref() == Some("Trusted time from a time server") && n.is_disabled()).is_some()
+    };
+    assert!(disabled(&h), "no time server: the box is disabled");
+    h.get_by_label("No time server is chosen, so the signing time is this computer's clock.");
+    h.get_by_label("Choose one in Preferences ▸ Signatures").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Preferences));
+    h.get_by_label("Time server");
+    // The combo box shows its choice as its value.
+    assert!(h.query_by(|n| n.value().as_deref() == Some("None (use this computer's clock)")).is_some());
+    // Choose a server, close Preferences: back to Sign as, with the box on.
+    h.state_mut().set_option("time-server", &server.url).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::SignAs));
+    let host = server.url.trim_start_matches("http://").trim_end_matches("/tsa").to_string();
+    let label = format!("Trusted time from {host}");
+    assert!(h.query_by(|n| n.label().as_deref() == Some(label.as_str()) && !n.is_disabled()).is_some(), "{label}");
+    assert!(h.state().sign_draft.as_ref().unwrap().timestamp, "on by default");
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(server.requests(), 1);
+    let sig = newest_signature(&h);
+    assert!(sig.timestamp, "{:?}", sig.details);
+    assert!(h.state().toast.clone().unwrap().0.starts_with("Signed and saved to"));
+
+    // Unticked: signed with this computer's clock, and nothing is sent.
+    sign_as_invisibly(&mut h);
+    h.get_by_label(label.as_str()).click();
+    h.run_steps(2);
+    assert!(!h.state().sign_draft.as_ref().unwrap().timestamp);
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    assert_eq!(server.requests(), 1, "nothing sent");
+    assert!(!newest_signature(&h).timestamp);
+
+    // None again: nothing is sent either.
+    h.state_mut().set_option("time-server", "none").unwrap();
+    sign_as_invisibly(&mut h);
+    assert!(disabled(&h));
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    assert_eq!(server.requests(), 1, "nothing sent");
+    assert!(!newest_signature(&h).timestamp);
+}
+
+/// A time server that can't be reached doesn't stop the signing: the document is signed with this
+/// computer's clock, and the notice says so.
+#[test]
+fn an_unreachable_time_server_signs_without_its_time_and_says_so() {
+    let dir = dir();
+    let mut h = harness(dir.clone());
+    let gone = pdfcraft_tsa_http::test_server::unreachable_url().unwrap();
+    h.state_mut().set_option("time-server", &gone).unwrap();
+    sign_as_invisibly(&mut h);
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    assert_eq!(h.state().dialog, None);
+    assert!(dir.join("contract_signed.pdf").exists());
+    let sig = newest_signature(&h);
+    assert!(!sig.timestamp, "{:?}", sig.details);
+    let notice = h.state().toast.clone().unwrap().0;
+    assert!(notice.contains("without a trusted time") && notice.contains(&gone) && notice.contains("this computer's clock"), "{notice}");
+}
+
+/// Preferences ▸ Signatures ▸ Time server is remembered, and read back as untrusted: anything but a
+/// valid http(s) address is no server. Another server's address is used only once it is valid.
+#[test]
+fn the_time_server_choice_persists_and_is_read_back_untrusted() {
+    let mut app = PdfCraftApp::new();
+    assert_eq!(app.time_server.url(), None, "off by default");
+    for url in ["http://timestamp.digicert.com", "https://tsa.example.org:8443/rfc3161"] {
+        app.set_option("time-server", url).unwrap();
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&app.persist());
+        assert_eq!(restored.time_server.url(), Some(url));
+    }
+    app.set_option("time-server", "none").unwrap();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert_eq!(restored.time_server.url(), None);
+    for bad in ["nonsense", "ftp://example.com", "http://user:pw@example.com", "http://exa mple.com"] {
+        assert!(app.set_option("time-server", bad).is_err(), "{bad}");
+    }
+    for saved in [
+        serde_json::json!("ftp://example.com"),
+        serde_json::json!("http://user@example.com/"),
+        serde_json::json!(format!("http://example.com/{}", "a".repeat(5000))),
+        serde_json::json!(42),
+        serde_json::json!({ "url": "http://timestamp.digicert.com" }),
+        serde_json::json!(""),
+    ] {
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&serde_json::json!({ "time_server": saved }).to_string());
+        assert_eq!(restored.time_server.url(), None, "{saved}");
+    }
+}
+
+/// Preferences ▸ Signatures ▸ Another server…: a typed address is used only once it is valid.
+#[test]
+fn another_time_server_is_used_only_once_its_address_is_valid() {
+    use egui::accesskit::Role;
+    let mut h = harness(dir());
+    h.state_mut().set_option("time-server", "http://tsa.example.org/").unwrap();
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(4);
+    // The combo box shows its choice as its value.
+    assert!(h.query_by(|n| n.value().as_deref() == Some("Another server…")).is_some());
+    let retype = |h: &mut Harness<'static, PdfCraftApp>, text: &str| {
+        // The preferences scroll; bring the field into view before clicking it.
+        h.get_by_role_and_label(Role::TextInput, "Server address").scroll_to_me();
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::TextInput, "Server address").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "Server address").type_text(text);
+        h.run_steps(2);
+    };
+    let address = |h: &Harness<'static, PdfCraftApp>| h.state().time_server.url().map(str::to_string);
+    retype(&mut h, "http://tsa example.org/");
+    assert_eq!(address(&h), None, "a space isn't valid, and no server is used meanwhile");
+    h.get_by_label_contains("This isn't a time server address");
+    retype(&mut h, "https://tsa.example.net/stamp");
+    assert_eq!(address(&h).as_deref(), Some("https://tsa.example.net/stamp"));
+    assert!(h.query_by(|n| n.label().is_some_and(|l| l.contains("This isn't a time server address"))).is_none());
+}

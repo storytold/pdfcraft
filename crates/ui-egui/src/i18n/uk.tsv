@@ -2455,3 +2455,18 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Сервер часу
+	None (use this computer's clock)	Немає (використовувати годинник цього комп’ютера)
+	Another server…	Інший сервер…
+	Server address	Адреса сервера
+	Type the server's address. Until then, no time server is used.	Введіть адресу сервера. Доти сервер часу не використовується.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Це не адреса сервера часу: вона починається з http:// або https:// і вказує сервер. Поки вона неправильна, сервер часу не використовується.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Вимкнено, доки ви не виберете сервер. Тоді PdfCraft звертається до нього лише під час підписування й надсилає йому відбиток (геш) підпису, але ніколи не сам документ. Якщо сервер недоступний, документ підписується без довіреного часу, і ви отримуєте повідомлення.
+	Trusted time from {server}	Довірений час від {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	На сервер часу надсилається лише відбиток (геш) підпису, але ніколи не сам документ.
+	Trusted time from a time server	Довірений час від сервера часу
+	No time server is chosen, so the signing time is this computer's clock.	Сервер часу не вибрано, тож час підпису береться з годинника цього комп’ютера.
+	Choose one in Preferences ▸ Signatures	Виберіть його в розділі «Налаштування > Підписи»
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Підписано й збережено в {path}, але без довіреного часу: {reason}. Час підпису взято з годинника цього комп’ютера.

@@ -2439,3 +2439,18 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Διακομιστής χρόνου
+	None (use this computer's clock)	Κανένας (χρήση του ρολογιού αυτού του υπολογιστή)
+	Another server…	Άλλος διακομιστής…
+	Server address	Διεύθυνση διακομιστή
+	Type the server's address. Until then, no time server is used.	Πληκτρολογήστε τη διεύθυνση του διακομιστή. Μέχρι τότε δεν χρησιμοποιείται διακομιστής χρόνου.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Αυτή δεν είναι διεύθυνση διακομιστή χρόνου: ξεκινά με http:// ή https:// και ορίζει έναν διακομιστή. Μέχρι να είναι έγκυρη, δεν χρησιμοποιείται διακομιστής χρόνου.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Απενεργοποιημένο μέχρι να επιλέξετε διακομιστή. Στη συνέχεια το PdfCraft επικοινωνεί μαζί του μόνο όταν υπογράφετε και του στέλνει ένα αποτύπωμα (hash) της υπογραφής, ποτέ το έγγραφο. Αν ο διακομιστής δεν είναι προσβάσιμος, το έγγραφο υπογράφεται χωρίς την αξιόπιστη ώρα και ενημερώνεστε.
+	Trusted time from {server}	Αξιόπιστη ώρα από {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Στον διακομιστή χρόνου στέλνεται μόνο ένα αποτύπωμα (hash) της υπογραφής, ποτέ το έγγραφο.
+	Trusted time from a time server	Αξιόπιστη ώρα από διακομιστή χρόνου
+	No time server is chosen, so the signing time is this computer's clock.	Δεν έχει επιλεγεί διακομιστής χρόνου, οπότε η ώρα υπογραφής προέρχεται από το ρολόι αυτού του υπολογιστή.
+	Choose one in Preferences ▸ Signatures	Επιλέξτε έναν στις Προτιμήσεις > Υπογραφές
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Υπογράφηκε και αποθηκεύτηκε στο {path}, αλλά χωρίς αξιόπιστη ώρα: {reason}. Η ώρα υπογραφής προέρχεται από το ρολόι αυτού του υπολογιστή.

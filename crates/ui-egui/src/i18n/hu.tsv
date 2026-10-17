@@ -2432,3 +2432,18 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Időszerver
+	None (use this computer's clock)	Nincs (a számítógép órájának használata)
+	Another server…	Másik szerver…
+	Server address	Szervercím
+	Type the server's address. Until then, no time server is used.	Írd be a szerver címét. Addig nincs használatban időszerver.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Ez nem időszervercím: http:// vagy https:// kezdetű, és egy szervert nevez meg. Amíg nem érvényes, nincs használatban időszerver.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Kikapcsolva, amíg nem választasz szervert. Ezután a PdfCraft csak aláíráskor lép vele kapcsolatba, és az aláírás ujjlenyomatát (hash) küldi el neki, sosem a dokumentumot. Ha a szerver nem érhető el, a dokumentum megbízható idő nélkül lesz aláírva, és erről értesítést kapsz.
+	Trusted time from {server}	Megbízható idő innen: {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Az időszerver csak az aláírás ujjlenyomatát (hash) kapja meg, sosem a dokumentumot.
+	Trusted time from a time server	Megbízható idő időszerverről
+	No time server is chosen, so the signing time is this computer's clock.	Nincs kiválasztva időszerver, ezért az aláírás ideje a számítógép órájából származik.
+	Choose one in Preferences ▸ Signatures	Válassz egyet itt: Beállítások > Aláírások
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Aláírva és mentve ide: {path}, de megbízható idő nélkül: {reason}. Az aláírás ideje a számítógép órájából származik.

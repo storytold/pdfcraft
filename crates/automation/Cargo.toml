@@ -14,6 +14,8 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
+# sign_document's `timestamp_server`: the RFC 3161 transport, used only when that argument is given.
+pdfcraft-tsa-http = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
@@ -28,6 +30,8 @@ mcp = ["dep:base64"]
 
 [dev-dependencies]
 pdfcraft-fonts = { workspace = true }
+# A loopback time server for the signing tests.
+pdfcraft-tsa-http = { workspace = true, features = ["test-server"] }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }

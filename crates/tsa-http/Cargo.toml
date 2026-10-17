@@ -1,0 +1,30 @@
+[package]
+name = "pdfcraft-tsa-http"
+description = "RFC 3161 time servers over HTTP: the opt-in transport pdfcraft-sign leaves to the application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-sign = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The same HTTP client, features and trust as Help ▸ Check for updates (apps/pdfcraft): rustls
+# with the operating system's root certificates, no bundled root list. Both are already in the
+# lockfile through the desktop app.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+
+[features]
+# A loopback HTTP server for other crates' tests (`test_server`). Never enabled by a shipped build.
+test-server = []
+
+[dev-dependencies]
+pdfcraft-cos = { workspace = true }
+# This crate's own tests use the loopback server too.
+pdfcraft-tsa-http = { path = ".", features = ["test-server"] }

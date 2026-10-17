@@ -113,6 +113,9 @@ pub struct SignDraft {
     pub error: Option<String>,
     /// Sign with a Digital ID ▸ Remove was clicked for this list entry: asking to confirm.
     pub confirm_remove: Option<usize>,
+    /// Sign as ▸ Trusted time from the chosen time server. On for each signing when a server is
+    /// chosen in Preferences; it does nothing without one.
+    pub timestamp: bool,
 }
 
 impl SignDraft {
@@ -135,8 +138,116 @@ impl SignDraft {
             new_id: NewIdDraft::default(),
             error: None,
             confirm_remove: None,
+            timestamp: true,
         }
     }
+}
+
+/// Preferences ▸ Signatures ▸ Time server: the RFC 3161 server signatures take a trusted time
+/// from. None by default, so nothing reaches the network until a person chooses one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TimeServer {
+    /// The server in use: a checked http(s) address.
+    url: Option<String>,
+    /// "Another server…" is chosen: the address is typed in `typed`.
+    other: bool,
+    /// What is typed for another server; in use only once it is a valid address.
+    typed: String,
+}
+
+impl TimeServer {
+    /// A chosen server: one of the suggestions, or another valid address.
+    pub fn chosen(url: &str) -> Result<Self, pdfcraft_tsa_http::UrlError> {
+        let url = pdfcraft_tsa_http::check_url(url)?;
+        let other = !pdfcraft_tsa_http::SUGGESTED.iter().any(|(_, s)| *s == url);
+        Ok(Self { typed: if other { url.clone() } else { String::new() }, url: Some(url), other })
+    }
+
+    /// The server in use, if any.
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+
+    /// Read back from the settings, which are untrusted: anything but a valid address is none.
+    pub(crate) fn restore(value: &serde_json::Value) -> Self {
+        value.as_str().and_then(|url| Self::chosen(url).ok()).unwrap_or_default()
+    }
+}
+
+/// How the Sign dialog names a server: a suggestion by its name, another by its host.
+#[cfg(not(target_arch = "wasm32"))]
+fn server_name(url: &str) -> String {
+    if let Some((name, _)) = pdfcraft_tsa_http::SUGGESTED.iter().find(|(_, s)| *s == url) {
+        return (*name).to_string();
+    }
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?']).next().unwrap_or(rest).to_string()
+}
+
+/// Preferences ▸ Signatures: the time server signatures take a trusted time from.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn time_server_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    use pdfcraft_tsa_http::SUGGESTED;
+    ui.label(egui::RichText::new(tl!("Signatures")).font(theme::semibold(13.0)));
+    let ts = &mut app.time_server;
+    let none = tl!("None (use this computer's clock)");
+    let suggestion = |name: &str, url: &str| format!("{name} ({url})");
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Time server"));
+        let selected = match (&ts.url, ts.other) {
+            (_, true) => tl!("Another server…").to_string(),
+            (None, false) => none.to_string(),
+            (Some(url), false) => SUGGESTED.iter().find(|(_, s)| s == url).map_or_else(|| url.clone(), |(n, s)| suggestion(n, s)),
+        };
+        egui::ComboBox::from_id_salt("time-server")
+            .selected_text(selected)
+            .width(340.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(ts.url.is_none() && !ts.other, none).clicked() {
+                    *ts = TimeServer::default();
+                    ui.close();
+                }
+                for (name, url) in SUGGESTED {
+                    if ui.selectable_label(!ts.other && ts.url.as_deref() == Some(*url), suggestion(name, url)).clicked() {
+                        *ts = TimeServer { url: Some((*url).to_string()), other: false, typed: String::new() };
+                        ui.close();
+                    }
+                }
+                if ui.selectable_label(ts.other, tl!("Another server…")).clicked() {
+                    // Starts from the server in use, which stays in use until the address changes.
+                    if !ts.other {
+                        ts.typed = ts.url.clone().unwrap_or_default();
+                    }
+                    ts.other = true;
+                    ui.close();
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    if ts.other {
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Server address"));
+            let edit = crate::widgets::line(&mut ts.typed).hint_text("https://").desired_width(340.0).char_limit(pdfcraft_tsa_http::MAX_URL_CHARS);
+            if ui.add(edit).labelled_by(label.id).changed() {
+                // Only a valid address is used; anything else leaves no server.
+                ts.url = pdfcraft_tsa_http::check_url(&ts.typed).ok();
+            }
+        });
+        if ts.url.is_none() {
+            let text = if ts.typed.trim().is_empty() {
+                tl!("Type the server's address. Until then, no time server is used.")
+            } else {
+                tl!("This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.")
+            };
+            ui.label(egui::RichText::new(text).small().color(t.text_muted));
+        }
+    }
+    ui.label(
+        egui::RichText::new(tl!("Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told."))
+            .small()
+            .color(t.text_muted),
+    );
 }
 
 /// What a page asks of the signing flow.
@@ -284,6 +395,7 @@ impl PdfCraftApp {
             draft.image = Some(image.clone());
         }
         self.sign_draft = Some(draft);
+        self.preferences_then_sign = false;
         self.dialog = Some(crate::Dialog::Sign);
     }
 
@@ -434,6 +546,8 @@ impl PdfCraftApp {
             _ => None,
         };
         let choice = d.graphic.clone();
+        // The time server, when one is chosen and its box is ticked; nothing is sent otherwise.
+        let time_server = self.time_server.url().filter(|_| d.timestamp).map(str::to_string);
         let opts = SignOptions {
             field: d.field.clone(),
             page: d.page,
@@ -457,7 +571,19 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
-            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
+            // A time server that can't be reached or answers wrongly costs only its timestamp.
+            let (signed, unstamped) = match &time_server {
+                Some(url) => {
+                    let authority = pdfcraft_tsa_http::HttpAuthority::new(url).map_err(|e| e.to_string())?;
+                    pdfcraft_tsa_http::sign_with_fallback(
+                        &authority,
+                        |tsa| app.session.sign_with_timestamp(doc_id, &id, opts.clone(), tsa),
+                        || app.session.sign(doc_id, &id, opts.clone()),
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                None => (app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?, None),
+            };
             crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
             // Our own write is not a change on disk to reload (#431).
             #[cfg(not(target_arch = "wasm32"))]
@@ -468,7 +594,13 @@ impl PdfCraftApp {
                 view.invalidate_content();
             }
             app.right = Some(crate::RightPanel::Signatures);
-            app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
+            match unstamped {
+                None => app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]),
+                Some(reason) => app.notify_fmt(
+                    "Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.",
+                    &[("path", &path.display().to_string()), ("reason", &reason)],
+                ),
+            }
             Ok(())
         };
         match self.save_override.clone() {
@@ -976,6 +1108,8 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
     // The time as the signature will show it (signing takes the session clock then).
     let date = sign::pdf::display_date(&app.session.signing_date());
+    #[cfg(not(target_arch = "wasm32"))]
+    let time_server = app.time_server.url().map(server_name);
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
         d.step = SignStep::Choose;
@@ -1083,6 +1217,32 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         }
         ui.end_row();
     });
+    // A trusted time from the time server chosen in Preferences ▸ Signatures (RFC 3161). The
+    // browser build has no time servers.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.add_space(4.0);
+        match &time_server {
+            Some(server) => {
+                ui.add(widgets::checkbox(&mut d.timestamp, crate::i18n::fmt(tl!("Trusted time from {server}"), &[("server", server)])));
+                ui.label(
+                    egui::RichText::new(tl!("Only a fingerprint (hash) of the signature is sent to the time server, never the document."))
+                        .small()
+                        .color(t.text_muted),
+                );
+            }
+            None => {
+                let mut off = false;
+                ui.add_enabled(false, widgets::checkbox(&mut off, tl!("Trusted time from a time server")));
+                ui.label(
+                    egui::RichText::new(tl!("No time server is chosen, so the signing time is this computer's clock.")).small().color(t.text_muted),
+                );
+                if ui.link(tl!("Choose one in Preferences ▸ Signatures")).clicked() {
+                    app.preferences_then_sign = true;
+                }
+            }
+        }
+    }
     ui.add_space(6.0);
     error(ui, &d.error);
     ui.horizontal(|ui| {

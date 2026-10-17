@@ -6116,8 +6116,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/sign/tests/pdf.rs::a_document_timestamp_covers_the_file_and_validates"]
-notes = "timestamp_document appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time. Missing: automation tool and timestamp-server configuration (transport is caller-injected)."
+evidence = ["crates/sign/tests/pdf.rs::a_document_timestamp_covers_the_file_and_validates", "crates/tsa-http/tests/http.rs::a_document_timestamp_comes_from_the_server"]
+notes = "timestamp_document appends a standalone /ETSI.RFC3161 signature dictionary over the whole file; validation discovers and verifies these (imprint, token signature, TSA cert validity) and reports the trusted time. Its request carries a nonce the answer must repeat, and the opt-in HTTP transport (crates/tsa-http) gets it from a loopback time server in a test. Missing: a command and an automation tool."
 
 [[feature]]
 id = "sign.timestamp-servers"
@@ -6125,11 +6125,11 @@ title = "Configure timestamp servers"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["app.preferences", "sign.digital"]
+tools = ["sign_document"]
+evidence = ["crates/ui-egui/tests/signing.rs::the_trusted_time_box_needs_a_time_server_chosen_in_preferences", "crates/ui-egui/tests/signing.rs::the_time_server_choice_persists_and_is_read_back_untrusted", "crates/ui-egui/tests/signing.rs::another_time_server_is_used_only_once_its_address_is_valid", "crates/automation/tests/automation.rs::signing_with_a_time_server_through_tools", "crates/tsa-http/src/lib.rs::addresses_are_checked"]
+notes = "Opt-in (#888): Preferences ▸ Signatures ▸ Time server is None by default; a person picks a suggested public RFC 3161 server (DigiCert, Sectigo, GlobalSign, Entrust) or types another http(s) address, which is checked and remembered (read back as untrusted). Sign as then offers Trusted time from that server (on for each signing; disabled, with a link to Preferences, when none is chosen); sign_document takes timestamp_server. Only a hash of the signature value is sent, by crates/tsa-http, the one crate that opens the connection. Missing against Acrobat: a list of several named servers, and servers that need a user name and password."
 
 [[feature]]
 id = "sign.pades-bt"
@@ -6137,11 +6137,11 @@ title = "PAdES B-T (signature timestamp)"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "partial"
-commands = []
-tools = []
-evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
-notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
+status = "shipped"
+commands = ["sign.digital"]
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/sign/tests/pdf.rs::a_timestamp_answer_must_repeat_the_requests_nonce", "crates/tsa-http/tests/http.rs::signing_with_a_time_server_embeds_its_timestamp", "crates/tsa-http/tests/http.rs::an_unreachable_server_signs_without_a_timestamp_and_says_why", "crates/tsa-http/tests/http.rs::a_wrong_answer_signs_without_a_timestamp_and_says_why", "crates/automation/tests/automation.rs::signing_with_a_time_server_through_tools", "crates/ui-egui/tests/signing.rs::an_unreachable_time_server_signs_without_its_time_and_says_so"]
+notes = "Sign with an embedded RFC 3161 token from the time server chosen in Preferences ▸ Signatures (Sign as ▸ Trusted time) or sign_document's timestamp_server, over HTTP (crates/tsa-http): imprint, nonce and TSA signature verified at signing and validation time, trusted time reported. A server that can't be reached or answers wrongly never stops the signing: the document is signed without the token and the person (or the tool's result) is told why. Tested against a loopback server, not yet against Acrobat's validator. The trusted time shows as verified in PdfCraft only when the TSA's chain is in the trusted certificates (no OS trust store yet: sign.os-trust). The standalone document timestamp is sign.document-timestamp."
 
 [[feature]]
 id = "sign.ltv"

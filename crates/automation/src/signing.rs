@@ -244,6 +244,12 @@ impl Automation {
             Some(_) if !visible => return Err(bad("labels needs a visible signature: pass rect or field")),
             Some(v) => labels_arg(v)?,
         };
+        // Opt-in: without an address nothing is sent anywhere.
+        let time_server = match a.get("timestamp_server") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(url)) => Some(pdfcraft_tsa_http::HttpAuthority::new(url).map_err(|e| bad(format!("timestamp_server: {e}")))?),
+            Some(_) => return Err(bad("timestamp_server must be a time server's http:// or https:// address")),
+        };
         let out = self.resolve(a.str("out")?, true)?;
         let opts = SignOptions {
             field,
@@ -258,17 +264,34 @@ impl Automation {
             graphic,
             ..SignOptions::default()
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
+        let sign_error = |e| match e {
             // A graphic the signer refuses is the caller's to fix.
             pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
             e => failed(e),
-        })?;
+        };
+        // A time server that can't be reached or answers wrongly costs only its timestamp.
+        let (signed, unstamped) = match &time_server {
+            Some(authority) => pdfcraft_tsa_http::sign_with_fallback(
+                authority,
+                |tsa| self.session.sign_with_timestamp(doc_id, &id, opts.clone(), tsa),
+                || self.session.sign(doc_id, &id, opts.clone()),
+            )
+            .map_err(sign_error)?,
+            None => (self.session.sign(doc_id, &id, opts).map_err(sign_error)?, None),
+        };
         write_atomic(&out, &signed)?;
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
         let doc = self.doc(a)?;
         let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
-        Ok(json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? }))
+        let mut result = json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? });
+        if let Some(authority) = &time_server {
+            result["timestamp"] = match unstamped {
+                None => json!({ "server": authority.url(), "embedded": true }),
+                Some(reason) => json!({ "server": authority.url(), "embedded": false, "reason": reason }),
+            };
+        }
+        Ok(result)
     }
 
     /// `{"image": path}` (PNG or JPEG), `{"text": name}` (typed in the script font) or

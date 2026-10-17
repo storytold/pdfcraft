@@ -2684,3 +2684,17 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Laiko serveris
+	None (use this computer's clock)	Nėra (naudoti šio kompiuterio laikrodį)
+	Another server…	Kitas serveris…
+	Server address	Serverio adresas
+	Type the server's address. Until then, no time server is used.	Įveskite serverio adresą. Iki tol laiko serveris nenaudojamas.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Tai ne laiko serverio adresas: jis prasideda http:// arba https:// ir nurodo serverį. Kol jis netinkamas, laiko serveris nenaudojamas.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Išjungta, kol pasirinksite serverį. Tada PdfCraft kreipiasi į jį tik pasirašant ir siunčia jam parašo santrauką (maišos reikšmę), niekada ne dokumentą. Jei serveris nepasiekiamas, dokumentas pasirašomas be patikimo laiko ir jums apie tai pranešama.
+	Trusted time from {server}	Patikimas laikas iš {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Laiko serveriui siunčiama tik parašo santrauka (maišos reikšmė), niekada ne dokumentas.
+	Trusted time from a time server	Patikimas laikas iš laiko serverio
+	No time server is chosen, so the signing time is this computer's clock.	Laiko serveris nepasirinktas, todėl pasirašymo laikas nustatomas pagal šio kompiuterio laikrodį.
+	Choose one in Preferences ▸ Signatures	Pasirinkite jį: Nuostatos > Parašai
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Pasirašyta ir įrašyta į {path}, bet be patikimo laiko: {reason}. Pasirašymo laikas nustatytas pagal šio kompiuterio laikrodį.

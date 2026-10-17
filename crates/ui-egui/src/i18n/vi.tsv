@@ -2686,3 +2686,17 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Máy chủ thời gian
+	None (use this computer's clock)	Không có (dùng đồng hồ của máy tính này)
+	Another server…	Máy chủ khác…
+	Server address	Địa chỉ máy chủ
+	Type the server's address. Until then, no time server is used.	Hãy nhập địa chỉ của máy chủ. Cho đến lúc đó, không có máy chủ thời gian nào được dùng.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Đây không phải là địa chỉ máy chủ thời gian: địa chỉ bắt đầu bằng http:// hoặc https:// và chỉ đến một máy chủ. Cho đến khi địa chỉ hợp lệ, không có máy chủ thời gian nào được dùng.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Tắt cho đến khi bạn chọn một máy chủ. Sau đó, PdfCraft chỉ liên hệ với máy chủ khi bạn ký và gửi cho máy chủ một dấu vân tay (hash) của chữ ký, không bao giờ gửi tài liệu. Nếu không kết nối được với máy chủ, tài liệu sẽ được ký mà không có thời gian tin cậy, và bạn sẽ được thông báo.
+	Trusted time from {server}	Thời gian tin cậy từ {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Chỉ một dấu vân tay (hash) của chữ ký được gửi đến máy chủ thời gian, không bao giờ gửi tài liệu.
+	Trusted time from a time server	Thời gian tin cậy từ máy chủ thời gian
+	No time server is chosen, so the signing time is this computer's clock.	Chưa chọn máy chủ thời gian nào, nên thời gian ký lấy từ đồng hồ của máy tính này.
+	Choose one in Preferences ▸ Signatures	Chọn một máy chủ trong Tùy chọn > Chữ ký
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Đã ký và lưu vào {path}, nhưng không có thời gian tin cậy: {reason}. Thời gian ký lấy từ đồng hồ của máy tính này.

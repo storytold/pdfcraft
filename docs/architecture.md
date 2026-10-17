@@ -33,7 +33,7 @@ standalone and publishable.
 | L3 core services | `render`, `annot`, `forms`, `js`, `xfa` | Rendering and inspection (bootstrap: vendored `hayro`, `lopdf`); annotation builders and appearance streams; AcroForm model, filling, appearances; sandboxed JavaScript (boa) and FormCalc; XFA template layout and data |
 | L4 features | `edit`, `organize`, `redact`, `xfdf`, `sign`, `ocr`, `create`, `export`, `optimize`, `preflight`, `a11y`, `compare`, `measure`, `print` | One crate per Acrobat tool family |
 | L6 façade | `engine` | Session, open documents, edit history, the command registry and tool catalogue. Frontends never reach past it |
-| L7 platform and frontends | `platform`, `ui-egui`, `automation` | OS services; the egui shell (desktop and web); headless JSON-Schema tools, CLI and MCP |
+| L7 platform and frontends | `platform`, `ui-egui`, `automation`, `tsa-http` | OS services; the egui shell (desktop and web); headless JSON-Schema tools, CLI and MCP; the opt-in RFC 3161 time server transport (off until a person chooses a server) |
 
 Planned crates that the layer table already reserves (`arlington`, `color`, `ops`, `text`, `ml`,
 `security`, `prepress`, `search`, `media`, `ai`, `viewport`, `tools`, `ui-common`) don't exist yet.

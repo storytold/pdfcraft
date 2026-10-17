@@ -2342,3 +2342,18 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	టైమ్ సర్వర్
+	None (use this computer's clock)	ఏదీ లేదు (ఈ కంప్యూటర్ గడియారాన్ని ఉపయోగించు)
+	Another server…	మరో సర్వర్…
+	Server address	సర్వర్ చిరునామా
+	Type the server's address. Until then, no time server is used.	సర్వర్ చిరునామాను టైప్ చేయండి. అప్పటివరకు ఏ టైమ్ సర్వర్ ఉపయోగించబడదు.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	ఇది టైమ్ సర్వర్ చిరునామా కాదు: ఇది http:// లేదా https://తో మొదలై ఒక సర్వర్‌ను సూచిస్తుంది. అది సరైనది అయ్యేవరకు ఏ టైమ్ సర్వర్ ఉపయోగించబడదు.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	మీరు సర్వర్‌ను ఎంచుకునే వరకు ఇది ఆఫ్‌లో ఉంటుంది. ఆ తర్వాత మీరు సంతకం చేసినప్పుడు మాత్రమే PdfCraft దాన్ని సంప్రదించి, సంతకం యొక్క వేలిముద్ర (హ్యాష్)ను మాత్రమే పంపుతుంది, పత్రాన్ని ఎప్పుడూ పంపదు. సర్వర్ అందుబాటులో లేకపోతే, విశ్వసనీయ సమయం లేకుండానే పత్రంపై సంతకం చేయబడుతుంది, ఆ విషయం మీకు తెలియజేయబడుతుంది.
+	Trusted time from {server}	{server} నుండి విశ్వసనీయ సమయం
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	టైమ్ సర్వర్‌కు సంతకం యొక్క వేలిముద్ర (హ్యాష్) మాత్రమే పంపబడుతుంది, పత్రం ఎప్పుడూ పంపబడదు.
+	Trusted time from a time server	టైమ్ సర్వర్ నుండి విశ్వసనీయ సమయం
+	No time server is chosen, so the signing time is this computer's clock.	ఏ టైమ్ సర్వర్ ఎంచుకోబడలేదు, కాబట్టి సంతకం సమయం ఈ కంప్యూటర్ గడియారం నుండి వస్తుంది.
+	Choose one in Preferences ▸ Signatures	ప్రాధాన్యతలు > సంతకాలు లో ఒకదాన్ని ఎంచుకోండి
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	సంతకం చేసి {path}లో సేవ్ చేయబడింది, కానీ విశ్వసనీయ సమయం లేకుండా: {reason}. సంతకం సమయం ఈ కంప్యూటర్ గడియారం నుండి వచ్చింది.

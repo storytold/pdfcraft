@@ -2409,3 +2409,18 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Serwer znaczników czasu
+	None (use this computer's clock)	Brak (użyj zegara tego komputera)
+	Another server…	Inny serwer…
+	Server address	Adres serwera
+	Type the server's address. Until then, no time server is used.	Wpisz adres serwera. Do tego czasu żaden serwer znaczników czasu nie jest używany.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	To nie jest adres serwera znaczników czasu: zaczyna się od http:// lub https:// i wskazuje serwer. Dopóki nie jest poprawny, żaden serwer znaczników czasu nie jest używany.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Wyłączone, dopóki nie wybierzesz serwera. Wtedy PdfCraft łączy się z nim tylko podczas podpisywania i wysyła mu odcisk (hash) podpisu, nigdy dokument. Jeśli serwer jest nieosiągalny, dokument zostaje podpisany bez zaufanego czasu, a PdfCraft o tym informuje.
+	Trusted time from {server}	Zaufany czas z {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Do serwera znaczników czasu wysyłany jest tylko odcisk (hash) podpisu, nigdy dokument.
+	Trusted time from a time server	Zaufany czas z serwera znaczników czasu
+	No time server is chosen, so the signing time is this computer's clock.	Nie wybrano serwera znaczników czasu, więc czas podpisu pochodzi z zegara tego komputera.
+	Choose one in Preferences ▸ Signatures	Wybierz go w Preferencje ▸ Podpisy
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Podpisano i zapisano w {path}, ale bez zaufanego czasu: {reason}. Czas podpisu pochodzi z zegara tego komputera.

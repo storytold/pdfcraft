@@ -2447,3 +2447,18 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Servidor de carimbo de data/hora
+	None (use this computer's clock)	Nenhum (usar o relógio deste computador)
+	Another server…	Outro servidor…
+	Server address	Endereço do servidor
+	Type the server's address. Until then, no time server is used.	Digite o endereço do servidor. Até lá, nenhum servidor de carimbo de data/hora é usado.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Este não é um endereço de servidor de carimbo de data/hora: ele começa com http:// ou https:// e indica um servidor. Enquanto não for, nenhum servidor de carimbo de data/hora é usado.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Desativado até você escolher um servidor. Depois, o PdfCraft só entra em contato com ele quando você assina e envia uma impressão digital (hash) da assinatura, nunca o documento. Se o servidor não puder ser contatado, o documento é assinado sem o horário confiável, e você é avisado.
+	Trusted time from {server}	Horário confiável de {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Somente uma impressão digital (hash) da assinatura é enviada ao servidor de carimbo de data/hora, nunca o documento.
+	Trusted time from a time server	Horário confiável de um servidor de carimbo de data/hora
+	No time server is chosen, so the signing time is this computer's clock.	Nenhum servidor de carimbo de data/hora foi escolhido, então o horário da assinatura é o do relógio deste computador.
+	Choose one in Preferences ▸ Signatures	Escolha um em Preferências > Assinaturas
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Assinado e salvo em {path}, mas sem horário confiável: {reason}. O horário da assinatura é o do relógio deste computador.

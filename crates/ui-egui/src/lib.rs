@@ -778,6 +778,11 @@ pub struct PdfCraftApp {
     pub(crate) saved_signature_previews: [Option<(fill_sign::SavedSig, egui::TextureHandle)>; 2],
     /// What visible digital signatures show on their left, and its preview in Sign as.
     pub sign_graphic: sign_ui::SignGraphic,
+    /// Preferences ▸ Signatures ▸ Time server: none (the default), or the RFC 3161 server a
+    /// person chose. Nothing reaches the network unless one is chosen.
+    pub time_server: sign_ui::TimeServer,
+    /// The Sign dialog's time server hint opened Preferences: closing them goes back to it.
+    pub(crate) preferences_then_sign: bool,
     pub(crate) sign_graphic_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
     #[cfg(target_arch = "wasm32")]
     pub(crate) signature_images: fill_sign::ImageInbox,
@@ -1054,6 +1059,8 @@ impl PdfCraftApp {
             signature_photo: None,
             saved_signature_previews: [None, None],
             sign_graphic: sign_ui::SignGraphic::Name,
+            time_server: sign_ui::TimeServer::default(),
+            preferences_then_sign: false,
             sign_graphic_preview: None,
             #[cfg(target_arch = "wasm32")]
             signature_images: Default::default(),
@@ -2280,6 +2287,8 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        // Null: no time server (signing uses this computer's clock).
+        v["time_server"] = self.time_server.url().map_or(serde_json::Value::Null, |url| serde_json::Value::String(url.to_string()));
         v.to_string()
     }
 
@@ -2428,6 +2437,8 @@ impl PdfCraftApp {
         }
         // An unreadable choice (a damaged image) falls back to the name.
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
+        // Settings are untrusted: an address that isn't a valid http(s) one leaves no server.
+        self.time_server = sign_ui::TimeServer::restore(&v["time_server"]);
         if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
             self.digital_ids = ids;
         }
@@ -2706,6 +2717,14 @@ impl PdfCraftApp {
                     "true" => true,
                     "false" => false,
                     _ => return Err("system-title-bar must be true or false".into()),
+                };
+            }
+            // `--time-server none|<http(s) address>`: Preferences ▸ Signatures ▸ Time server.
+            ("time-server", _) => {
+                self.time_server = if value.eq_ignore_ascii_case("none") {
+                    sign_ui::TimeServer::default()
+                } else {
+                    sign_ui::TimeServer::chosen(value).map_err(|e| e.to_string())?
                 };
             }
             ("flatten-fill-sign", _) => {

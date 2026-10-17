@@ -2710,3 +2710,18 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	خادم الوقت
+	None (use this computer's clock)	لا شيء (استخدام ساعة هذا الحاسوب)
+	Another server…	خادم آخر…
+	Server address	عنوان الخادم
+	Type the server's address. Until then, no time server is used.	اكتب عنوان الخادم. حتى ذلك الحين لا يُستخدم أي خادم وقت.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	هذا ليس عنوان خادم وقت: يبدأ بـ http:// أو https:// ويحدد خادمًا. ما دام غير صالح، لا يُستخدم أي خادم وقت.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	متوقف حتى تختار خادمًا. بعد ذلك يتصل PdfCraft به فقط عند التوقيع، ويرسل إليه بصمة (تجزئة) للتوقيع، وليس المستند أبدًا. إذا تعذّر الوصول إلى الخادم، يُوقَّع المستند دون الوقت الموثوق، ويتم إعلامك بذلك.
+	Trusted time from {server}	وقت موثوق من {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	تُرسل إلى خادم الوقت بصمة (تجزئة) التوقيع فقط، وليس المستند أبدًا.
+	Trusted time from a time server	وقت موثوق من خادم وقت
+	No time server is chosen, so the signing time is this computer's clock.	لم يتم اختيار خادم وقت، لذا يكون وقت التوقيع من ساعة هذا الحاسوب.
+	Choose one in Preferences ▸ Signatures	اختر واحدًا من التفضيلات > التوقيعات
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	تم التوقيع والحفظ في {path}، ولكن دون وقت موثوق: {reason}. وقت التوقيع هو ساعة هذا الحاسوب.

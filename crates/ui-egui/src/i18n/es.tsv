@@ -2573,3 +2573,17 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Servidor de hora
+	None (use this computer's clock)	Ninguno (usar el reloj de este ordenador)
+	Another server…	Otro servidor…
+	Server address	Dirección del servidor
+	Type the server's address. Until then, no time server is used.	Escribe la dirección del servidor. Hasta entonces, no se usa ningún servidor de hora.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Esta no es una dirección de servidor de hora: empieza por http:// o https:// e indica un servidor. Mientras no lo sea, no se usa ningún servidor de hora.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Desactivado hasta que elijas un servidor. Después, PdfCraft solo se conecta a él al firmar y le envía una huella (hash) de la firma, nunca el documento. Si no se puede contactar con el servidor, el documento se firma sin la hora de confianza y se te avisa.
+	Trusted time from {server}	Hora de confianza de {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Solo se envía al servidor de hora una huella (hash) de la firma, nunca el documento.
+	Trusted time from a time server	Hora de confianza de un servidor de hora
+	No time server is chosen, so the signing time is this computer's clock.	No hay ningún servidor de hora elegido, así que la hora de la firma es la del reloj de este ordenador.
+	Choose one in Preferences ▸ Signatures	Elige uno en Preferencias > Firmas
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Firmado y guardado en {path}, pero sin hora de confianza: {reason}. La hora de la firma es la del reloj de este ordenador.

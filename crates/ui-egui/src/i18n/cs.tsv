@@ -2507,3 +2507,18 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Časový server
+	None (use this computer's clock)	Žádný (použít hodiny tohoto počítače)
+	Another server…	Jiný server…
+	Server address	Adresa serveru
+	Type the server's address. Until then, no time server is used.	Zadejte adresu serveru. Do té doby se žádný časový server nepoužívá.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Toto není adresa časového serveru: začíná http:// nebo https:// a uvádí server. Dokud není platná, žádný časový server se nepoužívá.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Vypnuto, dokud nevyberete server. Pak se k němu PdfCraft připojí jen při podepisování a pošle mu otisk (hash) podpisu, nikdy dokument. Pokud server není dostupný, dokument se podepíše bez důvěryhodného času a budete na to upozorněni.
+	Trusted time from {server}	Důvěryhodný čas ze serveru {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Časovému serveru se posílá jen otisk (hash) podpisu, nikdy dokument.
+	Trusted time from a time server	Důvěryhodný čas z časového serveru
+	No time server is chosen, so the signing time is this computer's clock.	Není vybrán žádný časový server, takže čas podpisu pochází z hodin tohoto počítače.
+	Choose one in Preferences ▸ Signatures	Vyberte ho v „Předvolby > Podpisy“
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Podepsáno a uloženo do {path}, ale bez důvěryhodného času: {reason}. Čas podpisu pochází z hodin tohoto počítače.

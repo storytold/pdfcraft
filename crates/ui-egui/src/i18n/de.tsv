@@ -2434,3 +2434,18 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Zeitserver
+	None (use this computer's clock)	Keiner (Uhr dieses Computers verwenden)
+	Another server…	Anderer Server…
+	Server address	Serveradresse
+	Type the server's address. Until then, no time server is used.	Gib die Adresse des Servers ein. Bis dahin wird kein Zeitserver verwendet.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Das ist keine Zeitserver-Adresse: Sie beginnt mit http:// oder https:// und nennt einen Server. Solange sie nicht gültig ist, wird kein Zeitserver verwendet.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Aus, bis du einen Server wählst. Danach kontaktiert PdfCraft ihn nur beim Signieren und sendet ihm einen Fingerabdruck (Hash) der Signatur, nie das Dokument. Ist der Server nicht erreichbar, wird das Dokument ohne vertrauenswürdige Zeit signiert, und du wirst darauf hingewiesen.
+	Trusted time from {server}	Vertrauenswürdige Zeit von {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Nur ein Fingerabdruck (Hash) der Signatur wird an den Zeitserver gesendet, nie das Dokument.
+	Trusted time from a time server	Vertrauenswürdige Zeit von einem Zeitserver
+	No time server is chosen, so the signing time is this computer's clock.	Kein Zeitserver gewählt, daher stammt die Signaturzeit von der Uhr dieses Computers.
+	Choose one in Preferences ▸ Signatures	Einen in Einstellungen > Signaturen wählen
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Signiert und gespeichert unter {path}, aber ohne vertrauenswürdige Zeit: {reason}. Die Signaturzeit stammt von der Uhr dieses Computers.

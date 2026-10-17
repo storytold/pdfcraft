@@ -2645,3 +2645,18 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Server di marca temporale
+	None (use this computer's clock)	Nessuno (usa l'orologio di questo computer)
+	Another server…	Altro server…
+	Server address	Indirizzo del server
+	Type the server's address. Until then, no time server is used.	Digita l'indirizzo del server. Fino ad allora non viene usato alcun server di marca temporale.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Questo non è l'indirizzo di un server di marca temporale: inizia con http:// o https:// e indica un server. Finché non lo è, non viene usato alcun server di marca temporale.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Disattivato finché non scegli un server. Poi PdfCraft lo contatta solo quando firmi e gli invia un'impronta (hash) della firma, mai il documento. Se il server non è raggiungibile, il documento viene firmato senza l'ora attendibile e ti viene segnalato.
+	Trusted time from {server}	Ora attendibile da {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Al server di marca temporale viene inviata solo un'impronta (hash) della firma, mai il documento.
+	Trusted time from a time server	Ora attendibile da un server di marca temporale
+	No time server is chosen, so the signing time is this computer's clock.	Nessun server di marca temporale scelto, quindi l'ora della firma è quella dell'orologio di questo computer.
+	Choose one in Preferences ▸ Signatures	Scegline uno in Preferenze > Firme
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Firmato e salvato in {path}, ma senza ora attendibile: {reason}. L'ora della firma è quella dell'orologio di questo computer.

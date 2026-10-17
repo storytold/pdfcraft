@@ -81,6 +81,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
+    // The opt-in RFC 3161 transport: the frontends reach a time server through it only.
+    ("tsa-http", Class::Layer(7)),
     // test support
     ("testkit", Class::Testkit),
     ("oracle", Class::Testkit),
@@ -105,6 +107,8 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
     ("automation", "platform"),
+    ("ui-egui", "tsa-http"),
+    ("automation", "tsa-http"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).

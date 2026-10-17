@@ -474,6 +474,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.label(
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );
+    // Signatures ▸ Time server (RFC 3161). The browser build has no time servers.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.add_space(8.0);
+        crate::sign_ui::time_server_preferences(ui, app, t);
+    }
     ui.add_space(8.0);
     date_format(ui, app, t);
     ui.add_space(8.0);

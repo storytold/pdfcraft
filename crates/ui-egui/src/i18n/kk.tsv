@@ -2431,3 +2431,18 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Уақыт сервері
+	None (use this computer's clock)	Жоқ (осы компьютердің сағатын пайдалану)
+	Another server…	Басқа сервер…
+	Server address	Сервер мекенжайы
+	Type the server's address. Until then, no time server is used.	Сервердің мекенжайын енгізіңіз. Оған дейін уақыт сервері пайдаланылмайды.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Бұл уақыт серверінің мекенжайы емес: ол http:// немесе https:// деп басталып, серверді көрсетеді. Ол дұрыс болмайынша, уақыт сервері пайдаланылмайды.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Сервер таңдағанша өшірулі. Содан кейін PdfCraft онымен тек қол қойған кезде байланысады және оған құжатты емес, қолтаңбаның саусақ ізін (хеш) ғана жібереді. Серверге қосылу мүмкін болмаса, құжатқа сенімді уақытсыз қол қойылады және бұл туралы хабарланады.
+	Trusted time from {server}	{server} серверінен сенімді уақыт
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Уақыт серверіне құжат емес, тек қолтаңбаның саусақ ізі (хеш) жіберіледі.
+	Trusted time from a time server	Уақыт серверінен сенімді уақыт
+	No time server is chosen, so the signing time is this computer's clock.	Уақыт сервері таңдалмаған, сондықтан қол қою уақыты осы компьютердің сағатынан алынады.
+	Choose one in Preferences ▸ Signatures	Параметрлер > Қолтаңбалар бөлімінде таңдаңыз
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Қол қойылып, {path} жолына сақталды, бірақ сенімді уақытсыз: {reason}. Қол қою уақыты осы компьютердің сағатынан алынды.

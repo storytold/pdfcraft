@@ -1,6 +1,6 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (§12.4.4: page transitions and display times read) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (PAdES B-T: an opt-in time server chosen in Preferences ▸ Signatures) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -102,7 +102,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 |---|---|---|
 | Sub-filters `adbe.pkcs7.detached`, `ETSI.CAdES.detached`; read `adbe.pkcs7.sha1`, `adbe.x509.rsa_sha1` | yes | yes |
 | PAdES B-B | yes | yes (PKCS #12, macOS Keychain, Windows store with PIN) |
-| PAdES B-T (signature timestamp), document timestamps | yes, with configured TSA | partial: works when a TSA is given; no timestamp-server preferences |
+| PAdES B-T (signature timestamp), document timestamps | yes, with configured TSA | partial: signatures take an RFC 3161 time from one server chosen in Preferences ▸ Signatures (off by default) or `sign_document`'s `timestamp_server`; no list of servers or server sign-in; document timestamps have no command or tool yet |
 | PAdES B-LT, B-LTA (DSS/VRI, OCSP/CRL) | yes, fetched online | partial: evidence supplied by the caller; no online fetching |
 | DocMDP certification | yes | yes |
 | FieldMDP (lock fields) | yes | none |

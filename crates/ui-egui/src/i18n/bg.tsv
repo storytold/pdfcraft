@@ -2396,3 +2396,18 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Сървър за време
+	None (use this computer's clock)	Няма (използване на часовника на този компютър)
+	Another server…	Друг сървър…
+	Server address	Адрес на сървъра
+	Type the server's address. Until then, no time server is used.	Въведете адреса на сървъра. Дотогава не се използва сървър за време.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Това не е адрес на сървър за време: той започва с http:// или https:// и посочва сървър. Докато не е валиден, не се използва сървър за време.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Изключено, докато не изберете сървър. След това PdfCraft се свързва с него само когато подписвате, и му изпраща отпечатък (хеш) на подписа, никога документа. Ако сървърът е недостъпен, документът се подписва без надеждно време и получавате известие.
+	Trusted time from {server}	Надеждно време от {server}
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	До сървъра за време се изпраща само отпечатък (хеш) на подписа, никога документът.
+	Trusted time from a time server	Надеждно време от сървър за време
+	No time server is chosen, so the signing time is this computer's clock.	Не е избран сървър за време, затова времето на подписване е от часовника на този компютър.
+	Choose one in Preferences ▸ Signatures	Изберете в Настройки > Подписи
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	Подписано и записано в {path}, но без надеждно време: {reason}. Времето на подписване е от часовника на този компютър.

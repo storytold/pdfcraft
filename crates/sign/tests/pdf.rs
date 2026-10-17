@@ -417,6 +417,43 @@ fn a_malformed_timestamp_response_fails_signing_without_a_file() {
 }
 
 #[test]
+fn a_timestamp_answer_must_repeat_the_requests_nonce() {
+    /// Answers with a correct token for the imprint, but for another nonce (or none).
+    struct Forgetful {
+        id: pkcs12::DigitalId,
+        nonce: Option<u64>,
+        asked: std::cell::Cell<Option<u64>>,
+    }
+    impl TimestampAuthority for Forgetful {
+        fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError> {
+            let mut q = pdfcraft_sign::timestamp::parse_request(request)?;
+            self.asked.set(q.nonce);
+            q.nonce = self.nonce;
+            let time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
+            pdfcraft_sign::timestamp::respond(
+                &self.id.key,
+                &self.id.certificate,
+                &self.id.chain,
+                pdfcraft_sign::DigestAlg::Sha256,
+                &q,
+                "1.2.3.4",
+                time,
+                7,
+            )
+        }
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    for nonce in [None, Some(5)] {
+        let tsa = Forgetful { id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(), nonce, asked: Default::default() };
+        let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa);
+        assert!(matches!(&signed, Err(SignError::Malformed(m)) if m.contains("nonce")), "{nonce:?}: {:?}", signed.as_ref().map(Vec::len));
+        assert!(tsa.asked.get().is_some_and(|n| n != 5), "each request carries a fresh nonce");
+        let stamped = pdfcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z");
+        assert!(matches!(&stamped, Err(SignError::Malformed(m)) if m.contains("nonce")), "{nonce:?}: {:?}", stamped.as_ref().map(Vec::len));
+    }
+}
+
+#[test]
 fn a_document_timestamp_covers_the_file_and_validates() {
     let tsa = TestTsa {
         id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),

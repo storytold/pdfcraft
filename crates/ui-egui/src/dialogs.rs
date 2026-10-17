@@ -754,6 +754,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 if crate::sign_ui::dialog(ui, app, &t) {
                     app.sign_draft = None;
                     close = true;
+                } else if app.preferences_then_sign {
+                    // Choose a time server in Preferences, then come back to signing.
+                    next = Dialog::Preferences;
                 }
                 return;
             }
@@ -1386,6 +1389,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
+    }
+    // Preferences opened from the Sign dialog's time server hint go back to it when closed.
+    if dialog == Dialog::Preferences
+        && app.dialog != Some(Dialog::Preferences)
+        && std::mem::take(&mut app.preferences_then_sign)
+        && app.sign_draft.is_some()
+    {
+        app.dialog = Some(Dialog::Sign);
     }
     if let Some(cmd) = link_command {
         app.execute(cmd);

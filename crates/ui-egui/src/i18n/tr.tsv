@@ -2429,3 +2429,18 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+
+# RFC 3161 time server: Preferences ▸ Signatures and Sign as (#888)
+	Time server	Zaman sunucusu
+	None (use this computer's clock)	Yok (bu bilgisayarın saatini kullan)
+	Another server…	Başka bir sunucu…
+	Server address	Sunucu adresi
+	Type the server's address. Until then, no time server is used.	Sunucunun adresini yazın. O zamana kadar hiçbir zaman sunucusu kullanılmaz.
+	This isn't a time server address: it starts with http:// or https:// and names a server. Until it is, no time server is used.	Bu bir zaman sunucusu adresi değil: http:// veya https:// ile başlar ve bir sunucuyu belirtir. Geçerli olana kadar hiçbir zaman sunucusu kullanılmaz.
+	Off until you choose a server. Then PdfCraft contacts it only when you sign, and sends it a fingerprint (hash) of the signature, never the document. If the server can't be reached, the document is signed without the trusted time, and you're told.	Bir sunucu seçene kadar kapalıdır. Sonra PdfCraft ona yalnızca imzaladığınızda bağlanır ve belgeyi değil, yalnızca imzanın parmak izini (hash) gönderir. Sunucuya ulaşılamazsa belge güvenilir zaman olmadan imzalanır ve size bildirilir.
+	Trusted time from {server}	{server} sunucusundan güvenilir zaman
+	Only a fingerprint (hash) of the signature is sent to the time server, never the document.	Zaman sunucusuna belge asla gönderilmez, yalnızca imzanın parmak izi (hash) gönderilir.
+	Trusted time from a time server	Bir zaman sunucusundan güvenilir zaman
+	No time server is chosen, so the signing time is this computer's clock.	Zaman sunucusu seçilmedi; bu yüzden imzalama zamanı bu bilgisayarın saatinden alınır.
+	Choose one in Preferences ▸ Signatures	Tercihler > İmzalar bölümünden birini seçin
+	Signed and saved to {path}, but without a trusted time: {reason}. The signing time is this computer's clock.	İmzalandı ve {path} konumuna kaydedildi, ancak güvenilir zaman olmadan: {reason}. İmzalama zamanı bu bilgisayarın saatidir.

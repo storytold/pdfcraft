@@ -1968,7 +1968,7 @@ fn sign_inner(
             // The imprint covers the signature value, which attaching an unsigned attribute
             // does not change (PAdES B-T).
             let sd = SignedData::parse(&base)?;
-            let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&sd.signer.signature]))?;
+            let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&sd.signer.signature]))?.with_fresh_nonce();
             let resp = t.timestamp(&q.encode()?)?;
             let token = crate::timestamp::parse_response(&resp, &q)?;
             crate::cms::attach_timestamp_token(&base, &token.raw)?
@@ -2022,7 +2022,7 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
     }
     br_text.resize(width, b' ');
     out[br_at..br_at + width].copy_from_slice(&br_text);
-    let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&out[..start], &out[end..]]))?;
+    let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&out[..start], &out[end..]]))?.with_fresh_nonce();
     let resp = tsa.timestamp(&q.encode()?)?;
     let token = crate::timestamp::parse_response(&resp, &q)?;
     let hex: Vec<u8> = token.raw.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
