@@ -130,10 +130,15 @@ impl HeldToolOpen {
         self.started.recv_timeout(Duration::from_secs(5)).expect("the native open reached its preparation barrier");
     }
 
-    #[allow(clippy::expect_used)]
     fn complete(&self, harness: &mut Harness<'static, PdfCraftApp>) {
+        self.complete_within(harness, Duration::from_secs(5));
+    }
+
+    /// [`Self::complete`] for a preparation that may take up to `timeout`.
+    #[allow(clippy::expect_used)]
+    fn complete_within(&self, harness: &mut Harness<'static, PdfCraftApp>, timeout: Duration) {
         self.release.send(()).expect("release the native preparation");
-        self.finished.recv_timeout(Duration::from_secs(5)).expect("the native open returned its result");
+        self.finished.recv_timeout(timeout).expect("the native open returned its result");
         harness.run_steps(2);
     }
 }
@@ -1020,7 +1025,8 @@ fn file_open_converts_an_office_document_on_the_worker() {
     harness.run_steps(2);
     held.wait_started();
     assert!(harness.state().views.is_empty(), "nothing opens before the conversion finishes");
-    held.complete(&mut harness);
+    // An installed LibreOffice takes seconds; it is stopped after 120 s.
+    held.complete_within(&mut harness, Duration::from_secs(150));
     let app = harness.state();
     assert!(app.pending_opens.is_empty());
     if let Some(view) = app.views.first() {
