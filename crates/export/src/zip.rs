@@ -44,6 +44,67 @@ fn zip64_extra(fields: &[u64]) -> Vec<u8> {
     e
 }
 
+/// The classic 32-bit field value for `value`: the value itself, or the 0xFFFFFFFF sentinel when it
+/// no longer fits — including when it equals the sentinel, which a reader cannot tell from a real
+/// value — in which case the ZIP64 extra field carries the real value (APPNOTE 4.4.3).
+fn classic_u32(value: u64) -> u32 {
+    if value >= MAX_CLASSIC_U32 { u32::MAX } else { value as u32 }
+}
+
+/// Builds one member's local file header and central directory entry. The sizes and `offset` are
+/// parameters, not read from the body, so tests can inject values past the classic fields without
+/// allocating the data.
+fn entry_headers(name: &str, crc: u32, method: u16, compressed: u64, uncompressed: u64, offset: u64) -> (Vec<u8>, Vec<u8>) {
+    // A value at or above the sentinel cannot be held by a classic field, so it is offloaded.
+    let size_is_zip64 = uncompressed >= MAX_CLASSIC_U32 || compressed >= MAX_CLASSIC_U32;
+    // A local header that carries ZIP64 sizes carries both, original then compressed, even when only
+    // one overflowed (APPNOTE 4.5.3). A central entry carries one value for each field it set to its
+    // sentinel, and only those, so a reader walking the fields by their classic ones stays in step.
+    let local_extra = if size_is_zip64 { zip64_extra(&[uncompressed, compressed]) } else { Vec::new() };
+    let mut central_fields = Vec::new();
+    if uncompressed >= MAX_CLASSIC_U32 {
+        central_fields.push(uncompressed);
+    }
+    if compressed >= MAX_CLASSIC_U32 {
+        central_fields.push(compressed);
+    }
+    if offset >= MAX_CLASSIC_U32 {
+        central_fields.push(offset);
+    }
+    let central_extra = zip64_extra(&central_fields);
+    // An entry that carries ZIP64 fields needs version 4.5 to extract (APPNOTE 4.4.3); the version
+    // in the local header and the central entry agree.
+    let version_needed = if size_is_zip64 || offset >= MAX_CLASSIC_U32 { 45u16 } else { 20u16 };
+    let header = |sig: u32, central: bool| {
+        let mut h = Vec::new();
+        h.extend(sig.to_le_bytes());
+        if central {
+            h.extend(20u16.to_le_bytes()); // made by
+        }
+        h.extend(version_needed.to_le_bytes()); // version needed
+        h.extend(0x0800u16.to_le_bytes()); // UTF-8 names
+        h.extend(method.to_le_bytes());
+        h.extend([0, 0, 0x21, 0]); // 00:00, 1980-01-01 (a zero date is not a valid DOS date)
+        h.extend(crc.to_le_bytes());
+        h.extend(classic_u32(compressed).to_le_bytes());
+        h.extend(classic_u32(uncompressed).to_le_bytes());
+        h.extend((name.len() as u16).to_le_bytes());
+        let extra = if central { &central_extra } else { &local_extra };
+        h.extend((extra.len() as u16).to_le_bytes()); // extra
+        if central {
+            h.extend(0u16.to_le_bytes()); // comment
+            h.extend(0u16.to_le_bytes()); // disk
+            h.extend(0u16.to_le_bytes()); // internal attributes
+            h.extend(0u32.to_le_bytes()); // external attributes
+            h.extend(classic_u32(offset).to_le_bytes());
+        }
+        h.extend(name.as_bytes());
+        h.extend(extra);
+        h
+    };
+    (header(0x0403_4b50, false), header(0x0201_4b50, true))
+}
+
 /// Builds a zip archive in memory. An archive past the classic record's 16-bit entry count or
 /// 32-bit sizes and offsets is written with a ZIP64 end-of-central-directory record: a
 /// PowerPoint export writes two entries per page plus ten fixed parts, so a document with
@@ -68,53 +129,10 @@ impl Zip {
             (0u16, data.to_vec())
         };
         let offset = self.out.len() as u64;
-        let (compressed, uncompressed) = (body.len() as u64, data.len() as u64);
-        // A local header's extra field carries the sizes that do not fit; a central entry's
-        // also carries the local header's offset (APPNOTE 4.5.3). The extra field follows the
-        // file name, so an archive of small entries is byte for byte what it was.
-        let mut local_fields = Vec::new();
-        if uncompressed > MAX_CLASSIC_U32 {
-            local_fields.push(uncompressed);
-        }
-        if compressed > MAX_CLASSIC_U32 {
-            local_fields.push(compressed);
-        }
-        let local_extra = zip64_extra(&local_fields);
-        let mut central_fields = local_fields.clone();
-        if offset > MAX_CLASSIC_U32 {
-            central_fields.push(offset);
-        }
-        let central_extra = zip64_extra(&central_fields);
-        let header = |sig: u32, central: bool| {
-            let mut h = Vec::new();
-            h.extend(sig.to_le_bytes());
-            if central {
-                h.extend(20u16.to_le_bytes()); // made by
-            }
-            h.extend(20u16.to_le_bytes()); // version needed
-            h.extend(0x0800u16.to_le_bytes()); // UTF-8 names
-            h.extend(method.to_le_bytes());
-            h.extend([0, 0, 0x21, 0]); // 00:00, 1980-01-01 (a zero date is not a valid DOS date)
-            h.extend(crc.to_le_bytes());
-            h.extend((if compressed > MAX_CLASSIC_U32 { u32::MAX } else { compressed as u32 }).to_le_bytes());
-            h.extend((if uncompressed > MAX_CLASSIC_U32 { u32::MAX } else { uncompressed as u32 }).to_le_bytes());
-            h.extend((name.len() as u16).to_le_bytes());
-            let extra = if central { &central_extra } else { &local_extra };
-            h.extend((extra.len() as u16).to_le_bytes()); // extra
-            if central {
-                h.extend(0u16.to_le_bytes()); // comment
-                h.extend(0u16.to_le_bytes()); // disk
-                h.extend(0u16.to_le_bytes()); // internal attributes
-                h.extend(0u32.to_le_bytes()); // external attributes
-                h.extend((if offset > MAX_CLASSIC_U32 { u32::MAX } else { offset as u32 }).to_le_bytes());
-            }
-            h.extend(name.as_bytes());
-            h.extend(extra);
-            h
-        };
-        self.out.extend(header(0x0403_4b50, false));
+        let (local, central) = entry_headers(name, crc, method, body.len() as u64, data.len() as u64, offset);
+        self.out.extend(local);
         self.out.extend(&body);
-        self.central.extend(header(0x0201_4b50, true));
+        self.central.extend(central);
         self.count += 1;
     }
 
@@ -124,7 +142,7 @@ impl Zip {
         let count = self.count as u64;
         self.out.append(&mut self.central);
         let classic_count = if count > MAX_CLASSIC_COUNT { u16::MAX } else { count as u16 };
-        if count > MAX_CLASSIC_COUNT || size > MAX_CLASSIC_U32 || start > MAX_CLASSIC_U32 {
+        if count > MAX_CLASSIC_COUNT || size >= MAX_CLASSIC_U32 || start >= MAX_CLASSIC_U32 {
             let eocd64_at = self.out.len() as u64;
             self.out.extend(0x0606_4b50u32.to_le_bytes()); // ZIP64 end of central directory record
             self.out.extend(44u64.to_le_bytes()); // size of the rest of this record
@@ -145,8 +163,8 @@ impl Zip {
         self.out.extend([0u8; 4]); // number of this disk, disk with the central directory
         self.out.extend(classic_count.to_le_bytes()); // entries on this disk
         self.out.extend(classic_count.to_le_bytes()); // entries in total
-        self.out.extend((if size > MAX_CLASSIC_U32 { u32::MAX } else { size as u32 }).to_le_bytes());
-        self.out.extend((if start > MAX_CLASSIC_U32 { u32::MAX } else { start as u32 }).to_le_bytes());
+        self.out.extend(classic_u32(size).to_le_bytes());
+        self.out.extend(classic_u32(start).to_le_bytes());
         self.out.extend(0u16.to_le_bytes()); // comment length
         self.out
     }
@@ -197,5 +215,66 @@ mod tests {
         assert_eq!(&b[at..at + 4], &0x0606_4b50u32.to_le_bytes());
         assert_eq!(u64::from_le_bytes(b[at + 24..at + 32].try_into().unwrap_or([0; 8])), entries as u64, "entries on this disk");
         assert_eq!(u64::from_le_bytes(b[at + 32..at + 40].try_into().unwrap_or([0; 8])), entries as u64, "entries in total");
+    }
+
+    /// The extra field of a local file header (APPNOTE 4.3.7), which follows the file name.
+    fn local_extra(h: &[u8]) -> &[u8] {
+        let le = |i: usize, n: usize| h[i..i + n].iter().rev().fold(0usize, |v, b| v << 8 | *b as usize);
+        let (name_len, extra_len) = (le(26, 2), le(28, 2));
+        &h[30 + name_len..30 + name_len + extra_len]
+    }
+
+    /// The extra field of a central directory entry (APPNOTE 4.3.12), which follows the file name.
+    fn central_extra(h: &[u8]) -> &[u8] {
+        let le = |i: usize, n: usize| h[i..i + n].iter().rev().fold(0usize, |v, b| v << 8 | *b as usize);
+        let (name_len, extra_len) = (le(28, 2), le(30, 2));
+        &h[46 + name_len..46 + name_len + extra_len]
+    }
+
+    #[test]
+    fn local_zip64_extra_carries_both_sizes() {
+        // When only one size overflows the u32 limit, the local header still carries both sizes —
+        // original then compressed — because a local ZIP64 extra that carries either must carry
+        // both (APPNOTE 4.5.3). Either size may be the one past the limit.
+        for (compressed, uncompressed) in [(100u64, u32::MAX as u64 + 1), (u32::MAX as u64 + 1, 100)] {
+            let (local, _) = entry_headers("a", 0, 0, compressed, uncompressed, 0);
+            let extra = local_extra(&local);
+            assert_eq!(u16::from_le_bytes(extra[..2].try_into().unwrap_or([0; 2])), 0x0001, "ZIP64 extra id");
+            assert_eq!(u16::from_le_bytes(extra[2..4].try_into().unwrap_or([0; 2])), 16, "both sizes are present");
+            assert_eq!(u64::from_le_bytes(extra[4..12].try_into().unwrap_or([0; 8])), uncompressed, "original size first");
+            assert_eq!(u64::from_le_bytes(extra[12..20].try_into().unwrap_or([0; 8])), compressed, "compressed size second");
+        }
+    }
+
+    #[test]
+    fn zip64_entries_need_version_4_5() {
+        // An entry that carries ZIP64 fields must advertise version 4.5 to extract, in both the
+        // local file header and the central directory entry (APPNOTE 4.4.3). An entry that fits
+        // every classic field stays at 2.0, so small archives are unchanged.
+        let (local, central) = entry_headers("a", 0, 0, u32::MAX as u64 + 1, u32::MAX as u64 + 1, 0);
+        assert_eq!(u16::from_le_bytes(local[4..6].try_into().unwrap_or([0; 2])), 45, "local version needed");
+        assert_eq!(u16::from_le_bytes(central[6..8].try_into().unwrap_or([0; 2])), 45, "central version needed");
+        let (local, central) = entry_headers("a", 0, 0, 4, 8, 0);
+        assert_eq!(u16::from_le_bytes(local[4..6].try_into().unwrap_or([0; 2])), 20, "local version needed");
+        assert_eq!(u16::from_le_bytes(central[6..8].try_into().unwrap_or([0; 2])), 20, "central version needed");
+    }
+
+    #[test]
+    fn size_equal_to_the_sentinel_is_offloaded() {
+        // A real size of exactly u32::MAX is indistinguishable from the 0xFFFFFFFF sentinel, so it
+        // too must be offloaded: every classic field set to the sentinel needs its 8-byte value in
+        // the central extra, or a reader such as Python's zipfile reports "Compress size not
+        // found". Both orders of which size is the MAX+1 one must work.
+        for (compressed, uncompressed) in [(u32::MAX as u64, u32::MAX as u64 + 1), (u32::MAX as u64 + 1, u32::MAX as u64)] {
+            let (local, central) = entry_headers("a", 0, 0, compressed, uncompressed, 0);
+            assert_eq!(u32::from_le_bytes(local[18..22].try_into().unwrap_or([0; 4])), u32::MAX, "local compressed sentinel");
+            assert_eq!(u32::from_le_bytes(local[22..26].try_into().unwrap_or([0; 4])), u32::MAX, "local original sentinel");
+            assert_eq!(u32::from_le_bytes(central[20..24].try_into().unwrap_or([0; 4])), u32::MAX, "central compressed sentinel");
+            assert_eq!(u32::from_le_bytes(central[24..28].try_into().unwrap_or([0; 4])), u32::MAX, "central original sentinel");
+            let extra = central_extra(&central);
+            assert_eq!(u16::from_le_bytes(extra[2..4].try_into().unwrap_or([0; 2])), 16, "a value for each sentinel field");
+            assert_eq!(u64::from_le_bytes(extra[4..12].try_into().unwrap_or([0; 8])), uncompressed, "original size first");
+            assert_eq!(u64::from_le_bytes(extra[12..20].try_into().unwrap_or([0; 8])), compressed, "compressed size second");
+        }
     }
 }
