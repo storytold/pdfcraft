@@ -292,10 +292,18 @@ update the numbers.
 ### 14. Arabic not mirrored; no Hindi, Indonesian, Korean
 
 - **Missing:** a right-to-left layout (panels, menus, alignment), bidirectional text in the text
+<<<<<<< HEAD
+  layout itself (wrapping, typed text); a Hangul face in craft-fonts (Korean now draws with one
+  installed system face, so the web build and machines without one show boxes). Acrobat ships
+  Korean; it ships Arabic in its Middle East edition; it ships neither Hindi nor Indonesian nor
+  Vietnamese. Indonesian, Vietnamese, Hindi and Korean catalogs ship as of 2026-10-13; Dutch,
+  Danish, Swedish and Finnish as of 2026-10-14.
+=======
   layout itself (wrapping, typed text); catalogs for Hindi, Indonesian and Korean (Acrobat ships
   Korean; it ships Arabic in its Middle East edition; it ships none of Hindi or Indonesian).
   Vietnamese ships as a catalog (`vi`, 100% of the current localizable union) but stays `partial`
   like other non-English languages (no translated help; engine/OS details stay English).
+>>>>>>> i18n-id-vi
 - **Evidence:** [localization.md](localization.md) §Arabic; `misc.rtl-ui` planned.
 - **Estimate:** 25–45 h (Arabic RTL 20–35, three catalogs 8–12 plus review). **Doc:**
   [localization-parity.md](localization-parity.md).

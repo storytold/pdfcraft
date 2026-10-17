@@ -75,6 +75,20 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
     ui_thai_fonts().into_iter().next()
 }
 
+/// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
+/// document titles), in manifest order. Empty when built without craft-fonts or when its revision
+/// has no Devanagari face; a desktop build then falls back to one font already installed on the
+/// machine (`SYSTEM_DEVANAGARI_FALLBACK`), and the web build shows replacement boxes.
+pub fn ui_devanagari_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.covers("Deva")).collect()
+}
+
+/// The face for Devanagari text written into PDFs: the first `Deva` face. `None` when built
+/// without craft-fonts or when its revision has no Devanagari face.
+pub fn document_devanagari_font() -> Option<&'static CraftFont> {
+    ui_devanagari_fonts().into_iter().next()
+}
+
 /// The `Hebr` craft-fonts faces for Hebrew interface text (file names, document titles, text
 /// being edited), in manifest order. Empty when built without craft-fonts or when it has no
 /// Hebrew face.
