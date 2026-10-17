@@ -2,7 +2,7 @@ use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
 use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
-    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_unicode, read_to_unicode,
+    Encoding, FallbackFontQuery, FontFlags, glyph_name_to_unicode, normalized_glyph_name, read_to_unicode,
     strip_subset_prefix, unicode_from_name,
 };
 use crate::util::OptionLog;
@@ -225,7 +225,7 @@ impl EmbeddedKind {
     fn new(dict: &Dict<'_>) -> Option<Self> {
         let descriptor = dict.get::<Dict<'_>>(FONT_DESC).unwrap_or_default();
 
-        let font_flags = descriptor.get::<u32>(FLAGS).and_then(FontFlags::from_bits);
+        let font_flags = descriptor.get::<u32>(FLAGS).map(FontFlags::from_bits_truncate);
 
         let (widths, missing_width) = read_widths(dict, &descriptor)?;
         let (encoding, differences) = read_encoding(dict);
@@ -300,6 +300,88 @@ impl EmbeddedKind {
         self.base_font.outline_glyph(glyph)
     }
 
+    fn map_unicode_in_cmap(&self, c: char) -> Option<GlyphId> {
+        let cmap = self.base_font.font_ref().cmap().ok()?;
+        let mut glyph = None;
+
+        for record in cmap.encoding_records() {
+            if record.platform_id() == PlatformId::Windows
+                && matches!(record.encoding_id(), 1 | 10)
+                && let Ok(subtable) = record.subtable(cmap.offset_data())
+            {
+                glyph = glyph.or_else(|| subtable.map_codepoint(c)).filter(|g| *g != GlyphId::NOTDEF);
+            }
+        }
+
+        if glyph.is_none() {
+            for record in cmap.encoding_records() {
+                if record.platform_id() == PlatformId::Unicode
+                    && let Ok(subtable) = record.subtable(cmap.offset_data())
+                {
+                    glyph = glyph.or_else(|| subtable.map_codepoint(c)).filter(|g| *g != GlyphId::NOTDEF);
+                }
+            }
+        }
+
+        glyph
+    }
+
+    fn map_name(&self, lookup: &str) -> Option<GlyphId> {
+        let base_lookup = if !lookup.starts_with('.') { lookup.split('.').next().unwrap_or(lookup) } else { lookup };
+        let unicode_char = glyph_names::get(lookup)
+            .or_else(|| glyph_names::get(base_lookup))
+            .and_then(|n| n.chars().next())
+            .or_else(|| unicode_from_name(lookup))
+            .or_else(|| unicode_from_name(base_lookup));
+
+        let mut glyph = unicode_char.and_then(|c| self.map_unicode_in_cmap(c));
+
+        if glyph.is_none()
+            && let Ok(cmap) = self.base_font.font_ref().cmap()
+        {
+            for record in cmap.encoding_records() {
+                if record.platform_id() == PlatformId::Macintosh
+                    && record.encoding_id() == 0
+                    && let Ok(subtable) = record.subtable(cmap.offset_data())
+                {
+                    glyph = glyph.or_else(|| {
+                        mac_os_roman::get_inverse(lookup)
+                            .or_else(|| mac_roman::get_inverse(lookup))
+                            .or_else(|| mac_os_roman::get_inverse(base_lookup))
+                            .or_else(|| mac_roman::get_inverse(base_lookup))
+                            .or_else(|| {
+                                unicode_char
+                                    .and_then(glyph_names::get_reverse)
+                                    .and_then(|agl| mac_os_roman::get_inverse(agl).or_else(|| mac_roman::get_inverse(agl)))
+                            })
+                            .and_then(|c| subtable.map_codepoint(c))
+                            .filter(|g| *g != GlyphId::NOTDEF)
+                    });
+                }
+            }
+        }
+
+        if glyph.is_none() {
+            glyph = self
+                .glyph_names
+                .get(lookup)
+                .copied()
+                .or_else(|| self.glyph_names.get(base_lookup).copied())
+                .or_else(|| self.glyph_names.get(normalized_glyph_name(base_lookup)).copied())
+                .or_else(|| unicode_char.and_then(glyph_names::get_reverse).and_then(|agl| self.glyph_names.get(agl).copied()))
+                .or_else(|| {
+                    unicode_char.and_then(|c| {
+                        let cp = c as u32;
+                        self.glyph_names.get(&format!("uni{cp:04X}")).or_else(|| self.glyph_names.get(&format!("u{cp:04X}"))).copied()
+                    })
+                })
+                .or_else(|| glyph_num_string(base_lookup).map(GlyphId::new))
+                .filter(|g| *g != GlyphId::NOTDEF);
+        }
+
+        glyph
+    }
+
     fn map_code(&self, code: u8) -> GlyphId {
         if let Some(glyph) = self.cached_mappings.borrow().get(&code) {
             return *glyph;
@@ -312,51 +394,19 @@ impl EmbeddedKind {
                 .unwrap_or(GlyphId::NOTDEF);
         }
 
+        // PdfCraft patch: keep glyph selection separate from text extraction. Symbolic
+        // TrueType fonts ignore Encoding (ISO 32000-1 9.6.6.4); ToUnicode supplies text
+        // semantics (9.10), not an alternate glyph. Extend only the existing name lookup
+        // with Unicode cmap records and post-name aliases. Keep the raw symbolic fallback
+        // and the CFF path unchanged until affected source files justify a different policy.
         let mut glyph = None;
-
         if self.is_non_symbolic() {
             let Some(lookup) = self.code_to_name(code) else {
                 return GlyphId::NOTDEF;
             };
-
-            if let Ok(cmap) = self.base_font.font_ref().cmap() {
-                for record in cmap.encoding_records() {
-                    if record.platform_id() == PlatformId::Windows
-                        && record.encoding_id() == 1
-                        && let Ok(subtable) = record.subtable(cmap.offset_data())
-                    {
-                        glyph = glyph.or_else(|| {
-                            glyph_names::get(lookup)
-                                .map(|n| n.to_string())
-                                .or_else(|| unicode_from_name(lookup).map(|n| n.to_string()))
-                                .and_then(|n| n.chars().next())
-                                .and_then(|c| subtable.map_codepoint(c))
-                                .filter(|g| *g != GlyphId::NOTDEF)
-                        });
-                    }
-                }
-
-                for record in cmap.encoding_records() {
-                    if record.platform_id() == PlatformId::Macintosh
-                        && record.encoding_id() == 0
-                        && let Ok(subtable) = record.subtable(cmap.offset_data())
-                    {
-                        glyph = glyph.or_else(|| {
-                            mac_os_roman::get_inverse(lookup)
-                                .or_else(|| mac_roman::get_inverse(lookup))
-                                .and_then(|c| subtable.map_codepoint(c))
-                                .filter(|g| *g != GlyphId::NOTDEF)
-                        });
-                    }
-                }
-            }
-
-            if glyph.is_none() {
-                if let Some(gid) = self.glyph_names.get(lookup) {
-                    glyph = Some(*gid);
-                } else if let Some(gid) = glyph_num_string(lookup) {
-                    glyph = Some(GlyphId::new(gid));
-                }
+            // An explicit .notdef is a mapping, not permission to draw the raw code.
+            if lookup != ".notdef" {
+                glyph = self.map_name(lookup);
             }
         } else if let Ok(cmap) = self.base_font.font_ref().cmap() {
             for record in cmap.encoding_records() {
@@ -482,7 +532,7 @@ pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) 
                         if let Ok(code) = code.try_into() {
                             map.insert(code, name.as_str().to_string());
                         }
-                        code += 1;
+                        code = code.saturating_add(1);
                     }
                     _ => {}
                 }
