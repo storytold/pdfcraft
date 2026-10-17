@@ -3295,6 +3295,34 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Issue #2448: applying redactions clears document information entries that repeat the redacted
+/// text; unrelated entries stay, and the saved file keeps no trace of the secret.
+#[test]
+fn redacting_clears_matching_document_info_through_tools() {
+    let dir = workdir("redact-info");
+    std::fs::write(dir.join("memo.txt"), "Project Nimbus clearance is TOPSECRETX today\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "TOPSECRETX clearance memo" }));
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Author", "value": "Ada" }));
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "TOPSECRETX" }));
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["title"].as_str(), None, "the title repeating redacted text is gone");
+    assert_eq!(info["author"].as_str(), Some("Ada"), "unrelated entries stay");
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("TOPSECRETX") && text.contains("Public line"), "{text}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "memo.pdf" }));
+    let bytes = std::fs::read(dir.join("memo.pdf")).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"TOPSECRETX"), "the saved file has no trace of the secret");
+    // A full write may pack /Info into a compressed object stream, so survival is checked by
+    // opening the saved file, not by scanning its bytes.
+    let saved = ok(&mut a, "doc_open", json!({ "path": "memo.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": saved }));
+    assert_eq!(info["author"].as_str(), Some("Ada"), "unrelated metadata survives in the saved file");
+    assert_eq!(info["title"].as_str(), None, "the secret title is gone from the saved file");
+}
+
 #[test]
 fn redacting_with_codes_through_tools() {
     let dir = workdir("redact-codes");

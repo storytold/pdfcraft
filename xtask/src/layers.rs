@@ -97,6 +97,7 @@ pub const STANDALONE_DEPS: &[(&str, &[&str])] = &[("cos", &["filters", "crypt", 
 /// Allowed same-layer edges (architecture §3 rule 1). `forms → js` is deliberately absent.
 pub const SIDEWAYS: &[(&str, &str)] = &[
     ("redact", "edit"),
+    ("redact", "organize"),
     ("audit", "edit"),
     ("a11y", "preflight"),
     ("prepress", "preflight"),

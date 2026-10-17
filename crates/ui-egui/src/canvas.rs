@@ -452,6 +452,8 @@ pub struct DocView {
     last_press_time: f64,
     last_press_pos: Option<Pos2>,
     last_queue: Vec<RenderRequest>,
+    /// Hold finished rasters in the pool so tests can inspect the view before delivery.
+    pub hold_rasters: bool,
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
@@ -729,6 +731,7 @@ impl DocView {
             last_press_time: 0.0,
             last_press_pos: None,
             last_queue: Vec::new(),
+            hold_rasters: false,
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
@@ -1733,7 +1736,9 @@ impl DocView {
             pool.set_queue(queue.clone());
             self.last_queue = queue;
         }
-        self.receive(ctx, pool);
+        if !self.hold_rasters {
+            self.receive(ctx, pool);
+        }
         if !self.last_queue.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
