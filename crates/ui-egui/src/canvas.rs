@@ -2338,9 +2338,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = !app.modal_open() && !app.palette_open;
+    let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
     if view.organize {
+        // One remembered grid size for every document, kept in the settings.
+        view.set_grid_zoom(organize_zoom);
         organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        app.organize_zoom = view.grid_zoom();
         return;
     }
 

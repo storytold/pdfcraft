@@ -1844,6 +1844,39 @@ fn page_grid_zooms_with_its_buttons_keys_and_pinch() {
     assert!(!dirty(&h), "zooming is not an edit");
 }
 
+/// As in Acrobat, Organize pages keeps the size last chosen: every document's grid opens at it,
+/// and so does the next start of the app.
+#[test]
+fn page_grid_size_is_remembered_for_every_document_and_restart() {
+    let mut h = organize(3);
+    h.get_by_label("Larger pages").click();
+    h.run_steps(3);
+    assert_eq!(grid_zoom(&h), 1.25);
+    h.state_mut().open_bytes("other.pdf", None, fixture(2)).expect("second fixture opens");
+    h.state_mut().set_option("organize", "on").unwrap();
+    h.run_steps(4);
+    let other = h.state().active.expect("the new document is active");
+    assert_ne!(other, 0);
+    assert_eq!(h.state().views[other].grid_zoom(), 1.25, "the other document");
+    let settings = h.state().persist();
+    let h = harness(3, move |app| {
+        app.restore(&settings);
+        app.set_option("organize", "on").unwrap();
+    });
+    assert_eq!(grid_zoom(&h), 1.25, "after a restart");
+}
+
+#[test]
+fn a_damaged_remembered_page_grid_size_is_ignored_or_clamped() {
+    let mut app = PdfCraftApp::new();
+    app.restore(r#"{"organize_zoom": "huge"}"#);
+    assert_eq!(app.organize_zoom, 1.0);
+    app.restore(r#"{"organize_zoom": 40.0}"#);
+    assert_eq!(app.organize_zoom, 3.0);
+    app.restore(r#"{"organize_zoom": -2}"#);
+    assert_eq!(app.organize_zoom, 0.5);
+}
+
 #[test]
 fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
     // A long document: sharpness must not depend on how many pages there are.
