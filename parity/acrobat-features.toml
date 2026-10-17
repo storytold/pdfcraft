@@ -10125,11 +10125,11 @@ title = "Send the file by email (system mail client)"
 area = "N"
 tier = "P3"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/platform/src/mail.rs::macos_scripts_mail_and_outlook_and_falls_back_for_any_other_default", "crates/platform/src/mail.rs::windows_uses_the_new_outlook_then_simple_mapi_then_falls_back", "crates/platform/src/mail.rs::linux_and_the_bsds_use_xdg_email_and_fall_back_without_it", "crates/platform/src/mail.rs::a_missing_file_or_a_bad_recipient_is_refused_before_anything_runs"]
+notes = "The engine only (pdfcraft_platform::mail): the computer's default email program gets the file in a new message. macOS: the mailto: handler from Launch Services; Mail and Outlook through AppleScript. Windows: the new Outlook through an unsent .eml, else the default Simple MAPI client. Linux and the BSDs: xdg-email. Any other default (a webmail site, an unknown program) or a program that doesn't answer gets a mailto: message without the file and the file shown in its folder. Not yet: the File menu command and its window (a follow-up PR); no automation tool (it would open a window on the person's desktop). Nothing is sent by PdfCraft and it uses no network."
 
 [[feature]]
 id = "misc.user-docs"
