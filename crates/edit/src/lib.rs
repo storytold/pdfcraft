@@ -656,8 +656,8 @@ pub mod indic;
 mod linebreak;
 pub mod text;
 pub use text::{
-    BlockStyle, LineEdit, RangeStyle, TextBlock, TextLine, clear_block, reading_blocks, replace_block, replace_line, rewrite_block, text_blocks,
-    text_lines,
+    BlockStyle, LineEdit, RangeStyle, RunSources, TextBlock, TextLine, clear_block, reading_blocks, replace_block, replace_line, rewrite_block,
+    text_blocks, text_lines,
 };
 pub mod added;
 pub use added::{

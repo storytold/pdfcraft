@@ -194,6 +194,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
     ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
+    // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
+    // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
+    c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and

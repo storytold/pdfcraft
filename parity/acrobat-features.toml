@@ -2019,11 +2019,11 @@ title = "Find and replace in edit mode"
 area = "C"
 tier = "P2"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["edit.replace"]
+tools = ["text_replace"]
+evidence = ["crates/engine/src/find_replace/tests.rs::a_replaced_word_keeps_its_paragraphs_font_and_size", "crates/engine/src/find_replace/tests.rs::a_mixed_style_paragraph_keeps_the_other_runs_styles", "crates/engine/src/find_replace/tests.rs::replace_all_across_pages_is_one_undo_step", "crates/engine/src/find_replace/tests.rs::whole_words_and_case_follow_the_find_options", "crates/engine/src/find_replace/tests.rs::a_match_spanning_two_paragraphs_is_skipped_and_counted", "crates/engine/src/find_replace/tests.rs::a_character_the_font_cannot_draw_is_skipped_and_counted", "crates/engine/src/find_replace/tests.rs::invisible_text_over_a_scan_is_skipped", "crates/engine/src/find_replace/tests.rs::the_highlighted_match_is_the_one_replaced", "crates/engine/src/find_replace/tests.rs::matches_the_paragraphs_dont_hold_are_counted_as_not_editable", "crates/engine/src/find_replace/tests.rs::first_replaces_only_the_first_match_in_document_order", "crates/edit/src/tests.rs::replacing_words_apart_in_a_paragraph_keeps_every_run_between_them", "crates/edit/src/tests.rs::style_sources_must_cover_the_text_with_the_paragraphs_runs", "crates/render/src/text.rs::text_search_agrees_with_the_page_search", "crates/ui-egui/tests/ui_group/find_replace.rs::replace_all_from_the_find_bar_is_one_undo_step", "crates/ui-egui/tests/ui_group/find_replace.rs::replace_changes_the_highlighted_match", "crates/automation/tests/automation.rs::replacing_text_through_tools"]
+notes = "in Edit text mode the floating Find box (⌘F) gains a Replace with row (⇧⌘H / Ctrl+Shift+H, Edit ▸ Replace…, which turns Edit text on; ⌘H is macOS's Hide and Ctrl+H Read mode): Replace changes the highlighted match, Replace all every match in the document as one undo step. Matching is the find bar's own (case-sensitive and whole-words options, whitespace runs as one space). Each match is rewritten inside its own paragraph through Edit text's paragraph rewrite, which keeps the paragraph's fonts, sizes and colours and rewraps it; the replacement takes the run it lands in and every other run keeps its own style. Left alone and counted in the notice (and text_replace's skipped_by): a match spanning two paragraphs, invisible OCR text, a paragraph whose own font can't draw the new text (no silent switch to another font), a paragraph the engine refuses, and matches the find bar sees outside editable paragraphs (form fields, comments, text inside form XObjects). Missing: replacing inside form fields, comments and form XObjects, matches across paragraphs, regular expressions and Acrobat's other search options (diacritics, bookmarks, comments), offering a substitute font for a skipped paragraph, and right-to-left (Hebrew) paragraphs of several styles (the paragraph rewrite rewrites them in one style). The highlighted match is mapped to its paragraph by position (paragraph box and an estimate along its run), so two overlapping paragraphs may pick the nearer one."
 
 [[feature]]
 id = "edit.rtl-cjk-editing"

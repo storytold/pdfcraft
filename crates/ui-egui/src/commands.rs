@@ -221,6 +221,16 @@ impl PdfCraftApp {
                     self.views[i].open_find();
                 }
             }
+            // Find and replace changes page text, so it runs in Edit text mode (as Acrobat's
+            // does): the command turns the mode on, and the find bar shows its Replace row there.
+            "edit.replace" => {
+                if let Some(i) = active {
+                    self.quick_tool = crate::QuickTool::EditText;
+                    self.left = crate::LeftPanel::Tool("edit");
+                    self.reveal_tools();
+                    self.views[i].open_replace();
+                }
+            }
             "view.focus_page_input" => {
                 if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get_mut(i))) {
                     // The page box in the toolbar (chrome.rs); select its label so typing replaces it.

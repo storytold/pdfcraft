@@ -1238,7 +1238,7 @@ mod tests {
     #[test]
     fn spanish_covers_what_the_engine_says() {
         let es = Lang::from_code("es").expect("es registered");
-        let lists: [(&str, &[&str]); 8] = [
+        let lists: [(&str, &[&str]); 9] = [
             ("accessibility finding", pdfcraft_engine::a11y::WORDINGS),
             ("accessibility report", pdfcraft_engine::a11y::REPORT_WORDS),
             ("PDF/A problem", pdfcraft_engine::pdfa::WORDINGS),
@@ -1247,6 +1247,7 @@ mod tests {
             ("pages to print", pdfcraft_engine::print::WORDINGS),
             ("edit label", pdfcraft_engine::EDIT_LABELS),
             ("batch label", pdfcraft_engine::BATCH_LABELS),
+            ("reason a match was not replaced", pdfcraft_engine::find_replace::SKIP_WORDINGS),
         ];
         for (what, list) in lists {
             assert!(!list.is_empty(), "no {what} wordings to cover");
@@ -1401,6 +1402,7 @@ mod tests {
             "{field}: {e}",
             "{0}: {1}",
             "{month} {y}",
+            "{why} ({n})",
             "+LOC",
             "−LOC",
             "ΔLOC",
@@ -1513,6 +1515,7 @@ mod tests {
             "`{command}` {when}",
             "{0}: {1}",
             "{month} {y}",
+            "{why} ({n})",
             "+LOC",
             "−LOC",
             "ΔLOC",
@@ -2512,6 +2515,7 @@ mod tests {
             "{month} {y}",
             "{n} {kind}",
             "{rule} - {status}",
+            "{why} ({n})",
             "+LOC",
             "−LOC",
             "ΔLOC",
@@ -2969,6 +2973,7 @@ mod tests {
             "`{command}` {when}",
             "{0}: {1}",
             "{month} {y}",
+            "{why} ({n})",
             "+LOC",
             "−LOC",
             "ΔLOC",
@@ -3049,6 +3054,7 @@ mod tests {
             "`{command}` {when}",
             "{0}: {1}",
             "{month} {y}",
+            "{why} ({n})",
             "+LOC",
             "−LOC",
             "ΔLOC",
