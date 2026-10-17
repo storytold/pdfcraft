@@ -78,6 +78,12 @@ impl Host for crate::PdfCraftApp {
             .collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        // The AI tab: configured provider and privacy mode, download/translation
+        // progress, and the curated model list with per-model download state.
+        #[cfg(not(target_arch = "wasm32"))]
+        let ai_state = self.ai.status_json();
+        #[cfg(target_arch = "wasm32")]
+        let ai_state = Value::Null;
         json!({
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
@@ -120,6 +126,7 @@ impl Host for crate::PdfCraftApp {
                 "expanded": self.combine_expanded().iter().filter_map(|i| self.combine_draft.get(*i).map(|f| f.name.clone())).collect::<Vec<_>>(),
                 "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
             },
+            "ai": ai_state,
             "quick_tool": match self.quick_tool {
                 crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
                 crate::QuickTool::Select => "select".to_string(),

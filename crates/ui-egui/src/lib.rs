@@ -87,6 +87,8 @@ pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionar
 use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod ai;
 mod app;
 mod frame_guard;
 mod hooks;
@@ -790,6 +792,9 @@ pub struct PdfCraftApp {
     pub page_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<control::Control>,
+    /// AI tab: provider setup and the last document translation.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) ai: ai::Ai,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
