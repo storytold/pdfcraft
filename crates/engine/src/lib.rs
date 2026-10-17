@@ -3462,6 +3462,25 @@ impl Session {
                 }
                 None => (bytes, info, Ok(Ok(cos))),
             },
+            (None, Ok(Ok(cos))) if !context.js_off => {
+                let mut work = cos.clone();
+                let ran = guard(|| js::on_open(&mut work, &name, &mut script_output))
+                    .unwrap_or_else(|m| Err(format!("its scripts failed unexpectedly ({m})")));
+                match ran {
+                    Ok(()) if work.is_modified() => match rebase(&work) {
+                        Ok((b, i, c)) => (b, i, Ok(Ok(c))),
+                        Err(e) => {
+                            script_output.errors.push(format!("The form's scripts could not be applied: {e}"));
+                            (bytes, info, Ok(Ok(cos)))
+                        }
+                    },
+                    Ok(()) => (bytes, info, Ok(Ok(cos))),
+                    Err(e) => {
+                        script_output.errors.push(format!("The form's scripts could not run: {e}"));
+                        (bytes, info, Ok(Ok(cos)))
+                    }
+                }
+            }
             (_, cos) => (bytes, info, cos),
         };
         // The catalog leads to no page, but the reader found pages by scanning: gather the page

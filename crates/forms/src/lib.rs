@@ -27,8 +27,8 @@ pub use author::{
     redraw_field, set_button_icon, set_props,
 };
 pub use scripting::{
-    FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,
-    set_field_script,
+    FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, open_scripts,
+    set_document_script, set_field_script,
 };
 
 #[cfg(test)]

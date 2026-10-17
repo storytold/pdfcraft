@@ -2104,3 +2104,36 @@ fn document_scripts_read_each_name_tree_node_once() {
     ]);
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }
+
+#[test]
+fn open_scripts_collect_catalog_next_chains_and_opening_page_actions() {
+    let cyclic = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /AA << /O 9 0 R >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page2();) >> >> >>".into(),
+        "<< /S /JavaScript /JS (open1();) /Next 10 0 R >>".into(),
+        "<< /S /Named /N /FirstPage /JS (ignored();) /Next << /S /JavaScript /JS (open2();) >> >>".into(),
+        "<< /S /JavaScript /JS (   ) /Next 8 0 R >>".into(),
+        "<< /S /JavaScript /JS (open3();) >>".into(),
+        "<< /S /JavaScript /JS (page1();) /Next 9 0 R >>".into(),
+        "[6 0 R 7 0 R << /S /JavaScript /JS (open4();) /Next 10 0 R >> 5 0 R]".into(),
+    ]);
+    assert_eq!(open_scripts(&cyclic), ["open1();", "open2();", "open3();", "open4();", "page1();"]);
+
+    let goto_page = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /GoTo /D [4 0 R /Fit] /Next << /S /JavaScript /JS (after_goto();) >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page1();) >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page2();) >> >> >>".into(),
+    ]);
+    assert_eq!(open_scripts(&goto_page), ["after_goto();", "page2();"]);
+
+    let dest_array = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /OpenAction [1 /Fit] >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page1();) >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page2();) >> >> >>".into(),
+    ]);
+    assert_eq!(open_scripts(&dest_array), ["page2();"]);
+}
