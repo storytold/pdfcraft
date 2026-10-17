@@ -48,6 +48,13 @@ ignore = [
     # winprint's fmt-derive (craft-print's Windows spooler), so it runs at compile time on Windows
     # and is not in the binary.
     { id = "RUSTSEC-2024-0370", reason = "compile-time proc macro of winprint's fmt-derive (craft-print Windows printing, #1107)" },
+    # zbus_names, zvariant and zvariant_derive are unmaintained as crates of their own (no
+    # vulnerability, no patched release): they were merged into zbus 6. They reach the tree only
+    # through egui's accessibility on Linux (eframe → egui-winit → accesskit_winit →
+    # accesskit_unix → atspi / zbus 5). Remove these when eframe moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained (merged into zbus 6), via eframe's AT-SPI accessibility (accesskit_unix → zbus 5)" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained (merged into zbus 6), via eframe's AT-SPI accessibility (accesskit_unix → zbus 5)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained (merged into zbus 6), via eframe's AT-SPI accessibility (accesskit_unix → zbus 5)" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md
