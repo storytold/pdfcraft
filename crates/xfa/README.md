@@ -59,7 +59,10 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   the datasets packet per event), and `rerender`, which lays the form out again from template,
   data and overrides. The scripts themselves run in the `js` crate's XFA object model; the
   engine runs initialize and calculate on open, change, exit, validate and calculate after a
-  field changes, and click for buttons.
+  field changes, and click for buttons. While this XFA layout is active, the engine does not
+  initialize Acrobat JavaScript with the PDF container's document-level scripts (including
+  non-XFA-viewer warnings). They stay available for inspection and saving; explicit console
+  scripts and XFA messages still run. Static XFA keeps its document scripts.
 
   Private keys PdfCraft writes (other viewers ignore them):
 

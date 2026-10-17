@@ -5435,6 +5435,35 @@ fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
 }
 
 #[test]
+fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
+    let dir = workdir("xfa-container-scripts");
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "form.pdf"}))["doc"].as_u64().unwrap();
+    let fallback = "app.alert('This PDF form requires a newer version of Adobe Acrobat');";
+    ok(&mut a, "js_set_document_script", json!({"doc":doc,"name":"viewerFallback","script":fallback}));
+    let out = ok(&mut a, "js_run", json!({"doc":doc,"script":"app.alert('Console message');"}));
+    assert!(out["error"].is_null(), "{out}");
+    assert_eq!(out["alerts"], json!(["Console message"]));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let doc = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "js_document_scripts", json!({"doc":doc}))["scripts"], json!([{"name":"viewerFallback","script":fallback}]));
+    let out = ok(&mut a, "js_run", json!({"doc":doc,"script":""}));
+    assert!(out["error"].is_null(), "{out}");
+    assert_eq!(out["alerts"], json!([]));
+    let out = ok(&mut a, "js_run", json!({"doc":doc,"script":"","field":"hello"}));
+    assert!(out["error"].is_null(), "{out}");
+    assert_eq!(out["alerts"], json!(["Hello 2"]));
+    ok(&mut a, "xfa_to_static", json!({"doc":doc}));
+    let out = ok(&mut a, "js_run", json!({"doc":doc,"script":""}));
+    assert_eq!(out["alerts"].as_array().unwrap().len(), 1);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "js_run", json!({"doc":doc,"script":""}))["alerts"], json!([]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn doc_info_says_when_a_runaway_script_turned_the_forms_scripts_off() {
     let dir = workdir("xfa-scripts-off");
     // An initialize script whose loops are in nested calls runs until it is abandoned.

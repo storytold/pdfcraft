@@ -113,7 +113,13 @@ pub struct JsRunner {
 impl JsRunner {
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let doc = pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos) };
-        JsRunner { doc, doc_scripts: pdfcraft_forms::document_scripts(cos), output: JsOutput::default(), cos: cos.clone() }
+        // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
+        // Keep them in the file and in Document JavaScripts, but do not initialize an
+        // AcroForm context with them: a viewer-compatibility alert would be misleading.
+        // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
+        let xfa_active = pdfcraft_xfa::xfa_shape(cos).is_some() && pdfcraft_xfa::existing_layout(cos).is_some();
+        let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone() }
     }
 }
 
