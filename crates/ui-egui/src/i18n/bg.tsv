@@ -2396,3 +2396,17 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+
+# Optional form detection download and progress.
+	Form field detection is already running	Откриването на полета вече се изпълнява
+	This document does not allow adding form fields	Този документ не позволява добавяне на полета за формуляр
+	Find form fields	Намиране на полета за формуляр
+	Checking form detection…	Проверка на откриването на формуляри…
+	Preparing form detection…	Подготовка на откриването на формуляри…
+	Downloading form detection…	Изтегляне на откриването на формуляри…
+	Finding fields… page {d} of {t}	Търсене на полета… страница {d} от {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Изтеглете 121 MB за автоматично намиране на текстови полета, квадратчета за отметка и области за подпис.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Това е еднократно изтегляне от GitHub. След това откриването работи офлайн. Вашите PDF файлове остават на това устройство.
+	Try again	Опитай отново
+	Download and detect	Изтегли и открий
+	Use basic detection	Използвай основно откриване

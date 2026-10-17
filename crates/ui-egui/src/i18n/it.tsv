@@ -2645,3 +2645,17 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+
+# Optional form detection download and progress.
+	Form field detection is already running	Il rilevamento dei campi è già in corso
+	This document does not allow adding form fields	Questo documento non consente di aggiungere campi modulo
+	Find form fields	Trova campi modulo
+	Checking form detection…	Verifica del rilevamento moduli…
+	Preparing form detection…	Preparazione del rilevamento moduli…
+	Downloading form detection…	Download del rilevamento moduli…
+	Finding fields… page {d} of {t}	Ricerca campi… pagina {d} di {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Scarica 121 MB per trovare automaticamente campi di testo, caselle di controllo e aree firma.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	È un download unico da GitHub. In seguito, il rilevamento funziona offline. I PDF rimangono su questo dispositivo.
+	Try again	Riprova
+	Download and detect	Scarica e rileva
+	Use basic detection	Usa rilevamento di base

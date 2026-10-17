@@ -2432,3 +2432,17 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+
+# Optional form detection download and progress.
+	Form field detection is already running	Az űrlapmezők felismerése már folyamatban van
+	This document does not allow adding form fields	Ez a dokumentum nem engedélyezi űrlapmezők hozzáadását
+	Find form fields	Űrlapmezők keresése
+	Checking form detection…	Űrlapfelismerés ellenőrzése…
+	Preparing form detection…	Űrlapfelismerés előkészítése…
+	Downloading form detection…	Űrlapfelismerés letöltése…
+	Finding fields… page {d} of {t}	Mezők keresése… {d}. oldal, összesen {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Töltsön le 121 MB-ot a szövegmezők, jelölőnégyzetek és aláírási területek automatikus felismeréséhez.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Ez egyszeri letöltés a GitHubról. Ezután a felismerés internetkapcsolat nélkül működik. A PDF-ek ezen az eszközön maradnak.
+	Try again	Újrapróbálkozás
+	Download and detect	Letöltés és felismerés
+	Use basic detection	Alapvető felismerés használata

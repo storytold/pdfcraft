@@ -2433,3 +2433,17 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+
+# Optional form detection download and progress.
+	Form field detection is already running	フォームフィールドの検出はすでに実行中です
+	This document does not allow adding form fields	この文書ではフォームフィールドを追加できません
+	Find form fields	フォームフィールドを検出
+	Checking form detection…	フォーム検出を確認中…
+	Preparing form detection…	フォーム検出を準備中…
+	Downloading form detection…	フォーム検出をダウンロード中…
+	Finding fields… page {d} of {t}	フィールドを検出中… {t} ページ中 {d} ページ
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	121 MB をダウンロードすると、テキストフィールド、チェックボックス、署名欄を自動で検出できます。
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	GitHub からのダウンロードは一度だけです。その後はオフラインで検出できます。PDF はこのデバイスに保存されたままです。
+	Try again	再試行
+	Download and detect	ダウンロードして検出
+	Use basic detection	基本の検出を使用

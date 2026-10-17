@@ -2431,3 +2431,17 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+
+# Optional form detection download and progress.
+	Form field detection is already running	Пішін өрістерін анықтау орындалып жатыр
+	This document does not allow adding form fields	Бұл құжат пішін өрістерін қосуға рұқсат бермейді
+	Find form fields	Пішін өрістерін табу
+	Checking form detection…	Пішіндерді анықтау тексерілуде…
+	Preparing form detection…	Пішіндерді анықтау дайындалуда…
+	Downloading form detection…	Пішіндерді анықтау жүктелуде…
+	Finding fields… page {d} of {t}	Өрістер ізделуде… {t} беттің {d}-беті
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Мәтін өрістерін, құсбелгілерді және қолтаңба аймақтарын автоматты түрде табу үшін 121 МБ жүктеп алыңыз.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Бұл GitHub-тан бір рет жүктеп алу. Одан кейін анықтау интернетсіз жұмыс істейді. PDF файлдарыңыз осы құрылғыда қалады.
+	Try again	Қайталап көру
+	Download and detect	Жүктеп алып анықтау
+	Use basic detection	Негізгі анықтауды пайдалану

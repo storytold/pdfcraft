@@ -2397,3 +2397,17 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+
+# Optional form detection download and progress.
+	Form field detection is already running	表单字段检测已在运行
+	This document does not allow adding form fields	此文档不允许添加表单字段
+	Find form fields	查找表单字段
+	Checking form detection…	正在检查表单检测…
+	Preparing form detection…	正在准备表单检测…
+	Downloading form detection…	正在下载表单检测…
+	Finding fields… page {d} of {t}	正在查找字段…第 {d} 页，共 {t} 页
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	下载 121 MB 即可自动查找文本字段、复选框和签名区域。
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	只需从 GitHub 下载一次。之后可离线检测表单。您的 PDF 始终保留在此设备上。
+	Try again	重试
+	Download and detect	下载并检测
+	Use basic detection	使用基本检测

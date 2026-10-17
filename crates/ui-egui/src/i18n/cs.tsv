@@ -2507,3 +2507,17 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+
+# Optional form detection download and progress.
+	Form field detection is already running	Rozpoznávání polí již probíhá
+	This document does not allow adding form fields	Tento dokument neumožňuje přidávat formulářová pole
+	Find form fields	Najít formulářová pole
+	Checking form detection…	Kontrola rozpoznávání formulářů…
+	Preparing form detection…	Příprava rozpoznávání formulářů…
+	Downloading form detection…	Stahování rozpoznávání formulářů…
+	Finding fields… page {d} of {t}	Hledání polí… stránka {d} z {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Stáhněte 121 MB pro automatické vyhledávání textových polí, zaškrtávacích políček a míst pro podpis.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Jde o jednorázové stažení z GitHubu. Poté rozpoznávání funguje offline. Vaše PDF zůstávají v tomto zařízení.
+	Try again	Zkusit znovu
+	Download and detect	Stáhnout a rozpoznat
+	Use basic detection	Použít základní rozpoznávání

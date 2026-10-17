@@ -2429,3 +2429,17 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+
+# Optional form detection download and progress.
+	Form field detection is already running	Form alanı algılama zaten çalışıyor
+	This document does not allow adding form fields	Bu belge form alanı eklenmesine izin vermiyor
+	Find form fields	Form alanlarını bul
+	Checking form detection…	Form algılama denetleniyor…
+	Preparing form detection…	Form algılama hazırlanıyor…
+	Downloading form detection…	Form algılama indiriliyor…
+	Finding fields… page {d} of {t}	Alanlar bulunuyor… {t} sayfadan {d}. sayfa
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Metin alanlarını, onay kutularını ve imza alanlarını otomatik bulmak için 121 MB indirin.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	GitHub’dan yalnızca bir kez indirilir. Ardından form algılama çevrimdışı çalışır. PDF dosyalarınız bu cihazda kalır.
+	Try again	Yeniden dene
+	Download and detect	İndir ve algıla
+	Use basic detection	Temel algılamayı kullan

@@ -292,9 +292,9 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `hayro-cmap` 0.1.0 | `assets/cmaps.brotli` | Adobe CMap resources (predefined CJK CMaps) (non-visual data, AGENTS.md §1.1) | Adobe | BSD-3-Clause | https://github.com/adobe-type-tools/cmap-resources (via hayro-cmap) | Character-code mapping tables required to read CJK PDFs. Non-visual data, allowed by AGENTS.md §1.1 |
 | `hayro-interpret` 0.7.0 | `src/font/generated/metrics.rs` | Standard-14 font metrics and encodings (as Rust tables) (non-visual data, AGENTS.md §1.1) | Adobe (Core 14 AFM metrics, PDF specification encodings); tables by The Hayro Authors | MIT OR Apache-2.0 | ISO 32000-2 Annex D; Adobe Core14 AFM files (via vendored hayro-interpret) | Glyph widths and encodings for non-embedded standard fonts. Non-visual data, allowed by AGENTS.md §1.1 |
 
-## Downloaded at build time (22)
+## Downloadable assets (23)
 
-Fonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR models by `cargo xtask models` into `assets/models/`; each is verified by SHA-256 and never committed.
+Fonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR models by `cargo xtask models` into `assets/models/`; each is verified by SHA-256 and never committed. Optional form detection is downloaded by the desktop app only after consent and is excluded from installers.
 
 | File | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -320,6 +320,7 @@ Fonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR model
 | `Inter-Italic[opsz,wght].ttf` | Inter Italic (variable) | The Inter Project Authors (Rasmus Andersson) | OFL-1.1 | https://github.com/google/fonts/tree/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/inter | Showcase PDF (cargo xtask demo-pdf) |
 | `text-detection.rten` | Ocrs text detection model | Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0) | CC-BY-SA-4.0 | https://github.com/robertknight/ocrs-models (the models ocrs downloads; model card: https://huggingface.co/robertknight/ocrs, cc-by-sa-4.0) | Scan & OCR: finds words on page images (cargo xtask models) |
 | `text-recognition.rten` | Ocrs text recognition model | Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0) | CC-BY-SA-4.0 | https://github.com/robertknight/ocrs-models (the models ocrs downloads; model card: https://huggingface.co/robertknight/ocrs, cc-by-sa-4.0) | Scan & OCR: reads the words it finds (cargo xtask models) |
+| `ffdetr-576.onnx` | FFDetr form-field detector, self-contained 576px ONNX export | Joe Barrow; ONNX conversion by PdfCraft contributors | Apache-2.0 | https://huggingface.co/jbarrow/FFDetr/tree/56f4e4235e28dcb2953513dc020bb191a2f54cfe (Apache-2.0 model card; RF-DETR 1.11.2, PyTorch 2.14.1+cpu, float32, opset 17) | Prepare a form: optional one-time runtime download after explicit consent; verified by size and SHA-256, stored locally; never bundled in installers |
 
 ## Optional build inputs (1)
 

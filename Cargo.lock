@@ -4005,6 +4005,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
@@ -4118,6 +4119,7 @@ dependencies = [
  "pdfcraft-edit",
  "pdfcraft-export",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-forms",
  "pdfcraft-geom",
  "pdfcraft-js",
@@ -4164,6 +4166,21 @@ dependencies = [
  "pdfcraft-cos",
  "skrifa 0.44.0",
  "unicode-bidi",
+]
+
+[[package]]
+name = "pdfcraft-form-detect"
+version = "0.8.0"
+dependencies = [
+ "image",
+ "rten",
+ "rten-tensor",
+ "rustls-native-certs",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]
@@ -4374,6 +4391,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-model",
  "pdfcraft-platform",
  "pdfcraft-render",
@@ -4386,6 +4404,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "sys-locale",
+ "tempfile",
  "toml",
  "unicode-bidi",
  "wasm-bindgen",
@@ -5338,6 +5357,7 @@ dependencies = [
  "rten-base",
  "rten-gemm",
  "rten-model-file",
+ "rten-onnx",
  "rten-parallel",
  "rten-shape-inference",
  "rten-simd",
@@ -5386,6 +5406,12 @@ dependencies = [
  "flatbuffers",
  "rten-base",
 ]
+
+[[package]]
+name = "rten-onnx"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96944374568990b8d1bbc5bae5957585866f9dd8256130460405730948bfd42e"
 
 [[package]]
 name = "rten-parallel"
@@ -8037,6 +8063,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "toml",
 ]
 

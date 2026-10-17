@@ -2686,3 +2686,17 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+
+# Optional form detection download and progress.
+	Form field detection is already running	Đang chạy phát hiện trường biểu mẫu
+	This document does not allow adding form fields	Tài liệu này không cho phép thêm trường biểu mẫu
+	Find form fields	Tìm trường biểu mẫu
+	Checking form detection…	Đang kiểm tra phát hiện biểu mẫu…
+	Preparing form detection…	Đang chuẩn bị phát hiện biểu mẫu…
+	Downloading form detection…	Đang tải tính năng phát hiện biểu mẫu…
+	Finding fields… page {d} of {t}	Đang tìm trường… trang {d} trên {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Tải xuống 121 MB để tự động tìm các trường văn bản, hộp kiểm và vùng chữ ký.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Chỉ cần tải từ GitHub một lần. Sau đó, tính năng phát hiện hoạt động ngoại tuyến. Các tệp PDF vẫn nằm trên thiết bị này.
+	Try again	Thử lại
+	Download and detect	Tải xuống và phát hiện
+	Use basic detection	Dùng phát hiện cơ bản

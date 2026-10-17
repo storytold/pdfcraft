@@ -5,6 +5,7 @@ use std::process::ExitCode;
 mod assets;
 mod corpus;
 mod demo_pdf;
+mod form_model;
 mod fuzz;
 mod gates;
 mod layers;
@@ -39,6 +40,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         gates::render_oracle,
     ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
+    ("form-model-package", "Prepare verified FFDetr release assets separately from app installers; never uploads", form_model::package),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];

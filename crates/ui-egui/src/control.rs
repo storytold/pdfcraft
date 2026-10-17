@@ -649,7 +649,7 @@ impl Host for crate::PdfCraftApp {
             .enumerate()
             .filter_map(|(i, v)| {
                 let d = self.session.get(v.id)?;
-                Some(json!({ "tab": i, "doc": v.id.0, "name": d.name, "path": d.path, "pages": d.info.pages.len(), "dirty": d.dirty, "active": self.active == Some(i) }))
+                Some(json!({ "tab": i, "doc": v.id.0, "name": d.name, "path": d.path, "pages": d.info.pages.len(), "dirty": d.dirty, "form_fields": d.form.len(), "active": self.active == Some(i) }))
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
@@ -661,6 +661,7 @@ impl Host for crate::PdfCraftApp {
             "docking": self.docking,
             "documents": docs,
             "pending_opens": pending_opens,
+            "form_detection": {"running": self.form_detection.is_running(), "prompting": self.form_detection.is_prompting()},
             "active": active.map(|v| json!({
                 "doc": v.id.0,
                 "page": v.current + 1,

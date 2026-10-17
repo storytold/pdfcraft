@@ -2434,3 +2434,17 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+
+# Optional form detection download and progress.
+	Form field detection is already running	Die Formularfelderkennung läuft bereits
+	This document does not allow adding form fields	Dieses Dokument erlaubt keine zusätzlichen Formularfelder
+	Find form fields	Formularfelder suchen
+	Checking form detection…	Formularerkennung wird geprüft…
+	Preparing form detection…	Formularerkennung wird vorbereitet…
+	Downloading form detection…	Formularerkennung wird heruntergeladen…
+	Finding fields… page {d} of {t}	Felder werden gesucht… Seite {d} von {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Laden Sie 121 MB herunter, um Textfelder, Kontrollkästchen und Unterschriftsbereiche automatisch zu finden.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Dieser Download von GitHub ist nur einmal nötig. Danach funktioniert die Erkennung offline. Ihre PDFs bleiben auf diesem Gerät.
+	Try again	Erneut versuchen
+	Download and detect	Herunterladen und erkennen
+	Use basic detection	Einfache Erkennung verwenden

@@ -2573,3 +2573,17 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+
+# Optional form detection download and progress.
+	Form field detection is already running	La detección de campos ya está en curso
+	This document does not allow adding form fields	Este documento no permite añadir campos de formulario
+	Find form fields	Buscar campos de formulario
+	Checking form detection…	Comprobando la detección de formularios…
+	Preparing form detection…	Preparando la detección de formularios…
+	Downloading form detection…	Descargando la detección de formularios…
+	Finding fields… page {d} of {t}	Buscando campos… página {d} de {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Descarga 121 MB para encontrar automáticamente campos de texto, casillas y áreas de firma.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Esta descarga de GitHub solo se realiza una vez. Después, la detección funciona sin conexión. Tus PDF permanecen en este dispositivo.
+	Try again	Reintentar
+	Download and detect	Descargar y detectar
+	Use basic detection	Usar detección básica

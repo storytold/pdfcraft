@@ -2684,3 +2684,17 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+
+# Optional form detection download and progress.
+	Form field detection is already running	Formos laukų aptikimas jau vykdomas
+	This document does not allow adding form fields	Šiame dokumente negalima pridėti formos laukų
+	Find form fields	Rasti formos laukus
+	Checking form detection…	Tikrinamas formų aptikimas…
+	Preparing form detection…	Ruošiamas formų aptikimas…
+	Downloading form detection…	Atsiunčiamas formų aptikimas…
+	Finding fields… page {d} of {t}	Ieškoma laukų… {d} puslapis iš {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Atsisiųskite 121 MB, kad automatiškai rastumėte teksto laukus, žymimuosius langelius ir parašo sritis.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Iš GitHub atsisiunčiama tik vieną kartą. Po to aptikimas veikia be interneto. Jūsų PDF lieka šiame įrenginyje.
+	Try again	Bandyti dar kartą
+	Download and detect	Atsisiųsti ir aptikti
+	Use basic detection	Naudoti paprastą aptikimą

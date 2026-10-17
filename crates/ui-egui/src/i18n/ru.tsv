@@ -2346,3 +2346,17 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+
+# Optional form detection download and progress.
+	Form field detection is already running	Обнаружение полей уже выполняется
+	This document does not allow adding form fields	Этот документ не разрешает добавлять поля формы
+	Find form fields	Найти поля формы
+	Checking form detection…	Проверка обнаружения форм…
+	Preparing form detection…	Подготовка обнаружения форм…
+	Downloading form detection…	Загрузка обнаружения форм…
+	Finding fields… page {d} of {t}	Поиск полей… страница {d} из {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Загрузите 121 МБ для автоматического поиска текстовых полей, флажков и областей подписи.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Это однократная загрузка с GitHub. Затем обнаружение работает без интернета. Ваши PDF остаются на этом устройстве.
+	Try again	Повторить
+	Download and detect	Загрузить и обнаружить
+	Use basic detection	Использовать базовое обнаружение

@@ -234,7 +234,7 @@ fn clean(label: &str) -> String {
 
 /// The label for a field at `rect`: the words to its left on the same line, else the words
 /// just above it.
-fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
+pub fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
     let h = (rect[3] - rect[1]).max(8.0);
     let same_line = |w: &Word| (mid(w.rect) - mid(rect)).abs() < h.max(10.0) * 0.7;
     let mut left: Vec<&Word> = if right_of {

@@ -2710,3 +2710,17 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+
+# Optional form detection download and progress.
+	Form field detection is already running	اكتشاف حقول النموذج قيد التشغيل بالفعل
+	This document does not allow adding form fields	لا يسمح هذا المستند بإضافة حقول نموذج
+	Find form fields	البحث عن حقول النموذج
+	Checking form detection…	جارٍ التحقق من اكتشاف النماذج…
+	Preparing form detection…	جارٍ تجهيز اكتشاف النماذج…
+	Downloading form detection…	جارٍ تنزيل اكتشاف النماذج…
+	Finding fields… page {d} of {t}	جارٍ البحث عن الحقول… الصفحة {d} من {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	نزّل 121 ميغابايت للعثور تلقائيًا على حقول النص ومربعات الاختيار ومناطق التوقيع.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	هذا تنزيل لمرة واحدة من GitHub. بعد ذلك، يعمل الاكتشاف دون اتصال بالإنترنت. تبقى ملفات PDF على هذا الجهاز.
+	Try again	إعادة المحاولة
+	Download and detect	تنزيل واكتشاف
+	Use basic detection	استخدام الاكتشاف الأساسي

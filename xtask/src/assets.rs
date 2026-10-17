@@ -131,6 +131,9 @@ pub struct Fetched {
     pub licence: String,
     pub licence_url: String,
     pub licence_sha256: String,
+    /// Runtime assets also name their licence text already held in the repository.
+    #[serde(default)]
+    pub licence_file: Option<String>,
     pub kind: String,
     pub usage: String,
     pub sha256: String,
@@ -169,7 +172,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     if problems.is_empty() {
         println!(
-            "assets: ok ({} repository assets, {} bundled by dependencies, {} fetched at build time)",
+            "assets: ok ({} repository assets, {} bundled by dependencies, {} downloadable assets)",
             manifest.asset.len(),
             manifest.bundled.len(),
             manifest.fetched.len()
@@ -285,6 +288,9 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
     }
     for f in &m.fetched {
         licence_ok(&f.file, &f.licence, &mut problems);
+        if f.kind == "optional-model" && f.licence_file.as_deref().is_none_or(|p| !root.join(p).is_file()) {
+            problems.push(format!("{}: optional model licence_file must name a licence in the repository", f.file));
+        }
         if visual(&f.kind) && (mentions_adobe(&f.author) || mentions_adobe(&f.source) || mentions_adobe(&f.title)) {
             problems.push(format!("{}: {} from Adobe is forbidden (AGENTS.md §1.1)", f.file, f.kind));
         }
@@ -407,7 +413,7 @@ pub fn render_markdown(m: &Manifest) -> String {
         );
     }
     s.push_str(&format!(
-        "\n## Downloaded at build time ({})\n\nFonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR models by `cargo xtask models` into `assets/models/`; each is verified by SHA-256 and never committed.\n\n| File | Title | Author | Licence | Source | Used for |\n|---|---|---|---|---|---|\n",
+        "\n## Downloadable assets ({})\n\nFonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR models by `cargo xtask models` into `assets/models/`; each is verified by SHA-256 and never committed. Optional form detection is downloaded by the desktop app only after consent and is excluded from installers.\n\n| File | Title | Author | Licence | Source | Used for |\n|---|---|---|---|---|---|\n",
         m.fetched.len()
     ));
     for f in &m.fetched {

@@ -24,6 +24,7 @@ pub mod compare;
 mod copy_image;
 pub mod dates;
 pub mod export;
+pub mod form_detection;
 pub mod js;
 pub mod links;
 pub mod ocr;

@@ -125,14 +125,20 @@ fn merge_data_files_into_a_spreadsheet() {
 #[test]
 fn prepare_a_form_detects_fields_on_a_paper_form() {
     let paper = pdfcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
+    let model_dir = tempfile::tempdir().unwrap();
+    let directory = model_dir.path().to_path_buf();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.form_detection.directory = Some(directory.clone());
         app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
         app
     });
     h.run_steps(4);
     assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    h.get_by_label("Use basic detection").click();
     h.run_steps(3);
     let app = h.state();
     let id = app.active_ids().unwrap().1;

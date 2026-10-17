@@ -95,22 +95,24 @@ impl PdfCraftApp {
         }
     }
 
-    /// Prepare a form ▸ detect fields from the page's blanks, lines and boxes.
-    pub fn detect_fields(&mut self) {
-        let Some((i, id)) = self.active_ids() else { return };
+    /// Explicit geometry fallback, including when the browser has no native model store.
+    pub(crate) fn detect_fields_basic(&mut self, id: DocId) {
         match self.session.auto_detect_fields(id, &[]) {
-            Ok(names) if names.is_empty() => self.notify_tr("No form fields were detected"),
-            Ok(names) => {
-                if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
-                }
-                if names.len() == 1 {
-                    self.notify_tr("Detected 1 form field");
-                } else {
-                    self.notify_fmt("Detected {n} form fields", &[("n", &names.len().to_string())]);
-                }
-            }
+            Ok(names) => self.form_detection_finished(id, names.len()),
             Err(e) => self.notify_error(e),
+        }
+    }
+
+    pub(crate) fn form_detection_finished(&mut self, id: DocId, count: usize) {
+        if let Some(info) = self.session.get(id).map(|d| d.info.clone())
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&info);
+        }
+        match count {
+            0 => self.notify_tr("No form fields were detected"),
+            1 => self.notify_tr("Detected 1 form field"),
+            _ => self.notify_fmt("Detected {n} form fields", &[("n", &count.to_string())]),
         }
     }
 

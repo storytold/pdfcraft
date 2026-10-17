@@ -775,6 +775,8 @@ impl Automation {
             "form_set_script" => self.form_set_script(&a)?,
             "form_merge_data" => self.form_merge_data(&a)?,
             "form_actions" => self.form_actions(&a)?,
+            "form_detection_status" => self.form_detection_status(&a)?,
+            "form_detection_install" => self.form_detection_install(&a)?,
             "form_detect_fields" => self.form_detect_fields(&a)?,
             "doc_compare" => self.doc_compare(&a)?,
             "action_list" => self.action_list()?,

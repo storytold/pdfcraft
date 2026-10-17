@@ -2383,3 +2383,17 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+
+# Optional form detection download and progress.
+	Form field detection is already running	表單欄位偵測已在執行
+	This document does not allow adding form fields	此文件不允許新增表單欄位
+	Find form fields	尋找表單欄位
+	Checking form detection…	正在檢查表單偵測…
+	Preparing form detection…	正在準備表單偵測…
+	Downloading form detection…	正在下載表單偵測…
+	Finding fields… page {d} of {t}	正在尋找欄位…第 {d} 頁，共 {t} 頁
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	下載 121 MB 即可自動尋找文字欄位、核取方塊及簽名區域。
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	只需從 GitHub 下載一次。之後即可離線偵測表單。您的 PDF 會保留在此裝置上。
+	Try again	重試
+	Download and detect	下載並偵測
+	Use basic detection	使用基本偵測

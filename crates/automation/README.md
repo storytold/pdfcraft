@@ -62,6 +62,16 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## Automatic field detection
+
+`form_detect_fields` also accepts a local, approved FFDetr ONNX `model` path
+and optional `confidence` (default 0.3). The model is read under the same root
+rules as documents and verified before execution; no download occurs. Preview
+with `add: false`, or create exactly the proposed fields in one undoable step.
+Without `model`, the existing geometry detector is used. See
+[native field detection](../../docs/form-field-detection.md) for the model
+format, rectangle convention, job safety and current limitations.
+
 ## Shared field properties
 
 `form_set_props` accepts either `field` (one name) or `fields` (1–1000 unique names):
@@ -209,3 +219,11 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+`form_detection_status` verifies the managed model offline. `form_detection_install`
+requires `confirm_download: true`, installs the separate pinned GitHub artifact
+with hash/length verification and respects read/write confinement. Detection
+with `backend: "ffdetr"` uses that installed model; it never downloads implicitly.
+`directory` can keep the model inside a constrained automation root. The desktop
+uses a first-use consent dialog and background progress; public downloads await
+publication of the separate model release. See the integration guide above.

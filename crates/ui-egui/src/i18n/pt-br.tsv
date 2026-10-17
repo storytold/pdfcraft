@@ -2447,3 +2447,17 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+
+# Optional form detection download and progress.
+	Form field detection is already running	A detecção de campos já está em andamento
+	This document does not allow adding form fields	Este documento não permite adicionar campos de formulário
+	Find form fields	Encontrar campos de formulário
+	Checking form detection…	Verificando a detecção de formulários…
+	Preparing form detection…	Preparando a detecção de formulários…
+	Downloading form detection…	Baixando a detecção de formulários…
+	Finding fields… page {d} of {t}	Encontrando campos… página {d} de {t}
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	Baixe 121 MB para encontrar automaticamente campos de texto, caixas de seleção e áreas de assinatura.
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	Este é um download único do GitHub. Depois, a detecção funciona offline. Seus PDFs permanecem neste dispositivo.
+	Try again	Tentar novamente
+	Download and detect	Baixar e detectar
+	Use basic detection	Usar detecção básica
