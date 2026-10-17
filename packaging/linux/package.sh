@@ -54,9 +54,9 @@ echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   if [ -n "${CROSS_TARGET:-}" ]; then
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-hot-folder --target "$CROSS_TARGET")
   else
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-hot-folder)
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -79,6 +79,12 @@ mkdir -p "$STAGE/usr/share/doc/pdfcraft"
 copy_docs "$STAGE/usr/share/doc/pdfcraft"
 # OCR models: the app finds them at <bin>/../share/pdfcraft/models, so in every format below.
 stage_models "$STAGE/usr/share/pdfcraft/models"
+
+# A separate package keeps the system service genuinely optional. Models are shared with
+# the required main PdfCraft package; the historical OCR add-on is never bundled here.
+HOT_STAGE="$WORK/hot-folder"
+install -Dm755 "$BIN/pdfcraft-hot-folder" "$HOT_STAGE/usr/bin/pdfcraft-hot-folder"
+"${CROSS_COMPILE:-}strip" "$HOT_STAGE/usr/bin/pdfcraft-hot-folder" 2>/dev/null || true
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
@@ -118,8 +124,12 @@ if has deb || has rpm; then
   export NFPM_ARCH="$DEB_ARCH"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
   sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  sed "s|\${HOT_STAGE}|$HOT_STAGE|g" "$HERE/hot-folder-nfpm.yaml" >"$WORK/hot-folder-nfpm.yaml"
   for fmt in deb rpm; do
-    if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
+    if has "$fmt"; then
+      (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt")
+      (cd "$ROOT" && nfpm package -f "$WORK/hot-folder-nfpm.yaml" -p "$fmt" -t "$DIST/pdfcraft-hot-folder-$VERSION-linux-$ARCH.$fmt")
+    fi
   done
 fi
 

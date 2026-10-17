@@ -1337,10 +1337,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn waiting_worker_can_cancel_before_initializer_returns() {
-        use std::{
-            sync::{atomic::AtomicUsize, mpsc},
-            time::Duration,
-        };
+        use std::{sync::mpsc, time::Duration};
+        let timeout = Duration::from_secs(10);
         let parser = Arc::new(PoolParser::default());
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1349,41 +1347,52 @@ mod tests {
             std::thread::spawn(move || {
                 parser.acquire(
                     || {
-                        started_tx.send(()).unwrap();
-                        release_rx.recv().unwrap();
+                        started_tx.send(()).ok()?;
+                        // Disconnecting also releases this thread if the test fails early.
+                        release_rx.recv().ok()?;
                         Pdf::new(ONE_PAGE.to_vec()).ok()
                     },
                     || false,
                 )
             })
         };
-        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        started_rx.recv_timeout(timeout).unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let checks = Arc::new(AtomicUsize::new(0));
+        let (waiting_tx, waiting_rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
         let waiter = {
-            let (parser, cancelled, checks) = (parser.clone(), cancelled.clone(), checks.clone());
+            let (parser, cancelled) = (parser.clone(), cancelled.clone());
             std::thread::spawn(move || {
+                let first_check = AtomicBool::new(true);
                 let result = parser.acquire(
                     || panic!("must not initialize twice"),
                     || {
-                        checks.fetch_add(1, Ordering::Relaxed);
-                        cancelled.load(Ordering::Acquire)
+                        if first_check.swap(false, Ordering::Relaxed) {
+                            let _ = waiting_tx.send(());
+                            // Enter Loading once even if cancellation arrives immediately.
+                            false
+                        } else {
+                            cancelled.load(Ordering::Acquire)
+                        }
                     },
                 );
-                done_tx.send(result.unwrap().is_none()).unwrap();
+                let _ = done_tx.send(result);
             })
         };
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while checks.load(Ordering::Relaxed) == 0 {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
-        }
+        // Block rather than competing with the worker in a two-second yield loop on a
+        // loaded VM. The timeout bounds a hang; it is not a scheduling-speed assertion.
+        let waiting = waiting_rx.recv_timeout(timeout);
         cancelled.store(true, Ordering::Release);
-        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
-        waiter.join().unwrap();
-        release_tx.send(()).unwrap();
-        assert!(initializer.join().unwrap().unwrap().is_some());
+        let result = done_rx.recv_timeout(timeout);
+        // Record cancellation BEFORE releasing initialization, but release and join both
+        // threads before assertions so a failure does not leave background work behind.
+        let _ = release_tx.send(());
+        let waiter_joined = waiter.join();
+        let initialized = initializer.join();
+        waiting.unwrap();
+        assert!(result.unwrap().unwrap().is_none(), "waiting worker must cancel while initialization is blocked");
+        waiter_joined.unwrap();
+        assert!(initialized.unwrap().unwrap().is_some());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

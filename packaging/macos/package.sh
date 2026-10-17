@@ -40,7 +40,9 @@ IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/PdfCraft.app"
+HOT_APP="$WORK/PdfCraft Hot Folder.app"
 DMG="$DIST/pdfcraft-$VERSION-macos-$ARCH.dmg"
+PKG="$DIST/pdfcraft-$VERSION-macos-$ARCH.pkg"
 CLI_ZIP="$DIST/pdfcraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
@@ -58,12 +60,12 @@ echo "==> PdfCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $N
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-hot-folder "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in pdfcraft pdfcraft-cli; do
+for bin in pdfcraft pdfcraft-cli pdfcraft-hot-folder; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -128,6 +130,52 @@ if [ "$NOTARIZE" = 1 ]; then
   xcrun stapler staple "$APP"
   xcrun stapler validate "$APP"
   spctl --assess --type execute -vvv "$APP"
+fi
+
+# ---- optional Hot Folder app and component installer -------------------------------------------
+mkdir -p "$HOT_APP/Contents/MacOS" "$HOT_APP/Contents/Resources"
+cp "$WORK/bin/pdfcraft-hot-folder" "$HOT_APP/Contents/MacOS/PdfCraft Hot Folder"
+cp "$ROOT/assets/app-icon/pdfcraft.icns" "$HOT_APP/Contents/Resources/PdfCraft.icns"
+copy_font_licences "$HOT_APP/Contents/Resources"
+stage_models "$HOT_APP/Contents/Resources/models"
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
+  -e "s/@BUILD_SHA@/${PDFCRAFT_BUILD_SHA:-unknown}/g" \
+  "$HERE/HotFolder-Info.plist.in" >"$HOT_APP/Contents/Info.plist"
+plutil -lint "$HOT_APP/Contents/Info.plist"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$HOT_APP/Contents/MacOS/PdfCraft Hot Folder"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$HOT_APP"
+codesign --verify --strict --deep --verbose=2 "$HOT_APP"
+if [ "$NOTARIZE" = 1 ]; then
+  ditto -c -k --keepParent "$HOT_APP" "$WORK/HotFolder-notarize.zip"
+  notarize "$WORK/HotFolder-notarize.zip"
+  xcrun stapler staple "$HOT_APP"
+fi
+
+# The native Installer shows a default-off companion choice. The regular DMG stays a simple
+# drag-to-Applications installation; system services are registered only by the selected PKG.
+mkdir -p "$WORK/components" "$WORK/hot-folder-scripts"
+cp "$HERE/hot-folder-scripts/preinstall" "$HERE/hot-folder-scripts/postinstall" "$WORK/hot-folder-scripts/"
+chmod 755 "$WORK/hot-folder-scripts/"*
+pkgbuild --component "$APP" --install-location /Applications --identifier ai.storyteller.pdfcraft.pkg \
+  --version "$SHORT_VERSION" "$WORK/components/PdfCraft-component.pkg"
+pkgbuild --component "$HOT_APP" --install-location /Applications --identifier ai.storyteller.pdfcraft.hot-folder.pkg \
+  --version "$SHORT_VERSION" --scripts "$WORK/hot-folder-scripts" "$WORK/components/HotFolder-component.pkg"
+sed "s/@SHORT_VERSION@/$SHORT_VERSION/g" "$HERE/Distribution.xml.in" >"$WORK/Distribution.xml"
+installer_signature=()
+if [ -n "${MACOS_INSTALLER_SIGN_IDENTITY:-}" ]; then
+  installer_signature=(--sign "$MACOS_INSTALLER_SIGN_IDENTITY")
+  if [ -n "${MACOS_KEYCHAIN:-}" ]; then installer_signature+=(--keychain "$MACOS_KEYCHAIN"); fi
+else
+  warn "PKG has no Developer ID Installer signature (MACOS_INSTALLER_SIGN_IDENTITY is unset)"
+fi
+productbuild --distribution "$WORK/Distribution.xml" --package-path "$WORK/components" \
+  ${installer_signature[@]+"${installer_signature[@]}"} "$PKG"
+pkgutil --expand "$PKG" "$WORK/pkg-check"
+test -f "$WORK/pkg-check/Distribution"
+if [ "$NOTARIZE" = 1 ] && [ -n "${MACOS_INSTALLER_SIGN_IDENTITY:-}" ]; then
+  notarize "$PKG"
+  xcrun stapler staple "$PKG"
+  xcrun stapler validate "$PKG"
 fi
 
 # ---- DMG ---------------------------------------------------------------------------------------
@@ -196,4 +244,4 @@ if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
 "$WORK/bin/pdfcraft-cli" --version
 echo "==> done"
-ls -lh "$DMG" "$CLI_ZIP"
+ls -lh "$DMG" "$PKG" "$CLI_ZIP"

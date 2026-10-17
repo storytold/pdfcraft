@@ -63,3 +63,7 @@ Rich-text values and exact appearance metrics/layout remain incomplete. JavaScri
 execution and FDF/XFDF exchange are integrated through the engine; this crate provides
 field actions and native AF rules. `/MK /R` rotation (0, 90, 180, 270) is drawn into the
 appearance.
+
+Scanned checkbox captions may include a leading recognized square (for example `□Haupt`).
+Detection accepts that caption only when the word begins within the matching box, extends
+to its right and shares its line; ordinary overlapping text is still excluded.

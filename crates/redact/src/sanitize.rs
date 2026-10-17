@@ -15,7 +15,7 @@ use crate::{RedactError, Report, annots_of, page_streams};
 pub enum Hidden {
     /// Document information (`/Info`) and XMP metadata streams.
     Metadata,
-    /// Embedded files and file attachment annotations.
+    /// Embedded files, catalog associated-file entries and file attachment annotations.
     Attachments,
     /// Comments and markup annotations (with their pop-ups).
     Comments,
@@ -231,7 +231,13 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                     let xmp = usize::from(cat.contains(b"Metadata")) + pages.iter().filter(|p| p.dict.contains(b"Metadata")).count();
                     info + xmp
                 }
-                Hidden::Attachments => sub(doc, &names, b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t, 0)) + count_sub(b"FileAttachment"),
+                Hidden::Attachments => {
+                    let associated = cat.get(b"AF").and_then(|files| doc.resolve(files).as_array().map(Vec::len)).unwrap_or(0);
+                    sub(doc, &names, b"EmbeddedFiles")
+                        .map_or(0, |t| name_tree_len(doc, &t, 0))
+                        .saturating_add(count_sub(b"FileAttachment"))
+                        .saturating_add(associated)
+                }
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
                 Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).unwrap_or(0),
@@ -259,6 +265,13 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
 pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden, usize)>, RedactError> {
     let counts = scan(doc);
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
+    // Empty categories are already satisfied. Do not normalize page/catalog structures,
+    // or remove empty containers, then claim that nothing was changed. Filter them even
+    // alongside a populated category so every removal has a corresponding report entry.
+    let which: Vec<_> = which.iter().copied().filter(|h| count(*h) > 0).collect();
+    if which.is_empty() {
+        return Err(RedactError::NothingToApply);
+    }
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
     // Content first (it needs the layers and the form still in place).
@@ -338,7 +351,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let off = hidden_layers(doc);
     let mut cat = doc.get(root).as_dict().cloned().unwrap_or_default();
     let mut names = sub(doc, &cat, b"Names");
-    for &h in which {
+    for &h in &which {
         match h {
             Hidden::Metadata => {
                 cat.remove(b"Metadata");
@@ -397,9 +410,6 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
         cat.set(b"Names".to_vec(), Object::Dict(n));
     }
     doc.set(root, Object::Dict(cat));
-    if done.is_empty() {
-        return Err(RedactError::NothingToApply);
-    }
     doc.require_full_save();
     Ok(done)
 }

@@ -589,6 +589,24 @@ impl Automation {
         if let Some(s) = a.opt_bool("skip_text_pages")? {
             settings.skip_text_pages = s;
         }
+        if let Some(v) = a.opt_bool("auto_rotate")? {
+            settings.auto_rotate = v;
+        }
+        if let Some(v) = a.opt_bool("deskew")? {
+            settings.deskew = v;
+        }
+        if let Some(v) = a.opt_bool("auto_crop")? {
+            settings.auto_crop = v;
+        }
+        if let Some(v) = a.opt_num("crop_margin")? {
+            if !v.is_finite() || !(0.0..=20.0).contains(&v) {
+                return Err(ToolError::InvalidArgs("crop_margin must be between 0 and 20 pt".into()));
+            }
+            settings.crop_margin = v;
+        }
+        if let Some(v) = a.opt_bool("recognize")? {
+            settings.recognize = v;
+        }
         Ok(settings)
     }
 
@@ -624,7 +642,18 @@ impl Automation {
     }
 
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
-        let settings = self.ocr_settings(a)?;
+        self.ocr_process(a, false)
+    }
+    pub(crate) fn ocr_enhance(&mut self, a: &Args) -> Result<Value> {
+        self.ocr_process(a, true)
+    }
+    fn ocr_process(&mut self, a: &Args, correction_only: bool) -> Result<Value> {
+        let mut settings = self.ocr_settings(a)?;
+        if correction_only {
+            settings.recognize = false;
+            settings.auto_crop = a.opt_bool("auto_crop")?.unwrap_or(true);
+            settings.skip_text_pages = a.opt_bool("skip_text_pages")?.unwrap_or(false);
+        }
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         let id = self.doc(a)?.id;
         let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
@@ -632,7 +661,7 @@ impl Automation {
             .iter()
             .map(|p| match &p.skipped {
                 Some(why) => json!({ "page": p.page + 1, "skipped": why }),
-                None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page, "text": p.text() }),
+                None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page, "text": p.text(), "rotation":p.correction.rotation,"deskew":p.correction.deskew,"crop_box":p.crop }),
             })
             .collect();
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))

@@ -329,6 +329,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.js_console", "JavaScript console…", None, Some(Shortcut::cmd("J")), Document, "square-terminal"),
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
+    c("ocr.enhance", "Enhance scanned file", None, None, Modification, "sparkles"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),

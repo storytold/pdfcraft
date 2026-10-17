@@ -8,12 +8,31 @@ use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        // Dialog tests use synthetic queues; querying installed printer drivers concurrently
+        // can crash inside a native driver and makes Save as PDF depend on this machine.
+        app.printer_source = Some(std::sync::Arc::new(|| {
+            // Keep discovery pending beyond a few UI frames to exercise the wait on fast hosts too.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Vec::new()
+        }));
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app
     });
     h.run_steps(4);
     h
+}
+
+// Printer discovery is asynchronous even for a synthetic empty source. Its reply adds/removes
+// rows and moves buttons, so settle it before querying or clicking layout-dependent controls.
+fn wait_for_printers(h: &mut Harness<'_, PdfCraftApp>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.printers_loading, "synthetic printer discovery did not finish");
+    h.run_steps(3);
 }
 
 #[test]
@@ -42,6 +61,13 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
         let mut app = PdfCraftApp::new();
+        // Dialog tests use synthetic queues; querying installed printer drivers concurrently
+        // can crash inside a native driver and makes Save as PDF depend on this machine.
+        app.printer_source = Some(std::sync::Arc::new(|| {
+            // Keep discovery pending beyond a few UI frames to exercise the wait on fast hosts too.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Vec::new()
+        }));
         app.set_option("language", "en").unwrap();
         app.open_bytes("labelled.pdf", None, bytes).unwrap();
         app
@@ -54,6 +80,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
         h.state_mut().set_option("page", &(current + 1).to_string()).unwrap();
         h.run_steps(3);
         assert!(h.state_mut().execute("print.dialog"));
+        wait_for_printers(&mut h);
         h.run_steps(3);
         h.get_by_label("Current page").click();
         h.run_steps(3);
@@ -82,6 +109,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
 fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::Print));
     h.get_by_label("Pages to Print".to_uppercase().as_str());
@@ -115,6 +143,7 @@ fn print_dialog_prints_the_selected_pages() {
     let tab = h.state().views.len() - 1;
     // Nothing picked: the whole document, and no "Selected pages" choice.
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     assert_eq!(h.state().print_draft.which, PrintWhich::All);
     assert!(h.query_by_label_contains("Selected pages").is_none());
@@ -124,6 +153,7 @@ fn print_dialog_prints_the_selected_pages() {
     // Pages 2 and 4 picked.
     h.state_mut().views[tab].select_pages(&[1, 3]);
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     assert_eq!(h.state().print_draft.which, PrintWhich::Selected);
     h.get_by_label("Selected pages (2)");
@@ -142,6 +172,7 @@ fn print_dialog_prints_the_selected_pages() {
     // The selection gone, the remembered choice falls back to the whole document.
     h.state_mut().views[tab].select_pages(&[]);
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     assert_eq!(h.state().print_draft.which, PrintWhich::All);
     assert!(h.state().print_draft.selected.is_empty());
@@ -151,6 +182,7 @@ fn print_dialog_prints_the_selected_pages() {
 fn invalid_ranges_are_explained_in_the_preview() {
     let mut h = harness();
     h.state_mut().execute("print.dialog");
+    wait_for_printers(&mut h);
     h.run_steps(2);
     h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::Range;
     h.state_mut().print_draft.range = "7".into();
@@ -166,6 +198,7 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     let bytes = h.state().session.create_blank(200.0, 300.0, 10).unwrap();
     h.state_mut().open_bytes("numbered.pdf", None, bytes.as_ref().clone()).unwrap();
     h.state_mut().execute("print.dialog");
+    wait_for_printers(&mut h);
     h.run_steps(3);
     h.get_by_label("Multiple").click();
     h.run_steps(2);
@@ -203,6 +236,7 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
 fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     h.state_mut().print_draft.printer = None;
     // A folder that doesn't exist: the write fails.
@@ -221,6 +255,15 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
 fn print_dialog_shows_the_printer_driver_options() {
     use pdfcraft_engine::print::spool;
     let mut h = harness();
+    // Deliver discovery only after the synthetic user has selected a queue.
+    // This reproduces the CI race without depending on scheduler timing.
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(()));
+    let hold = gate.lock().unwrap();
+    let wait = gate.clone();
+    h.state_mut().printer_source = Some(std::sync::Arc::new(move || {
+        let _open = wait.lock().unwrap();
+        Vec::new()
+    }));
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
     h.state_mut().print_draft.printer = None;
@@ -236,10 +279,21 @@ fn print_dialog_shows_the_printer_driver_options() {
     {
         let d = &mut h.state_mut().print_draft;
         d.printer = Some("Test_Queue".into());
+        d.paper = 0; // Letter: the page layout choice is sent independently of driver defaults.
+        // Match a real selection in the printer combo: late discovery must not
+        // replace the chosen queue with its default (or Save as PDF).
+        d.printer_picked = true;
         d.driver_options = Some(("Test_Queue".into(), vec![tray]));
         d.driver_choices.insert("InputSlot".into(), "Tray2".into());
         d.show_driver_options = true;
     }
+    drop(hold);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.printers_loading, "the delayed discovery result was consumed");
     h.run_steps(2);
     h.get_by_label("Printer properties");
     h.get_by_label("Media");
@@ -321,6 +375,13 @@ fn printers_listed_in_the_background_preselect_the_default_unless_one_was_picked
 fn architectural_page_can_be_matched_at_100_percent() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
+        // Dialog tests use synthetic queues; querying installed printer drivers concurrently
+        // can crash inside a native driver and makes Save as PDF depend on this machine.
+        app.printer_source = Some(std::sync::Arc::new(|| {
+            // Keep discovery pending beyond a few UI frames to exercise the wait on fast hosts too.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Vec::new()
+        }));
         app.set_option("language", "en").unwrap();
         let bytes = app.session.create_blank(2592.0, 1728.0, 1).unwrap();
         app.open_bytes("architectural.pdf", None, bytes.as_ref().clone()).unwrap();
@@ -328,6 +389,7 @@ fn architectural_page_can_be_matched_at_100_percent() {
     });
     h.run_steps(4);
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     h.get_by_label("PDF page: 36.00 × 24.00 in");
     h.get_by_label("Match page at 100%").click();
@@ -345,6 +407,7 @@ fn architectural_page_can_be_matched_at_100_percent() {
 fn custom_page_cannot_silently_match_a_standard_paper() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     // The 300 x 400 pt fixture is not a standard sheet.
     assert!(pdfcraft_engine::print::matching_paper((300.0, 400.0)).is_none());
@@ -388,6 +451,7 @@ fn a_printer_without_two_sided_printing_points_to_its_properties() {
 fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
+    wait_for_printers(&mut h);
     h.run_steps(3);
     h.get_by_label("Advanced".to_uppercase().as_str()).click();
     h.run_steps(2);

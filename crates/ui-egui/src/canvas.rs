@@ -1798,6 +1798,13 @@ impl DocView {
             self.slow_pages.insert(r.request.page);
         }
         let page = r.request.page;
+        // A raster asked for before the page changed size (a replace, a crop) can come back
+        // larger than the GPU takes, and uploading it aborts. Drop it: the page's current
+        // size is asked for again, within the limit.
+        let max_side = ctx.input(|i| i.max_texture_side);
+        if r.width as usize > max_side || r.height as usize > max_side {
+            return 0;
+        }
         let bytes = rgba_bytes(r.width as usize, r.height as usize);
         if bytes != r.rgba.len() || !self.admit_texture(r.request, bytes) {
             return 0;
@@ -5564,6 +5571,21 @@ trailer << /Root 1 0 R >>
         v.suspend_rendering(&pool);
         assert_eq!(v.receive_result(&ctx, obsolete()), 0);
         assert!(v.thumbs.is_empty(), "nor after the tab was suspended");
+    }
+
+    /// FreeBSD CI: a page raster asked for before Replace Pages made the page larger came back
+    /// at 1880 x 2350, past the 2048-pixel texture limit, and egui aborted the upload.
+    #[test]
+    fn a_raster_larger_than_the_gpu_takes_is_dropped_not_uploaded() {
+        let ctx = egui::Context::default();
+        let info = thumbnail_info(1);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        let req = RenderRequest { scale: 4.7, tag: 1000, ..Default::default() };
+        v.last_queue = vec![req];
+        let max_side = ctx.input(|i| i.max_texture_side) as u32;
+        assert_eq!(v.receive_result(&ctx, solid_result(req, max_side - 168, max_side + 302)), 0);
+        assert!(v.pages.is_empty(), "the oversized raster is not kept");
+        assert!(v.receive_result(&ctx, solid_result(req, 100, 130)) > 0, "a raster within the limit still uploads");
     }
 
     #[test]

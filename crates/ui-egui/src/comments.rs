@@ -1911,6 +1911,22 @@ mod tests {
     use super::*;
     use pdfcraft_render::TextGlyph;
 
+    /// #1858 without the render pool's timing: a released drawing stays painted from its
+    /// points until a raster of its own page arrives, and only that page's raster clears it.
+    #[test]
+    fn a_released_drawing_settles_until_its_page_is_rendered() {
+        let mut cv = CommentView::default();
+        cv.settle(0.0, 0, CommentTool::Ink, &[[10.0, 10.0], [20.0, 20.0]]);
+        assert_eq!(cv.settling_len(), 1);
+        cv.page_rendered(1);
+        assert_eq!(cv.settling_len(), 1, "another page's raster doesn't draw it");
+        cv.page_rendered(0);
+        assert_eq!(cv.settling_len(), 0, "its page's raster does");
+        cv.settle(0.0, 0, CommentTool::Ink, &[[10.0, 10.0]]);
+        cv.settle(SETTLE_SECS, 0, CommentTool::Ink, &[[10.0, 10.0]]);
+        assert_eq!(cv.settling_len(), 1, "one never rendered expires");
+    }
+
     /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn
     /// along `direction` (a unit vector in view space, y down).
     fn line(chars: &str, x: f32, y: f32, w: f32, em: f32, direction: [f32; 2]) -> PageText {

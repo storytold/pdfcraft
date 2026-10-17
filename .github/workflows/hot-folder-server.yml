@@ -1,0 +1,142 @@
+name: Hot Folder Windows Server acceptance
+
+# Installing services and creating an SMB share belongs on disposable hosts only.
+# In particular, no pull_request/pull_request_target or workflow_run trigger may
+# route unreviewed code to the opt-in self-hosted Server 2019 runner.
+on:
+  # The existing installer workflow can call the reviewed branch before this
+  # new file reaches the default branch. Its parent event must still be manual.
+  workflow_call:
+    inputs:
+      installer_run_id:
+        required: true
+        type: string
+      expected_sha:
+        required: true
+        type: string
+      artifact_name:
+        default: pdfcraft-preview-windows-x64
+        type: string
+      include_server_2019:
+        default: false
+        type: boolean
+      server_2019_confirmation:
+        default: ''
+        type: string
+  workflow_dispatch:
+    inputs:
+      installer_run_id:
+        description: Successful installer workflow run from this repository
+        required: true
+        type: string
+      expected_sha:
+        description: Full 40-character source SHA (must equal this workflow ref)
+        required: true
+        type: string
+      artifact_name:
+        description: x64 MSI artifact name in that run
+        required: true
+        default: pdfcraft-preview-windows-x64
+        type: string
+      include_server_2019:
+        description: Also use the dedicated disposable self-hosted Server 2019 runner
+        default: false
+        type: boolean
+      server_2019_confirmation:
+        description: For 2019 enter exactly DISPOSABLE SERVER 2019
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: hot-folder-server-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  provenance:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      artifact_id: ${{ steps.verify.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require matching successful trusted installer run
+        id: verify
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          INCLUDE_2019: ${{ inputs.include_server_2019 }}
+          CONFIRM_2019: ${{ inputs.server_2019_confirmation }}
+        run: ./packaging/server-tests/verify-provenance.ps1
+
+  hosted:
+    if: github.event_name == 'workflow_dispatch'
+    needs: provenance
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, build: 20348 }
+          - { os: windows-2025, build: 26100 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.provenance.outputs.artifact_id }}
+          run-id: ${{ inputs.installer_run_id }}
+          github-token: ${{ github.token }}
+          path: installer
+          merge-multiple: true
+      - name: Install and exercise the actual OCR service
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
+          EXPECTED_BUILD: ${{ matrix.build }}
+        run: ./packaging/server-tests/acceptance.ps1 -InstallerDirectory "$PWD/installer" -ExpectedCommit $env:EXPECTED_SHA -ExpectedServerBuild $env:EXPECTED_BUILD -DisposableHost
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hot-folder-server-${{ matrix.os }}
+          path: server-test-results
+          if-no-files-found: error
+
+  server-2019:
+    if: github.event_name == 'workflow_dispatch' && inputs.include_server_2019 && inputs.server_2019_confirmation == 'DISPOSABLE SERVER 2019'
+    needs: provenance
+    # Configure this environment with required reviewers before enabling the job.
+    environment: hot-folder-server-2019
+    runs-on: [self-hosted, Windows, X64, pdfcraft-server-2019-disposable]
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.provenance.outputs.artifact_id }}
+          run-id: ${{ inputs.installer_run_id }}
+          github-token: ${{ github.token }}
+          path: installer
+          merge-multiple: true
+      - name: Verify explicitly approved Server 2019 host
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
+        run: ./packaging/server-tests/acceptance.ps1 -InstallerDirectory "$PWD/installer" -ExpectedCommit $env:EXPECTED_SHA -ExpectedServerBuild 17763 -DisposableHost
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hot-folder-server-2019
+          path: server-test-results
+          if-no-files-found: error

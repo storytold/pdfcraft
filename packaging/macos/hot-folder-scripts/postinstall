@@ -1,0 +1,16 @@
+#!/bin/sh
+# A system LaunchDaemon runs before login, with the chosen user's privileges, never root.
+set -eu
+account="${PDFCRAFT_HOT_FOLDER_USER:-$(/usr/bin/stat -f '%Su' /dev/console)}"
+case "$account" in ''|root|loginwindow|_*|*[!A-Za-z0-9_-]*)
+  echo 'Hot Folder needs a signed-in non-root user, or PDFCRAFT_HOT_FOLDER_USER for unattended installation.' >&2; exit 1 ;;
+esac
+uid="$(/usr/bin/id -u "$account")"
+[ "$uid" -ne 0 ] || exit 1
+user_home="$(/usr/bin/dscl . -read "/Users/$account" NFSHomeDirectory | /usr/bin/sed 's/^NFSHomeDirectory: //')"
+case "$user_home" in /Users/*) ;; *) echo 'The service account needs an absolute local /Users home.' >&2; exit 1 ;; esac
+config="$user_home/Library/Application Support/PdfCraft/HotFolder/tasks.json"
+executable='/Applications/PdfCraft Hot Folder.app/Contents/MacOS/PdfCraft Hot Folder'
+# Never perform privileged writes/chown through a user-controlled home-directory path.
+/usr/bin/sudo -H -u "$account" "$executable" --initialize-config --config "$config"
+"$executable" --service-action install --account "$account" --config "$config"

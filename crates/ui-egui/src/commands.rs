@@ -396,7 +396,15 @@ impl PdfCraftApp {
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "a11y.check" => self.start_accessibility_check(),
             "a11y.find_untagged" => self.find_untagged_content(),
-            "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "ocr.recognize" => {
+                self.ocr_draft.recognize = true;
+                self.dialog = Some(Dialog::RecognizeText);
+            }
+            "ocr.enhance" => {
+                self.ocr_draft.recognize = false;
+                self.ocr_draft.auto_crop = true;
+                self.dialog = Some(Dialog::RecognizeText);
+            }
             "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
             "tools.document_js" => {
                 self.doc_js = Default::default();

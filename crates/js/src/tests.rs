@@ -1064,17 +1064,19 @@ mod session {
 
     #[test]
     fn a_scripts_time_starts_when_its_context_is_ready() {
-        // The engine made slow to be ready (300 ms) under a 50 ms script limit: the script is
-        // not abandoned, its time starting only when the engine says it is ready.
+        // The engine made slow to be ready (800 ms) under a 600 ms script limit: the script is
+        // not abandoned, its time starting only when the engine says it is ready. A 50 ms
+        // limit was too short for a debug build on the busy FreeBSD CI VM.
         use crate::xfa_session::START_DELAY_MS;
         use std::sync::atomic::Ordering::Relaxed;
+        const LIMIT: std::time::Duration = std::time::Duration::from_millis(600);
         let mut s = XfaSession::new(XfaDoc::default());
-        START_DELAY_MS.store(300, Relaxed);
+        START_DELAY_MS.store(800, Relaxed);
         let mut quick = script("1", false, "form1[0].page1[0].go[0]", "click");
-        quick.timeout = std::time::Duration::from_millis(50);
+        quick.timeout = LIMIT;
         let js = s.run(quick);
         let mut quick = script("1", true, "form1[0].page1[0].go[0]", "click");
-        quick.timeout = std::time::Duration::from_millis(50);
+        quick.timeout = LIMIT;
         let fc = s.run(quick);
         START_DELAY_MS.store(0, Relaxed);
         assert!(!js.abandoned && js.result.as_deref() == Some("1"), "{js:?}");

@@ -104,6 +104,31 @@ pub struct Settings {
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
     pub remove_unreferenced_dests: bool,
+    /// Drop images and forms listed in page resources but never drawn.
+    pub remove_unused_xobjects: bool,
+}
+
+impl Settings {
+    /// Compress document structure and non-image streams without changing image data,
+    /// removing user data, or pruning resource lists, links and named destinations.
+    /// The engine still deduplicates identical resources and writes a full save.
+    /// Pass an empty hidden-information discard list when using this profile.
+    pub fn lossless() -> Self {
+        let images = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+        Self {
+            merge_fragments: false,
+            color: images,
+            gray: images,
+            discard_thumbnails: false,
+            discard_alternate_images: false,
+            discard_tags: false,
+            discard_print_settings: false,
+            flate_unencoded: true,
+            remove_invalid_links: false,
+            remove_unreferenced_dests: false,
+            remove_unused_xobjects: false,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -120,6 +145,7 @@ impl Default for Settings {
             flate_unencoded: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
+            remove_unused_xobjects: true,
         }
     }
 }
@@ -204,7 +230,9 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
     if !progress(Stage::CleanUp) {
         return Err(OptimizeError::Cancelled);
     }
-    report.unused_xobjects = unused::remove_unused(doc, &pages, progress)?;
+    if settings.remove_unused_xobjects {
+        report.unused_xobjects = unused::remove_unused(doc, &pages, progress)?;
+    }
     if settings.discard_thumbnails {
         for p in &pages {
             if doc.get(*p).as_dict().is_some_and(|d| d.contains(b"Thumb")) {
@@ -284,6 +312,13 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let r = ObjRef { num, generation: doc.generation(num) };
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
+            // Retaining images also keeps unencoded image streams byte-for-byte; otherwise
+            // this generic stream pass would encode images that the image pass left alone.
+            if s.dict.name(b"Subtype") == Some(b"Image")
+                && [settings.color, settings.gray].iter().all(|s| !s.downsample && s.compression == Compression::Retain)
+            {
+                continue;
+            }
             // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
             if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
                 continue;

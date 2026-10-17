@@ -428,7 +428,11 @@ fn a_released_pen_stroke_stays_drawn_until_the_page_raster_has_it() {
     let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
     stroke_without_settling(&mut h, (40.0, 100.0), (140.0, 60.0));
     assert_eq!(comments(&h).len(), 1, "the stroke is committed");
-    assert_eq!(h.state().views[0].comments.settling_len(), 1, "still drawn from its points");
+    // A fast worker can deliver the new raster within the release frame (FreeBSD CI did), and
+    // then the raster draws it; otherwise it is still drawn from its points. The ordering itself
+    // is covered without the pool's timing by comments::tests.
+    let settling = h.state().views[0].comments.settling_len();
+    assert!(settling <= 1, "at most the released stroke settles: {settling}");
     settle(&mut h);
     assert_eq!(h.state().views[0].comments.settling_len(), 0, "the raster draws it now");
 }

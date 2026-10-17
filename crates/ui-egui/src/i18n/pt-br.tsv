@@ -2316,6 +2316,30 @@ animation effects	Off	Desativados
 	Original	Original
 	Greyscale	Escala de cinza
 	Black and white	Preto e branco
+	; 1 page skipped	; 1 página ignorada
+	; corrected {n} pages	; {n} páginas corrigidas
+	; {n} pages skipped	; {n} páginas ignoradas
+	Add searchable text	Adicionar texto pesquisável
+	Add the PDFs to combine	Adicionar os PDFs para combinar
+	Added the first {n} PDFs in {folder}	Adicionados os primeiros {n} PDFs de {folder}
+	Automatically rotate sideways and upside-down pages	Girar automaticamente páginas de lado ou de cabeça para baixo
+	Correct scans	Corrigir digitalizações
+	Corrected scan	Digitalização corrigida
+	Crop scanner borders to the paper edge	Recortar as bordas da digitalização até o papel
+	Drop PDFs or folders here, or choose them.	Solte PDFs ou pastas aqui, ou escolha-os.
+	Every PDF in the folder	Todo PDF da pasta
+	Every PDF in the folder and the folders inside it	Todo PDF da pasta e das pastas dentro dela
+	No PDFs found in {folder}	Nenhum PDF encontrado em {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Somente bordas nítidas do papel são recortadas. Bordas brancas indistinguíveis são mantidas.
+	Only the document's owner can change its security (open it with the permissions password)	Somente o proprietário do documento pode alterar sua segurança (abra-o com a senha de permissões)
+	Safety margin (pt)	Margem de segurança (pt)
+	Save (M4)	Salvar (M4)
+	Scan and text recognition	Digitalização e reconhecimento de texto
+	Scan correction	Correção de digitalização
+	Scan processing cancelled	Processamento das digitalizações cancelado
+	Searchable Image	Imagem pesquisável
+	Straighten skewed scans	Endireitar digitalizações inclinadas
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Orientações incertas permanecem inalteradas. Ao endireitar, toda a imagem cabe na página.
 	Reading colours	Cores de leitura
 	Replace document colours	Substituir as cores do documento
 	Black on white	Preto no branco

@@ -165,14 +165,16 @@ function Assert-MenuSearch([string] $Found, [string] $Key, [string] $Release, [s
   Assert-Equal ([int] $upgrade[3]) 258 "$What release detection attributes"
   if (($secure[0] -split ';') -notcontains $Release) { throw "$Release is not secure: '$($secure[0])'" }
 }
-# The old version is removed before the new one is installed, so rows that moved between components
-# (the image menu left PdfcraftApp after 0.7.1) are removed with it rather than orphaned.
-$validate = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallValidate''' 1
+# Install over shared components before removing the old product to preserve the SCM account.
+$execute = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallExecute''' 1
 $remove = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''RemoveExistingProducts''' 1
-$initialize = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallInitialize''' 1
-if ([int] $remove[0] -le [int] $validate[0] -or [int] $remove[0] -ge [int] $initialize[0]) {
-  throw "RemoveExistingProducts ($($remove[0])) must run between InstallValidate and InstallInitialize"
+$finalize = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallFinalize''' 1
+if ([int] $remove[0] -le [int] $execute[0] -or [int] $remove[0] -ge [int] $finalize[0]) {
+  throw "RemoveExistingProducts ($($remove[0])) must run between InstallExecute and InstallFinalize"
 }
+$removeRegistry = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''RemoveRegistryValues''' 1
+$writeRegistry = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''WriteRegistryValues''' 1
+if ([int] $removeRegistry[0] -ge [int] $writeRegistry[0]) { throw 'Legacy menu cleanup must precede menu writes' }
 
 # Image context menu (#190) opens the DPI chooser. Its own component, gated by INSTALLIMAGECONTEXTMENU
 # (on for a first install, kept on update only while present, secure), with the .png label as key
@@ -180,6 +182,11 @@ if ([int] $remove[0] -le [int] $validate[0] -or [int] $remove[0] -ge [int] $init
 $imageKey = 'Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf'
 foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
   $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.CreatePdf'
+  # Cleanup belongs to the always-installed app, so opting out also removes pre-0.8 rows.
+  $cleanup = Read-Row ('SELECT `Root`, `Name`, `Component_` FROM `RemoveRegistry` WHERE `Key` = ''' + $key + '''') 3
+  Assert-Equal $cleanup[0] '2' "$ext legacy menu cleanup HKLM root"
+  Assert-Equal $cleanup[1] '-' "$ext legacy menu cleanup includes subkeys"
+  Assert-Equal $cleanup[2] 'PdfcraftApp' "$ext legacy menu cleanup component"
   $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
   Assert-Equal $menu[0] 'Create PDF with PdfCraft…' "$ext context menu label"
   Assert-Equal $menu[1] 'PdfcraftImageContextMenu' "$ext context menu component"
@@ -267,6 +274,50 @@ try {
 if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
+# The companion is opt-in and belongs to a separate feature. Its service runs at boot
+# under LocalService, never an interactive user's credentials or LocalSystem.
+$feature = Read-Row 'SELECT `Level` FROM `Feature` WHERE `Feature` = ''HotFolder''' 1
+Assert-Equal $feature[0] '2' 'Hot Folder default feature level'
+Assert-NoRow 'SELECT `Value` FROM `Property` WHERE `Property` = ''INSTALLHOTFOLDER''' 'Hot Folder enabled by default'
+if (($secure[0] -split ';') -notcontains 'INSTALLHOTFOLDER') { throw 'Hot Folder choice is not secure' }
+$choice = Read-Row 'SELECT `Type`, `Property` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''HotFolder''' 2
+Assert-Equal $choice[0] 'CheckBox' 'Hot Folder optional checkbox'
+Assert-Equal $choice[1] 'INSTALLHOTFOLDER' 'Hot Folder checkbox property'
+$service = Read-Row 'SELECT `ServiceType`, `StartType`, `StartName`, `Arguments`, `Component_` FROM `ServiceInstall` WHERE `Name` = ''PdfCraftHotFolder''' 5
+Assert-Equal $service[0] '16' 'Hot Folder own-process service'
+Assert-Equal $service[1] '2' 'Hot Folder automatic boot startup'
+Assert-Equal $service[2] 'NT AUTHORITY\LocalService' 'Hot Folder restricted service account'
+Assert-Equal $service[3] '--service --config "[HotFolderData]tasks.json"' 'Service configuration arguments'
+Assert-Equal $service[4] 'PdfcraftHotFolderApp' 'Service executable component'
+$control = Read-Row 'SELECT `Event`, `Wait` FROM `ServiceControl` WHERE `Name` = ''PdfCraftHotFolder''' 2
+Assert-Equal $control[0] '163' 'Start on install, stop on upgrade/removal, delete on uninstall'
+Assert-Equal $control[1] '1' 'Wait for graceful service stop'
+$acl = Read-Row 'SELECT `SDDLText` FROM `MsiLockPermissionsEx` WHERE `LockObject` = ''HotFolderData''' 1
+Assert-Equal $acl[0] 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-19)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)(A;OICI;GRGX;;;BU)' 'Protected task directory'
+$secrets = Read-Row 'SELECT `SDDLText` FROM `MsiLockPermissionsEx` WHERE `LockObject` = ''HotFolderSecrets''' 1
+Assert-Equal $secrets[0] 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-19)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)' 'Credentials must not be readable by ordinary users'
+$prepare = Read-Row 'SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = ''PrepareHotFolderService''' 3
+Assert-Equal $prepare[1] 'PdfcraftHotFolderExe' 'Prepare service uses installed executable'
+Assert-Equal $prepare[2] '--service-action prepare-account --config "[HotFolderData]tasks.json"' 'Prepare service has no passwords'
+if (([int] $prepare[0] -band 3072) -ne 3072) { throw 'Service preparation must be deferred and elevated' }
+$prepareSequence = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''PrepareHotFolderService''' 1
+$installServices = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallServices''' 1
+$registrationCondition = Read-Row 'SELECT `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallServices''' 1
+Assert-Equal $registrationCondition[0] 'NOT HOTFOLDERSERVICEACCOUNT' 'Existing SCM registration must preserve account and password'
+if (($secure[0] -split ';') -notcontains 'HOTFOLDERSERVICEACCOUNT') { throw 'Existing service identity is not secure' }
+$registrationSearch = Read-Row 'SELECT `Root`, `Key`, `Name` FROM `RegLocator` WHERE `Signature_` = ''ExistingHotFolderService''' 3
+Assert-Equal $registrationSearch[0] '2' 'Service identity comes from HKLM'
+Assert-Equal $registrationSearch[1] 'SYSTEM\CurrentControlSet\Services\PdfCraftHotFolder' 'Service registry key'
+Assert-Equal $registrationSearch[2] 'ObjectName' 'Only public service account identity is inspected'
+$startServices = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''StartServices''' 1
+if ([int] $prepareSequence[0] -le [int] $installServices[0] -or [int] $prepareSequence[0] -ge [int] $startServices[0]) { throw 'Service preparation must run between registration and start' }
+$shortcut = Read-Row 'SELECT `Target`, `Arguments` FROM `Shortcut` WHERE `Shortcut` = ''HotFolderStartMenuShortcut''' 2
+Assert-Equal $shortcut[0] '[#PdfcraftHotFolderExe]' 'Hot Folder shortcut executable'
+Assert-Equal $shortcut[1] '--config "[HotFolderData]tasks.json"' 'GUI and service use the same tasks'
+foreach ($action in @(@('AddHotFolder', 'AddLocal'), @('RemoveHotFolder', 'Remove'))) {
+  $event = Read-Row ('SELECT `Argument` FROM `ControlEvent` WHERE `Dialog_` = ''InstallMaintenance'' AND `Control_` = ''' + $action[0] + ''' AND `Event` = ''' + $action[1] + '''') 1
+  Assert-Equal $event[0] 'HotFolder' "$($action[0]) feature action"
+}
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
 Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

@@ -110,7 +110,7 @@ fn images_are_measured_where_drawn_and_downsampled() {
     let b = stream(&doc, big);
     assert_eq!((b.dict.int(b"Width"), b.dict.int(b"Height"), b.dict.name(b"Filter")), (Some(300), Some(300), Some(&b"DCTDecode"[..])));
     let m = stream(&doc, masked);
-    let sm = stream(&doc, mask);
+    let sm = stream(&doc, m.dict.reference(b"SMask").unwrap());
     assert_eq!((m.dict.int(b"Width"), sm.dict.int(b"Width")), (Some(150), Some(150)), "the soft mask follows its image");
     assert_eq!(sm.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
     assert_eq!(stream(&doc, small).dict.int(b"Width"), Some(100));
@@ -174,12 +174,155 @@ fn settings_choose_what_happens() {
     let off = ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain };
     let r = optimize(&mut keep, &Settings { color: off, gray: off, ..Settings::default() }).unwrap();
     assert_eq!((r.images_resampled, r.images_recompressed), (0, 0));
-    // Lossless: resampled to 300 ppi, Flate.
+    // Lossless encoding after lossy resampling to 300 ppi.
     let lossless = ImageSettings { downsample: true, target_ppi: 300.0, above_ppi: 450.0, compression: Compression::Flate };
     let r = optimize(&mut doc, &Settings { gray: lossless, ..Settings::default() }).unwrap();
     assert_eq!(r.images_resampled, 1);
     let s = stream(&doc, big);
     assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height"), s.dict.name(b"Filter")), (Some(600), Some(300), Some(&b"FlateDecode"[..])));
+}
+
+#[test]
+fn hostile_image_and_mask_dimensions_are_left_unchanged() {
+    // Negative values that previously wrapped to small u32 dimensions reached pixels(),
+    // where multiplying the independently cast usize dimensions overflowed.
+    for (width, height) in
+        [(-4_294_967_040_i64, 256), (256, -4_294_967_040), (4_294_967_552, 256), (i64::MAX, 256), (0, 256), (100_000, 100_000), (256, i64::MIN)]
+    {
+        for bad_mask in [false, true] {
+            let mut doc = Document::new_empty();
+            let mask = image(&mut doc, 256, 256, 1, false, None);
+            let picture = image(&mut doc, 256, 256, 3, false, Some(mask));
+            let bad = if bad_mask { mask } else { picture };
+            let mut malformed = stream(&doc, bad);
+            malformed.dict.set(b"Width".to_vec(), width);
+            malformed.dict.set(b"Height".to_vec(), height);
+            doc.set(bad, Object::Stream(malformed));
+            page(&mut doc, &[("Im", picture)], "q 36 0 0 36 20 20 cm /Im Do Q");
+            let before = stream(&doc, picture);
+            let before_mask = stream(&doc, mask);
+            let report = optimize(&mut doc, &Settings::default()).unwrap();
+            assert_eq!((report.images_resampled, report.images_recompressed), (0, 0), "{width} x {height}, mask={bad_mask}");
+            assert_eq!(stream(&doc, picture), before);
+            assert_eq!(stream(&doc, mask), before_mask);
+        }
+    }
+}
+
+#[test]
+fn jpeg_dimensions_and_decoded_lengths_must_match_the_dictionary() {
+    let mut doc = Document::new_empty();
+    let jpeg = image(&mut doc, 128, 128, 3, true, None);
+    let mut mismatched = stream(&doc, jpeg);
+    // Same sample count, different shape: must not reshape the decoded JPEG silently.
+    mismatched.dict.set(b"Width".to_vec(), 256);
+    mismatched.dict.set(b"Height".to_vec(), 64);
+    doc.set(jpeg, Object::Stream(mismatched.clone()));
+    let short = image(&mut doc, 128, 128, 3, false, None);
+    let mut truncated = stream(&doc, short);
+    truncated.dict.remove(b"Filter");
+    truncated = Stream::from_raw(truncated.dict, vec![0; 127 * 128 * 3]);
+    doc.set(short, Object::Stream(truncated.clone()));
+    page(&mut doc, &[("J", jpeg), ("S", short)], "q 36 0 0 36 0 0 cm /J Do /S Do Q");
+    let settings = Settings { flate_unencoded: false, ..Default::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((report.images_resampled, report.images_recompressed), (0, 0));
+    assert_eq!(stream(&doc, jpeg), mismatched);
+    assert_eq!(stream(&doc, short), truncated);
+}
+
+fn rendered(doc: &Document, page: usize) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let result = renderer.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+    assert!(result.error.is_none(), "{:?}", result.error);
+    result.rgba.to_vec()
+}
+
+#[test]
+fn resampling_an_image_does_not_mutate_a_shared_soft_mask() {
+    let mut doc = Document::new_empty();
+    let mask = image(&mut doc, 256, 256, 1, false, None);
+    let first = image(&mut doc, 256, 256, 3, false, Some(mask));
+    let second = image(&mut doc, 256, 256, 3, false, Some(mask));
+    page(&mut doc, &[("I", first)], "q 72 0 0 72 20 20 cm /I Do Q");
+    page(&mut doc, &[("I", second)], "q 288 0 0 288 20 20 cm /I Do Q");
+    let before_mask = stream(&doc, mask);
+    let before_second = stream(&doc, second);
+    let before_pixels = rendered(&doc, 1);
+    assert!(before_pixels.as_chunks::<4>().0.iter().any(|p| p[0] < 240), "fixture must actually paint");
+    let color = ImageSettings { downsample: true, target_ppi: 64.0, above_ppi: 128.0, compression: Compression::Retain };
+    let report = optimize(&mut doc, &Settings { color, ..Default::default() }).unwrap();
+    assert_eq!(report.images_resampled, 1);
+    let modified = stream(&doc, first);
+    let own_mask = modified.dict.reference(b"SMask").unwrap();
+    assert_ne!(own_mask, mask);
+    assert_eq!(stream(&doc, own_mask).dict.int(b"Width"), Some(64));
+    assert_eq!(stream(&doc, mask), before_mask, "other references still see the original mask");
+    assert_eq!(stream(&doc, second), before_second);
+    assert_eq!(rendered(&doc, 1), before_pixels, "unchanged page survives full save and rendering exactly");
+}
+
+#[test]
+fn lossless_profile_preserves_images_and_document_data() {
+    let mut doc = Document::new_empty();
+    let photo = image(&mut doc, 256, 256, 3, true, None);
+    let alternate = image(&mut doc, 128, 128, 3, false, None);
+    let mut picture = stream(&doc, photo);
+    picture.dict.set(b"Alternates".to_vec(), Object::Array(vec![Object::Ref(alternate)]));
+    doc.set(photo, Object::Stream(picture));
+    let raw = image(&mut doc, 128, 128, 1, false, None);
+    let encoded = stream(&doc, raw);
+    let mut raw_dict = encoded.dict.clone();
+    raw_dict.remove(b"Filter");
+    doc.set(raw, Object::Stream(Stream::from_raw(raw_dict, encoded.decoded().unwrap())));
+    let p = page(
+        &mut doc,
+        &[("Photo", photo), ("Raw", raw), ("Unused", alternate)],
+        "q 36 0 0 36 20 20 cm /Photo Do Q q 72 0 0 72 100 100 cm /Raw Do Q % repeated padding repeated padding repeated padding",
+    );
+    let root = doc.root().unwrap();
+    let mut preferences = Dict::new();
+    preferences.set(b"Duplex".to_vec(), Object::name("DuplexFlipLongEdge"));
+    let mut dests = Dict::new();
+    dests.set(
+        b"Names".to_vec(),
+        Object::Array(vec![
+            Object::String(pdfcraft_cos::PdfString::literal(b"unused".to_vec())),
+            Object::Array(vec![Object::Ref(p), Object::name("Fit")]),
+        ]),
+    );
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Dict(dests));
+    let mut link = Dict::new();
+    link.set(b"Subtype".to_vec(), Object::name("Link"));
+    link.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+    link.set(b"Dest".to_vec(), Object::name("missing"));
+    let link = doc.add(Object::Dict(link));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+    doc.update_dict(root, |d| {
+        d.set(b"ViewerPreferences".to_vec(), Object::Dict(preferences));
+        d.set(b"StructTreeRoot".to_vec(), Object::Dict(Dict::new()));
+        d.set(b"Names".to_vec(), Object::Dict(names));
+        d.set(b"PrivateMarker".to_vec(), Object::name("KeepMe"));
+    })
+    .unwrap();
+    let before_root = doc.get(root);
+    let before_page = doc.get(p);
+    let original_images = [photo, raw, alternate].map(|r| stream(&doc, r));
+    let pixels = rendered(&doc, 0);
+    let report = optimize(&mut doc, &Settings::lossless()).unwrap();
+    assert_eq!((report.images_resampled, report.images_recompressed, report.unused_xobjects), (0, 0, 0));
+    assert_eq!((report.thumbnails, report.alternate_images, report.print_settings, report.unreferenced_dests), (0, 0, 0, 0));
+    assert!(!report.tags_removed);
+    assert_eq!(report.invalid_links, 0);
+    assert!(report.streams_compressed > 0, "non-image content can still be compressed");
+    assert_eq!(doc.get(root), before_root);
+    assert_eq!(doc.get(p), before_page);
+    for (r, before) in [photo, raw, alternate].into_iter().zip(original_images) {
+        assert_eq!(stream(&doc, r), before);
+    }
+    assert_eq!(rendered(&doc, 0), pixels);
 }
 
 #[test]
@@ -1021,4 +1164,13 @@ fn images_are_not_resampled_when_some_uses_could_not_be_measured() {
     page(&mut doc, &names, "q 72 0 0 72 36 36 cm /F1 Do Q");
     let refs = pdfcraft_annot::page_refs(&doc).unwrap();
     assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
+}
+
+#[test]
+fn lossless_profile_keeps_printed_image_fragments_exact() {
+    let (mut doc, _) = printed_page(120, |r| r % 2 == 1, |_, s| s);
+    let before = drawn_images(&doc);
+    let report = optimize(&mut doc, &Settings::lossless()).unwrap();
+    assert_eq!((report.merged_images, report.fragments_merged), (0, 0));
+    assert_eq!(drawn_images(&doc), before);
 }

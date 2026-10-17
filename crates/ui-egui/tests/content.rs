@@ -533,10 +533,18 @@ fn drag_added_text(h: &mut Harness<'static, PdfCraftApp>) -> ([f64; 4], egui::Re
     (rect, from, to, grab + shift)
 }
 
+// Separate kittest GPU devices created concurrently can crash the Windows graphics backend
+// with STATUS_ACCESS_VIOLATION. These two readback tests still run every assertion, but share
+// a lock on Windows so device creation, rendering and teardown do not overlap.
+#[cfg(target_os = "windows")]
+static GPU_READBACK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// #1488: while a finished text box is dragged, its text follows the box instead of staying put
 /// until the button is released.
 #[test]
 fn dragged_text_follows_the_pointer_before_release() {
+    #[cfg(target_os = "windows")]
+    let _gpu = GPU_READBACK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut h = harness();
     let (rect, from, to, end) = drag_added_text(&mut h);
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
@@ -555,6 +563,8 @@ fn dragged_text_follows_the_pointer_before_release() {
 /// instead of jumping back to where it was for those frames.
 #[test]
 fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
+    #[cfg(target_os = "windows")]
+    let _gpu = GPU_READBACK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // A page slow enough to render that the frames before its new raster can be looked at: many
     // pale squares, too light to count as ink.
     let mut content = String::from("0.9 g\n");

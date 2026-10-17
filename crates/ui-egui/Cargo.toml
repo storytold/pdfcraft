@@ -33,6 +33,8 @@ png = "0.18"
 base64 = "0.22"
 # Right-to-left file names in the chrome (egui shapes but does not reorder); already in the tree.
 unicode-bidi = "0.3"
+# OCR defaults to the OS/browser locale, including languages without a UI translation.
+sys-locale = { version = "0.3", features = ["js"] }
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
 skrifa = "0.44"

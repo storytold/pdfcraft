@@ -1,0 +1,65 @@
+name: Hot Folder system services
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/hot-folder]
+    paths:
+      - 'crates/hot-folder-service/**'
+      - 'packaging/service-tests/**'
+      - 'packaging/windows/**'
+      - 'packaging/macos/**'
+      - 'packaging/linux/**'
+      - '.github/workflows/hot-folder-services.yml'
+  pull_request:
+    paths:
+      - 'crates/hot-folder-service/**'
+      - 'packaging/service-tests/**'
+      - 'packaging/windows/**'
+      - 'packaging/macos/**'
+      - 'packaging/linux/**'
+      - '.github/workflows/hot-folder-services.yml'
+permissions:
+  contents: read
+jobs:
+  lifecycle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt -p pdfcraft-hot-folder-service --check
+      - run: cargo clippy -p pdfcraft-hot-folder-service --all-targets -- -D warnings
+      - run: cargo test -p pdfcraft-hot-folder-service --all-targets
+      - run: cargo build -p pdfcraft-hot-folder-service --example service_probe
+      - if: runner.os != 'Windows'
+        run: bash packaging/service-tests/unix.sh
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: packaging/service-tests/check-stop-wait.ps1
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: packaging/service-tests/windows.ps1
+      - if: runner.os == 'Windows'
+        run: dotnet tool install --global wix --version 5.0.2
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: packaging/service-tests/windows-msi.ps1
+      - if: runner.os == 'macOS'
+        run: bash packaging/service-tests/macos-pkg.sh
+      - if: runner.os == 'Linux'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_amd64.deb
+          sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
+          bash packaging/service-tests/linux-deb.sh
+      - if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hot-folder-msi-lifecycle-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/hot-folder-msi/*.log
+          if-no-files-found: ignore
