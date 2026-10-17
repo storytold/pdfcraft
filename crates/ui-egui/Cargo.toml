@@ -27,6 +27,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 # Hands rendered rasters to egui as its pixels, without copying; already in the tree through egui and wgpu.
 bytemuck = { version = "1", features = ["extern_crate_alloc"] }
+# Anti-aliased CPU downscale of oversampled print previews (already used in UI tests).
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 rfd = { workspace = true }
 png = "0.18"
@@ -76,7 +78,6 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 [dev-dependencies]
 pdfcraft-xfa = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
 

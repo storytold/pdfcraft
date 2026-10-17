@@ -681,6 +681,8 @@ pub(crate) const PREVIEW_MAX_SIDE: f32 = 4096.0;
 /// The most bytes of print-preview rasters kept at once. The current sheet comes first, then the
 /// next and the previous one; a neighbour that doesn't fit isn't rendered ahead.
 pub(crate) const PREVIEW_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
+/// Source quality floor for print previews; the raster is filtered down before GPU upload.
+const PREVIEW_MIN_SOURCE_SCALE: f32 = 150.0 / 72.0;
 
 /// Pages on the current sheet and its neighbours, each with the device pixels per point that
 /// fill the preview pane (so the picture is not a stretched thumbnail), nearest sheet first and
@@ -712,7 +714,7 @@ pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[St
             if !placed.is_finite() || placed < 0.05 || !long_pt.is_finite() || long_pt < 1.0 {
                 continue;
             }
-            let scale = placed.min(64.0).min(side / long_pt);
+            let scale = placed.clamp(PREVIEW_MIN_SOURCE_SCALE, 64.0).min(side / long_pt);
             let cost = (pw * f64::from(scale)).ceil() * (ph * f64::from(scale)).ceil() * 4.0;
             if let Some(slot) = out.iter_mut().find(|(page, _, _)| *page == pl.page) {
                 if scale > slot.1 && bytes - slot.2 + cost <= PREVIEW_BYTES {
@@ -734,16 +736,14 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
     let PrintDraft { driver_options: Some((_, options)), driver_choices: choices, show_driver_options: show, .. } = d else { return };
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tl!("Done")).clicked() {
-                    *show = false;
-                }
-                if ui.add_enabled(!choices.is_empty(), egui::Button::new(tl!("Reset to printer defaults"))).clicked() {
-                    choices.clear();
-                }
-            });
+        ui.label(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)));
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(tl!("Done")).clicked() {
+                *show = false;
+            }
+            if ui.add_enabled(!choices.is_empty(), egui::Button::new(tl!("Reset to printer defaults"))).clicked() {
+                choices.clear();
+            }
         });
         if options.is_empty() {
             ui.label(egui::RichText::new(tl!("This printer offers no settings of its own.")).small().color(t.text_muted));
@@ -808,7 +808,10 @@ pub(crate) fn body(
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
-    ui.horizontal_top(|ui| {
+    // Keep the normal layout unchanged; bound the expanded driver controls.
+    let expanded = d.show_driver_options;
+    let mut draw_content = |ui: &mut egui::Ui| {
+        ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
             ui.set_width(470.0);
@@ -1224,10 +1227,33 @@ pub(crate) fn body(
                 }
             }
         });
-    });
+        });
+    };
+
+    // Keep the original, fully accessible layout on roomy viewports. On a
+    // compact viewport, scroll settings and preview, not title or actions.
+    let viewport_height = ui.ctx().content_rect().height();
+    if expanded || viewport_height < 820.0 {
+        let max_content_height = if expanded {
+            (viewport_height * 0.55).max(140.0)
+        } else {
+            // Reserve room for the title, action row, frame and screen margins.
+            (viewport_height - 190.0).max(140.0)
+        };
+        egui::ScrollArea::vertical()
+            .id_salt("print-dialog-content")
+            .max_height(max_content_height)
+            .auto_shrink([false, true])
+            .show(ui, &mut draw_content);
+    } else {
+        draw_content(ui);
+    }
+
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    // Avoid filling the remaining modal height with an oversized footer.
+    let footer_size = egui::vec2(ui.available_width(), 32.0);
+    ui.allocate_ui_with_layout(footer_size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
         if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
@@ -1332,6 +1358,23 @@ mod tests {
         }
         let typed = PrintDraft { which: Which::Range, range: "1".into(), ..PrintDraft::default() };
         assert_eq!(typed.settings(5, &labels).map(|s| s.pages), Ok(vec![3]));
+    }
+
+    /// A4 rasterized sheets with fine rules need enough source pixels
+    /// before the preview is downsampled with an antialiasing filter.
+    #[test]
+    fn print_preview_a4_raster_requires_filtered_supersampling() {
+        let d = PrintDraft::default();
+        let sizes = vec![(842.0, 595.0); 2];
+        let labels = vec!["1".into(), "2".into()];
+
+        let rasters = preview_rasters(&d, &sizes, &labels, 1.0, 8192.0);
+
+        let scale = rasters.iter().find(|(page, _)| *page == 0).map(|(_, scale)| *scale).expect("first sheet must request a raster");
+
+        let min_scale = 150.0 / 72.0;
+
+        assert!(scale >= min_scale - 0.01, "RASTER_PREVIEW_UNDERSAMPLED:              scale={scale}, minimum={min_scale}");
     }
 
     #[test]

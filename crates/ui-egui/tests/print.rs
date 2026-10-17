@@ -216,6 +216,66 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     assert!(toast.contains("Could not save"), "the user is told why: {toast:?}");
 }
 
+/// CUPS properties must not overlap their translated header
+/// on a compact Brazilian Portuguese desktop viewport.
+#[test]
+fn print_driver_properties_header_does_not_overlap_ptbr() {
+    use pdfcraft_engine::print::spool;
+
+    let mut h = Harness::builder().with_size(egui::vec2(1360.0, 700.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "pt-br").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app
+    });
+
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    let tray = spool::PrinterOption {
+        key: "InputSlot".into(),
+        label: "InputSlot".into(),
+        group: "Media".into(),
+        choices: vec![("Auto".into(), "Auto".into()), ("Tray1".into(), "Tray1".into())],
+        default: "Auto".into(),
+    };
+
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Synthetic_Printer".into());
+        d.driver_options = Some(("Synthetic_Printer".into(), vec![tray]));
+        d.driver_choices.insert("InputSlot".into(), "Tray1".into());
+        d.show_driver_options = true;
+    }
+
+    h.run_steps(4);
+
+    let heading = h.get_by_role_and_label(Role::Label, "Propriedades da impressora").rect();
+
+    let reset = h.get_by_role_and_label(Role::Button, "Restaurar os padrões da impressora").rect();
+
+    let done = h.get_by_role_and_label(Role::Button, "Concluído").rect();
+
+    assert!(!heading.intersects(reset), "PROPERTY_HEADER_OVERLAP: title={heading:?}, reset={reset:?}");
+
+    assert!(!heading.intersects(done) && !reset.intersects(done), "PROPERTY_BUTTON_OVERLAP: title={heading:?}, reset={reset:?}, done={done:?}");
+
+    h.get_by_label("InputSlot");
+
+    h.get_by_role_and_label(Role::Button, "Restaurar os padrões da impressora").click();
+
+    h.run_steps(2);
+
+    assert!(h.state().print_draft.driver_choices.is_empty(), "Reset must clear driver choices");
+
+    h.get_by_role_and_label(Role::Button, "Concluído").click();
+
+    h.run_steps(2);
+
+    assert!(!h.state().print_draft.show_driver_options, "Done must close printer properties");
+}
+
 /// Properties… shows the printer driver's own options (CUPS) and sends only those changed.
 #[test]
 fn print_dialog_shows_the_printer_driver_options() {
@@ -254,6 +314,119 @@ fn print_dialog_shows_the_printer_driver_options() {
     h.state_mut().print_draft.driver_choices.insert("InputSlot".into(), "Tray2".into());
     h.state_mut().print_draft.printer = Some("Other_Queue".into());
     assert_eq!(h.state().print_draft.job("form.pdf").options, media, "another queue must not inherit driver options");
+}
+
+/// The standard Print dialog must fit without expanding printer properties.
+/// Reproduces the desktop's 1360x700 usable viewport using synthetic data.
+#[test]
+fn print_dialog_base_fits_700px_viewport() {
+    let mut h = Harness::builder().with_size(egui::vec2(1360.0, 700.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app
+    });
+
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Synthetic_Printer".into());
+        d.paper = pdfcraft_engine::print::PAPERS.iter().position(|(name, _)| *name == "A4").expect("A4 must exist in the paper list");
+        d.show_driver_options = false;
+    }
+
+    h.run_steps(4);
+    assert!(!h.state().print_draft.show_driver_options);
+
+    let card: egui::Rect = h.ctx.data(|data| data.get_temp(egui::Id::new("dialog").with("card"))).expect("print modal card must be recorded");
+
+    assert!(card.left() >= 0.0 && card.right() <= 1360.0 && card.top() >= 0.0 && card.bottom() <= 700.0, "MODAL_BASE_FORA_DA_VIEWPORT: {card:?}");
+
+    assert!(card.top() >= 24.0 && card.bottom() <= 676.0, "MARGEM_MODAL_BASE_INSUFICIENTE: {card:?}");
+
+    let title = h.get_by_role_and_label(Role::Label, "Print").rect();
+
+    assert!(title.top() >= card.top() && title.bottom() <= card.bottom(), "CABECALHO_MODAL_BASE_FORA: {title:?}, card: {card:?}");
+
+    for label in ["Print", "Cancel"] {
+        let button = h.get_by_role_and_label(Role::Button, label).rect();
+
+        assert!(button.top() >= card.top() && button.bottom() <= card.bottom(), "BOTAO_MODAL_BASE_FORA: {label}: {button:?}, card: {card:?}");
+    }
+}
+
+/// Expanded CUPS properties must keep the entire Print dialog in a 700 px viewport.
+/// Uses synthetic driver metadata; no printer or paper is required.
+#[test]
+fn print_dialog_properties_keep_chrome_visible_on_700px_viewport() {
+    use pdfcraft_engine::print::spool;
+
+    let mut h = Harness::builder().with_size(egui::vec2(1360.0, 700.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    let keys = [
+        ("InputSlot", "Media Source"),
+        ("MediaType", "Media Type"),
+        ("cupsPrintQuality", "Print Quality"),
+        ("ColorModel", "Output Mode"),
+        ("OutputBin", "Output Bin"),
+    ];
+    let options: Vec<spool::PrinterOption> = keys
+        .into_iter()
+        .map(|(key, label)| spool::PrinterOption {
+            key: key.into(),
+            label: label.into(),
+            group: "Printer Settings".into(),
+            choices: vec![("Default".into(), "Default".into()), ("Custom".into(), "Custom".into())],
+            default: "Default".into(),
+        })
+        .collect();
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Synthetic_Printer".into());
+        d.driver_options = Some(("Synthetic_Printer".into(), options));
+        d.driver_choices.insert("MediaType".into(), "Custom".into());
+        d.show_driver_options = true;
+    }
+    h.run_steps(4);
+    h.get_by_label("Printer properties");
+
+    let card: egui::Rect = h.ctx.data(|data| data.get_temp(egui::Id::new("dialog").with("card"))).expect("print modal card must be recorded");
+    assert!(
+        card.left() >= 0.0 && card.right() <= 1360.0 && card.top() >= 0.0 && card.bottom() <= 700.0,
+        "MODAL_FORA_DA_VIEWPORT: print modal exceeds 1360x700: {card:?}"
+    );
+    assert!(card.top() >= 24.0 && card.bottom() <= 676.0, "MARGEM_INSUFICIENTE: modal must have at least 24 px of vertical clearance: {card:?}");
+
+    let title = h.get_by_role_and_label(Role::Label, "Print").rect();
+    assert!(
+        title.left() >= card.left() && title.right() <= card.right() && title.top() >= card.top() && title.bottom() <= card.bottom(),
+        "CABECALHO_FORA_DA_VIEWPORT: title {title:?}, modal {card:?}"
+    );
+    for label in ["Print", "Cancel"] {
+        let rect = h.get_by_role_and_label(Role::Button, label).rect();
+        assert!(
+            rect.left() >= card.left() && rect.right() <= card.right() && rect.top() >= card.top() && rect.bottom() <= card.bottom(),
+            "RODAPE_FORA_DA_VIEWPORT: {label} {rect:?}, modal {card:?}"
+        );
+    }
+    h.get_by_role_and_label(Role::Button, "Done").click();
+    h.run_steps(3);
+    assert!(!h.state().print_draft.show_driver_options);
+    assert_eq!(h.state().print_draft.driver_choices.get("MediaType").map(String::as_str), Some("Custom"));
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
 }
 
 /// The desktop app lists printers in the background (PowerShell on Windows takes a second or
