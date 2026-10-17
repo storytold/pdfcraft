@@ -4197,6 +4197,16 @@ fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
     assert!(h.state_mut().execute("edit.edit_text"));
     h.state_mut().views[0].set_zoom(1.2);
     h.run_steps(4);
+    // The dragged pixels are the page raster's: wait for it, as a slow runner may not have it yet
+    // (the drag then drew no picture at all).
+    for _ in 0..400 {
+        h.run_steps(1);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().render_pending(), "the page raster arrives");
     let page = h.state().views[0].page_screen_rect(0).unwrap();
     let at = |x: f32, y: f32| egui::pos2(page.left() + x / 200.0 * page.width(), page.top() + (300.0 - y) / 300.0 * page.height());
     let p = at(95.0, 195.0);
