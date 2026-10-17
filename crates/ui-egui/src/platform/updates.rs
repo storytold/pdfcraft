@@ -89,7 +89,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
-        let clean = app.first_dirty().is_none();
+        let clean = app.first_dirty().is_none() && !app.form_detection.is_running();
         match app.updates.updater.show_if(ctx, clean) {
             Action::None => {}
             Action::OpenUrl(url) => app.open_url(&url),

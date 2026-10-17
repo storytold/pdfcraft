@@ -120,3 +120,4 @@ built by `.github/workflows/release.yml` ([releasing.md](releasing.md)).
 | 2026-10-23 | minor | `xtask ci` runs nextest and doctests, checks the CLI without default features, and checks wasm in one call |
 | 2026-10-10 | major | Created from the code on main (crate list, `xtask/src/layers.rs`, crate READMEs, `vendor/README.md`) |
 | 2026-10-17 | minor | Native FFDetr image inference at L4; engine jobs and explicit-model automation integration. |
+| 2026-10-17 | minor | Optional first-use FFDetr download, bounded verified storage and desktop worker; model distribution is separate from installers. |

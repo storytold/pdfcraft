@@ -7,7 +7,7 @@ use std::sync::Arc;
 use pdfcraft_forms::detect::Word;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
-pub use pdfcraft_form_detect::{Detector, Error as DetectionError, Kind, MODEL_FILE};
+pub use pdfcraft_form_detect::{Detector, Error as DetectionError, Kind, MODEL_FILE, model};
 
 use crate::{DocId, Edit, EditError, FieldProps, NewField, Session};
 

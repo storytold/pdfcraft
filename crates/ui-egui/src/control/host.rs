@@ -74,6 +74,7 @@ impl Host for crate::PdfCraftApp {
         json!({
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
+            "form_detection": {"running": self.form_detection.is_running(), "prompting": self.form_detection.is_prompting()},
             "pending_opens": pending_opens,
             "active": active.map(|v| json!({
                 "doc": v.id.0,

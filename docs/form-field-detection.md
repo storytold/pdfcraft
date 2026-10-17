@@ -1,97 +1,124 @@
 # Native form-field detection
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** initial native FFDetr engine and automation integration · **Status:** partial; explicit local model, no bundled weights or UI default switch
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** desktop first-use download, background detection and model release preparation · **Status:** native desktop and automation implemented; public download awaits publication of the model release asset; browser retains geometry detection
 
-PdfCraft can use a local FFDetr model to propose and create text, checkbox and
-signature fields over a flat or scanned PDF. This runs in Rust using RTen;
-neither Python nor a server is required during detection.
+Prepare a form uses FFDetr to find text fields, checkboxes and signature areas
+on printed or scanned forms. It runs locally in Rust using RTen. No document is
+uploaded, and neither Python nor an inference server is required.
 
-The first milestone is available through the engine and the existing CLI/MCP
-`form_detect_fields` tool. The desktop Prepare a form command still uses the
-existing geometry detector. Running the tool without `model` keeps its existing
-behavior. No new model is automatically downloaded or included in releases yet.
+## Desktop
+
+On the first use, Prepare a form offers **Download and detect**, explaining the
+121 MB download from GitHub. Nothing is fetched at startup or before that
+consent. The user can cancel or explicitly use basic detection instead.
+Download progress, detection progress, cancellation and retry remain in the app;
+there is no model picker or technical configuration to complete.
+
+The download verifies its exact size and SHA-256, installs atomically and keeps
+licence/attribution notices beside it. A failed or cancelled transfer preserves
+the previous model and leaves the document unchanged. Retries restart the transfer.
+A verified installed model works offline. One detector is retained between jobs
+so repeated detection does not reload the weights. Corrupt installations offer
+the download again; filesystem errors are reported.
+
+Models live in the user's application data directory: `$XDG_DATA_HOME/pdfcraft/models/ffdetr`
+(or `~/.local/share/pdfcraft/models/ffdetr`) on Unix, `~/Library/Application Support/PdfCraft/models/ffdetr`
+on macOS, and `%LOCALAPPDATA%/PdfCraft/models/ffdetr` on Windows. They are separate
+from the application installer and shared across app versions.
+
+**Publication prerequisite:** the versioned model artifact is configured at
+`https://github.com/storytold/pdfcraft/releases/download/models-ffdetr-576-v1/ffdetr-576.onnx`.
+That release has not been published as part of this work. Until maintainers publish
+it, a clean installation reports that the download is unavailable and can retry
+later. The local development machine already has the verified evaluation model,
+so native desktop detection can be tested immediately.
 
 ## CLI/MCP
 
-Put the approved self-contained ONNX export inside the CLI's permitted read
-directory. The model path follows the same `--root`, symlink and read-root
-checks as document paths. The loader verifies the model's SHA-256 before
-parsing it. Provenance and the supported hash are recorded in the
-[inference crate README](../crates/form-detect/README.md#model-provenance-and-limits).
+The same functionality is available headlessly:
 
-For a directory containing `input.pdf` and `ffdetr-576.onnx`, a script is:
+- `form_detection_status`: verifies the local model without network access and
+  reports availability, location, download URL and size.
+- `form_detection_install` with `confirm_download: true`: explicitly downloads
+  and verifies the pinned release. An installed valid model needs no network.
+- `form_detect_fields` with `backend: "ffdetr"`: uses the installed model.
+  `directory` optionally selects a managed model directory for constrained runs.
+- `form_detect_fields` with `model`: retains explicit-file support for developers.
+  Omission of both options preserves the CLI's existing geometry behavior.
+
+For a root directory containing a PDF, this script installs the optional model
+there and detects its fields (after the model asset is published):
 
 ```json
 [
+  {"tool":"form_detection_install","args":{"directory":"models","confirm_download":true}},
   {"tool":"doc_open","args":{"path":"input.pdf"}},
-  {"tool":"form_detect_fields","args":{"doc":1,"model":"ffdetr-576.onnx","confidence":0.3}},
+  {"tool":"form_detect_fields","args":{"doc":1,"backend":"ffdetr","directory":"models"}},
   {"tool":"doc_save","args":{"doc":1,"path":"fillable.pdf"}}
 ]
 ```
 
-Run it using:
+All model reads and installation writes, including nested files, honour `--root`
+and separate automation read/write roots. Installation needs both read and write
+access. Detection never implicitly downloads a model. The automation calls are
+synchronous; the desktop uses workers and reports progress.
+
+`add: false` previews proposals. `pages` selects 1-based page numbers (default:
+all). `confidence` is finite and within 0–1, default 0.3; it requires FFDetr.
+Results include kind, name, confidence and rectangle. Detection rectangles use
+**PDF user-space points, bottom-left origin**, unlike `form_fields` display
+coordinates. New fields are transparent and skip existing fields. Signature
+proposals create empty PDF signature fields, not signatures.
+
+## Engine and correctness
+
+`Session::form_detection_job` captures immutable document state. `Job::run` accepts
+a reusable detector and cancellation/progress callback. `apply_detected_fields`
+rejects changed or closed documents and applies the complete result as one
+undoable batch through the normal permission, transaction and save mechanisms.
+Cancellation never applies partial results. The UI uses the original document ID,
+so switching tabs cannot apply results to another document.
+
+Rendering is page-at-a-time, up to 144 dpi, capped at 3000px on the longest side.
+The image detector is limited to 12 million pixels. Coordinates account for crop
+origin and page rotation; widget text retains its displayed orientation. Names
+come from the existing text layer; image-only pages use default names.
+
+Tests cover bounded/verified downloads, preserved files after failure, consent,
+retry, live cancellation, offline operation, detector reuse, confinement, preview,
+fill/save/reopen, undo/redo, rotations, duplicate rejection and stale snapshots.
+Synthetic ONNX fixtures are generated in Rust, without downloading model weights.
+The real export was also validated through the CLI on a private ten-page PDF.
+On an identical reference page image, native inference returned the same 53
+proposals as CommonForms with normalized coordinate error below 0.000001.
+PdfCraft's renderer produces some different proposals from PDFium; this is an
+inference compatibility check, not a general accuracy benchmark.
+
+## Separate model release
+
+The provenance and hash are recorded in `ATTRIBUTION.toml` as `optional-model`.
+It is deliberately excluded from `cargo xtask models` and all app installers.
+Prepare the independently distributable files with:
 
 ```sh
-cargo run -p pdfcraft-cli -j 2 -- run --root /path/to/directory --script /path/to/steps.json
+cargo xtask form-model-package /path/to/ffdetr-576.onnx
 ```
 
-Use `add: false` to inspect proposals without modifying the document. `pages`
-selects 1-based page numbers; omission means all pages. `confidence` must be
-between 0 and 1 and requires `model`. The default is 0.3. Results include the
-backend (`ffdetr`), kind, name, confidence and rectangle. Detection rectangles
-retain the existing tool convention: **PDF user-space points, bottom-left
-origin**, unlike the displayed coordinates returned by `form_fields`.
+The command verifies the input and writes the model, Apache licence, attribution
+and checksums to `dist/models-ffdetr-576-v1/`. It never uploads anything. Maintainers
+publish those files as assets on GitHub release **models-ffdetr-576-v1**,
+marked **pre-release** and **not latest** so it cannot replace the app release
+returned by the existing update checker. Changing
+the export requires a new versioned release URL, hash, size and attribution entry.
+The supported export configuration is in the [inference README](../crates/form-detect/README.md).
 
-All fields are created as one undoable batch, with transparent fill and no
-border so the printed form remains visible. Existing fields are skipped.
-Model inference runs once per request; adding fields reuses those proposals.
-Signature proposals create empty PDF signature fields, not signatures.
-
-## Engine jobs
-
-`Session::form_detection_job` captures immutable page/document state. `Job::run`
-accepts a reusable detector and a progress callback; returning false cancels
-without producing a partial result. `Session::apply_detected_fields` rejects
-results if the source document changed or closed. Adding fields goes through
-the normal permission checks, transaction, save and undo mechanisms.
-
-Pages are rendered one at a time at up to 144 dpi with the longest side capped
-at 3000px. The image detector itself is limited to 12 million pixels. Model
-coordinates are transformed through the page's displayed geometry, including
-rotation and crop origin. Turned widgets retain their text orientation.
-
-Labels are currently taken from the existing text layer using the shared
-nearby-label rules. Image-only pages get default field names. Automatic radio
-grouping, comb properties, improved label association and model-resolution
-selection remain future work. Confidence indicates model certainty, not a
-guarantee that the proposed field is correct.
-
-## Validation and remaining work
-
-Unit tests cover preprocessing, invalid buffers, output shapes, class selection
-and duplicate suppression. Engine tests cover rotations, duplicate detection,
-cancellation, stale snapshots, undo/redo and save/reopen. Tool tests generate a
-tiny original ONNX model at runtime and exercise preview, creation, filling,
-save/reopen, invalid inputs and model-path confinement without downloading weights.
-The tiny model does not test FFDetr accuracy; that needs separate evaluation
-with the real pinned export and representative documents.
-
-The real export has also been run through the CLI on a private ten-page PDF,
-including save/reopen, duplicate rejection and rendered-page inspection. On the
-same reference page image, native inference returned the same 53 proposals as
-CommonForms, with maximum normalized coordinate error below 0.000001. Rendering
-the PDF with PdfCraft rather than PDFium changes some proposals, so this is
-evidence for inference compatibility, not a general accuracy benchmark.
-
-Before a default desktop rollout: publish and attribute a verified model
-artifact; package it alongside OCR models; add background UI progress/cancel
-and model reuse; validate a broader document set and measure memory/CPU time.
-Keep the geometry detector available when the model is absent. Browser model
-delivery and scheduling are separate work; the Rust inference crate must
-continue to compile for WASM.
+Remaining work: publish that release asset, evaluate a broader document set,
+and separately design browser model delivery/scheduling. Radio grouping, comb
+properties and OCR-assisted label association are not inferred yet.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | Desktop download consent, progress/cancel/retry, reusable native detector, managed-model automation and separate release packaging. |
 | 2026-10-17 | Native FFDetr engine jobs and explicit-model CLI/MCP support. |

@@ -204,6 +204,7 @@ impl PdfCraftApp {
             pdfa: Default::default(),
             compare_old: None,
             compare: None,
+            form_detection: Default::default(),
             js_console: Default::default(),
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
@@ -327,6 +328,7 @@ impl PdfCraftApp {
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
         self.dialog.is_some()
+            || self.form_detection.is_open()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
@@ -608,6 +610,7 @@ impl eframe::App for PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
+        self.poll_form_detection();
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();

@@ -1,6 +1,6 @@
 //! FFDetr inference, independent of PDF parsing and editing. Inputs are page images; outputs
 //! are field proposals in normalized, top-left coordinates. The engine owns page transforms,
-//! labels, existing-field filtering and edits. No downloads happen here.
+//! labels, existing-field filtering and edits. Inference stays offline; `model` handles explicit installation.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -11,6 +11,8 @@ use std::sync::Arc;
 use rten::{Dimension, Model, NodeId, RunOptions};
 use rten_tensor::{AsView, Layout, NdTensor, TensorView};
 use sha2::{Digest, Sha256};
+
+pub mod model;
 
 #[cfg(feature = "test-model")]
 pub mod test_model;
@@ -30,6 +32,10 @@ const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("form detection was cancelled")]
+    Cancelled,
+    #[error("could not download form detection: {0}")]
+    Download(String),
     #[error("cannot read form detection model: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid form detection model: {0}")]

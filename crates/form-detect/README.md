@@ -1,12 +1,12 @@
 # pdfcraft-form-detect
 
-Local FFDetr inference on page images. Layer L4; no PDF parser, UI, Python runtime,
-network access or model downloads. Uses the same RTen 0.26 runtime as PdfCraft OCR.
+Local FFDetr inference on page images, plus explicit installation of the optional
+pinned model. Layer L4; no PDF parser, UI or Python runtime. Uses RTen 0.26.
 
-This is the first native integration milestone. The engine exposes a cancellable
-snapshot job, and CLI/MCP `form_detect_fields` accepts an explicit local `model`
-path. Prepare a form still uses the existing detector until model packaging and
-background UI integration land. See [the integration guide](../../docs/form-field-detection.md).
+The desktop downloads the model only after first-use consent, reports progress,
+and reuses a verified detector on background workers. Inference stays offline.
+The CLI/MCP also exposes status, explicit installation and managed-model detection.
+See the [integration guide](../../docs/form-field-detection.md).
 
 ## API
 
@@ -45,9 +45,12 @@ It is separate from FFDNet-S/L, whose weight licensing remains unresolved.
   opset 17; CommonForms 0.2.1, RF-DETR 1.11.2, PyTorch 2.14.1+cpu.
 - Apache-2.0 text: [LICENSE-APACHE](../../LICENSE-APACHE).
 
-No weights are committed, fetched by the build, or bundled by this milestone.
-The caller supplies an existing local export. A release artifact needs its own
-`ATTRIBUTION.toml` entry, pinned download and notices before packaging is enabled.
+No weights are committed, fetched by the build or included in app installers.
+`model` downloads the pinned GitHub release asset only when explicitly requested,
+verifies size and hash, and installs atomically with notices. Its `optional-model`
+entry is in `ATTRIBUTION.toml`. The model release must still be published by
+maintainers. `cargo xtask form-model-package` prepares its files without uploading.
+An explicit local export remains supported for development.
 
 Only the approved export hash is accepted **before parsing or execution**.
 This prevents arbitrary user-supplied ONNX graphs from requesting enormous

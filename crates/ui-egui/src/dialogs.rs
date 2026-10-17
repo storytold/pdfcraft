@@ -78,6 +78,9 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.modal_open() || ctx.memory(|m| m.top_modal_layer().is_some()) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
     }
+    if crate::form_detection_ui::dialog(app, ctx) {
+        return;
+    }
     dialogs(app, ctx);
     // Last, so it sits above Document Properties when Security's Unlock… asked for it.
     unlock(app, ctx);

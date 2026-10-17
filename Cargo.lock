@@ -4463,9 +4463,12 @@ dependencies = [
  "image",
  "rten",
  "rten-tensor",
+ "rustls-native-certs",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]
@@ -4695,6 +4698,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-model",
  "pdfcraft-platform",
  "pdfcraft-render",
@@ -4709,6 +4713,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "sys-locale",
+ "tempfile",
  "toml",
  "unicode-bidi",
  "wasm-bindgen",
@@ -8395,6 +8400,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tempfile",
  "toml",
 ]
 

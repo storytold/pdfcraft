@@ -23,3 +23,9 @@ test-model = []
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Explicit first-use model download; never contacted during startup or inference.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+tempfile = "3.27"

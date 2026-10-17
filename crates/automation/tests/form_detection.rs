@@ -81,3 +81,42 @@ fn invalid_models_and_options_leave_the_document_unchanged() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn managed_model_status_install_and_detection_are_headless_and_offline_when_installed() {
+    let (mut a, dir, id) = setup("managed");
+    let args = json!({"directory":dir});
+    assert_eq!(call(&mut a, "form_detection_status", args.clone())["available"], false);
+    assert!(a.call("form_detection_install", &args).unwrap_err().to_string().contains("confirm_download"));
+    write_model(&dir.join(pdfcraft_form_detect::MODEL_FILE));
+    assert_eq!(call(&mut a, "form_detection_status", args)["available"], true);
+    let installed = call(&mut a, "form_detection_install", json!({"directory":dir,"confirm_download":true}));
+    assert_eq!(installed["available"], true);
+    let result = call(&mut a, "form_detect_fields", json!({"doc":id,"backend":"ffdetr","directory":dir}));
+    assert_eq!(result["fields"].as_array().unwrap().len(), 3);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn managed_model_status_and_install_refuse_outside_roots_and_nested_links() {
+    let (mut a, dir, _) = setup("managed-confinement");
+    let outside = dir.with_extension("outside-models");
+    std::fs::create_dir_all(&outside).unwrap();
+    write_model(&outside.join(pdfcraft_form_detect::MODEL_FILE));
+    for tool in ["form_detection_status", "form_detection_install"] {
+        let args = if tool == "form_detection_install" { json!({"directory":outside,"confirm_download":true}) } else { json!({"directory":outside}) };
+        let error = a.call(tool, &args).unwrap_err().to_string();
+        assert!(error.contains("outside"), "{error}");
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside.join(pdfcraft_form_detect::MODEL_FILE), dir.join(pdfcraft_form_detect::MODEL_FILE)).unwrap();
+        for tool in ["form_detection_status", "form_detection_install"] {
+            let args = if tool == "form_detection_install" { json!({"directory":dir,"confirm_download":true}) } else { json!({"directory":dir}) };
+            let error = a.call(tool, &args).unwrap_err().to_string();
+            assert!(error.contains("outside"), "{error}");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+}

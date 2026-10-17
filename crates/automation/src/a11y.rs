@@ -578,59 +578,6 @@ impl Automation {
     }
 }
 
-impl Automation {
-    pub(crate) fn form_detect_fields(&mut self, a: &Args) -> Result<Value> {
-        let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
-        let id = self.doc(a)?.id;
-        if let Some(path) = a.opt_str("model")? {
-            let confidence = a.opt_num("confidence")?.unwrap_or(0.3);
-            if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
-                return Err(ToolError::InvalidArgs("confidence must be a finite number between 0 and 1".into()));
-            }
-            let confidence = confidence as f32;
-            let add = a.opt_bool("add")?.unwrap_or(true);
-            // Resolve before reading the model, including preview-only requests.
-            let path = self.resolve(path, false)?;
-            let detector = pdfcraft_engine::guard(|| pdfcraft_engine::form_detection::Detector::load(&path)).map_err(failed)?.map_err(failed)?;
-            let job = self.session.form_detection_job(id, &pages).map_err(failed)?;
-            let found = job.run(&detector, confidence, |_, _| true).map_err(failed)?;
-            let list: Vec<Value> = found.fields().iter().map(|field| {
-                use pdfcraft_engine::form_detection::Kind;
-                let kind = match field.kind { Kind::Text => "text", Kind::CheckBox => "checkbox", Kind::Signature => "signature" };
-                json!({ "page": field.page + 1, "kind": kind, "name": field.name, "rect": field.rect.map(|v| (v * 100.0).round() / 100.0), "confidence": field.confidence })
-            }).collect();
-            if add {
-                self.session.apply_detected_fields(found).map_err(failed)?;
-            }
-            return Ok(json!({ "fields": list, "backend": "ffdetr" }));
-        }
-        if a.opt_num("confidence")?.is_some() {
-            return Err(ToolError::InvalidArgs("confidence requires a local FFDetr model path".into()));
-        }
-        let found = self.session.detect_fields(id, &pages);
-        let list: Vec<Value> = found
-            .iter()
-            .map(|(p, c)| {
-                let (kind, comb) = match c.kind {
-                    pdfcraft_engine::detect::Kind::Text => ("text", None),
-                    pdfcraft_engine::detect::Kind::CheckBox => ("checkbox", None),
-                    pdfcraft_engine::detect::Kind::Comb { cells } => ("text", Some(cells)),
-                };
-                let mut v = json!({ "page": p + 1, "kind": kind, "name": c.name, "rect": c.rect.map(|v| (v * 100.0).round() / 100.0) });
-                if let Some(cells) = comb {
-                    v["comb"] = json!(cells);
-                }
-                v
-            })
-            .collect();
-        if a.opt_bool("add")?.unwrap_or(true) && !found.is_empty() {
-            self.session.auto_detect_fields(id, &pages).map_err(failed)?;
-        }
-        Ok(json!({ "fields": list }))
-    }
-
-}
-
 #[cfg(test)]
 mod review_html_tests {
     use super::*;

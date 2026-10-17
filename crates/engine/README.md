@@ -5,7 +5,7 @@ catalogue; frontends never reach past it into the parsing, rendering or editing 
 
 `form_detection` provides native FFDetr snapshot jobs: render/detect without
 mutating the session, report progress/cancellation, then atomically apply the
-proposals if the document is unchanged. See the [integration guide](../../docs/form-field-detection.md).
+proposals if the document is unchanged. Its re-exported `model` API handles optional, verified model storage and explicit downloads. See the [integration guide](../../docs/form-field-detection.md).
 
 `word_count::count` provides cancellable, page-at-a-time Unicode word and character statistics
 with optional semantic exclusions; see [word-count behavior and limits](../../docs/word-count.md).
