@@ -4249,3 +4249,103 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
         }
     }
 }
+
+#[test]
+fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
+    // Each row has its own background box drawn immediately before its BT..ET, as cards and
+    // highlighted headings exported from LibreOffice or browsers do (#2377).
+    let card = "0 0.45 0.25 rg 60 696 240 16 re f BT /F1 10 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
+                0 0.45 0.25 rg 60 668 240 24 re f BT /F1 16 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
+                0 0.45 0.25 rg 60 632 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
+                0 0.45 0.25 rg 60 596 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
+    let shown_at = |ops: &[pdfcraft_content::Op], needle: &str| {
+        ops.iter()
+            .position(|op| {
+                matches!(op.op.as_slice(), b"Tj" | b"TJ")
+                    && op.operands.iter().any(|o| matches!(o, Object::String(s) if String::from_utf8_lossy(&s.bytes).contains(needle)))
+            })
+            .unwrap()
+    };
+
+    // 1. Editing the title rows emits all rewritten rows after all four background fills.
+    let mut doc = text_page(card);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    let edited = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio\nun progetto nuovo";
+    text::rewrite_block(&mut doc, 0, 0, Some(edited), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, edited);
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let fills: Vec<usize> = ops.iter().enumerate().filter_map(|(i, op)| op.is("f").then_some(i)).collect();
+    assert_eq!(fills.len(), 4);
+    assert!(
+        shown_at(&ops, "criterio") > fills[3] && shown_at(&ops, "nuovo") > fills[3],
+        "rewritten title rows must be drawn after their row background fills (fills at {fills:?}): {ops:?}"
+    );
+
+    // 2. Partial edit with a kept suffix row: rewritten rows 0..=2 are drawn after fills[0..=2]
+    // and still before kept row 3, preserving reading order.
+    let mut doc = text_page(card);
+    let partial = "WORKSHOP ONLINE\nDalla teoria alla pratica:\ngestire con criterio\nun progetto complesso";
+    text::rewrite_block(&mut doc, 0, 0, Some(partial), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, partial);
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let fills: Vec<usize> = ops.iter().enumerate().filter_map(|(i, op)| op.is("f").then_some(i)).collect();
+    assert!(
+        shown_at(&ops, "WORKSHOP") > fills[2]
+            && shown_at(&ops, "pratica:") > fills[2]
+            && shown_at(&ops, "criterio") > fills[2]
+            && shown_at(&ops, "criterio") < shown_at(&ops, "complesso")
+            && shown_at(&ops, "complesso") > fills[3],
+        "rewritten prefix rows must follow their fills and precede the kept final row"
+    );
+
+    // 3. Editing row 2 so that it wraps pushes row 3 down; all rewritten rows must follow fills[3].
+    let mut doc = text_page(card);
+    let wrapped_edit = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio e metodo approfondito\nun progetto complesso";
+    text::rewrite_block(&mut doc, 0, 0, Some(wrapped_edit), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let last_fill = ops.iter().rposition(|op| op.is("f")).unwrap();
+    assert!(
+        shown_at(&ops, "approfondito") > last_fill && shown_at(&ops, "complesso") > last_fill,
+        "wrapped rows and pushed-down suffix row must follow all row background fills"
+    );
+
+    // 4. Single-style paragraph path across a CTM change between rows, with movement, underline,
+    // and a trailing unrelated line sharing the second row's BT..ET.
+    let cross_ctm = "0.9 0.9 0.2 rg 60 696 240 18 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
+                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 668 240 18 re f \
+                     BT /F1 12 Tf 0 0 0 rg 54 672 Td (Second highlighted row) Tj 246 -40 Td (Side footer) Tj ET Q";
+    let mut doc = text_page(cross_ctm);
+    let para = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.text.starts_with("First highlighted")).unwrap();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[para].rows.len(), 2);
+    text::rewrite_block(
+        &mut doc,
+        0,
+        para,
+        Some("Updated first highlighted row and updated second highlighted row"),
+        &text::BlockStyle { offset: Some([6.0, -4.0]), underline: Some(true), ..Default::default() },
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let last_fill = ops.iter().rposition(|op| op.is("f")).unwrap();
+    assert!(
+        shown_at(&ops, "Updated first") > last_fill && shown_at(&ops, "Side footer") > shown_at(&ops, "Updated first"),
+        "cross-CTM single-style rewrite must follow both background fills and precede the shared BT's trailing line"
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let updated_first = lines.iter().find(|l| l.text.starts_with("Updated first")).unwrap();
+    let side_footer = lines.iter().find(|l| l.text == "Side footer").unwrap();
+    assert!(
+        (updated_first.baseline()[0] - 70.0).abs() < 0.01 && (updated_first.baseline()[1] - 696.0).abs() < 0.01,
+        "offset baseline in user space across CTM: {:?}",
+        updated_first.baseline()
+    );
+    assert!(
+        (side_footer.baseline()[0] - 310.0).abs() < 0.01 && (side_footer.baseline()[1] - 644.0).abs() < 0.01,
+        "trailing line in shared BT keeps its tlm across CTM: {:?}",
+        side_footer.baseline()
+    );
+}

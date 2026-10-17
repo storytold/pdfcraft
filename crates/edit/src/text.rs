@@ -2060,6 +2060,8 @@ fn rewrite_block_from(
     // The characters to show, for choosing fonts: the breaks are moves, not glyphs.
     let flat = text.replace('\n', " ");
     let o = &first.origin;
+    let last = members.last().copied().unwrap_or(first);
+    let emit = &last.origin;
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
     // The size in text space: points ÷ the text-to-user scale.
@@ -2120,13 +2122,19 @@ fn rewrite_block_from(
     // paragraph leaves the document as it was. The move is in page space, so it is taken back through
     // the CTM's linear part into the space the paragraph is drawn in.
     let movement = if dx != 0.0 || dy != 0.0 {
-        let c = o.ctm;
+        let c = emit.ctm;
         let back = Matrix([c[0], c[1], c[2], c[3], 0.0, 0.0])
             .invert()
             .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it can't be moved in".into()))?;
         Some(back.apply(dx, dy))
     } else {
         None
+    };
+    let tm = if o.ctm == emit.ctm {
+        o.tm
+    } else {
+        let emit_inv = Matrix(emit.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
+        Matrix(o.tm).then(&Matrix(o.ctm)).then(&emit_inv).0
     };
     let type3 = if !reuse && needs_type3(&flat) { Some(type3_font(doc, &mut fonts_res, &flat, family, bold, max_glyphs)?) } else { None };
     let advance = |s: &str| -> f64 {
@@ -2205,7 +2213,7 @@ fn rewrite_block_from(
     let n = pdfcraft_content::num;
     // In its own graphics state, so a new colour (or anything else) stops at the paragraph.
     let mut block_ops = vec![Op::new("q", vec![])];
-    block_ops.extend(reveal_ops(&b, &lines, style, o.ctm)?);
+    block_ops.extend(reveal_ops(&b, &lines, style, emit.ctm)?);
     // Moved: a translation inside that state.
     if let Some((ax, ay)) = movement {
         block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
@@ -2220,7 +2228,7 @@ fn rewrite_block_from(
         state.fill = vec![Op::new("rg", vec![n(r), n(g), n(bl)])];
     }
     block_ops.extend(state.ops());
-    block_ops.push(Op::new("Tm", o.tm.iter().map(|v| n(*v)).collect()));
+    block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
     // Alignment: each line's offset from the left edge, in text space.
     let offset = |line: &str| -> f64 {
         let free = (width - advance(line)).max(0.0) / k;
@@ -2303,7 +2311,7 @@ fn rewrite_block_from(
             })
             .collect();
         block_ops.push(Op::new("q", vec![]));
-        block_ops.push(Op::new("cm", o.tm.iter().map(|v| n(*v)).collect()));
+        block_ops.push(Op::new("cm", tm.iter().map(|v| n(*v)).collect()));
         block_ops.extend(colour);
         block_ops.push(Op::new("w", vec![n(size * 0.06)]));
         for (x0, x1, y) in underlines {
@@ -2318,24 +2326,24 @@ fn rewrite_block_from(
     // second copy, an invisible text layer): the new text is all that may show.
     let mut drop = coincident_ops(&lines, &members);
     drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    // Text shown earlier in the same text object stays first: the paragraph then goes where it
-    // was, between two halves of the text object, so it keeps its place in reading order.
-    let start = first.ops.first().copied().unwrap_or(o.bt_op);
+    // Text shown earlier in the same text object stays first: the paragraph then goes where its
+    // last row was, after any backgrounds between the rows, or between two halves of the text object.
+    let start = last.ops.first().copied().unwrap_or(emit.bt_op);
     let split = ops
-        .get(o.bt_op..start)
+        .get(emit.bt_op..start)
         .unwrap_or_default()
         .iter()
         .enumerate()
-        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
+        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(emit.bt_op + i)));
     // What the text after the paragraph expects: the state at its BT (or where it was split).
-    let after = if split { &o.state } else { &o.bt_state };
+    let after = if split { &emit.state } else { &emit.bt_state };
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
         block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
     }
-    let at = if split { start } else { o.bt_op };
+    let at = if split { start } else { emit.bt_op };
     let new_data = splice(&pieces, &ops, |i| {
         let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
         (insert, !drop.contains(&i))

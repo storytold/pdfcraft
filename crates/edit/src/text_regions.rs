@@ -620,19 +620,20 @@ pub(super) fn rewrite_styled_block(
     let kept_lines: std::collections::HashSet<usize> =
         kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
     let rewritten: Vec<&TextLine> = block.lines.iter().filter(|i| !kept_lines.contains(i)).filter_map(|i| lines.get(*i)).collect();
-    // The rewrite goes where the first rewritten row was drawn, so it must share the paragraph's
-    // space. A dropped `'` or `"` also moved to the next line, which a kept row relies on.
-    let lead = rewritten.first().copied().filter(|lead| {
-        lead.origin.ctm.iter().zip(first.origin.ctm).all(|(a, b)| (a - b).abs() < 1e-9)
-            && !rewritten.iter().flat_map(|l| &l.ops).any(|i| ops.get(*i).is_some_and(|op| op.is("'") || op.is("\"")))
-    });
+    // The rewrite goes where the last rewritten row was drawn, after any backgrounds painted
+    // between the rows. A dropped `'` or `"` also moved to the next line, which a kept row relies on.
+    let lead =
+        rewritten.last().copied().filter(|_| !rewritten.iter().flat_map(|l| &l.ops).any(|i| ops.get(*i).is_some_and(|op| op.is("'") || op.is("\""))));
     let (members, lead) = match lead {
         Some(lead) if !kept_lines.is_empty() => (rewritten, lead),
         _ => {
             kept.iter_mut().for_each(|k| *k = false);
-            (block.lines.iter().filter_map(|i| lines.get(*i)).collect(), first)
+            let all: Vec<&TextLine> = block.lines.iter().filter_map(|i| lines.get(*i)).collect();
+            let last = all.last().copied().unwrap_or(first);
+            (all, last)
         }
     };
+    let o = &lead.origin;
     for (row, _) in rows.iter().zip(&kept).filter(|(_, k)| !**k) {
         let text: String = row.iter().map(|v| v.0).collect();
         if pdfcraft_fonts::source_shaping::required(&text) && row.first().is_some_and(|first| row.iter().any(|v| v.1 != first.1 || v.2 != first.2)) {
@@ -668,8 +669,8 @@ pub(super) fn rewrite_styled_block(
     }
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
-    block_ops.extend(reveal_ops(block, lines, style, first.origin.ctm)?);
-    let back = Matrix([first.origin.ctm[0], first.origin.ctm[1], first.origin.ctm[2], first.origin.ctm[3], 0.0, 0.0])
+    block_ops.extend(reveal_ops(block, lines, style, o.ctm)?);
+    let back = Matrix([o.ctm[0], o.ctm[1], o.ctm[2], o.ctm[3], 0.0, 0.0])
         .invert()
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
@@ -741,7 +742,7 @@ pub(super) fn rewrite_styled_block(
             if let Some([r, g, b]) = overrides.get(&item.1).and_then(|r| r.color).or(style.color) {
                 state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
             }
-            let inverse = Matrix(first.origin.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
+            let inverse = Matrix(o.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
             let mut tm = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm)).then(&inverse).0;
             let (ax, ay) = back.apply(x - source.origin.x, baseline - source.origin.baseline);
             tm[4] += ax;
@@ -790,10 +791,10 @@ pub(super) fn rewrite_styled_block(
             if underlines.get(&item.1).copied().or(style.underline) == Some(true) {
                 let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
                 let underline_size = size_of(source, item.1) * source.origin.k;
-                let (x0, y0) = back.apply(x - first.origin.ctm[4], baseline - first.origin.ctm[5] - underline_size * 0.12);
-                let (x1, y1) = back.apply(x + segment_width - first.origin.ctm[4], baseline - first.origin.ctm[5] - underline_size * 0.12);
+                let (x0, y0) = back.apply(x - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
+                let (x1, y1) = back.apply(x + segment_width - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 block_ops.push(Op::new("RG", vec![n(r), n(g), n(b)]));
-                block_ops.push(Op::new("w", vec![n(underline_size * 0.06 / first.origin.ctm[2].hypot(first.origin.ctm[3]).max(1e-6))]));
+                block_ops.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
                 block_ops.push(Op::new("m", vec![n(x0), n(y0)]));
                 block_ops.push(Op::new("l", vec![n(x1), n(y1)]));
                 block_ops.push(Op::new("S", vec![]));
@@ -810,7 +811,6 @@ pub(super) fn rewrite_styled_block(
     block_ops.push(Op::new("Q", vec![]));
     let mut drop = coincident_ops(lines, &members);
     drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    let o = &lead.origin;
     let start = lead.ops.first().copied().unwrap_or(o.bt_op);
     let split = ops
         .get(o.bt_op..start)
