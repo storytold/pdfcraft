@@ -672,3 +672,19 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+#[test]
+fn scan_acquire_opens_the_scanner_dialog() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("scan.acquire"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Scanner));
+    if pdfcraft_platform::scan::supported() {
+        h.get_by_label("Create PDF");
+        h.get_by_label("Insert scanned pages");
+        h.get_by_label("Multiple files");
+    } else {
+        // No backend: the dialog says so and lists no devices.
+        h.get_by_label("Scanning needs Windows (WIA) in this version.");
+    }
+}

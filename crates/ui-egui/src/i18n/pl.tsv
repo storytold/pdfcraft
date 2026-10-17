@@ -2409,3 +2409,17 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Scanning page {n}…	Skanowanie strony {n}…
+	Scanning page {n} of {t}…	Skanowanie strony {n} z {t}…
+	All pages asks the driver for the whole stack.	„Wszystkie strony” prosi sterownik o cały stos.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Liczba stron zatrzymuje podajnik po tylu arkuszach. Anulowanie kończy transfer wcześniej; już odebrane strony pozostają w dokumencie.
+	Created Scan.pdf	Utworzono Scan.pdf
+	Inserted scanned pages	Wstawiono zeskanowane strony
+	Created {n} scanned files	Utworzono {n} zeskanowanych plików
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Sieć
+	The same printer is also available over USB.	Ta sama drukarka jest dostępna także przez USB.
+	The same printer is also available over the network.	Ta sama drukarka jest dostępna także przez sieć.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Skanowanie wymaga w tej wersji systemu Windows (WIA).

@@ -21,6 +21,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
 base64 = "0.22"
+craft-job = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # `geteuid` for `ui`'s control-file owner check: safe, so no `unsafe` libc call here.

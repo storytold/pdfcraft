@@ -72,6 +72,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut open_revision: Option<usize> = None;
     let mut a11y_now = false;
     let mut ocr_now = false;
+    let mut scan_click = crate::scan_ui::ScanClick::None;
+    let mut interrupt_action: Option<crate::scan_ui::InterruptAction> = None;
     let mut compare_now = false;
     let mut images_now = false;
     let mut stamp_now = false;
@@ -83,6 +85,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
+            Dialog::Scanner => 680.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             _ => 520.0,
@@ -971,6 +974,17 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = go || cancel;
                 return;
             }
+            Dialog::Scanner => {
+                let click = crate::scan_ui::body(ui, app, &t);
+                scan_click = click;
+                close = click == crate::scan_ui::ScanClick::Close;
+                return;
+            }
+            Dialog::ScanInterrupted => {
+                interrupt_action = crate::scan_ui::interrupted_body(ui, app, &t);
+                close = interrupt_action.is_some();
+                return;
+            }
             Dialog::AccessibilityOptions => {
                 let (start, cancel) = crate::a11y_ui::options_body(ui, app, &t);
                 a11y_now = start;
@@ -1406,6 +1420,23 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if ocr_now {
         app.start_ocr();
+    }
+    if dialog == Dialog::ScanInterrupted {
+        // Escape, a click outside, or the close button all mean Finish: keep what was scanned.
+        let closed = modal.should_close();
+        if let Some(action) = interrupt_action.or(closed.then_some(crate::scan_ui::InterruptAction::Finish)) {
+            app.resolve_interrupt(action);
+        }
+    }
+    if matches!(
+        scan_click,
+        crate::scan_ui::ScanClick::Preview
+            | crate::scan_ui::ScanClick::Create
+            | crate::scan_ui::ScanClick::Insert
+            | crate::scan_ui::ScanClick::ReverseSides
+            | crate::scan_ui::ScanClick::Stop
+    ) {
+        app.start_scan(scan_click);
     }
     if compare_now {
         app.run_compare();

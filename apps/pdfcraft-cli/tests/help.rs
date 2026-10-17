@@ -44,6 +44,10 @@ fn usage_lists_mcp_only_when_built_with_it() {
     // The lines around it are still there.
     assert!(stdout.contains("pdfcraft-cli run    --script steps.json"), "{stdout}");
     assert!(stdout.contains("pdfcraft-cli ui     --control FILE"), "{stdout}");
+    assert!(stdout.contains("pdfcraft-cli scan   devices"), "{stdout}");
+    assert!(stdout.contains("pdfcraft-cli scan   --out DIR --yes"), "{stdout}");
+    assert!(stdout.contains("[--reverse]"), "{stdout}");
+    assert!(stdout.contains("[--duplex]"), "{stdout}");
 }
 
 #[cfg(not(feature = "mcp"))]

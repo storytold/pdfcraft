@@ -173,12 +173,18 @@ fn plausible(def: &pdfcraft_automation::ToolDef) -> serde_json::Map<String, Valu
 }
 
 /// Run `call`, turning a panic into a message instead of unwinding out of the test.
+/// The scan tools reach the system's scanners (a listing, or a real scan). They stay out of the
+/// hostile sweeps unless the machine's scanners may be touched.
+fn touches_scanners(tool: &str) -> bool {
+    tool.starts_with("scan_") && std::env::var_os("PDFCRAFT_TEST_REAL_SCANNERS").is_none()
+}
+
 fn guarded(a: &mut Automation, tool: &str, args: &Value) -> std::result::Result<(), String> {
     let result = catch_unwind(AssertUnwindSafe(|| a.call(tool, args)));
     match result {
         Ok(Ok(_)) => Ok(()),
         // Any ToolError is a good outcome: the agent is told what was wrong.
-        Ok(Err(ToolError::UnknownTool(_) | ToolError::InvalidArgs(_) | ToolError::Failed(_))) => Ok(()),
+        Ok(Err(ToolError::UnknownTool(_) | ToolError::InvalidArgs(_) | ToolError::Failed(_) | ToolError::FailedWith { .. })) => Ok(()),
         Err(panic) => {
             let what = panic
                 .downcast_ref::<&str>()
@@ -198,7 +204,7 @@ fn no_tool_panics_on_hostile_arguments() {
     let mut failures = Vec::new();
     let mut calls = 0usize;
 
-    for def in tools() {
+    for def in tools().into_iter().filter(|def| !touches_scanners(def.name)) {
         // The whole arguments object, not just its properties.
         for bad in [json!(null), json!([]), json!("string"), json!(7), json!(true), json!({})] {
             calls += 1;
@@ -269,7 +275,7 @@ fn no_tool_escapes_the_root() {
     let mut tried = 0usize;
     let mut refused = 0usize;
 
-    for def in tools() {
+    for def in tools().into_iter().filter(|def| !touches_scanners(def.name)) {
         for (prop, is_list) in path_props(&def) {
             for escape in escapes(&base, linked) {
                 let mut obj = plausible_with(&def, Some(doc));

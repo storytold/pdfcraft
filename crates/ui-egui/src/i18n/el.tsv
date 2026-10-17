@@ -2439,3 +2439,17 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Scanning page {n}…	Σάρωση σελίδας {n}…
+	Scanning page {n} of {t}…	Σάρωση σελίδας {n} από {t}…
+	All pages asks the driver for the whole stack.	Οι «Όλες οι σελίδες» ζητούν από τον οδηγό ολόκληρη τη στοίβα.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	Ο αριθμός σελίδων σταματά τον τροφοδότη μετά από τόσα φύλλα. Η ακύρωση τερματίζει τη μεταφορά νωρίς· οι σελίδες που ήδη ελήφθησαν μένουν στο έγγραφο.
+	Created Scan.pdf	Δημιουργήθηκε το Scan.pdf
+	Inserted scanned pages	Εισήχθησαν οι σαρωμένες σελίδες
+	Created {n} scanned files	Δημιουργήθηκαν {n} σαρωμένα αρχεία
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	Δίκτυο
+	The same printer is also available over USB.	Ο ίδιος εκτυπωτής είναι διαθέσιμος και μέσω USB.
+	The same printer is also available over the network.	Ο ίδιος εκτυπωτής είναι διαθέσιμος και μέσω δικτύου.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	Η σάρωση απαιτεί Windows (WIA) σε αυτήν την έκδοση.

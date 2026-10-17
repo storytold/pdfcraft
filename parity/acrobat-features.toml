@@ -2737,11 +2737,13 @@ title = "Insert pages from a scanner"
 area = "D"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["scan.acquire"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+  "crates/ui-egui/tests/commands.rs::scan_acquire_opens_the_scanner_dialog",
+]
+notes = "Organize pages ▸ From scanner… (and Scan & OCR ▸ From scanner…) opens the scanner dialog; Insert scanned pages streams into the open document after the selection. Windows WIA only; TWAIN / ICA / SANE still open."
 
 [[feature]]
 id = "organize.insert-from-web"
@@ -6741,11 +6743,20 @@ title = "Scan from TWAIN/WIA/ICA/SANE scanners"
 area = "I"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["scan.acquire"]
+tools = ["scan_devices", "scan_acquire", "scan_jobs"]
+evidence = [
+  "crates/automation/tests/automation.rs::scan_devices_is_read_only_and_lists_without_feeding_paper",
+  "apps/pdfcraft-cli/src/scan_cmd.rs::a_jam_keeps_the_pages_and_continue_append_scans_only_the_rest",
+  "crates/automation/src/scan_jobs.rs::the_journal_round_trips_through_an_atomic_write",
+  "crates/automation/src/scanning.rs::the_unsupported_backend_reports_windows_only_for_listing_and_acquire",
+  "crates/automation/src/scanning.rs::check_acquire_needs_a_device_and_touches_nothing_without_one",
+  "apps/pdfcraft-cli/tests/scan_check.rs::acquire_without_a_device_is_refused_and_prints_nothing",
+  "crates/ui-egui/src/scan_ui.rs::the_dialog_defaults_to_auto_300_dpi_gray",
+  "crates/ui-egui/src/scan_ui.rs::the_dialog_shows_a_notice_only_where_scanning_is_unsupported",
+]
+notes = "Windows WIA only, through the CLI and the tools; other platforms report unsupported, and TWAIN / ICA / SANE / eSCL are open. pdfcraft-cli scan devices and the scan_devices tool list scanners without feeding paper and, by default, without opening a device; --device or --details read handling status and each source's capabilities. pdfcraft-cli scan --out DIR --yes and scan_acquire pull pages into a folder (default source auto: the feeder when it reports ready, else the glass), with the controls the driver publishes (resolution, color, brightness, contrast, threshold, rotation, format, compression, intent, page size, region, duplex). A failure carries its identity as data; a partial stack keeps the saved pages. Without a duplex bit, --reverse does a two-pass manual duplex. Black-and-white scans are delivered as 1-bit images. pdfcraft-cli scan check reports what the stack sees (list, --details, --device, --json) and, only with --acquire and --device, makes one 100 dpi page. pdfcraft-cli scan --out DIR runs as one craft-scan ScanJob with a journal (DIR/scan-job.json) and an exit status by outcome (0 completed, 10 needs attention, 11 failed, 12 cancelled); scan jobs and scan job DIR (and the read-only scan_jobs tool) show the journals without opening a scanner, and scan --continue DIR with --append or --restart goes on after an interruption. Scan & OCR ▸ From scanner… (scan.acquire) opens a dialog that lists devices without feeding paper, then Preview / Create PDF / Insert on a worker thread, with a progress card and Cancel; where there is no backend it says that scanning needs Windows (WIA) in this version, instead of a device list."
 
 [[feature]]
 id = "ocr.scan-presets"
@@ -6753,11 +6764,14 @@ title = "Scan presets"
 area = "I"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["scan.acquire"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+  "crates/ui-egui/src/scan_ui.rs::text_ocr_picks_300_dpi_gray_and_clears_the_region",
+  "crates/ui-egui/src/scan_ui.rs::color_document_photo_and_black_and_white_presets",
+]
+notes = "From scanner… offers Text (300 dpi gray + text intent), Color document (300 dpi RGB + color intent), Black and white (300 dpi 1-bit + text intent and mid threshold), and Photo (600 dpi when listed, else 400/300, RGB + maximize-quality intent). Each button is shown only when the driver lists that colour. Brightness/contrast reset to neutral; the region is cleared. Saved named presets and auto-detect from a preview are still open."
 
 [[feature]]
 id = "ocr.scan-append"
@@ -6765,11 +6779,15 @@ title = "Append scans to an existing PDF or split into files"
 area = "I"
 tier = "P2"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["scan.acquire"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+  "crates/ui-egui/src/scan_ui.rs::the_dialog_defaults_to_auto_300_dpi_gray",
+  "crates/ui-egui/src/scan_ui.rs::create_file_names_and_remaining_capacity",
+  "crates/ui-egui/src/scan_ui.rs::multiple_files_defaults_off",
+]
+notes = "From scanner… Insert scanned pages adds finished pages to the open document after the selection (or the current page). Organize pages ▸ From scanner… opens the same dialog. Create PDF starts a new document; Multiple files + Pages per file opens Scan.pdf, Scan (2).pdf, … as each group fills. Missing: choosing a folder / filename prefix up front, and a PDF Portfolio of the split files."
 
 [[feature]]
 id = "ocr.adobe-scan-sync"

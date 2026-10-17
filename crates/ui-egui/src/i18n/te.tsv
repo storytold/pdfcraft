@@ -2342,3 +2342,22 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Scanning page {n}…	పేజీ {n} స్కాన్ అవుతోంది…
+	Scanning page {n} of {t}…	పేజీ {n} / {t} స్కాన్ అవుతోంది…
+	All pages asks the driver for the whole stack.	“అన్ని పేజీలు” డ్రైవర్ నుండి మొత్తం స్టాక్‌ను అడుగుతుంది.
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	పేజీ లెక్క అన్ని షీట్ల తర్వాత ఫీడర్‌ను ఆపుతుంది. రద్దు బదిలీని ముందుగానే ముగిస్తుంది; ఇప్పటికే వచ్చిన పేజీలు పత్రంలో ఉంటాయి.
+	Created Scan.pdf	Scan.pdf సృష్టించబడింది
+	Inserted scanned pages	స్కాన్ చేసిన పేజీలు చేర్చబడ్డాయి
+	Created {n} scanned files	{n} స్కాన్ చేసిన ఫైల్‌లు సృష్టించబడ్డాయి
+# Machine-drafted rows for native-speaker review (WIA interruption kinds and the Scanner menu label, 2026-10-12).
+	Scanner	స్కానర్
+	From scanner…	స్కానర్ నుండి…
+# Machine-drafted row for native-speaker review (scanner details check, 2026-10-12).
+	Checking the scanner…	స్కానర్‌ను తనిఖీ చేస్తోంది…
+# Machine-drafted rows for native-speaker review (scanner connection tag, 2026-10-13).
+	USB	USB
+	Network	నెట్‌వర్క్
+	The same printer is also available over USB.	అదే ప్రింటర్ USB ద్వారా కూడా అందుబాటులో ఉంది.
+	The same printer is also available over the network.	అదే ప్రింటర్ నెట్‌వర్క్ ద్వారా కూడా అందుబాటులో ఉంది.
+# Machine-drafted row for native-speaker review (scanner dialog without a backend, 2026-10-13).
+	Scanning needs Windows (WIA) in this version.	ఈ వెర్షన్‌లో స్కాన్ చేయడానికి Windows (WIA) అవసరం.

@@ -286,7 +286,8 @@ wall clock).
 **Needs a human:** the renderer decision (own M2 devices vs an outside renderer, #841); Acrobat
 oracle captures on the owner's Mac (synthetic fixtures only); native-speaker review of every
 catalog; smart cards and PKCS #11 tokens, scanners and Windows printers to test against; any
-licensed OCR or AI model.
+licensed OCR or AI model; Windows WIA scanners for acquire testing — see
+[hardware-parity.md](hardware-parity.md).
 
 ## Revision history
 

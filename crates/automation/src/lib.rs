@@ -28,6 +28,8 @@ mod measure;
 mod printing;
 mod reading;
 mod redact;
+pub mod scan_jobs;
+mod scanning;
 mod signing;
 mod text_cache;
 mod tools;
@@ -42,6 +44,10 @@ use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, Reque
 use serde_json::{Value, json};
 
 pub use pdfcraft_render::Pixels;
+pub use scanning::{
+    CHECK_ACQUIRE_WARNING, ScanCheck, ScanCheckOptions, list_scan_devices, render_check_text, scan_check, scan_device_details, scan_error_info_json,
+    scan_length_json,
+};
 pub use tools::{ToolDef, tools};
 
 /// One piece of a tool's result.
@@ -62,13 +68,16 @@ pub enum ToolError {
     InvalidArgs(String),
     /// The tool ran and failed (the message is for the agent to read).
     Failed(String),
+    /// Like [`Self::Failed`], with the failure as data (`data`) for a caller that wants fields, not
+    /// prose. Displays as `message`. MCP carries `data` as the result's `structuredContent`.
+    FailedWith { message: String, data: serde_json::Value },
 }
 
 impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolError::UnknownTool(t) => write!(f, "unknown tool {t:?}"),
-            ToolError::InvalidArgs(m) | ToolError::Failed(m) => f.write_str(m),
+            ToolError::InvalidArgs(m) | ToolError::Failed(m) | ToolError::FailedWith { message: m, .. } => f.write_str(m),
         }
     }
 }
@@ -163,6 +172,10 @@ impl Automation {
 
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
     }
 
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
@@ -302,6 +315,9 @@ impl Automation {
             "command_list" => self.command_list(&a)?,
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,
+            "scan_devices" => self.scan_devices(&a)?,
+            "scan_acquire" => self.scan_acquire(&a)?,
+            "scan_jobs" => self.scan_jobs(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,
             "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
             "page_number" => {
@@ -2745,6 +2761,49 @@ mod tests {
         let warnings = failures["warnings"].as_array().unwrap();
         assert_eq!(warnings.len(), FIND_MAX_WARNINGS);
         assert!(warnings.iter().all(|w| w["error"].as_str().unwrap().len() <= FIND_MAX_WARNING_BYTES && w["error_truncated"] == true));
+    }
+
+    #[test]
+    fn scan_jobs_lists_and_shows_journals_inside_the_root_and_nothing_else() {
+        use crate::scan_jobs::{JOB_FILE, JobRecord, request_json, write_record};
+        use pdfcraft_platform::scan::{
+            ScanSettings,
+            job::{ScanJob, ScanJobConfig},
+        };
+        let base = std::env::temp_dir().join(format!("pdfcraft-automation-scanjobs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        let outside = base.join("outside");
+        for dir in [root.join("a"), root.join("b").join("deep"), outside.clone()] {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        let settings = ScanSettings { pages: 2, ..ScanSettings::default() };
+        let record = || JobRecord {
+            id: "scan-9".into(),
+            started: 1_760_000_000_000,
+            updated: 1_760_000_001_000,
+            request: request_json(&settings, false),
+            journal: ScanJob::new(settings.clone(), ScanJobConfig::default().with_title("T")).snapshot().into_journal(),
+            view: Value::Null,
+            attempts: Vec::new(),
+        };
+        for dir in [root.join("a"), root.join("b").join("deep"), outside.clone()] {
+            write_record(&dir, &record()).unwrap();
+        }
+        let mut a = Automation::new().with_root(&root).unwrap();
+        let listed = json(&mut a, "scan_jobs", json!({}));
+        assert_eq!(listed["count"], 1, "one level down only: {listed}");
+        assert_eq!(listed["jobs"][0]["id"], "scan-9");
+        assert_eq!(listed["jobs"][0]["state"], "preparing");
+        let shown = json(&mut a, "scan_jobs", json!({ "dir": "a", "show": true }));
+        assert_eq!(shown["job"]["exit_code"], 10);
+        assert!(shown["text"].as_str().unwrap().contains("next:"), "{shown}");
+        for dir in [outside.display().to_string(), "..".to_string()] {
+            let error = a.call("scan_jobs", &json!({ "dir": dir })).unwrap_err();
+            assert!(error.to_string().contains("outside"), "{error}");
+        }
+        assert!(base.join("outside").join(JOB_FILE).is_file());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

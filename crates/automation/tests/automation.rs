@@ -537,6 +537,43 @@ fn file_writing_tools_are_not_read_only() {
 }
 
 #[test]
+fn scan_devices_is_read_only_and_lists_without_feeding_paper() {
+    let tool = tools().into_iter().find(|t| t.name == "scan_devices").expect("scan_devices");
+    assert!(tool.read_only, "listing scanners must stay read-only");
+    assert!(!tool.destructive);
+    assert!(tool.command.is_none(), "scan_devices has no engine command; acquire is the CLI");
+    let props = &tool.input_schema["properties"];
+    assert!(props["device"].is_object() && props["details"].is_object(), "{props}");
+    // An empty filter is refused before any scanner is touched.
+    let dir = workdir("scan_devices_empty");
+    let mut a = auto(&dir);
+    assert!(a.call("scan_devices", &json!({ "device": "  " })).is_err(), "an empty device filter must be an error");
+    assert!(a.call("scan_devices", &json!({ "details": "yes" })).is_err(), "details must be a boolean");
+    // The call below lists the installed scanners (a cheap list, but it still talks to the WIA service), so it only
+    // runs when asked for on a machine whose scanners may be touched.
+    if std::env::var_os("PDFCRAFT_TEST_REAL_SCANNERS").is_none() {
+        return;
+    }
+    let dir = workdir("scan_devices");
+    let mut a = auto(&dir);
+    let listed = ok(&mut a, "scan_devices", json!({}));
+    assert!(listed["count"].as_u64().is_some(), "{listed}");
+    assert!(listed["scanners"].as_array().is_some(), "{listed}");
+    assert_eq!(listed["count"], listed["scanners"].as_array().unwrap().len() as u64);
+}
+
+#[test]
+fn scan_acquire_is_destructive_and_requires_out() {
+    let tool = tools().into_iter().find(|t| t.name == "scan_acquire").expect("scan_acquire");
+    assert!(!tool.read_only);
+    assert!(tool.destructive);
+    let dir = workdir("scan_acquire");
+    let mut a = auto(&dir);
+    let err = a.call("scan_acquire", &json!({ "device": "none" }));
+    assert!(err.is_err(), "missing out must fail before WIA");
+}
+
+#[test]
 fn open_inspect_render_and_find() {
     let dir = workdir("inspect");
     let mut a = auto(&dir);

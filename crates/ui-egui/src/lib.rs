@@ -58,6 +58,7 @@ mod marks_ui;
 mod measure_ui;
 mod ocr_ui;
 mod optimize_ui;
+mod scan_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
@@ -331,6 +332,10 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ From scanner.
+    Scanner,
+    /// A scan stopped early (cover open, jam, empty feeder): Continue or Finish.
+    ScanInterrupted,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -656,6 +661,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Scan & OCR ▸ From scanner.
+    pub scan: scan_ui::ScanUi,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
@@ -984,6 +991,7 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            scan: scan_ui::ScanUi::default(),
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
@@ -2030,6 +2038,9 @@ impl PdfCraftApp {
     fn show_progress(&mut self, ctx: &egui::Context) {
         if widgets::progress_notice(self, ctx) {
             self.cancel_optimize();
+            if let Some(job) = &self.scan.job {
+                job.cancel.request();
+            }
         }
     }
 
@@ -2527,6 +2538,7 @@ impl PdfCraftApp {
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
                     "recognize-text" => Some(Dialog::RecognizeText),
+                    "scanner" => Some(Dialog::Scanner),
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
@@ -3065,6 +3077,7 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_export();
         self.poll_ocr();
+        self.poll_scan();
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();
