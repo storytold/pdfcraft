@@ -4250,6 +4250,19 @@ fn xfa_scripts_of_one_event_see_the_form_as_the_engine_holds_it() {
 }
 
 #[test]
+fn repeated_xfa_print_buttons_run_their_click_script() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::repeated_print_button_template()));
+    let mut s = Session::new();
+    let id = s.open("print.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    for name in ["PrintButton1", "PrintButton1_2", "PrintButton1_3"] {
+        let out = s.run_javascript(id, "throw new Error('AcroForm fallback ran')", Some(name)).unwrap();
+        assert_eq!(out.error, None, "{name}: {out:?}");
+        assert_eq!(out.requests, vec![pdfcraft_js::Request::Print], "{name}: {out:?}");
+    }
+}
+
+#[test]
 fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
     let mut s = Session::new().with_clock(|| 1_700_000_000);

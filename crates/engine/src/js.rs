@@ -192,7 +192,8 @@ impl Session {
         // A button PdfCraft generated from an XFA template runs its XFA click script.
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
-            && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, t)
+            && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
             let out = self.take_js_output(id);

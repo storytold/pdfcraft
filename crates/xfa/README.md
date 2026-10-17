@@ -59,7 +59,9 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   the datasets packet per event), and `rerender`, which lays the form out again from template,
   data and overrides. The scripts themselves run in the `js` crate's XFA object model; the
   engine runs initialize and calculate on open, change, exit, validate and calculate after a
-  field changes, and click for buttons.
+  field changes, and click for buttons. Every generated copy of a page-master button resolves
+  its own PDF field to the shared XFA click script, so clicking an early copy works as well
+  as the last, including through `js_run` and after save/reopen.
 
   Private keys PdfCraft writes (other viewers ignore them):
 

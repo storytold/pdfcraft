@@ -66,6 +66,31 @@ pub fn template(rows: usize) -> String {
     t
 }
 
+/// Three body pages sharing a page-master print button and its XFA click script.
+pub fn repeated_print_button_template() -> String {
+    let mut xml = String::from(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/>
+  <contentArea x="36pt" y="72pt" w="540pt" h="648pt"/><medium short="612pt" long="792pt"/>
+  <field name="PrintButton1" x="36pt" y="24pt" w="100pt" h="25pt"><ui><button/></ui>
+   <caption><value><text>Print form</text></value></caption>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.print(1, "0", (xfa.host.numPages -1).toString(), 0, 0, 0, 0, 0);</script></event>
+  </field>
+ </pageArea></pageSet>
+"#,
+    );
+    for page in 1..=3 {
+        xml.push_str(&format!(
+            r#"<subform name="page{page}" layout="tb"><breakBefore targetType="pageArea"/>
+ <field name="note{page}" w="200pt" h="25pt"><ui><textEdit/></ui><value><text>Page {page}</text></value></field>
+</subform>"#
+        ));
+    }
+    xml.push_str("</subform></template>");
+    xml
+}
+
 /// [`template`] with a datasets packet holding `data` (the children of `xfa:data`).
 pub fn template_with_data(rows: usize, data: &str) -> String {
     let t = template(rows);

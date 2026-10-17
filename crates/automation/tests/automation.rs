@@ -5405,6 +5405,32 @@ fn measurement_snap_tool_covers_all_targets() {
 }
 
 #[test]
+fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
+    let dir = workdir("xfa-print-buttons");
+    let template = pdfcraft_xfa::fixtures::repeated_print_button_template();
+    std::fs::write(dir.join("print.pdf"), pdfcraft_xfa::fixtures::shell(&template)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "print.pdf" }))["doc"].as_u64().unwrap();
+    let check = |a: &mut Automation, doc| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        let buttons: Vec<_> = fields["fields"].as_array().unwrap().iter().filter(|f| f["type"] == "button").collect();
+        assert_eq!(buttons.len(), 3);
+        for (index, field) in buttons.iter().enumerate() {
+            assert_eq!(field["page"], index + 1);
+            let out = ok(a, "js_run", json!({ "doc": doc, "field": field["name"], "script": "throw new Error('AcroForm fallback ran')" }));
+            assert!(out["error"].is_null(), "{out}");
+            assert_eq!(out["requests"], json!([{ "print": true }]), "{out}");
+            assert_eq!(out["alerts"], json!([]));
+        }
+    };
+    check(&mut a, doc);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    ok(&mut a, "doc_close", json!({ "doc": doc }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    check(&mut a, doc);
+}
+
+#[test]
 fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     let dir = workdir("xfa-scripts");
     std::fs::write(dir.join("scripted.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();

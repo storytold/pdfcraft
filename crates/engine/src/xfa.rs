@@ -826,10 +826,12 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     r.finish().map(|_| ())
 }
 
-/// The SOM path of field `name` when PdfCraft generated it from an XFA template and the
-/// template has a click script for it (a button with a native action has none).
-pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, name: &str) -> Option<String> {
-    let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, f)| f == name).map(|(s, _)| s)?;
+/// The SOM path of a generated field whose template has a click script.
+pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field) -> Option<String> {
+    // Page-master copies have distinct PDF field names but share a SOM path. Reversing
+    // fields_by_som would lose every copy except the last: use the clicked field itself.
+    let object = doc.get(field.obj);
+    let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
     let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
     live.events.iter().any(|e| e.som == som && e.activity == "click").then_some(som)
 }
