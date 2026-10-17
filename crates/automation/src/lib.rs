@@ -21,6 +21,7 @@ mod content;
 mod conventions;
 pub mod file_access;
 mod forms;
+mod hairlines;
 mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -744,6 +745,7 @@ impl Automation {
             "content_update" => self.content_update(&a)?,
             "content_delete" => self.content_delete(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "doc_fix_hairlines" => self.fix_hairlines(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,

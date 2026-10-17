@@ -129,6 +129,17 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
+        t("doc_fix_hairlines", "Fix hairlines", "Print production: strokes narrower than narrower_than points on the page (after every transformation; zero-width lines always) are given width points, in page content and form XObjects; Type 3 glyphs and tiling patterns only when asked. Returns fixed (strokes) and pages; nothing to fix gives 0 and no edit.")
+            .cmd("prepress.hairlines")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to fix (default all)"),
+                    "narrower_than": { "type": "number", "minimum": 0, "description": "Points on the page (default 0.216)." },
+                    "width": { "type": "number", "exclusiveMinimum": 0, "description": "Points on the page (default 0.72)." },
+                    "type3": { "type": "boolean" }, "patterns": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),

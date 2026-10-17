@@ -8317,11 +8317,11 @@ title = "Fix hairlines"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["prepress.hairlines"]
+tools = ["doc_fix_hairlines"]
+evidence = ["crates/edit/src/tests.rs::hairlines_are_widened_in_page_content_and_forms", "crates/ui-egui/tests/editing.rs::fix_hairlines_from_the_dialog", "crates/automation/tests/automation.rs::fix_hairlines_through_tools"]
+notes = "Print production ▸ Fix hairlines…: strokes narrower than a threshold (default 0.003 in; zero-width lines always) get a width (default 0.01 in), in page content and form XObjects, measured after every transformation; Type 3 glyphs and tiling patterns only when asked; all, current or a range of pages; the dialog says how many strokes changed and tells when there is nothing to fix (no edit, no undo step). Tool doc_fix_hairlines. Still missing against Acrobat: nothing of the dialog; hairlines inside annotation appearances are left alone."
 
 [[feature]]
 id = "print.flattener-preview"
