@@ -1047,7 +1047,7 @@ impl Layouter<'_> {
     /// template's), for a field without a fixed height, which grows to hold its text. `ctx`
     /// is the field's own (its SOM ends in the field). Zero for anything else.
     fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
-        if f.ui != Ui::TextEdit || !f.multiline || f.common.h.is_some() || f.common.name.is_none() {
+        if !f.grows_with_text() || f.common.name.is_none() {
             return 0.0;
         }
         let value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
@@ -1551,7 +1551,7 @@ impl Layouter<'_> {
         }
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.
-        if f.ui == Ui::TextEdit && f.multiline && f.common.h.is_none() && rect.h > self.cursor().0.h + 0.01 {
+        if f.grows_with_text() && rect.h > self.cursor().0.h + 0.01 {
             let value =
                 self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
             if let Some(value) = value.filter(|t| !t.trim().is_empty()) {

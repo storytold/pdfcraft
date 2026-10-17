@@ -7,7 +7,14 @@ A dynamic XFA form is a PDF shell around an XML template (`/AcroForm /XFA`): one
 ("requires Adobe Reader") and `/NeedsRendering true`. Viewers without an XFA engine show the
 placeholder. This crate reads the template, lays it out, and writes ordinary pages and AcroForm
 fields into the document, so everything else in PdfCraft (rendering, filling, saving, printing,
-the automation tools) works on it unchanged. The engine does this when it opens such a form.
+the automation tools) works on it unchanged. The engine does this when it opens such a form,
+and repeats layout after an edited multiline text field without a fixed height changes value.
+This uses the final datasets after calculations, including on forms without scripts; pages
+and widgets refresh together and undo/redo restores their layout. Text longer than a page
+uses the existing page-text fallback: the full value remains in the datasets and is shown
+across pages, with a warning that it can no longer be edited as a widget. Fixed-height fields
+keep their geometry. If a value cannot be synchronized to the datasets, the engine reports
+that warning and keeps the existing layout and accepted widget values.
 
 ## What it does
 

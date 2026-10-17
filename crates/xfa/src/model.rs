@@ -506,6 +506,11 @@ pub struct Field {
 }
 
 impl Field {
+    /// Whether the text can determine this field's height.
+    pub(crate) fn grows_with_text(&self) -> bool {
+        self.ui == Ui::TextEdit && self.multiline && self.common.h.is_none()
+    }
+
     /// A choice list's value as saved to the data: an item's shown text becomes its saved
     /// value (an editable list keeps typed text); several values stay on separate lines.
     /// Other fields keep `v`.

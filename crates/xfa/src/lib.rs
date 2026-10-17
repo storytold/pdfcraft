@@ -100,8 +100,8 @@ pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_p
 pub use parse::{measure, parse};
 pub use pdf::{CLICK_KEY, LAYOUT_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use script::{
-    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, fields_by_som, form_tree,
-    has_scripts, overrides, refresh_value, rerender, set_overrides, template_of,
+    FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, field_grows_with_text,
+    fields_by_som, form_tree, has_scripts, overrides, refresh_value, rerender, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -764,6 +764,49 @@ fn collect_fields(n: &FormNode, out: &mut Vec<(String, String, String, String)>,
     }
 }
 
+/// Reflow a laid-out XFA form when an edited multiline field can grow. The datasets must
+/// already hold the final values, including calculation results. Fixed-height fields keep
+/// their existing geometry; forms without scripts parse their template only when needed.
+/// `Some` means pages/widgets were rebuilt and the caller must fully refresh its snapshot.
+pub(crate) fn relayout_changed_text(
+    doc: &mut pdfcraft_cos::Document,
+    cached: Option<&Template>,
+    before: &[pdfcraft_forms::Field],
+) -> Result<Option<Vec<String>>, String> {
+    if pdfcraft_xfa::existing_layout(doc).is_none() {
+        return Ok(None);
+    }
+    let current = &*doc;
+    let mut changed = before
+        .iter()
+        .filter(|f| f.kind == pdfcraft_forms::FieldKind::Text && f.has(pdfcraft_forms::flags::MULTILINE))
+        .filter_map(|f| {
+            let object = current.get(f.obj);
+            let dict = object.as_dict()?;
+            let value = dict.get(b"V").and_then(|v| current.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+            if f.value.first().map_or("", String::as_str) == value {
+                return None;
+            }
+            dict.get(pdfcraft_xfa::SOM_KEY).and_then(|s| current.resolve(s).as_string().map(|s| s.to_text()))
+        })
+        .peekable();
+    if changed.peek().is_none() {
+        return Ok(None);
+    }
+    let template = match cached {
+        Some(tpl) => std::borrow::Cow::Borrowed(tpl),
+        None => std::borrow::Cow::Owned(pdfcraft_xfa::template_of(current).map_err(|e| e.to_string())?),
+    };
+    let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som));
+    drop(changed);
+    if !reflow {
+        return Ok(None);
+    }
+    let report = pdfcraft_xfa::rerender(doc, &template).map_err(|e| e.to_string())?;
+    crate::xfa_redraw(doc)?;
+    Ok(Some(report.warnings))
+}
+
 /// On open: initialize scripts, then calculations. Returns what they changed.
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);

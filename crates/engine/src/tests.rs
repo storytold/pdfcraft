@@ -4250,6 +4250,71 @@ fn xfa_scripts_of_one_event_see_the_form_as_the_engine_holds_it() {
 }
 
 #[test]
+fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
+    let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();
+    assert_eq!(text.len(), 10_500);
+    for scripted in [false, true] {
+        let template = pdfcraft_xfa::fixtures::growable_text_template(scripted);
+        let mut s = Session::new();
+        let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+        s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text.clone()) }).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 3, "scripted={scripted}");
+        let data = pdfcraft_xfa::data_of(&s.get(id).unwrap().editor.as_ref().unwrap().cos).unwrap();
+        assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].Page3[0].ACTIVIDADES[0]")), Some(text.as_str()));
+        s.undo(id).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "ACTIVIDADES").unwrap().value, vec!["Short"]);
+        s.redo(id).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    }
+}
+
+#[test]
+fn xfa_text_growth_refreshes_widget_geometry_but_fixed_height_fields_keep_their_widgets() {
+    for fixed in [false, true] {
+        let size = if fixed { r#"h="30pt""# } else { r#"minH="20pt""# };
+        let template = pdfcraft_xfa::fixtures::growable_text_template(false).replace(r#"minH="207.017mm""#, size);
+        let mut s = Session::new();
+        let id = s.open("geometry.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let field = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "ACTIVIDADES").unwrap().clone();
+        let before = field(&s);
+        s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text("Line\n".repeat(10)) }).unwrap();
+        let after = field(&s);
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+        if fixed {
+            assert_eq!(before.obj, after.obj, "fixed-height fields must not trigger layout");
+            assert_eq!(before.widgets[0].rect, after.widgets[0].rect);
+        } else {
+            assert_ne!(before.obj, after.obj);
+            assert!(after.widgets[0].rect[3] - after.widgets[0].rect[1] > before.widgets[0].rect[3] - before.widgets[0].rect[1]);
+            assert_eq!(
+                s.get(id).unwrap().info.fields.iter().find(|f| f.name == "ACTIVIDADES").unwrap().value.as_deref(),
+                Some("Line\n".repeat(10).trim_end())
+            );
+        }
+        s.undo(id).unwrap();
+        assert_eq!(field(&s).widgets[0].rect, before.widgets[0].rect);
+        s.redo(id).unwrap();
+        assert_eq!(field(&s).widgets[0].rect, after.widgets[0].rect);
+    }
+}
+
+#[test]
+fn xfa_text_that_cannot_sync_to_structured_data_is_not_replaced_by_a_relayout() {
+    let template = pdfcraft_xfa::fixtures::growable_text_template(false)
+        .replace("<ACTIVIDADES>Short</ACTIVIDADES>", "<ACTIVIDADES><nested>Short</nested></ACTIVIDADES>");
+    let mut s = Session::new();
+    let id = s.open("structured.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let text = "Keep this accepted value\n".repeat(150);
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text.clone()) }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    assert_eq!(doc.form.iter().find(|f| f.name == "ACTIVIDADES").unwrap().value, vec![text]);
+    assert!(doc.xfa_warnings.iter().any(|w| w.contains("structured content")));
+}
+
+#[test]
 fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
     let mut s = Session::new().with_clock(|| 1_700_000_000);

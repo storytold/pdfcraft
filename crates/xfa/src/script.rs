@@ -614,6 +614,12 @@ fn template_field<'a>(tpl: &'a Template, som: &str) -> Option<&'a Field> {
     }
 }
 
+/// Whether the template field at `som` is multiline text without a fixed height.
+/// A change to its value can require a new layout, including new continuation pages.
+pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
+    template_field(tpl, som).is_some_and(Field::grows_with_text)
+}
+
 /// The child of `nodes` named `name`, looking through unnamed subforms and areas (as data
 /// paths do); exclusion groups are not looked into.
 fn named_in<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {

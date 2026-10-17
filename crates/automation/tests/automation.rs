@@ -5405,6 +5405,39 @@ fn measurement_snap_tool_covers_all_targets() {
 }
 
 #[test]
+fn growable_xfa_text_paginates_after_fill_save_and_print() {
+    let dir = workdir("xfa-growable-text");
+    let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();
+    assert_eq!(text.len(), 10_500);
+    for scripted in [false, true] {
+        let template = pdfcraft_xfa::fixtures::growable_text_template(scripted);
+        std::fs::write(dir.join("growing.pdf"), pdfcraft_xfa::fixtures::shell(&template)).unwrap();
+        let mut a = auto(&dir);
+        let opened = ok(&mut a, "doc_open", json!({ "path": "growing.pdf" }));
+        let doc = opened["doc"].as_u64().unwrap();
+        assert_eq!(opened["pages"], 2);
+        let filled = ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "ACTIVIDADES": text } }));
+        assert_eq!(filled["pages"], 3, "scripted={scripted}: {filled}");
+        ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "data.xml", "what": "fields" }));
+        let data = std::fs::read_to_string(dir.join("data.xml")).unwrap();
+        assert!(data.contains(text.trim_end()), "the full value remains in the datasets");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+        ok(&mut a, "doc_close", json!({ "doc": doc }));
+        let reopened = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }));
+        assert_eq!(reopened["pages"], 3);
+        let doc = reopened["doc"].as_u64().unwrap();
+        ok(&mut a, "doc_print", json!({ "doc": doc, "path": "printed.pdf" }));
+        let printed = ok(&mut a, "doc_open", json!({ "path": "printed.pdf" }));
+        assert_eq!(printed["pages"], 3);
+        let output = ok(&mut a, "text_extract", json!({ "doc": printed["doc"] }));
+        let printed_text = output["pages"].as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n");
+        let expected = format!("{text}\nFollowing section");
+        assert_eq!(printed_text.split_whitespace().collect::<Vec<_>>(), expected.split_whitespace().collect::<Vec<_>>(), "scripted={scripted}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     let dir = workdir("xfa-scripts");
     std::fs::write(dir.join("scripted.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())).unwrap();

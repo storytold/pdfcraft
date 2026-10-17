@@ -66,6 +66,29 @@ pub fn template(rows: usize) -> String {
     t
 }
 
+/// A growable rich-text field followed by a section that starts on a new page.
+pub fn growable_text_template(scripted: bool) -> String {
+    let event = if scripted { r#"<event activity="initialize"><script contentType="application/x-javascript">0;</script></event>"# } else { "" };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">{event}
+ <pageSet><pageArea name="master"><occur max="-1"/>
+  <contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/>
+ </pageArea></pageSet>
+ <subform name="Page3" layout="tb">
+  <field name="ACTIVIDADES" w="540pt" minH="207.017mm"><ui><textEdit multiLine="1" allowRichText="1"/></ui>
+   <font typeface="Courier" size="8pt"/><value><exData contentType="text/html"/></value>
+  </field>
+ </subform>
+ <subform name="following" layout="tb"><breakBefore targetType="pageArea"/>
+  <draw name="end" w="500pt" h="20pt"><value><text>Following section</text></value></draw>
+ </subform>
+</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><Page3><ACTIVIDADES>Short</ACTIVIDADES></Page3></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#
+    )
+}
+
 /// [`template`] with a datasets packet holding `data` (the children of `xfa:data`).
 pub fn template_with_data(rows: usize, data: &str) -> String {
     let t = template(rows);
