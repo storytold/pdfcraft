@@ -4673,3 +4673,116 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     h.run_steps(3);
     assert_eq!(h.state().left, LeftPanel::AllTools);
 }
+
+/// #3061: a paragraph running past its page's bottom edge (an HTML converter relying on the
+/// page clip) opens in an editor that draws on its page only. It covered the next page.
+#[test]
+fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
+    let text = |first: &str, count: usize, leading: usize| {
+        let mut s = String::from("BT /F1 14 Tf\n");
+        for i in 0..count {
+            s.push_str(&format!("1 0 0 1 72 {} Tm ({first} line {}: the client may cancel this) Tj\n", 720 - (leading * i) as i64, i + 1));
+        }
+        s.push_str("ET");
+        s.into_bytes()
+    };
+    // Page 1's single paragraph goes down to y = -270; page 2 is ordinary.
+    let (one, two) = (text("Page one", 56, 18), text("PAGE TWO", 3, 40));
+    let stream = |d: &[u8]| [format!("<< /Length {} >>\nstream\n", d.len()).into_bytes(), d.to_vec(), b"\nendstream".to_vec()].concat();
+    let page = |contents: usize| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {contents} 0 R /Resources << /Font << /F1 7 0 R >> >> >>")
+            .into_bytes()
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".to_vec(),
+        page(4),
+        stream(&one),
+        page(6),
+        stream(&two),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>".to_vec(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1400.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("off-page.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let info = h.state().session.get(id).unwrap().info.pages[0].clone();
+    let (first, second) = (h.state().views[0].page_screen_rect(0).unwrap(), h.state().views[0].page_screen_rect(1).unwrap());
+    shown_on_its_page_only(&mut h, first, second, "the paragraph's outline");
+    let v = info.user_to_view(200.0, 378.0);
+    let p = first.min + egui::vec2(v[0], v[1]) * (first.width() / info.width);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        h.state().views[0].line_editor.as_ref().is_some_and(|e| e.page == 0 && e.text.contains("line 50")),
+        "the paragraph's off-page lines are in it"
+    );
+    shown_on_its_page_only(&mut h, first, second, "the open editor");
+    // Scrolled up past the tool bar, the editor stays inside the document area.
+    let viewport = h.state().views[0].viewport_rect();
+    let above = viewport.top() - 3.0;
+    let before = h.render().unwrap();
+    h.hover_at(egui::pos2(first.right() - 20.0, first.center().y));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -300.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(4);
+    let scrolled = h.state().views[0].page_screen_rect(0).unwrap();
+    assert!(scrolled.top() < viewport.top() - 100.0, "scrolled: {scrolled:?} in {viewport:?}");
+    assert!(h.state().views[0].line_editor.is_some(), "still editing");
+    let after = h.render().unwrap();
+    for x in (first.left() as u32 + 70)..(first.left() as u32 + 420) {
+        assert_eq!(after.get_pixel(x, above as u32), before.get_pixel(x, above as u32), "above the document area at x = {x}");
+    }
+}
+
+/// Between pages `first` and `second`, and on `second` above its own text, across where page
+/// 1's paragraph is: what is there without it (the gap's colour right of the paragraph, white
+/// paper).
+fn shown_on_its_page_only(h: &mut Harness<'static, PdfCraftApp>, first: egui::Rect, second: egui::Rect, what: &str) {
+    let shot = h.render().unwrap();
+    let pixel = |x: f32, y: f32| shot.get_pixel(x as u32, y as u32).0;
+    let gap = pixel(first.right() - 40.0, (first.bottom() + second.top()) / 2.0);
+    for x in (first.left() as u32 + 70)..(first.left() as u32 + 420) {
+        let x = x as f32;
+        assert_eq!(pixel(x, (first.bottom() + second.top()) / 2.0), gap, "{what}: between the pages at x = {x}");
+        for dy in [4.0, 20.0, 40.0] {
+            let [r, g, b, _] = pixel(x, second.top() + dy);
+            assert!(r > 240 && g > 240 && b > 240, "{what}: page 2 at {x}, +{dy}: {r},{g},{b}");
+        }
+    }
+}
