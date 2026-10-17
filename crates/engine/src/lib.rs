@@ -24,6 +24,7 @@ pub mod compare;
 mod copy_image;
 pub mod dates;
 pub mod export;
+mod image_alpha;
 pub mod js;
 pub mod links;
 pub mod ocr;
@@ -405,6 +406,8 @@ pub struct Document {
     /// What the last successful [`Session::apply`] wrote that its fonts can't draw: kept as typed,
     /// drawn with `?` in its place (see [`TextNotice`]). The interface shows it; tools return it.
     pub edit_notices: Vec<TextNotice>,
+    /// Which parts of pictures with transparency show, for picking them ([`Document::image_shows_at`]).
+    alpha: image_alpha::AlphaCache,
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn
@@ -3589,6 +3592,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            alpha: Default::default(),
         }
     }
 

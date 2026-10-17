@@ -435,7 +435,13 @@ impl Automation {
                 let doc = self.doc(&a)?;
                 let p = &doc.info.pages[page];
                 let user = p.view_to_user(point[0] as f32, point[1] as f32).map(f64::from);
-                let images: Vec<_> = doc.page_images(page).iter().enumerate().filter(|(_, im)| im.contains(user)).map(|(i, _)| i + 1).collect();
+                let images: Vec<_> = doc
+                    .page_images(page)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, im)| im.contains(user) && doc.image_shows_at(im, user))
+                    .map(|(i, _)| i + 1)
+                    .collect();
                 json!({"page":page+1,"images":images})
             }
             "page_images" => {

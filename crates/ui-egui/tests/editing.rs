@@ -4673,3 +4673,68 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     h.run_steps(3);
     assert_eq!(h.state().left, LeftPanel::AllTools);
 }
+
+/// Edit text & images: a click through the transparent margin of a picture selects the picture
+/// below it, and a click where it shows selects it.
+#[test]
+fn a_click_through_a_pictures_transparent_margin_selects_the_picture_below() {
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let image = "/Type /XObject /Subtype /Image /Width 4 /Height 4 /BitsPerComponent 8";
+    // The top picture's soft mask shows its top-right quarter only.
+    let mask: Vec<u8> = [[0, 0, 255, 255], [0, 0, 255, 255], [0; 4], [0; 4]].concat();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Low 5 0 R /Top 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 100 0 0 100 20 20 cm /Low Do Q q 100 0 0 100 60 60 cm /Top Do Q"),
+        stream(&format!("{image} /ColorSpace /DeviceRGB"), &[0x80; 48]),
+        stream(&format!("{image} /ColorSpace /DeviceRGB /SMask 7 0 R"), &[0x40; 48]),
+        stream(&format!("{image} /ColorSpace /DeviceGray"), &mask),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("overlap.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let info = h.state().session.get(id).unwrap().info.pages[0].clone();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = |x: f32, y: f32| {
+        let v = info.user_to_view(x, y);
+        page.min + egui::vec2(v[0], v[1]) * (page.width() / info.width)
+    };
+    for ((x, y), want) in [((70.0, 70.0), 0), ((150.0, 150.0), 1), ((100.0, 100.0), 0), ((115.0, 145.0), 1)] {
+        let p = at(x, y);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(want), "click at {x}, {y}");
+    }
+}

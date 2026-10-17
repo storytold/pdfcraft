@@ -5461,7 +5461,9 @@ fn copy_image_finds_the_image_under_a_point_and_decodes_it_at_full_size() {
     let id = s.open("p.pdf", None, pic, None).unwrap();
     let d = s.get(id).unwrap();
     let r = d.page_images(0)[0].rect;
-    assert_eq!(d.page_image_at(0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]), Some(0));
+    // On its red top-left pixel; its other pixels but the blue one are transparent.
+    assert_eq!(d.page_image_at(0, [r[0] + (r[2] - r[0]) / 6.0, r[3] - (r[3] - r[1]) / 4.0]), Some(0));
+    assert_eq!(d.page_image_at(0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]), None);
     assert_eq!(d.page_image_at(0, [r[2] + 10.0, r[3] + 10.0]), None);
     assert_eq!(d.page_image_at(7, [0.0, 0.0]), None);
     let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
@@ -5800,4 +5802,142 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     assert!(v.iter().zip(shown.iter()).all(|(a, b)| (a - b).abs() < 0.01), "{v:?} vs {shown:?}");
     // No area, or a box off the image, is refused.
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
+}
+
+/// A one-page 300 × 300 PDF of `objects` (numbered from 5) drawn by `content`; the page's
+/// XObjects are `xobjects`.
+fn images_pdf(xobjects: &str, content: &[u8], objects: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << {xobjects} >> >> >>").into_bytes(),
+        stream("", content),
+    ];
+    objs.extend(objects.iter().map(|(dict, data)| stream(dict, data)));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Pictures are picked where they show. Overlapping pictures with transparent margins (a PNG
+/// signature over a table, cut-out photos side by side) give a click through the margin to the
+/// picture below; stencil images and colour-keyed pictures likewise. Pictures that can't be
+/// read, or show everywhere, keep their whole box.
+#[test]
+fn pictures_are_picked_where_they_show() {
+    let rgb = |n: usize| ("/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8".to_string(), vec![0x80; n]);
+    let with = |(d, data): (String, Vec<u8>), extra: &str| (format!("{d} {extra}"), data);
+    let gray = |rows: [[u8; 4]; 4]| {
+        ("/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8".to_string(), rows.concat())
+    };
+    let (a, o) = (255, 0);
+    let objects = vec![
+        rgb(48),                                                                                                // 5: Low, opaque
+        with(rgb(48), "/SMask 7 0 R"),                                                                          // 6: Top
+        gray([[o, o, a, a], [o, o, a, a], [o, o, o, o], [o, o, o, o]]),                                         // 7: its top-right quarter shows
+        ("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ImageMask true".into(), vec![0x40]),               // 8
+        ("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ImageMask true /Decode [1 0]".into(), vec![0x40]), // 9
+        (
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Mask [250 255 0 5 0 5]".into(),
+            vec![255, 0, 0, 0, 0, 255],
+        ), // 10: red keyed out
+        (
+            "/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode /SMask 7 0 R".into(),
+            b"not a JPEG 2000 codestream".to_vec(),
+        ), // 11: can't be read
+        with(rgb(48), "/SMask 13 0 R"),                                                                         // 12
+        gray([[a; 4]; 4]),                                                                                      // 13: shows everywhere
+    ];
+    let content = b"q 100 0 0 100 20 20 cm /Low Do Q q 100 0 0 100 60 60 cm /Top Do Q \
+        q 40 0 0 40 200 20 cm /St Do Q q 40 0 0 40 250 20 cm /StI Do Q q 40 0 0 40 200 100 cm /Key Do Q \
+        q 40 0 0 40 200 200 cm /Jpx Do Q q 40 0 0 40 250 200 cm /Full Do Q q -40 0 0 40 140 200 cm /Top Do Q q 0 40 -40 0 300 250 cm /Top Do Q";
+    let xobjects = "/Low 5 0 R /Top 6 0 R /St 8 0 R /StI 9 0 R /Key 10 0 R /Jpx 11 0 R /Full 12 0 R";
+    let mut s = Session::new();
+    let id = s.open("alpha.pdf", None, Arc::new(images_pdf(xobjects, content, &objects)), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_images(0).len(), 9, "{:?}", d.page_images(0));
+    let cases: [([f64; 2], Option<usize>); 14] = [
+        // Top's transparent lower-left, over Low: Low is picked.
+        ([70.0, 70.0], Some(0)),
+        ([100.0, 100.0], Some(0)),
+        // Top's showing quarter, over Low and beyond it.
+        ([115.0, 145.0], Some(1)),
+        ([150.0, 150.0], Some(1)),
+        // Top's transparent lower-right, over nothing.
+        ([150.0, 70.0], None),
+        // A stencil paints its 0 samples; with /Decode [1 0], its 1 samples.
+        ([210.0, 40.0], Some(2)),
+        ([230.0, 40.0], None),
+        ([260.0, 40.0], None),
+        ([280.0, 40.0], Some(3)),
+        // The colour-keyed red half doesn't show.
+        ([210.0, 120.0], None),
+        ([230.0, 120.0], Some(4)),
+        // Unreadable, and showing everywhere: the whole box.
+        ([205.0, 205.0], Some(5)),
+        ([255.0, 205.0], Some(6)),
+        // Top mirrored: its showing quarter is on the left.
+        ([105.0, 235.0], Some(7)),
+    ];
+    for (at, want) in cases {
+        assert_eq!(d.page_image_at(0, at), want, "at {at:?}");
+    }
+    assert_eq!(d.page_image_at(0, [135.0, 235.0]), None, "the mirrored placement's transparent right");
+    // Top turned a quarter: its showing quarter is at the top left.
+    assert_eq!(d.page_image_at(0, [265.0, 285.0]), Some(8));
+    assert_eq!(d.page_image_at(0, [295.0, 285.0]), None);
+    assert_eq!(d.page_image_at(0, [265.0, 255.0]), None);
+    let images = d.page_images(0);
+    assert!(!d.image_shows_at(&images[1], [70.0, 70.0]));
+    assert!(d.image_shows_at(&images[1], [150.0, 150.0]));
+
+    // An edit changing only Top's soft mask is seen at once: it now shows everywhere.
+    let doc = s.doc_mut(id).unwrap();
+    let editor = doc.editor.as_mut().unwrap();
+    let full = editor.cos.get(pdfcraft_cos::ObjRef::new(13, 0));
+    editor.cos.set(pdfcraft_cos::ObjRef::new(7, 0), (*full).clone());
+    doc.generation += 1;
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_image_at(0, [70.0, 70.0]), Some(1));
+    assert_eq!(d.page_image_at(0, [150.0, 70.0]), Some(1));
+}
+
+/// A picture larger than the opacity grid is picked where it shows, its pixels scaled onto the
+/// grid: a 300 × 300 picture showing only its top-left 150 × 150.
+#[test]
+fn large_pictures_are_picked_where_they_show() {
+    let mask: Vec<u8> = (0..300).flat_map(|y| (0..300).map(move |x| if x < 150 && y < 150 { 255 } else { 0 })).collect();
+    let objects = vec![
+        (
+            "/Type /XObject /Subtype /Image /Width 300 /Height 300 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 6 0 R".to_string(),
+            vec![0x80; 90_000],
+        ),
+        ("/Type /XObject /Subtype /Image /Width 300 /Height 300 /ColorSpace /DeviceGray /BitsPerComponent 8".to_string(), mask),
+    ];
+    let mut s = Session::new();
+    let id = s.open("large.pdf", None, Arc::new(images_pdf("/Big 5 0 R", b"q 100 0 0 100 0 0 cm /Big Do Q", &objects)), None).unwrap();
+    let d = s.get(id).unwrap();
+    // Just inside and just outside the showing quarter, along each axis.
+    assert_eq!(d.page_image_at(0, [45.0, 55.5]), Some(0));
+    assert_eq!(d.page_image_at(0, [45.0, 44.0]), None);
+    assert_eq!(d.page_image_at(0, [49.0, 80.0]), Some(0));
+    assert_eq!(d.page_image_at(0, [56.0, 80.0]), None);
 }

@@ -6495,3 +6495,50 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `image_hit` counts a picture with transparency only where it shows: through a soft-masked
+/// picture's transparent margin, only the picture below is hit.
+#[test]
+fn image_hit_sees_through_transparent_parts_of_pictures() {
+    let dir = workdir("alpha-hit");
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let image = "/Type /XObject /Subtype /Image /Width 4 /Height 4 /BitsPerComponent 8";
+    // The soft mask shows the top-right quarter only.
+    let mask: Vec<u8> = [[0, 0, 255, 255], [0, 0, 255, 255], [0; 4], [0; 4]].concat();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Low 5 0 R /Top 6 0 R >> >> >>".to_vec(),
+        stream("", b"q 100 0 0 100 20 20 cm /Low Do Q q 100 0 0 100 60 60 cm /Top Do Q"),
+        stream(&format!("{image} /ColorSpace /DeviceRGB"), &[0x80; 48]),
+        stream(&format!("{image} /ColorSpace /DeviceRGB /SMask 7 0 R"), &[0x40; 48]),
+        stream(&format!("{image} /ColorSpace /DeviceGray"), &mask),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("overlap.pdf"), out).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"overlap.pdf"}))["doc"].as_u64().unwrap();
+    let hit = |a: &mut Automation, x: i32, y: i32| ok(a, "image_hit", json!({"doc":doc,"page":1,"point":[x, 300 - y]}))["images"].clone();
+    assert_eq!(hit(&mut a, 70, 70), json!([1]), "the top picture's transparent margin");
+    assert_eq!(hit(&mut a, 115, 115), json!([1, 2]), "where the top picture shows");
+    assert_eq!(hit(&mut a, 150, 70), json!([]), "transparent, over nothing");
+    assert_eq!(hit(&mut a, 150, 150), json!([2]));
+}

@@ -635,6 +635,7 @@ pub(crate) fn image_input(
     xf: &PageXform,
     page: usize,
     info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     images: &[pdfcraft_engine::PageImage],
     view: &mut DocView,
     action: &mut Option<ImageAction>,
@@ -647,7 +648,9 @@ pub(crate) fn image_input(
         let (x, y) = xf.screen_to_view(point);
         let Some(p) = info.pages.get(page) else { return false };
         let user = p.view_to_user(x, y);
-        images.get(index).is_some_and(|im| im.contains(user.map(f64::from)))
+        let user = user.map(f64::from);
+        // A picture is picked where it shows: through its transparent parts, the one below is.
+        images.get(index).is_some_and(|im| im.contains(user) && doc.image_shows_at(im, user))
     };
     let selected = view.image_selection.as_ref().filter(|s| s.page == page).map(|s| s.index).filter(|i| *i < boxes.len());
     let dragging = view.image_selection.as_ref().is_some_and(|s| s.drag.is_some());
