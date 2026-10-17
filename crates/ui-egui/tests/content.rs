@@ -236,7 +236,7 @@ fn typing_moving_styling_and_deleting_added_content() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the new text is selected");
     // Bold from the Format panel: one undoable change.
-    h.get_by_label("B").click();
+    h.get_by_label("Bold").click();
     h.run_steps(3);
 
     let pdfcraft_engine::AddedContent::Text(t) = &added(&h)[0].content else { panic!() };
@@ -584,4 +584,61 @@ fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
     h.run_steps(2);
     let (old, new) = ink_at(&mut h, from, to);
     assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
+}
+
+/// Format text is laid out as Acrobat's: alignment from its flyout, style buttons by name, and
+/// the controls PdfCraft can't apply yet present but disabled.
+/// Format text lines its rows up (#3037): the size list is centred beside the colour swatch and
+/// the alignment button and is as tall as the font list, each spacing row's controls share one
+/// line, and nothing reaches past the font list, which spans the panel.
+#[test]
+fn format_text_rows_line_up_and_fit_the_panel() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    h.get_by_label("FORMAT TEXT");
+    let combo = |h: &Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(value)).map(|n| n.rect()).expect(value)
+    };
+    let (font, size) = (combo(&h, "Helvetica"), combo(&h, "12"));
+    let middle = |r: egui::Rect| r.center().y;
+    for label in ["Colour", "Alignment"] {
+        let other = h.get_by_label(label).rect();
+        assert!((middle(size) - middle(other)).abs() < 0.5, "the size list ({size:?}) is centred with {label} ({other:?})");
+    }
+    assert_eq!(size.height(), font.height(), "the font and size lists are the same height");
+    // Line and paragraph spacing; scale and character spacing with their lists.
+    let line = [combo(&h, "Auto"), combo(&h, "0")];
+    assert!((middle(line[0]) - middle(line[1])).abs() < 0.5, "{line:?}");
+    // Each: its number field and the arrow that lists common values.
+    let scale_row: Vec<egui::Rect> =
+        ["Horizontal scale", "Character spacing"].iter().flat_map(|l| h.query_all_by_label(l).map(|n| n.rect())).collect();
+    assert_eq!(scale_row.len(), 4, "two fields and their two arrows: {scale_row:?}");
+    for r in &scale_row {
+        assert!((middle(*r) - middle(scale_row[0])).abs() < 0.5, "{scale_row:?}");
+    }
+    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row) {
+        assert!(r.right() <= font.right() + 0.5, "{r:?} reaches past the panel ({font:?})");
+    }
+}
+
+#[test]
+fn format_text_panel_sets_alignment_and_lists_planned_controls_disabled() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    h.get_by_label("FORMAT TEXT");
+    for planned in ["Bulleted list", "Numbered list", "Superscript", "Subscript"] {
+        assert!(h.get_by_label(planned).accesskit_node().is_disabled(), "{planned} is shown but disabled");
+    }
+    h.get_by_label("Alignment").click();
+    h.run_steps(2);
+    h.get_by_label("Centre").click();
+    h.run_steps(2);
+    assert_eq!(h.state().text_style.align, pdfcraft_engine::TextAlign::Center);
+    h.get_by_label("Bold").click();
+    h.run_steps(2);
+    assert!(h.state().text_style.bold);
 }

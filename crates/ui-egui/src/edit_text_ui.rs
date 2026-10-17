@@ -182,34 +182,31 @@ impl Default for Extras {
     }
 }
 
-/// Underline, line spacing, character spacing and horizontal scale for the paragraph being
-/// edited (under Format text). Returns `true` when something changed.
-pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
-    let before = *e;
-    ui.horizontal(|ui| {
-        if crate::icons::button(ui, "underline", 26.0, e.underline, tl!("Underline")).clicked() {
-            e.underline = !e.underline;
-        }
-        let zero = tl!("Line spacing").to_string();
-        let label = |v: f64| if v == 0.0 { zero.clone() } else { format!("{v:.2}×") };
-        egui::ComboBox::from_id_salt("line-spacing").selected_text(label(e.line_spacing)).width(110.0).show_ui(ui, |ui| {
-            for v in [1.0, 1.15, 1.5, 2.0] {
-                ui.selectable_value(&mut e.line_spacing, v, label(v));
-            }
-        });
-    });
-    ui.horizontal(|ui| {
-        let l = ui.label(tl!("Character spacing"));
-        ui.add(egui::DragValue::new(&mut e.char_spacing).range(-5.0..=50.0).speed(0.1).suffix(" pt")).labelled_by(l.id);
-    });
-    ui.horizontal(|ui| {
-        let l = ui.label(tl!("Horizontal scale"));
-        ui.add(egui::DragValue::new(&mut e.scale).range(10.0..=400.0).speed(1.0).suffix(" %")).labelled_by(l.id);
-    });
-    *e != before
-}
-
 impl LineEditor {
+    /// What Format text's font list shows: the chosen page font, a standard family picked
+    /// instead, or the paragraph's own font (its `/BaseFont` without the subset tag).
+    pub(crate) fn font_shown(&self, sources: &[(String, String)]) -> String {
+        if let Some(face) = self.font_resource.as_ref().and_then(|r| sources.iter().find(|(res, _)| res == r)).map(|(_, face)| face) {
+            return face.clone();
+        }
+        if self.look.family != self.look0.family {
+            return self.look.family.label().to_string();
+        }
+        let base = self.source.as_ref().map(|(block, _)| block.base_font.as_str()).unwrap_or_default();
+        // "ABCDEF+Calibri" is a subset of Calibri.
+        let name = match base.split_once('+') {
+            Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+            _ => base,
+        };
+        if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
+    }
+
+    /// Back to the paragraph's own font: no page font chosen and the family it started with.
+    pub(crate) fn keep_source_font(&mut self) {
+        self.font_resource = None;
+        self.look.family = self.look0.family;
+    }
+
     pub(crate) fn has_changes(&self) -> bool {
         self.text != self.original || self.look != self.look0 || self.extras != self.extras0
     }

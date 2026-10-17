@@ -1986,8 +1986,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/editing.rs::the_format_panel_restyles_the_paragraph_being_edited"]
-notes = "character spacing in points and horizontal scaling in percent for a paragraph (Tc, Tz), rewrapped"
+evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/ui-egui/tests/editing.rs::the_format_panel_takes_any_scale_and_character_spacing"]
+notes = "character spacing in points (-5 to 50) and horizontal scaling in percent (10 to 400) for a paragraph (Tc, Tz), rewrapped; Format text takes any value in those ranges typed, or a common one from its list"
 
 [[feature]]
 id = "edit.lists"
@@ -2592,8 +2592,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/automation/tests/automation.rs::editing_existing_text_through_tools"]
-notes = "Edit a PDF ▸ Format text shows the paragraph being edited (family, bold/italic guessed from its font, size) and applies changes at once as one undo step each, keeping the paragraph open"
+evidence = ["crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/automation/tests/automation.rs::editing_existing_text_through_tools", "crates/ui-egui/tests/content.rs::format_text_panel_sets_alignment_and_lists_planned_controls_disabled", "crates/ui-egui/tests/content.rs::format_text_rows_line_up_and_fit_the_panel"]
+notes = "Edit a PDF ▸ Format text, laid out as Acrobat's panel, for the paragraph being edited and for added text: font (the source font kept, the document's fonts, families, installed or loaded font files), size, colour, alignment, bold and italic, line spacing, horizontal scale and character spacing; each change applies at once as one undo step, keeping the paragraph open. Shown disabled with a Planned tooltip until they exist: bulleted and numbered lists (edit.lists), superscript and subscript (edit.text-super-subscript), paragraph spacing, and underline on added text."
 
 [[feature]]
 id = "edit.adobe-express-edits"

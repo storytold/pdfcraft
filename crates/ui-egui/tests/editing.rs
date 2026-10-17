@@ -2860,7 +2860,7 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     assert!(h.state().views[0].line_editor.is_some());
     // The Format text panel shows the paragraph's look; making it bold applies at once.
     h.get_by_label("FORMAT TEXT");
-    h.get_by_label("B").click();
+    h.get_by_label("Bold").click();
     h.run_steps(4);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
@@ -2874,6 +2874,62 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.text_blocks(0)[0].base_font, "Helvetica-Bold");
     assert!(s.views[0].line_editor.as_ref().is_some_and(|e| e.extras.underline));
+}
+
+/// Horizontal scale and Character spacing take any value in their ranges, not only the listed
+/// ones: values between the listed ones and beyond them, typed in Format text, reach the saved
+/// file as the engine writes them.
+#[test]
+fn the_format_panel_takes_any_scale_and_character_spacing() {
+    let mut h = harness(1, |_| {});
+    let id = h.state().views[0].id;
+    let width = |h: &Harness<'static, PdfCraftApp>, view: usize| {
+        let s = h.state();
+        let r = s.session.get(s.views[view].id).unwrap().text_blocks(0)[0].rect;
+        r[2] - r[0]
+    };
+    let plain = width(&h, 0);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some());
+    // Typed the way a person does: click the field, type, Enter.
+    let type_in = |h: &mut Harness<'static, PdfCraftApp>, label: &str, value: &str| {
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.event(egui::Event::Text(value.into()));
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(4);
+    };
+    let extras = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].line_editor.as_ref().map(|e| (e.extras.scale, e.extras.char_spacing));
+    // Between the listed values (50…200 %, −1…5 pt) and beyond them, within what was always allowed.
+    type_in(&mut h, "Horizontal scale", "80");
+    assert_eq!(extras(&h), Some((80.0, 0.0)));
+    type_in(&mut h, "Horizontal scale", "250");
+    assert_eq!(extras(&h), Some((250.0, 0.0)));
+    type_in(&mut h, "Character spacing", "0.25");
+    assert_eq!(extras(&h), Some((250.0, 0.25)));
+    type_in(&mut h, "Character spacing", "-2");
+    assert_eq!(extras(&h), Some((250.0, -2.0)));
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit text"));
+    // Saved and reopened, the paragraph is as wide as the engine draws it with those values.
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    h.state_mut().open_bytes("reference.pdf", None, fixture(1)).expect("opens");
+    let style = pdfcraft_engine::BlockStyle { scale: Some(250.0), char_spacing: Some(-2.0), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::EditTextBlock { page: 0, block: 0, text: "Page 1".into(), style }));
+    h.state_mut().open_bytes("saved.pdf", None, bytes.as_ref().clone()).expect("the saved file opens");
+    h.run_steps(3);
+    let (reference, saved) = (width(&h, 1), width(&h, 2));
+    assert!(saved > plain * 1.5, "250 % widens it: {plain} → {saved}");
+    assert!((saved - reference).abs() < 0.5, "saved {saved}, the engine's own {reference}");
 }
 
 #[test]
@@ -2894,7 +2950,7 @@ fn selected_text_formatting_keeps_the_rest_of_the_paragraph_and_reopens() {
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
     h.run_steps(2);
     assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().selection, Some(5..6));
-    h.get_by_label("B").click();
+    h.get_by_label("Bold").click();
     h.run_steps(5);
     let id = h.state().views[0].id;
     let doc = h.state().session.get(id).unwrap();
