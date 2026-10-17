@@ -6262,6 +6262,91 @@ fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     pixels[at..at + 4].try_into().unwrap()
 }
 
+/// A 300 × 100 page: red in layer "Walls" (left), green in "Doors" (middle), blue in a second
+/// group also named "Walls" (right), and a black Square comment along the bottom.
+fn layered_pdf() -> Vec<u8> {
+    let content = b"/OC /W1 BDC 1 0 0 rg 10 30 80 60 re f EMC /OC /D BDC 0 1 0 rg 110 30 80 60 re f EMC /OC /W2 BDC 0 0 1 rg 210 30 80 60 re f EMC";
+    let ap = b"0 g 0 0 280 10 re f";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D << /Order [5 0 R 6 0 R 7 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Contents 4 0 R /Annots [8 0 R] /Resources << /Properties << /W1 5 0 R /D 6 0 R /W2 7 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+        b"<< /Type /OCG /Name (Walls) >>".to_vec(),
+        b"<< /Type /OCG /Name (Doors) >>".to_vec(),
+        b"<< /Type /OCG /Name (Walls) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Square /Rect [10 2 290 12] /C [0 0 0] /AP << /N 9 0 R >> >>".to_vec(),
+        [format!("<< /Type /XObject /Subtype /Form /BBox [0 0 280 10] /Length {} >>\nstream\n", ap.len()).as_bytes(), ap, b"\nendstream"].concat(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #2986: `layer_set` hides and shows layers in what `page_render` draws, by name (every group
+/// with that name) or by position; `comments_hide` now changes `page_render` too. Neither
+/// changes the file.
+#[test]
+fn layers_and_hidden_comments_change_what_page_render_draws() {
+    let dir = workdir("layer-set");
+    std::fs::write(dir.join("layers.pdf"), layered_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "layers.pdf" }))["doc"].as_u64().unwrap();
+    let at = |a: &mut Automation, x: u32, y: u32| {
+        let (w, _, px) = a.render_pixels(doc, 1, 1.0).unwrap();
+        let i = ((y * w + x) * 4) as usize;
+        [px.as_ref()[i], px.as_ref()[i + 1], px.as_ref()[i + 2]]
+    };
+    // Points (50, 40) red, (150, 40) green, (250, 40) blue, (150, 93) the comment; y down.
+    assert_eq!(
+        [at(&mut a, 50, 40), at(&mut a, 150, 40), at(&mut a, 250, 40), at(&mut a, 150, 93)],
+        [[255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 0, 0]]
+    );
+
+    let r = ok(&mut a, "layer_set", json!({ "doc": doc, "layer": "Walls", "visible": false }));
+    assert_eq!(
+        r["layers"],
+        json!([{ "name": "Walls", "visible": false }, { "name": "Doors", "visible": true }, { "name": "Walls", "visible": false }])
+    );
+    assert_eq!(
+        [at(&mut a, 50, 40), at(&mut a, 150, 40), at(&mut a, 250, 40)],
+        [[255, 255, 255], [0, 255, 0], [255, 255, 255]],
+        "both groups named Walls hide"
+    );
+
+    ok(&mut a, "layer_set", json!({ "doc": doc, "layer": 3, "visible": true }));
+    assert_eq!([at(&mut a, 50, 40), at(&mut a, 250, 40)], [[255, 255, 255], [0, 0, 255]], "position 3 is the second Walls only");
+
+    ok(&mut a, "comments_hide", json!({ "doc": doc }));
+    assert_eq!(at(&mut a, 150, 93), [255, 255, 255], "hidden comments are not drawn");
+    ok(&mut a, "comments_hide", json!({ "doc": doc, "hidden": false }));
+    assert_eq!(at(&mut a, 150, 93), [0, 0, 0]);
+
+    for (args, what) in [
+        (json!({ "doc": doc, "layer": "Roof", "visible": false }), "an unknown name"),
+        (json!({ "doc": doc, "layer": 0, "visible": false }), "position 0"),
+        (json!({ "doc": doc, "layer": 4, "visible": false }), "a position past the end"),
+        (json!({ "doc": doc, "layer": true, "visible": false }), "a layer that is neither"),
+        (json!({ "doc": doc, "layer": "Doors" }), "no visible"),
+    ] {
+        assert!(matches!(a.call("layer_set", &args), Err(ToolError::InvalidArgs(_))), "{what} must be refused");
+    }
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"][0]["dirty"], json!(false), "a view setting leaves the document clean: {list}");
+}
+
 /// The `view_reading_colors` tool changes what `page_render` draws — text and background remap,
 /// images never do — without touching the file, and its errors name what's wrong (#897).
 #[test]

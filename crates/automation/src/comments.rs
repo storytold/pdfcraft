@@ -589,7 +589,10 @@ impl Automation {
     pub(crate) fn comments_hide(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let hidden = a.opt_bool("hidden")?.unwrap_or(true);
-        self.session.set_hide_comments(id, hidden);
+        if self.session.set_hide_comments(id, hidden) {
+            // The cached renderer drew with the old setting; page_render must read it again.
+            self.renderers.remove(&id);
+        }
         Ok(json!({ "hidden": hidden }))
     }
 

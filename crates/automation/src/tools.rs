@@ -757,6 +757,11 @@ pub fn tools() -> Vec<ToolDef> {
             comment_ref(json!({ "locked": { "type": "boolean", "description": "Default true." } })),
             &["doc"],
         )),
+        t("layer_set", "Show or hide a layer", "Show or hide a layer (optional content group), as the Layers panel's eye icon does. layer is its name as doc_info lists it (every layer with that name) or its 1-based position in that list. A view setting: page_render draws with it, and the file doesn't change. Returns every layer with its visibility.")
+            .with(schema(
+                json!({ "doc": doc(), "layer": { "type": ["string", "integer"], "description": "A layer name, or a 1-based position in doc_info's layers." }, "visible": { "type": "boolean" } }),
+                &["doc", "layer", "visible"],
+            )),
         t("comments_hide", "Hide all comments", "Hide or show every comment on the page (fields and links still draw). A view setting: the file doesn't change.")
             .cmd("comment.hide_all")
             .with(schema(json!({ "doc": doc(), "hidden": { "type": "boolean", "description": "Default true." } }), &["doc"])),

@@ -1321,9 +1321,9 @@ tier = "P0"
 milestone = "M3"
 status = "shipped"
 commands = []
-tools = ["doc_info"]
-evidence = ["crates/render/src/raster.rs::layer_override_hides_content", "crates/engine/src/tests.rs::layer_choices_survive_edits"]
-notes = ""
+tools = ["doc_info", "layer_set"]
+evidence = ["crates/render/src/raster.rs::layer_override_hides_content", "crates/engine/src/tests.rs::layer_choices_survive_edits", "crates/automation/tests/automation.rs::layers_and_hidden_comments_change_what_page_render_draws"]
+notes = "layer_set shows or hides a layer by name (every group with that name, as CAD exporters repeat names) or by position, and page_render draws with the document's layer visibility. Still missing: Reset to initial visibility (view.layers-reset), layer properties, and /OC on annotations (#2176)."
 
 [[feature]]
 id = "view.layers-reset"

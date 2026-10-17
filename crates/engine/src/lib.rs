@@ -4760,6 +4760,12 @@ impl Session {
         Some(self.get(id)?.config.reading_colors)
     }
 
+    /// How the document's pages are drawn for viewing: its password and view settings (layer
+    /// visibility, hidden comments, reading colours). `None` when no such document is open.
+    pub fn render_config(&self, id: DocId) -> Option<RenderConfig> {
+        Some(self.get(id)?.config.clone())
+    }
+
     /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment
     /// with its number, author, type, date, text and replies, grouped by page.
     pub fn summarize_comments(&self, id: DocId, sort: SummarySort) -> Result<Arc<Vec<u8>>, EditError> {

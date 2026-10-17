@@ -21,6 +21,7 @@ mod content;
 mod conventions;
 pub mod file_access;
 mod forms;
+mod layers;
 mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -838,6 +839,7 @@ impl Automation {
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
+            "layer_set" => self.layer_set(&a)?,
             "view_reading_colors" => self.view_reading_colors(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
@@ -1791,11 +1793,11 @@ impl Automation {
 
     fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
-        let colors = self.session.reading_colors(id).unwrap_or_default();
-        let fresh = || {
-            let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), reading_colors: colors, ..Default::default() };
-            (doc.display.clone(), PageRenderer::new(doc.display.clone(), config))
-        };
+        // The document's own view settings: layer visibility, hidden comments, reading colours
+        // (tools that change one drop this cache so the next render reads it again).
+        let config =
+            self.session.render_config(id).unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
+        let fresh = || (doc.display.clone(), PageRenderer::new(doc.display.clone(), config.clone()));
         let entry = self.renderers.entry(id).or_insert_with(fresh);
         if !Arc::ptr_eq(&entry.0, &doc.display) {
             *entry = fresh();
