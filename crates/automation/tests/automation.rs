@@ -5211,6 +5211,38 @@ fn xfa_data_files_export_and_import_through_tools() {
 }
 
 #[test]
+fn xfa_rich_text_max_length_is_reported_and_enforced_through_tools() {
+    let dir = workdir("xfa-rich-limit");
+    let template = pdfcraft_xfa::fixtures::template_with_data(0, "<form><head><familyName>Old</familyName></head></form>")
+        .replace(r#"<text maxChars="30"/>"#, r#"<exData contentType="text/html" maxLength="5"/>"#)
+        .replace("<textEdit>", "<textEdit allowRichText=\"1\">");
+    std::fs::write(dir.join("rich.pdf"), pdfcraft_xfa::fixtures::shell(&template)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "rich.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let family = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "familyName").unwrap();
+    assert_eq!(family["max_length"], 5);
+
+    // The boundary counts Unicode characters, not UTF-8 bytes.
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "familyName": "éàöüñ" } }));
+    ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "before.xml", "what": "fields" }));
+    let before = std::fs::read(dir.join("before.xml")).unwrap();
+    assert!(std::str::from_utf8(&before).unwrap().contains("<familyName>éàöüñ</familyName>"));
+    let error = a.call("form_fill", &json!({ "doc": doc, "values": { "familyName": "éàöüñX" } })).unwrap_err();
+    assert!(error.to_string().contains("at most 5 characters"), "{error}");
+    ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "after.xml", "what": "fields" }));
+    assert_eq!(std::fs::read(dir.join("after.xml")).unwrap(), before, "refused edits leave the XFA data unchanged");
+
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    ok(&mut a, "doc_close", json!({ "doc": doc }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "out.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let family = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "familyName").unwrap();
+    assert_eq!(family["max_length"], 5);
+    assert_eq!(family["value"], "éàöüñ");
+}
+
+#[test]
 fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     let dir = workdir("xfa");
     std::fs::write(dir.join("xfa.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(2))).unwrap();

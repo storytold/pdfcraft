@@ -75,6 +75,32 @@ fn the_template_parses_with_fonts_captions_and_rich_text() {
 }
 
 #[test]
+fn rich_text_max_length_reaches_the_field_and_layout() {
+    for (attribute, expected) in [
+        (r#"maxLength="5250""#, Some(5250)),
+        (r#"maxLength=" 10500 ""#, Some(10500)),
+        (r#"maxLength="0""#, None),
+        (r#"maxLength="-1""#, None),
+        (r#"maxLength="invalid""#, None),
+        (r#"maxLength="999999999999999999999999999999999999""#, None),
+        ("", None),
+    ] {
+        let xml = template(0).replace(
+            r#"<text maxChars="30"/>"#,
+            &format!(r#"<exData contentType="text/html" {attribute}><body xmlns="http://www.w3.org/1999/xhtml"><p>Hello</p></body></exData>"#),
+        );
+        let (tpl, _) = parse(&xml).unwrap();
+        let Node::Subform(head) = &tpl.root.children[0] else { panic!() };
+        let Node::Field(field) = &head.children[2] else { panic!() };
+        assert_eq!(field.max_chars, expected, "{attribute}");
+        assert_eq!(field.value.plain().as_deref(), Some("Hello"));
+        let form = layout_xml(&xml).unwrap();
+        let field = form.pages.iter().flat_map(widgets).find(|w| w.name == "familyName").unwrap();
+        assert_eq!(field.max_chars, expected, "{attribute}");
+    }
+}
+
+#[test]
 fn the_xdp_template_wins_over_the_config_packets_template_element() {
     // The config packet has a <template> too; the real one is in the xfa-template namespace.
     let (tpl, _) = parse(&template(0)).unwrap();

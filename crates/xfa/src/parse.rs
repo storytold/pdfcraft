@@ -424,8 +424,14 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         Some(_) => Ui::Unknown,
     };
     let value_el = child(n, "value");
-    let max_chars =
-        value_el.and_then(|v| child(v, "text")).and_then(|t| t.attribute("maxChars")).and_then(|m| m.trim().parse::<usize>().ok()).filter(|m| *m > 0);
+    let max_chars = value_el
+        .and_then(|v| child(v, "text"))
+        .and_then(|t| t.attribute("maxChars"))
+        .and_then(|m| m.trim().parse::<usize>().ok())
+        // XFA 3.3, exData/maxLength: a character limit excluding markup; -1 is unlimited.
+        .or_else(|| value_el.and_then(|v| child(v, "exData")).and_then(|e| e.attribute("maxLength")).and_then(|m| m.trim().parse::<usize>().ok()))
+        // Preserve the existing zero/unbounded convention of generated form fields.
+        .filter(|m| *m > 0);
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
