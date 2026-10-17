@@ -1971,11 +1971,11 @@ title = "Line and paragraph spacing"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "partial"
+status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/editing.rs::the_format_panel_restyles_the_paragraph_being_edited"]
-notes = "line spacing (1, 1.15, 1.5, 2 × size or any multiple); space between paragraphs is not adjustable yet"
+evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/edit/src/tests.rs::paragraph_breaks_get_their_own_spacing", "crates/ui-egui/tests/editing.rs::the_format_panel_has_a_paragraph_spacing_field"]
+notes = "line spacing (1, 1.15, 1.5, 2 × size or any multiple); space between paragraphs: a line break in the edited text starts a paragraph, set apart by the Paragraph spacing value (points; half the size unless set), each paragraph wrapped and justified on its own, a kept row shifted by the spacing added above it; the panel's Paragraph spacing field, text_edit's paragraph_spacing. Still missing against Acrobat: space before and after as separate values."
 
 [[feature]]
 id = "edit.char-spacing-scale"

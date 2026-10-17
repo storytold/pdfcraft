@@ -172,13 +172,16 @@ pub struct LineEditor {
 pub struct Extras {
     pub underline: bool,
     pub line_spacing: f64,
+    /// Space between paragraphs in points (a line break in the box starts one); 0 = the
+    /// default, half the size.
+    pub paragraph_spacing: f64,
     pub char_spacing: f64,
     pub scale: f64,
 }
 
 impl Default for Extras {
     fn default() -> Self {
-        Extras { underline: false, line_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
+        Extras { underline: false, line_spacing: 0.0, paragraph_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
     }
 }
 
@@ -197,6 +200,12 @@ pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
                 ui.selectable_value(&mut e.line_spacing, v, label(v));
             }
         });
+    });
+    ui.horizontal(|ui| {
+        let l = ui.label(tl!("Paragraph spacing"));
+        ui.add(egui::DragValue::new(&mut e.paragraph_spacing).range(0.0..=72.0).speed(0.5).suffix(" pt"))
+            .labelled_by(l.id)
+            .on_hover_text(tl!("Between paragraphs: press Enter in the box to start one"));
     });
     ui.horizontal(|ui| {
         let l = ui.label(tl!("Character spacing"));
@@ -236,6 +245,7 @@ impl LineEditor {
             underline: (self.extras.underline != self.extras0.underline).then_some(self.extras.underline),
             line_spacing: (self.extras.line_spacing != self.extras0.line_spacing && self.extras.line_spacing > 0.0)
                 .then_some(self.extras.line_spacing),
+            paragraph_spacing: (self.extras.paragraph_spacing != self.extras0.paragraph_spacing).then_some(self.extras.paragraph_spacing),
             char_spacing: (self.extras.char_spacing != self.extras0.char_spacing).then_some(self.extras.char_spacing),
             scale: (self.extras.scale != self.extras0.scale).then_some(self.extras.scale),
             ..Default::default()
