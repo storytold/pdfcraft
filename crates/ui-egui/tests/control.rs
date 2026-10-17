@@ -1243,19 +1243,13 @@ fn docking_pointer_group_float_close_restore_and_document_commands() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
     h.run_steps(4);
-    let from = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").rect().center();
-    let to = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools").rect().center();
-    h.event(egui::Event::PointerMoved(from));
-    h.run_steps(2);
-    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
-    h.run_steps(2);
-    for step in 1..=8 {
-        h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 8.0)));
-        h.run_steps(1);
-    }
-    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    // Tools docked alone has no tab strip (as Acrobat's tool pane), so it is grouped by command.
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Tools").is_none());
+    ok(&mut h, &c, "ui.dock", json!({"operation":"move", "panel":"inspector", "target":"tools", "zone":"center"}));
     h.run_steps(4);
     assert_eq!(h.state().docking.layout.location(&Panel::Inspector).unwrap().anchor, Some(Panel::Tools));
+    // Grouped, Tools has its tab again.
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools");
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").click_button(egui::PointerButton::Secondary);
     h.run_steps(3);
     h.get_by_label("Float panel").click();
