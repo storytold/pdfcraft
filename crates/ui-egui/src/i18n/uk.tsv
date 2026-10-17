@@ -2455,3 +2455,8 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Attach a file…	Прикріпити файл…
+	Delete attachment	Видалити вкладення
+	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне
+	Attach {name}	Прикріпити {name}
+	Delete attachment {key}	Видалити вкладення {key}

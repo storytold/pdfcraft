@@ -2657,3 +2657,84 @@ fn a_chain_of_objects_too_deep_to_copy_is_refused_and_leaves_the_destination_alo
         .join();
     assert!(run.is_ok(), "the copy must not overflow the stack");
 }
+
+/// What Edit ▸ Attach file added survives Combine files (upstream's writer), names
+/// with accents included, and the combined document takes more attachments and deletions.
+#[test]
+fn attachments_added_in_the_app_survive_combine_and_more_can_be_attached() {
+    let embedded = |doc: &Document, key: &str| -> (Vec<u8>, Option<String>) {
+        let names = doc.resolve(catalog(doc).get(b"Names").unwrap()).as_dict().cloned().unwrap();
+        let tree = doc.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+        let pairs = tree.get(b"Names").and_then(|n| n.as_array()).cloned().unwrap();
+        let at = pairs.chunks(2).position(|p| p[0].as_string().unwrap().to_text() == key).unwrap_or_else(|| panic!("no attachment {key}"));
+        let spec = doc.resolve(&pairs[at * 2 + 1]).as_dict().cloned().unwrap();
+        let desc = spec.get(b"Desc").and_then(Object::as_string).map(|s| s.to_text());
+        let ef = spec.get(b"EF").and_then(Object::as_dict).unwrap().get(b"F").cloned().unwrap();
+        let Object::Stream(stream) = doc.resolve(&ef).as_ref().clone() else { panic!("the embedded file is a stream") };
+        (stream.decoded().unwrap(), desc)
+    };
+    let mut a = Document::open(Arc::new(fixture())).unwrap();
+    add_attachment(&mut a, "invoice.csv", b"a,b", Some("March"), Some("text/csv"), None).unwrap();
+    add_attachment(&mut a, "año.txt", b"uno", None, None, None).unwrap();
+    let mut b = Document::open(Arc::new(fixture())).unwrap();
+    add_attachment(&mut b, "invoice.csv", b"x,y", None, None, None).unwrap();
+    add_attachment(&mut b, "año.txt", b"dos", None, None, None).unwrap();
+    let a = save_and_reopen(&a);
+    let b = save_and_reopen(&b);
+    let mut out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    // Both files' attachments, the second copies numbered as text (not bytes glued onto UTF-16).
+    assert_eq!(attachment_keys(&out), ["invoice.csv", "invoice.csv (2)", "año.txt", "año.txt (2)"]);
+    assert_eq!(embedded(&out, "invoice.csv"), (b"a,b".to_vec(), Some("March".into())));
+    assert_eq!(embedded(&out, "invoice.csv (2)"), (b"x,y".to_vec(), None));
+    assert_eq!(embedded(&out, "año.txt (2)").0, b"dos");
+    // The combined document goes on taking attachments, and losing them, like any other.
+    assert_eq!(add_attachment(&mut out, "invoice.csv", b"z", None, None, None).unwrap(), "invoice.csv (3)");
+    delete_attachment(&mut out, "invoice.csv (2)").unwrap();
+    let out = full_roundtrip(&out);
+    assert_eq!(attachment_keys(&out), ["invoice.csv", "invoice.csv (3)", "año.txt", "año.txt (2)"]);
+    assert_eq!(embedded(&out, "invoice.csv (3)").0, b"z");
+}
+
+#[test]
+fn attachments_are_added_listed_and_deleted() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    assert!(attachment_keys(&doc).is_empty());
+    // A path loses its folder; the key is the file name.
+    let key = add_attachment(&mut doc, "/Users/eva/Desktop/invoice.csv", b"a,b\n1,2\n", Some("March"), Some("text/csv"), Some("D:20261012120000Z"))
+        .unwrap();
+    assert_eq!(key, "invoice.csv");
+    // The same name again is kept apart.
+    assert_eq!(add_attachment(&mut doc, "invoice.csv", b"x", None, None, None).unwrap(), "invoice.csv (2)");
+    assert_eq!(add_attachment(&mut doc, "  ", b"x", None, None, None), Err(OrganizeError::Invalid("the attachment needs a file name".into())));
+    let doc = save_and_reopen(&doc);
+    assert_eq!(attachment_keys(&doc), ["invoice.csv", "invoice.csv (2)"]);
+    // What was written: a Filespec with the embedded stream, its size and type, and the description.
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let tree = doc.resolve(&names).as_dict().unwrap().get(b"EmbeddedFiles").cloned().unwrap();
+    let tree = doc.resolve(&tree);
+    let pairs = tree.as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let pairs = doc.resolve(&pairs).as_array().cloned().unwrap();
+    assert_eq!(pairs.len(), 4);
+    let spec = doc.resolve(&pairs[1]);
+    let spec = spec.as_dict().unwrap();
+    assert_eq!(spec.get(b"Type"), Some(&Object::name("Filespec")));
+    assert_eq!(spec.get(b"UF").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("invoice.csv"));
+    assert_eq!(spec.get(b"Desc").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("March"));
+    let ef = spec.get(b"EF").and_then(Object::as_dict).unwrap().get(b"F").cloned().unwrap();
+    let ef = doc.resolve(&ef);
+    let Object::Stream(stream) = ef.as_ref() else { panic!("the embedded file is a stream") };
+    assert_eq!(stream.dict.get(b"Subtype"), Some(&Object::Name(b"text/csv".to_vec())));
+    let params = stream.dict.get(b"Params").and_then(Object::as_dict).unwrap();
+    assert_eq!(params.get(b"Size"), Some(&Object::Int(8)));
+    assert_eq!(stream.decoded().unwrap(), b"a,b\n1,2\n");
+    // Deleting: the one named goes, the other stays; the last one takes the tree with it.
+    let mut doc = doc;
+    delete_attachment(&mut doc, "invoice.csv").unwrap();
+    assert_eq!(attachment_keys(&doc), ["invoice.csv (2)"]);
+    assert_eq!(delete_attachment(&mut doc, "invoice.csv"), Err(OrganizeError::Invalid("there is no attachment named invoice.csv".into())));
+    delete_attachment(&mut doc, "invoice.csv (2)").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert!(attachment_keys(&doc).is_empty());
+    assert!(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Names").is_none());
+}

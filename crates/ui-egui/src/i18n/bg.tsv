@@ -2396,3 +2396,8 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Attach a file…	Прикачване на файл…
+	Delete attachment	Изтриване на прикачения файл
+	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията
+	Attach {name}	Прикачване на {name}
+	Delete attachment {key}	Изтриване на прикачения файл {key}

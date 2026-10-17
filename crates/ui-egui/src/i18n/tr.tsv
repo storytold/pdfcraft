@@ -2429,3 +2429,8 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Attach a file…	Dosya ekle…
+	Delete attachment	Eki sil
+	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor
+	Attach {name}	{name} ekle
+	Delete attachment {key}	{key} ekini sil

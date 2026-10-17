@@ -147,7 +147,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Link", "link-2", "edit.link", Ready),
                     item("Bates numbering", "hash", "edit.bates", Ready),
                     menu_item("Background", "palette", &["edit.background", "edit.background.update", "edit.background.remove"]),
-                    item("Attach file", "paperclip", "edit.attach", Planned("M12")),
+                    item("Attach file", "paperclip", "edit.attach", Ready),
                 ],
             },
         ],

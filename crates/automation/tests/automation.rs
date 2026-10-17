@@ -6495,3 +6495,43 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn attaching_and_deleting_files_through_the_tools() {
+    let dir = workdir("attach");
+    std::fs::write(dir.join("notes.txt"), b"keep this with the PDF").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert!(ok(&mut a, "doc_info", json!({ "doc": doc }))["attachments"].as_array().unwrap().is_empty());
+    // A text file and a PDF, the PDF under a name of its own; the second notes.txt is kept apart.
+    let r = ok(&mut a, "attachment_add", json!({ "doc": doc, "path": "notes.txt", "description": "Meeting notes" }));
+    assert_eq!(r["name"], "notes.txt");
+    let r = ok(&mut a, "attachment_add", json!({ "doc": doc, "path": "b.pdf", "name": "annex.pdf" }));
+    assert_eq!(r["name"], "annex.pdf");
+    let r = ok(&mut a, "attachment_add", json!({ "doc": doc, "path": "notes.txt" }));
+    assert_eq!(r["name"], "notes.txt (2)");
+    let listed = ok(&mut a, "doc_info", json!({ "doc": doc }))["attachments"].clone();
+    let names: Vec<&str> = listed.as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["annex.pdf", "notes.txt", "notes.txt (2)"]);
+    assert_eq!(listed[1]["description"], "Meeting notes");
+    assert_eq!(listed[1]["size"], 22);
+    // Saved and reopened, the attachment is there with its bytes.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "with-notes.pdf" }));
+    let saved = std::fs::read(dir.join("with-notes.pdf")).unwrap();
+    let info = pdfcraft_render::inspect(std::sync::Arc::new(saved.clone()), None).unwrap();
+    let att = info.attachments.iter().find(|x| x.name == "notes.txt").expect("notes.txt is in the file");
+    assert_eq!(pdfcraft_render::attachment_data(&saved, None, att).unwrap(), b"keep this with the PDF");
+    // Deleting one leaves the others; a name that is not there is refused; undo brings it back.
+    ok(&mut a, "attachment_delete", json!({ "doc": doc, "name": "notes.txt" }));
+    let names: Vec<String> = ok(&mut a, "doc_info", json!({ "doc": doc }))["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["annex.pdf", "notes.txt (2)"]);
+    assert!(a.call("attachment_delete", &json!({ "doc": doc, "name": "notes.txt" })).is_err());
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["attachments"].as_array().unwrap().len(), 3);
+    assert!(a.call("attachment_add", &json!({ "doc": doc, "path": "missing.txt" })).is_err(), "a file that is not there is refused");
+}

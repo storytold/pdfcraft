@@ -3349,11 +3349,11 @@ title = "Add file attachments"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.attach"]
+tools = ["attachment_add"]
+evidence = ["crates/organize/src/tests.rs::attachments_are_added_listed_and_deleted", "crates/organize/src/tests.rs::attachments_added_in_the_app_survive_combine_and_more_can_be_attached", "crates/automation/tests/automation.rs::attaching_and_deleting_files_through_the_tools"]
+notes = "Edit ▸ Attach a file… (also the Attach a file… button in the Attachments panel and the Edit a PDF list): the file goes into /Names /EmbeddedFiles as a Filespec with a Flate-compressed EmbeddedFile stream (/Size, /ModDate, /Subtype from the extension); a name already taken gets \" (2)\"…; the panel opens on it. Undoable. Acrobat's Comment ▸ Attach File (a paper-clip comment on the page) is comment.attach-file-comment."
 
 [[feature]]
 id = "organize.attachments-delete"
@@ -3361,11 +3361,11 @@ title = "Delete attachments"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["attachment_delete"]
+evidence = ["crates/organize/src/tests.rs::attachments_are_added_listed_and_deleted", "crates/organize/src/tests.rs::attachments_added_in_the_app_survive_combine_and_more_can_be_attached", "crates/automation/tests/automation.rs::attaching_and_deleting_files_through_the_tools"]
+notes = "The trash button on a document-level row of the Attachments panel; the last one removed takes the /EmbeddedFiles tree with it. Undoable. A paper-clip comment is deleted as a comment."
 
 [[feature]]
 id = "organize.attachments-description"

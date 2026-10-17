@@ -1513,6 +1513,38 @@ impl PdfCraftApp {
     }
 
     /// Save an attachment to disk, or open a PDF attachment in a new tab.
+    /// Edit ▸ Attach a file…: choose a file, then attach it to the active document and show
+    /// the Attachments panel with it.
+    pub fn attach_file_dialog(&mut self) {
+        if self.active_ids().is_none() {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Attach a file").to_string());
+            self.ask_one(pickers::Ask::File(dialog), None, |app, path| app.attach_file(&path));
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.notify_tr("Attaching files is not available on the web yet");
+    }
+
+    /// Attach the file at `path` to the active document (document level: the Attachments
+    /// panel, not a paper-clip comment on a page).
+    pub fn attach_file(&mut self, path: &std::path::Path) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                return;
+            }
+        };
+        let mime = pdfcraft_engine::mime_for_name(&name).map(str::to_string);
+        if self.apply_edit(pdfcraft_engine::Edit::AddAttachment { name, bytes, description: None, mime }) {
+            self.choose_right_panel(Some(RightPanel::Attachments));
+        }
+    }
+
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };

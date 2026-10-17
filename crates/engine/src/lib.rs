@@ -44,7 +44,7 @@ pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use text_preview::TextEditPreview;
 
-pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, split_ranges};
+pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
 
 /// One file produced by a split: (1-based first page, last page, PDF bytes).
 pub use pdfcraft_organize::LabelStyle;
@@ -249,6 +249,8 @@ fn uses_scripts(edit: &Edit) -> bool {
 fn scope_of(edit: &Edit) -> Scope {
     match edit {
         Edit::SetInfo { .. } => Scope::Metadata,
+        // The Attachments list is read from the whole document.
+        Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
@@ -1481,6 +1483,18 @@ pub enum Edit {
     },
     /// Document Properties ▸ Initial View (and the language and binding).
     SetInitialView(Box<InitialView>),
+    /// Edit ▸ Attach a file: a document-level attachment (`/Names /EmbeddedFiles`) under
+    /// `name`, made unique; `mime` is the embedded file's `/Subtype` when known.
+    AddAttachment {
+        name: String,
+        bytes: Vec<u8>,
+        description: Option<String>,
+        mime: Option<String>,
+    },
+    /// Remove the document-level attachment whose name-tree key is `key`.
+    DeleteAttachment {
+        key: String,
+    },
     /// Build a tagged structure tree for an untagged, text-only document.
     AutoTagText,
     /// Add alternate text: set (or clear, with `None`) a figure's alternate text. `figure` is
@@ -1979,6 +1993,8 @@ impl Edit {
             Edit::DuplicateField { .. } => Label::of("Duplicate field"),
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetInitialView(_) => Label::of("Change initial view"),
+            Edit::AddAttachment { name, .. } => Label::with("Attach {name}", name.as_str()),
+            Edit::DeleteAttachment { key } => Label::with("Delete attachment {key}", key.as_str()),
             Edit::AutoTagText => Label::of("Automatically tag text"),
             Edit::SetAltText { .. } => Label::of("Set alternate text"),
             Edit::AutoTagFormFields => Label::of("Tag form fields"),
@@ -2175,6 +2191,8 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
         | Edit::SetInitialView(_)
+        | Edit::AddAttachment { .. }
+        | Edit::DeleteAttachment { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -2373,6 +2391,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
         }
+        Edit::AddAttachment { name, bytes, description, mime } => {
+            pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
+        }
+        Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
             pdfcraft_annot::add_text_replacement(doc, *page, quads, text, author, strike, caret, &cx.meta())?;
         }

@@ -2409,3 +2409,8 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Attach a file…	Dołącz plik…
+	Delete attachment	Usuń załącznik
+	Attaching files is not available on the web yet	Dołączanie plików nie jest jeszcze dostępne w wersji webowej
+	Attach {name}	Dołącz {name}
+	Delete attachment {key}	Usuń załącznik {key}

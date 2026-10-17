@@ -2507,3 +2507,8 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Attach a file…	Připojit soubor…
+	Delete attachment	Odstranit přílohu
+	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici
+	Attach {name}	Připojit {name}
+	Delete attachment {key}	Odstranit přílohu {key}

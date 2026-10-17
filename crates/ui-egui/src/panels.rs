@@ -712,6 +712,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
                     RightPanel::Attachments => {
+                        let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
+                        if attachable {
+                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
+                                    panel_command = Some("edit.attach");
+                                }
+                            });
+                        }
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
@@ -743,6 +751,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                             && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
                                         {
                                             attachment_action = Some((ai, true));
+                                        }
+                                        if let pdfcraft_render::AttachmentSource::Document { key } = &a.source
+                                            && attachable
+                                            && icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment")).clicked()
+                                        {
+                                            panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
                                         }
                                     });
                                 });

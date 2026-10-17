@@ -2433,3 +2433,8 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Attach a file…	ファイルを添付…
+	Delete attachment	添付ファイルを削除
+	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません
+	Attach {name}	{name} を添付
+	Delete attachment {key}	添付ファイル {key} を削除

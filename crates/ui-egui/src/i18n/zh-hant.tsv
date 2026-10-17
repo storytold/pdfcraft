@@ -2383,3 +2383,8 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Attach a file…	附加檔案…
+	Delete attachment	刪除附件
+	Attaching files is not available on the web yet	網頁版尚不支援附加檔案
+	Attach {name}	附加 {name}
+	Delete attachment {key}	刪除附件 {key}

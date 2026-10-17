@@ -556,7 +556,7 @@ fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8) -> Opt
 }
 
 /// All (key, value) pairs of a name tree, in order.
-fn name_tree_entries(src: &Document, node: &Object, depth: u8, out: &mut Vec<(Vec<u8>, Object)>) {
+pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, out: &mut Vec<(Vec<u8>, Object)>) {
     if depth > 32 {
         return;
     }
@@ -1146,17 +1146,23 @@ fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8
 }
 
 /// Write attachments as a flat, sorted `/EmbeddedFiles` name tree; duplicate names get " (2)"…
-fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
+pub(crate) fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
     if entries.is_empty() {
         return Ok(());
     }
+    // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
+    // or Chinese letters) must not get ASCII bytes appended to it.
     let mut seen = std::collections::HashSet::new();
     for (k, _) in entries.iter_mut() {
-        let base = k.clone();
+        let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
+        let mut text = base.clone();
         let mut n = 2;
-        while !seen.insert(k.clone()) {
-            *k = [base.as_slice(), format!(" ({n})").as_bytes()].concat();
+        while !seen.insert(text.clone()) {
+            text = format!("{base} ({n})");
             n += 1;
+        }
+        if text != base {
+            *k = pdfcraft_cos::PdfString::text(&text).bytes;
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1169,6 +1175,14 @@ fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> R
     tree.set(b"Names".to_vec(), Object::Array(names));
     let tree = dst.add(tree);
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
+    // `/Names` may be an indirect dictionary (Acrobat writes it so): update it where it is, so
+    // its other trees (/Dests, /JavaScript…) stay.
+    if let Some(Object::Ref(names)) = dst.get(root).as_dict().and_then(|c| c.get(b"Names").cloned())
+        && dst.get(names).as_dict().is_some()
+    {
+        dst.update_dict(names, |n| n.set(b"EmbeddedFiles".to_vec(), Object::Ref(tree)))?;
+        return Ok(());
+    }
     dst.update_dict(root, |c| {
         let mut n = match c.get(b"Names") {
             Some(Object::Dict(d)) => d.clone(),

@@ -2434,3 +2434,8 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Attach a file…	Datei anhängen…
+	Delete attachment	Anhang löschen
+	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar
+	Attach {name}	{name} anhängen
+	Delete attachment {key}	Anhang {key} löschen

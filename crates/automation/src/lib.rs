@@ -744,6 +744,24 @@ impl Automation {
             "content_update" => self.content_update(&a)?,
             "content_delete" => self.content_delete(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "attachment_add" => {
+                let path = self.resolve(a.str("path")?, false)?;
+                let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                let name = match a.opt_str("name")? {
+                    Some(n) => n.to_string(),
+                    None => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                };
+                let mime = pdfcraft_engine::mime_for_name(&name).map(str::to_string);
+                let description = a.opt_str("description")?.map(str::to_string);
+                let before: Vec<String> = self.doc(&a)?.info.attachments.iter().map(|x| x.name.clone()).collect();
+                let out = self.apply(&a, Edit::AddAttachment { name, bytes, description, mime })?;
+                let key = self.doc(&a)?.info.attachments.iter().map(|x| x.name.clone()).find(|n| !before.contains(n)).unwrap_or_default();
+                json!({ "name": key, "document": out })
+            }
+            "attachment_delete" => {
+                let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
+                self.apply(&a, edit)?
+            }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
