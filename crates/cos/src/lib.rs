@@ -52,4 +52,6 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
+    #[error("cannot save a non-finite PDF number without changing its value; correct the overflowing or invalid number before saving")]
+    NonFiniteNumber,
 }

@@ -36,6 +36,12 @@ let bytes = write_full(&doc, &SaveOptions::default())?;         // garbage-colle
 Both writers **return the bytes**; the caller decides where they go, which is what lets the engine
 produce a working file in memory after every edit and keep saving atomic.
 
+Writers return `CosError::NonFiniteNumber` if an object they must serialize contains an infinite
+or NaN real. Numeric overflow remains non-finite on read so safety checks can detect it; saving
+must not silently replace it with zero or invent a finite value. Incremental saves can preserve
+unmodified objects in the original bytes, but rewriting an affected object requires correcting
+its invalid number first. A failed save leaves the source and unsaved edits intact.
+
 Useful alongside: `doc.repair_log()` (what was reconstructed), `doc.revisions()` and
 `doc.revision_ends()` (the incremental history), `doc.is_edited(num)` and `doc.modified_objects()`,
 `doc.permissions()` and `doc.security()`, `doc.set_encryption()` / `doc.remove_encryption()`, and
@@ -78,7 +84,7 @@ recognisable in a diff and byte-stable when re-serialized.
 ## Errors
 
 `CosError`: `NotPdf`, `Syntax { offset, detail }`, `MissingObject`, `NotADictionary`, `Filter`,
-`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`.
+`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`, `ReadOnlyLimit`, `NonFiniteNumber`.
 
 ## Not done here
 

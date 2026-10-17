@@ -96,18 +96,42 @@ fn integer(input: ParserInput) -> NomResult<i64> {
     convert_result(i64::from_str(str::from_utf8(int_input).unwrap()), i, ErrorKind::Digit)
 }
 
+fn integer_or_overflow_real(input: ParserInput) -> NomResult<Object> {
+    let (i, _) = pair(opt(one_of("+-")), digit1).parse(input)?;
+
+    let int_input = str::from_utf8(&input[..input.len() - i.len()]).unwrap();
+    match i64::from_str(int_input) {
+        Ok(value) => Ok((i, Object::Integer(value))),
+        // PdfCraft patch: integers past i64::MAX/MIN (such as 31-digit MediaBox coordinates)
+        // fall back to a clamped real, matching hayro-syntax and pdfcraft-cos.
+        Err(_) => convert_result(
+            f32::from_str(int_input).map(|v| Object::Real(v.clamp(f32::MIN, f32::MAX))),
+            i,
+            ErrorKind::Digit,
+        ),
+    }
+}
+
 fn real(input: ParserInput) -> NomResult<f32> {
+    // PdfCraft patch: accept scientific-notation exponents (`1e30`, `1E-5`) and clamp
+    // overflowed reals to finite f32 bounds.
+    let exponent = || (one_of("eE"), opt(one_of("+-")), digit1);
     let (i, _) = pair(
         opt(one_of("+-")),
         alt((
-            map((digit1, tag(&b"."[..]), digit0), |_| ()),
-            map(pair(tag(&b"."[..]), digit1), |_| ()),
+            map((digit1, tag(&b"."[..]), digit0, opt(exponent())), |_| ()),
+            map((tag(&b"."[..]), digit1, opt(exponent())), |_| ()),
+            map((digit1, exponent()), |_| ()),
         )),
     )
     .parse(input)?;
 
     let float_input = &input[..input.len() - i.len()];
-    convert_result(f32::from_str(str::from_utf8(float_input).unwrap()), i, ErrorKind::Digit)
+    convert_result(
+        f32::from_str(str::from_utf8(float_input).unwrap()).map(|v| v.clamp(f32::MIN, f32::MAX)),
+        i,
+        ErrorKind::Digit,
+    )
 }
 
 pub(crate) fn hex_char(input: ParserInput) -> NomResult<u8> {
@@ -441,7 +465,7 @@ fn _direct_objects(depth: usize) -> impl Fn(ParserInput) -> NomResult<Object> {
             boolean,
             reference,
             map(real, Object::Real),
-            map(integer, Object::Integer),
+            integer_or_overflow_real,
             map(name, Object::Name),
             map(literal_string, Object::string_literal),
             hexadecimal_string,
@@ -695,7 +719,7 @@ fn operand(input: ParserInput) -> NomResult<Object> {
             null,
             boolean,
             map(real, Object::Real),
-            map(integer, Object::Integer),
+            integer_or_overflow_real,
             map(name, Object::Name),
             map(literal_string, Object::string_literal),
             hexadecimal_string,

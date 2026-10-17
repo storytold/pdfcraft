@@ -52,3 +52,5 @@ black-point normalization is unchanged. `lab_bradford_tests` checks independent
 D50/equal-energy neutral and chromatic oracles, D65 identity, and direct/Indexed
 consistency (including an asymmetric chromatic Range), and zero/overflowing
 cone-response fallback.
+
+Scientific-notation numbers and huge page boxes (#2670): `hayro-syntax` (`object::number::Number` and `page::Page`) and `lopdf` (`parser::real` / `integer_or_overflow_real`) accept scientific-notation exponents (`1e30`, `1e20`) and clamp overflowed `f32` reals and page dimensions to `f32::MIN..=f32::MAX`. Covered by `object::number::tests::scientific_notation_and_extreme_exponents` (`hayro-syntax`) and `inspect::tests::huge_mediabox_and_user_unit_open_with_one_page` (`pdfcraft-render`).

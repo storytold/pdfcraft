@@ -35,7 +35,7 @@ impl Number {
     /// Returns the number as a f32.
     pub fn as_f32(&self) -> f32 {
         match self.0 {
-            InternalNumber::Real(r) => r as f32,
+            InternalNumber::Real(r) => r.clamp(f32::MIN as f64, f32::MAX as f64) as f32,
             InternalNumber::Integer(i) => i as f32,
         }
     }
@@ -70,18 +70,50 @@ impl Number {
 impl Skippable for Number {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
         let has_sign = r.forward_if(|b| b == b'+' || b == b'-').is_some();
+        let mut has_digits = false;
+        let mut had_trailing_minus = false;
 
         // Some PDFs have weird trailing minuses, so try to accept those as well.
         match r.peek_byte()? {
             b'.' => {
                 r.read_byte()?;
                 // See PDFJS-9252 - treat a single . as 0.
-                r.forward_while(is_digit_or_minus);
+                while let Some(b) = r.peek_byte() {
+                    if is_digit(b) {
+                        has_digits = true;
+                        r.forward();
+                    } else if b == b'-' {
+                        had_trailing_minus = true;
+                        r.forward();
+                    } else {
+                        break;
+                    }
+                }
             }
             b'0'..=b'9' | b'-' => {
-                r.forward_while_1(is_digit_or_minus)?;
-                if let Some(()) = r.forward_tag(b".") {
-                    r.forward_while(is_digit_or_minus);
+                while let Some(b) = r.peek_byte() {
+                    if is_digit(b) {
+                        has_digits = true;
+                        r.forward();
+                    } else if b == b'-' {
+                        had_trailing_minus = true;
+                        r.forward();
+                    } else {
+                        break;
+                    }
+                }
+                if !had_trailing_minus && let Some(()) = r.forward_tag(b".") {
+                    while let Some(b) = r.peek_byte() {
+                        if is_digit(b) {
+                            has_digits = true;
+                            r.forward();
+                        } else if b == b'-' {
+                            had_trailing_minus = true;
+                            r.forward();
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
             // See PDFJS-bug1753983 - accept just + or - as a zero.
@@ -91,12 +123,28 @@ impl Skippable for Number {
             _ => return None,
         }
 
+        // PdfCraft patch: accept scientific-notation exponents (`1e30`, `1E-5`) when preceded
+        // by at least one digit and followed by at least one exponent digit.
+        if has_digits && !had_trailing_minus {
+            skip_exponent(r);
+        }
+
         // See issue 994. Don't accept numbers that are followed by a regular character.
         if r.peek_byte().is_some_and(is_regular_character) {
             return None;
         }
 
         Some(())
+    }
+}
+
+fn skip_exponent(r: &mut Reader<'_>) {
+    let mark = r.offset();
+    if r.forward_if(|b| b == b'e' || b == b'E').is_some() {
+        r.forward_if(|b| b == b'+' || b == b'-');
+        if r.forward_while_1(is_digit).is_none() {
+            r.jump(mark);
+        }
     }
 }
 
@@ -125,7 +173,8 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
         _ => false,
     };
 
-    // PdfCraft patch: high-precision float mantissa overflow (jsPDF double-precision coordinates).
+    // PdfCraft patch: high-precision float mantissa overflow (jsPDF double-precision coordinates)
+    // and scientific-notation exponents (`/MediaBox [0 0 1e30 1e30]`, `/UserUnit 1e20`).
     // Digits that don't fit in `mantissa` are dropped: past the dot they are only precision;
     // before it, each one scales the value by ten (`extra_int_digits`).
     let mut mantissa: u64 = 0;
@@ -133,6 +182,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     let mut decimal_shift: u32 = 0;
     let mut has_digits = false;
     let mut extra_int_digits: u32 = 0;
+    let mut had_trailing_minus = false;
 
     loop {
         match r.peek_byte() {
@@ -142,7 +192,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
                 if let Some(next) = mantissa.checked_mul(10).and_then(|m| m.checked_add(d)) {
                     mantissa = next;
                     if has_dot {
-                        decimal_shift += 1;
+                        decimal_shift = decimal_shift.saturating_add(1);
                     }
                 } else if !has_dot {
                     extra_int_digits = extra_int_digits.saturating_add(1);
@@ -158,6 +208,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
             Some(b'-') if has_digits => {
                 r.forward();
                 r.forward_while(is_digit_or_minus);
+                had_trailing_minus = true;
                 break;
             }
             _ => break,
@@ -165,11 +216,43 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
     }
 
     if !has_digits {
-        if negative || has_dot {
+        if (negative || has_dot) && !r.peek_byte().is_some_and(is_regular_character) {
             // Treat numbers like just `-`, `+` or `-.` as zero.
             return Some(Number(InternalNumber::Integer(0)));
         }
         return None;
+    }
+
+    let mut exponent: i32 = 0;
+    let mut has_exponent = false;
+    if !had_trailing_minus && matches!(r.peek_byte(), Some(b'e' | b'E')) {
+        let exp_mark = r.offset();
+        r.forward();
+        let exp_negative = match r.peek_byte() {
+            Some(b'-') => {
+                r.forward();
+                true
+            }
+            Some(b'+') => {
+                r.forward();
+                false
+            }
+            _ => false,
+        };
+        let mut exp_val: i32 = 0;
+        let mut exp_digits = false;
+        while let Some(b'0'..=b'9') = r.peek_byte() {
+            let Some(byte) = r.read_byte() else { break };
+            let d = (byte - b'0') as i32;
+            exp_digits = true;
+            exp_val = exp_val.saturating_mul(10).saturating_add(d);
+        }
+        if exp_digits {
+            has_exponent = true;
+            exponent = if exp_negative { -exp_val } else { exp_val };
+        } else {
+            r.jump(exp_mark);
+        }
     }
 
     // See issue 994. Don't accept numbers that are followed by a regular character
@@ -178,19 +261,7 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
         return None;
     }
 
-    // A value whose integer part overflowed `u64` is a real, scaled by the digits dropped and
-    // kept finite.
-    let scaled = |value: f64| -> f64 {
-        let value = if extra_int_digits > 0 { value * powi_f64(10.0, extra_int_digits) } else { value };
-        if value.is_finite() { value } else { f64::MAX }
-    };
-
-    if !has_dot && extra_int_digits > 0 {
-        let value = scaled(mantissa as f64);
-        return Some(Number(InternalNumber::Real(if negative { -value } else { value })));
-    }
-
-    if !has_dot {
+    if !has_dot && !has_exponent && extra_int_digits == 0 {
         let value = if mantissa <= i64::MAX as u64 {
             let i = mantissa as i64;
             if negative { -i } else { i }
@@ -203,24 +274,46 @@ fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
             }
             return Some(Number(InternalNumber::Real(val)));
         };
-        Some(Number(InternalNumber::Integer(value)))
-    } else {
-        let mut value = scaled(mantissa as f64);
-
-        if decimal_shift > 0 {
-            if decimal_shift < POWERS_OF_10.len() as u32 {
-                value /= POWERS_OF_10[decimal_shift as usize];
-            } else {
-                value /= powi_f64(10.0, decimal_shift);
-            }
-        }
-
-        if negative {
-            value = -value;
-        }
-
-        Some(Number(InternalNumber::Real(value)))
+        return Some(Number(InternalNumber::Integer(value)));
     }
+
+    if mantissa == 0 {
+        return Some(Number(InternalNumber::Real(if negative { -0.0 } else { 0.0 })));
+    }
+
+    // Scale by the combined power of ten and keep overflowed reals finite.
+    let net_exp = i64::from(extra_int_digits) - i64::from(decimal_shift) + i64::from(exponent);
+    let mut value = mantissa as f64;
+    if net_exp > 0 {
+        let shift = net_exp as u64;
+        if shift < POWERS_OF_10.len() as u64 {
+            value *= POWERS_OF_10[shift as usize];
+        } else if shift <= 308 {
+            value *= powi_f64(10.0, shift as u32);
+        } else {
+            value = f64::MAX;
+        }
+        if !value.is_finite() {
+            value = f64::MAX;
+        }
+    } else if net_exp < 0 {
+        let shift = (-net_exp) as u64;
+        if shift < POWERS_OF_10.len() as u64 {
+            value /= POWERS_OF_10[shift as usize];
+        } else if shift <= 308 {
+            value /= powi_f64(10.0, shift as u32);
+        } else if shift <= 350 {
+            value = (value / powi_f64(10.0, 300)) / powi_f64(10.0, (shift - 300) as u32);
+        } else {
+            value = 0.0;
+        }
+    }
+
+    if negative {
+        value = -value;
+    }
+
+    Some(Number(InternalNumber::Real(value)))
 }
 
 object!(Number, Number);
@@ -291,8 +384,7 @@ impl Skippable for f32 {
 
 impl Readable<'_> for f32 {
     fn read(r: &mut Reader<'_>, _: &ReaderContext<'_>) -> Option<Self> {
-        r.read_without_context::<Number>()
-            .map(|n| n.as_f64() as Self)
+        r.read_without_context::<Number>().map(|n| n.as_f32())
     }
 }
 
@@ -301,7 +393,7 @@ impl TryFrom<Object<'_>> for f32 {
 
     fn try_from(value: Object<'_>) -> Result<Self, Self::Error> {
         match value {
-            Object::Number(n) => Ok(n.as_f64() as Self),
+            Object::Number(n) => Ok(n.as_f32()),
             _ => Err(()),
         }
     }
@@ -592,5 +684,59 @@ mod tests {
         let huge = "9".repeat(400);
         let num6 = Reader::new(huge.as_bytes()).read_without_context::<f64>().unwrap();
         assert!(num6.is_finite() && num6 > 1e300, "got {num6}");
+        let num6_f32 = Reader::new(huge.as_bytes()).read_without_context::<f32>().unwrap();
+        assert_eq!(num6_f32, f32::MAX);
+    }
+
+    #[test]
+    fn scientific_notation_and_extreme_exponents() {
+        for (input, expected) in [
+            ("1e30", 1e30_f64),
+            ("1e20", 1e20),
+            ("1E+5", 1e5),
+            ("1.5e-3", 1.5e-3),
+            ("-.25e2", -25.0),
+            ("+2.e3", 2000.0),
+            ("0e300", 0.0),
+            ("-0.0e400", -0.0),
+            ("0e-400", 0.0),
+            ("1e-320", 1e-320),
+            ("1e-400", 0.0),
+            ("1234567890123456789012345e-5", 1.2345678901234568e19),
+            ("0.0000000000000000000000001e25", 1.0),
+        ] {
+            let mut r = Reader::new(input.as_bytes());
+            assert!(r.skip::<Number>(false).is_some(), "skip {input}");
+            assert!(r.at_end(), "skip {input} consumed all bytes");
+            let val = Reader::new(input.as_bytes()).read_without_context::<f64>().unwrap_or_else(|| panic!("read {input}"));
+            assert!(val.is_finite(), "{input}: {val}");
+            if expected == 0.0 {
+                assert_eq!(val, 0.0, "{input}");
+            } else {
+                assert!(((val - expected) / expected).abs() < 1e-12, "{input}: got {val}, expected {expected}");
+            }
+        }
+
+        for (input, expected_f64, expected_f32) in [
+            ("1e40", 1e40, f32::MAX),
+            ("-1e40", -1e40, f32::MIN),
+            ("1e400", f64::MAX, f32::MAX),
+            ("-1e400", -f64::MAX, f32::MIN),
+            ("1e99999999999999999999", f64::MAX, f32::MAX),
+        ] {
+            let mut r = Reader::new(input.as_bytes());
+            assert!(r.skip::<Number>(false).is_some(), "skip {input}");
+            let v64 = Reader::new(input.as_bytes()).read_without_context::<f64>().unwrap();
+            let v32 = Reader::new(input.as_bytes()).read_without_context::<f32>().unwrap();
+            let obj32 = f32::try_from(Reader::new(input.as_bytes()).read_without_context::<crate::object::Object<'_>>().unwrap()).unwrap();
+            assert_eq!(v64, expected_f64, "{input} f64");
+            assert_eq!(v32, expected_f32, "{input} f32");
+            assert_eq!(obj32, expected_f32, "{input} Object->f32");
+        }
+
+        for invalid in ["123endobj", "1e", "1E", "1e+", "1e-", "1e+abc", ".e5", "-.e5", "+e5", "-e5", "--e5", "1e30abc", "1e3.5", "12-3e4"] {
+            assert!(Reader::new(invalid.as_bytes()).skip::<Number>(false).is_none(), "skip must reject {invalid}");
+            assert!(Reader::new(invalid.as_bytes()).read_without_context::<Number>().is_none(), "read must reject {invalid}");
+        }
     }
 }

@@ -16,6 +16,9 @@ use crate::document::{Document, ObjectReader};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
+///
+/// Non-finite reals are replaced with zero by this low-level, infallible formatter.
+/// Document saves validate numbers first and refuse this lossy conversion.
 pub fn serialize(o: &Object, out: &mut Vec<u8>) {
     match o {
         Object::Null => out.extend_from_slice(b"null"),
@@ -58,6 +61,40 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
     // round-trip exactly (rounding to a fixed number of places visibly shifted shading colours).
     let s = format!("{r}");
     out.extend_from_slice(if s == "-0" { b"0" } else { s.as_bytes() });
+}
+
+/// Parsing overflow must stay non-finite for consumers such as printcheck. PDF cannot
+/// represent infinity or NaN, and clamping here would invent a value. Refuse a rewrite
+/// instead of silently losing data. References are checked by the save traversal; stream
+/// bodies are copied verbatim, so only their dictionaries need validation here.
+fn validate_numbers(o: &Object) -> Result<(), CosError> {
+    // Match the lexer's nesting limit without allocating a second copy of a wide array.
+    fn visit(o: &Object, depth: usize) -> Result<(), CosError> {
+        if depth > 128 {
+            return Err(CosError::Syntax { offset: 0, detail: "object nesting exceeds the save limit".into() });
+        }
+        match o {
+            Object::Real(r) if !r.is_finite() => return Err(CosError::NonFiniteNumber),
+            Object::Array(a) => {
+                for value in a {
+                    visit(value, depth + 1)?;
+                }
+            }
+            Object::Dict(d) => {
+                for (_, value) in d.iter() {
+                    visit(value, depth + 1)?;
+                }
+            }
+            Object::Stream(s) => {
+                for (_, value) in s.dict.iter() {
+                    visit(value, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    visit(o, 0)
 }
 
 fn write_name(n: &[u8], out: &mut Vec<u8>) {
@@ -199,6 +236,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     for (num, generation, obj) in doc.overlay_entries() {
         match obj {
             Some(o) => {
+                validate_numbers(&o)?;
                 offsets.insert(num, (base + out.len() as u64, generation, true));
                 write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
             }
@@ -217,6 +255,9 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
         trailer.set(b"Prev".to_vec(), Object::Int(p as i64));
     }
     let size = doc.next_num().max(trailer.int(b"Size").unwrap_or(0) as u32);
+    for (_, value) in trailer.iter() {
+        validate_numbers(value)?;
+    }
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, base, &mut trailer, rows, size);
@@ -270,6 +311,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             continue;
         }
         let o = reader.get(r);
+        validate_numbers(&o)?;
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
@@ -352,6 +394,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     }
     if reader.document.output_security().0.is_none() {
         ensure_id(&mut trailer, opts, reader.document.bytes());
+    }
+    for (_, value) in trailer.iter() {
+        validate_numbers(value)?;
     }
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
@@ -601,6 +646,50 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
+    }
+
+    #[test]
+    fn save_number_validation_bounds_nesting() {
+        let mut o = Object::Int(1);
+        for _ in 0..128 {
+            o = Object::Array(vec![o]);
+        }
+        assert!(validate_numbers(&o).is_ok());
+        assert!(validate_numbers(&Object::Array(vec![o])).is_err());
+    }
+
+    #[test]
+    fn saves_reject_nonfinite_numbers_in_objects_and_trailers() {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            for object_streams in [false, true] {
+                let opts = SaveOptions { object_streams, ..Default::default() };
+                let empty = write_full(&Document::new_empty(), &opts).unwrap();
+                for location in ["array", "stream", "trailer", "indirect"] {
+                    let mut doc = Document::open(std::sync::Arc::new(empty.clone())).unwrap();
+                    let nested = Object::Array(vec![Object::Dict([(b"Value".to_vec(), Object::Real(value))].into_iter().collect())]);
+                    match location {
+                        "array" => {
+                            let r = doc.add(nested);
+                            doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(r));
+                        }
+                        "stream" => {
+                            let dict = [(b"Custom".to_vec(), nested)].into_iter().collect();
+                            let r = doc.add(Object::Stream(Stream { dict, raw: Vec::new().into() }));
+                            doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(r));
+                        }
+                        "indirect" => {
+                            let r = doc.add(Object::Real(value));
+                            doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(r));
+                        }
+                        _ => doc.trailer_mut().set(b"Custom".to_vec(), nested),
+                    }
+                    for result in [write_full(&doc, &opts), write_incremental(&doc, &opts)] {
+                        assert!(matches!(result, Err(CosError::NonFiniteNumber)), "{location}, {value}, object_streams={object_streams}");
+                    }
+                    assert_eq!(doc.bytes().as_slice(), empty);
+                }
+            }
+        }
     }
 
     #[test]

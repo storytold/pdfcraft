@@ -193,7 +193,7 @@ fn convert(object: &CosObject, depth: usize) -> Result<Object> {
         CosObject::Null => Object::Null,
         CosObject::Bool(value) => Object::Boolean(*value),
         CosObject::Int(value) => Object::Integer(*value),
-        CosObject::Real(value) => Object::Real(*value as f32),
+        CosObject::Real(value) => Object::Real(value.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32),
         CosObject::Name(value) => Object::Name(value.clone()),
         CosObject::String(value) => {
             Object::String(value.bytes.clone(), if value.hex { lopdf::StringFormat::Hexadecimal } else { lopdf::StringFormat::Literal })
