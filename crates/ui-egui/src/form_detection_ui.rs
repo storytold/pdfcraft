@@ -231,11 +231,9 @@ mod native {
                         )));
                     }
                     Progress::Detect(done, total) => {
-                        ui.label(crate::i18n::fmt(
-                            tl!("Finding fields… page {d} of {t}"),
-                            &[("d", &done.saturating_add(1).min(total).to_string()), ("t", &total.to_string())],
-                        ));
-                        ui.add(egui::ProgressBar::new(if total == 0 { 0.0 } else { done as f32 / total as f32 }));
+                        let page = done.saturating_add(1).min(total);
+                        ui.label(crate::i18n::fmt(tl!("Finding fields… page {d} of {t}"), &[("d", &page.to_string()), ("t", &total.to_string())]));
+                        ui.add(egui::ProgressBar::new(if total == 0 { 0.0 } else { page as f32 / total as f32 }));
                     }
                 }
                 ui.add_space(12.0);
@@ -267,6 +265,39 @@ mod native {
             app.start_form_detection(true);
         }
         true
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+
+        #[test]
+        fn detection_bar_tracks_the_displayed_page_through_the_last_page() {
+            let progress = Arc::new(Mutex::new(Progress::Detect(0, 10)));
+            let shown = progress.clone();
+            let (_sender, receiver) = mpsc::channel();
+            let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(move |_cc| {
+                let mut app = PdfCraftApp::new();
+                app.set_option("language", "en").unwrap();
+                let bytes = app.session.create_from_text("form", "Original form fixture").unwrap();
+                app.open_bytes("form.pdf", None, bytes.to_vec()).unwrap();
+                let doc = app.active_ids().unwrap().1;
+                let job = app.session.form_detection_job(doc, &[]).unwrap();
+                app.form_detection.request = Some(Request { doc, job: Arc::new(job), error: None });
+                app.form_detection.running = Some(Running { receiver, cancel: Arc::new(AtomicBool::new(false)), progress: shown });
+                app
+            });
+            for (done, percent) in [(0, 10.0), (9, 100.0), (10, 100.0)] {
+                *progress.lock().unwrap() = Progress::Detect(done, 10);
+                h.run_steps(2);
+                let bar = h.get_by_role(egui::accesskit::Role::ProgressIndicator);
+                assert_eq!(bar.accesskit_node().numeric_value(), Some(percent), "completed pages: {done}");
+                assert!(bar.rect().width() >= 439.0, "the bar spans the dialog content");
+            }
+        }
     }
 }
 
