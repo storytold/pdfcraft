@@ -50,6 +50,9 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     h.get_by_label_contains("is a time letter (H h M s t)");
     assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
     assert_eq!(h.state().date_format_draft.as_deref(), Some("dd/mm HH"));
+    retype(&mut h, "auto");
+    assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy", "an invalid pattern must not reset the preference");
+    assert_eq!(h.state().date_format_draft.as_deref(), Some("auto"));
     // Typed a key at a time, spaces stay where they are typed (the box isn't trimmed under the cursor).
     h.get_by_role_and_label(Role::TextInput, "Pattern").click();
     h.run_steps(1);
@@ -163,4 +166,66 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
     assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "nothing placed");
     let toast = s.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("can't be written into the PDF yet"), "{toast}");
+}
+
+#[test]
+fn locale_default_and_explicit_us_dates_survive_restart_and_language_changes() {
+    let text = |app: &PdfCraftApp| {
+        // The shell applies the saved language at the start of each frame.
+        pdfcraft_ui_egui::i18n::set_current(pdfcraft_ui_egui::i18n::Lang::from_pref(&app.language));
+        app.date_text(None).unwrap()
+    };
+    let mut app = PdfCraftApp::new();
+    app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+    app.set_option("language", "pt-br").unwrap();
+    assert_eq!(text(&app), "14/11/2023");
+    let saved = app.persist();
+    let mut restored = PdfCraftApp::new();
+    restored.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+    restored.restore(&saved);
+    assert_eq!(text(&restored), "14/11/2023");
+    restored.set_option("language", "en").unwrap();
+    assert_eq!(text(&restored), "11/14/2023");
+    restored.set_option("date-format", "m/d/yyyy").unwrap();
+    restored.set_option("language", "pt-br").unwrap();
+    assert_eq!(text(&restored), "11/14/2023");
+    app.restore(&restored.persist());
+    assert_eq!(text(&app), "11/14/2023");
+    // Old settings did not distinguish automatic from explicit US patterns. Preserve
+    // them conservatively rather than silently replacing a user's possible choice.
+    app.restore(r#"{"date_format":"m/d/yyyy","language":"pt-br"}"#);
+    assert_eq!(text(&app), "11/14/2023");
+    app.set_option("date-format", "auto").unwrap();
+    assert_eq!(text(&app), "14/11/2023");
+    // Restoring null also resets an already configured instance, including its
+    // date language override, so the default follows the restored interface.
+    restored.set_option("date-language", "en").unwrap();
+    restored.restore(&app.persist());
+    assert_eq!(text(&restored), "14/11/2023");
+    assert_eq!(restored.session.date_format_override(), None);
+    assert_eq!(restored.session.date_language(), None);
+}
+
+#[test]
+fn default_picker_clears_an_explicit_pattern_and_invalid_draft() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("date-language", "pt-br").unwrap();
+        app.set_option("date-format", "yyyy-mm-dd").unwrap();
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(4);
+    retype(&mut h, "HH:MM");
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v.contains("yyyy-mm-dd"))).scroll_to_me();
+    h.run_steps(4);
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v.contains("yyyy-mm-dd"))).click();
+    h.run_steps(2);
+    h.get_by_label_contains("Default (").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.date_format_override(), None);
+    assert_eq!(h.state().session.date_format(), "dd/mm/yyyy");
+    assert_eq!(h.state().date_format_draft, None);
+    assert!(shows(&h, "dd/mm/yyyy"));
 }

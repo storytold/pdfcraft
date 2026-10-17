@@ -9,8 +9,18 @@
 
 use crate::Session;
 
-/// The format until the user picks one (Acrobat's: US month/day/year).
+/// Compatibility fallback for locales without a date-format default.
 pub const DEFAULT_DATE_FORMAT: &str = "m/d/yyyy";
+
+/// The default for a supported locale. Keep the historical fallback for locales whose
+/// regional date conventions are not yet represented here; a language alone does not
+/// identify a region (English, for example, is not necessarily US English).
+pub fn default_date_format(language: Option<&str>) -> &'static str {
+    match language.and_then(date_language).map(|l| l.code) {
+        Some("pt-br") => "dd/mm/yyyy",
+        _ => DEFAULT_DATE_FORMAT,
+    }
+}
 
 /// Ready-made formats for Preferences ▸ Date format. Any other valid pattern works too.
 pub const DATE_FORMATS: [&str; 12] = [
@@ -528,15 +538,32 @@ fn unescaped(fmt: &str) -> impl Iterator<Item = (char, bool)> + '_ {
 
 impl Session {
     /// Preferences ▸ Date format: the pattern Fill & Sign dates use. Rejects unusable patterns
-    /// (see [`check_date_format`]) and keeps the previous one.
+    /// (see [`check_date_format`]) and keeps the previous one. `auto` follows the date
+    /// language's default again. Even a choice equal to the default stays explicit.
     pub fn set_date_format(&mut self, fmt: &str) -> Result<(), String> {
+        if fmt.trim().eq_ignore_ascii_case("auto") {
+            self.date_format = None;
+            return Ok(());
+        }
         let fmt = check_date_format(fmt)?;
-        self.date_format = (fmt != DEFAULT_DATE_FORMAT).then(|| fmt.to_string());
+        self.date_format = Some(fmt.to_string());
         Ok(())
     }
 
     pub fn date_format(&self) -> &str {
-        self.date_format.as_deref().unwrap_or(DEFAULT_DATE_FORMAT)
+        self.date_format_for_language(None)
+    }
+
+    /// Resolve an automatic pattern using the caller's effective language (the interface
+    /// language in the GUI), or the session's date language in headless callers.
+    pub fn date_format_for_language(&self, language: Option<&str>) -> &str {
+        self.date_format.as_deref().unwrap_or_else(|| default_date_format(language.or(self.date_language())))
+    }
+
+    /// Persist the choice, not its resolved value: `None` must keep following the locale
+    /// after a restart, while an explicitly selected US pattern must remain US.
+    pub fn date_format_override(&self) -> Option<&str> {
+        self.date_format.as_deref()
     }
 
     /// Preferences ▸ Date format ▸ Language: the language of month and weekday names, or
@@ -561,7 +588,7 @@ impl Session {
     pub fn today_text(&self, fmt: Option<&str>, lang: Option<&str>) -> Result<String, String> {
         let fmt = match fmt {
             Some(f) => check_date_format(f)?,
-            None => self.date_format(),
+            None => self.date_format_for_language(lang),
         };
         let lang = lang.or(self.date_language()).and_then(date_language).unwrap_or(&DATE_LANGUAGES[0]);
         Ok(format_day(fmt, self.today(), lang))

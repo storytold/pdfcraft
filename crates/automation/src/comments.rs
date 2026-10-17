@@ -439,7 +439,7 @@ impl Automation {
         let format = a.opt_str("format")?;
         let language = a.opt_str("language")?.map(|l| Some(l).filter(|l| !l.trim().eq_ignore_ascii_case("auto")));
         // Check the format before changing anything, so a bad one leaves both settings alone.
-        if let Some(f) = format {
+        if let Some(f) = format.filter(|f| !f.trim().eq_ignore_ascii_case("auto")) {
             dates::check_date_format(f).map_err(ToolError::InvalidArgs)?;
         }
         if let Some(l) = language {
@@ -452,6 +452,7 @@ impl Automation {
         let languages: Vec<Value> = dates::DATE_LANGUAGES.iter().map(|l| json!({ "code": l.code, "name": l.name })).collect();
         Ok(json!({
             "format": self.session.date_format(),
+            "automatic": self.session.date_format_override().is_none(),
             "language": self.session.date_language().unwrap_or("auto"),
             // Characters Fill & Sign can't write into a PDF yet; dates with them are refused.
             "unwritable": dates::unwritable(&today),

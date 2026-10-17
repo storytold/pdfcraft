@@ -2624,7 +2624,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
     let date_text = crate::date_text_for_pdf(&app.session);
     let mut refused: Option<String> = None;
-    let by_line = app.session.stamp_by_line(&author);
+    let stamp_language = app.session.date_language().unwrap_or(crate::i18n::current().code());
+    let by_line = app.session.stamp_by_line_in_language(&author, Some(stamp_language));
     let mut stamp_placed = false;
     let mut image_action: Option<crate::edit_text_ui::ImageAction> = None;
     let custom_stamp = match app.quick_tool {

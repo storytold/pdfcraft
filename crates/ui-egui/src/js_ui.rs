@@ -500,17 +500,30 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
 fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     use pdfcraft_engine::dates::{DATE_FORMATS, DATE_LANGUAGES, MAX_DATE_FORMAT_CHARS};
     ui.label(egui::RichText::new(tl!("Date format")).font(theme::semibold(13.0)));
+    let language = app.session.date_language().unwrap_or(crate::i18n::current().code()).to_string();
     let sample = |app: &PdfCraftApp, f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Fill & Sign dates"));
-        let current = app.session.date_format().to_string();
-        let selected = if DATE_FORMATS.contains(&current.as_str()) { sample(app, &current) } else { tl!("Custom").to_string() };
+        let current = app.session.date_format_for_language(Some(&language)).to_string();
+        let automatic = app.session.date_format_override().is_none();
+        let default = format!("{} ({})", tl!("Default"), sample(app, pdfcraft_engine::dates::default_date_format(Some(&language))));
+        let selected = if automatic {
+            default.clone()
+        } else if DATE_FORMATS.contains(&current.as_str()) {
+            sample(app, &current)
+        } else {
+            tl!("Custom").to_string()
+        };
         egui::ComboBox::from_id_salt("date-format")
             .selected_text(selected)
             .width(240.0)
             .show_ui(ui, |ui| {
+                if ui.selectable_label(automatic, default).clicked() && app.session.set_date_format("auto").is_ok() {
+                    app.date_format_draft = None;
+                    ui.close();
+                }
                 for f in DATE_FORMATS {
-                    if ui.selectable_label(current == f, sample(app, f)).clicked() && app.session.set_date_format(f).is_ok() {
+                    if ui.selectable_label(!automatic && current == f, sample(app, f)).clicked() && app.session.set_date_format(f).is_ok() {
                         app.date_format_draft = None;
                         ui.close();
                     }
@@ -521,12 +534,16 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     });
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Pattern"));
-        let mut text = app.date_format_draft.clone().unwrap_or_else(|| app.session.date_format().to_string());
+        let mut text = app.date_format_draft.clone().unwrap_or_else(|| app.session.date_format_for_language(Some(&language)).to_string());
         let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0).char_limit(MAX_DATE_FORMAT_CHARS)).labelled_by(label.id);
         // The box keeps the text as typed (a trailing space included) while it has focus; the
         // setting takes the trimmed pattern whenever it's valid.
         if edit.changed() {
-            let _ = app.session.set_date_format(&text);
+            // The editor accepts patterns only; `auto` belongs to the Default picker
+            // entry and headless setting, not an invalid pattern that silently applies.
+            if pdfcraft_engine::dates::check_date_format(&text).is_ok() {
+                let _ = app.session.set_date_format(&text);
+            }
             app.date_format_draft = Some(text.clone());
         }
         if !edit.has_focus() && pdfcraft_engine::dates::check_date_format(&text).is_ok() {

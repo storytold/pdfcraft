@@ -2241,7 +2241,8 @@ impl PdfCraftApp {
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "fill_text_size": self.fill_text_size,
-            "date_format": self.session.date_format(),
+            // Null keeps the locale default automatic across restarts.
+            "date_format": self.session.date_format_override(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
@@ -2371,10 +2372,15 @@ impl PdfCraftApp {
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
+            // Legacy settings always wrote a string; keep it as an explicit choice.
             let _ = self.session.set_date_format(f);
+        } else if v.get("date_format").is_some_and(serde_json::Value::is_null) {
+            let _ = self.session.set_date_format("auto");
         }
         if let Some(l) = v["date_language"].as_str() {
             let _ = self.session.set_date_language(Some(l));
+        } else if v.get("date_language").is_some_and(serde_json::Value::is_null) {
+            let _ = self.session.set_date_language(None);
         }
         // An empty or missing name keeps the login-name default; settings are untrusted, so the
         // name is cut to a sane length.

@@ -6495,3 +6495,29 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn brazilian_fill_sign_defaults_and_explicit_choices_through_tools() {
+    let dir = workdir("brazilian-date");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let pref = ok(&mut a, "fill_sign_date_format", json!({ "language": "pt-br" }));
+    assert_eq!(pref["format"], "dd/mm/yyyy");
+    assert_eq!(pref["automatic"], true);
+    assert_eq!(pref["today"], "14/11/2023");
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "date", "at": [20, 40] }));
+    assert!(page_text(&mut a, doc)[0].contains("14/11/2023"));
+    let pref = ok(&mut a, "fill_sign_date_format", json!({ "format": "m/d/yyyy" }));
+    assert_eq!(pref["automatic"], false);
+    assert_eq!(pref["today"], "11/14/2023");
+    ok(&mut a, "fill_sign_date_format", json!({ "language": "en" }));
+    assert_eq!(ok(&mut a, "fill_sign_date_format", json!({ "language": "pt-br" }))["today"], "11/14/2023");
+    // Validation remains atomic, including when the other argument requests auto.
+    let before = ok(&mut a, "fill_sign_date_format", json!({}));
+    for args in [json!({ "format": "auto", "language": "unknown" }), json!({ "format": "HH:MM", "language": "auto" })] {
+        assert!(matches!(a.call("fill_sign_date_format", &args), Err(ToolError::InvalidArgs(_))));
+        assert_eq!(ok(&mut a, "fill_sign_date_format", json!({})), before);
+    }
+    assert_eq!(ok(&mut a, "fill_sign_date_format", json!({ "format": "auto" }))["today"], "14/11/2023");
+    let _ = std::fs::remove_dir_all(dir);
+}
