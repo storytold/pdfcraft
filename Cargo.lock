@@ -4274,6 +4274,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
@@ -4401,6 +4402,7 @@ dependencies = [
  "pdfcraft-export",
  "pdfcraft-filters",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-forms",
  "pdfcraft-geom",
  "pdfcraft-js",
@@ -4452,6 +4454,18 @@ dependencies = [
  "pdfcraft-cos",
  "skrifa 0.44.0",
  "unicode-bidi",
+]
+
+[[package]]
+name = "pdfcraft-form-detect"
+version = "0.18.0"
+dependencies = [
+ "image",
+ "rten",
+ "rten-tensor",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

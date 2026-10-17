@@ -32,6 +32,7 @@ pub mod export;
 pub mod field_table;
 mod fill_sign;
 mod history;
+pub mod form_detection;
 pub mod js;
 mod layers;
 pub mod links;

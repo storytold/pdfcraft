@@ -59,6 +59,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("xfdf", Class::Layer(4)),
     ("sign", Class::Layer(4)),
     ("ocr", Class::Layer(4)),
+    ("form-detect", Class::Layer(4)),
     ("create", Class::Layer(4)),
     ("export", Class::Layer(4)),
     ("optimize", Class::Layer(4)),

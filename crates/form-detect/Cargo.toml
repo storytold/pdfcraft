@@ -1,0 +1,25 @@
+[package]
+name = "pdfcraft-form-detect"
+description = "Local FFDetr form-field inference on page images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rten = { version = "0.26.0", default-features = false, features = ["onnx_format"] }
+rten-tensor = "0.26.0"
+thiserror.workspace = true
+sha2 = "0.11"
+
+[features]
+# A generated constant-output fixture for downstream integration tests. Never enabled by apps.
+test-model = []
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json.workspace = true

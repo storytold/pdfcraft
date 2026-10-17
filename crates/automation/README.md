@@ -73,6 +73,16 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## Automatic field detection
+
+`form_detect_fields` also accepts a local, approved FFDetr ONNX `model` path
+and optional `confidence` (default 0.3). The model is read under the same root
+rules as documents and verified before execution; no download occurs. Preview
+with `add: false`, or create exactly the proposed fields in one undoable step.
+Without `model`, the existing geometry detector is used. See
+[native field detection](../../docs/form-field-detection.md) for the model
+format, rectangle convention, job safety and current limitations.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:
