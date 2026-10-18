@@ -35,7 +35,7 @@ For an installed desktop app, put those files in a directory and launch with
 the executable, or in `PdfCraft.app/Contents/Resources/` on macOS. The source tree's
 `assets/models/` is the final fallback for development builds. Model availability is
 checked separately for each language; installing English alone does not enable Chinese
-or Latin. Current release installers do not automatically include these model files.
+or Latin. Desktop release packages include the models. The Linux CLI-only archive does not.
 
 Recognition runs entirely on the CPU in Rust, using RTen. English uses ocrs;
 Chinese uses the Apache-2.0 PP-OCRv4 mobile recognition model and Latin the PP-OCRv5

@@ -5350,6 +5350,37 @@ fn unicode_ocr_layer_preserves_pixels_copy_save_and_undo() {
     assert_eq!(page_texts(&s, id), extracted, "invalid coordinates leave the document unchanged");
 }
 
+/// #3029: the Unicode layer's invisible mode and font end with the layer. `3 Tr` is graphics
+/// state, and `ET` does not reset it, so a page with nothing to wrap would leave later text invisible.
+#[test]
+fn unicode_ocr_text_restores_the_graphics_state() {
+    let (mut s, id) = session_with(1);
+    let words = vec![ocr::PlacedWord { text: "中文".into(), origin: [20.0, 80.0], across: [80.0, 0.0], up: [0.0, 12.0] }];
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let contents = page.dict.get(b"Contents").and_then(|c| c.as_array()).unwrap();
+    let layer = contents
+        .iter()
+        .filter_map(|object| match &*doc.resolve(object) {
+            pdfcraft_cos::Object::Stream(stream) => String::from_utf8(stream.decoded().unwrap()).ok(),
+            _ => None,
+        })
+        .find(|text| text.contains("/OCR BMC"))
+        .expect("the Unicode OCR stream");
+    let mut depth = 0_i32;
+    for token in layer.split_ascii_whitespace() {
+        match token {
+            "q" => depth += 1,
+            "Q" => depth -= 1,
+            "Tr" | "Tf" | "Tm" => assert!(depth > 0, "`{token}` outside q … Q in {layer:?}"),
+            _ => {}
+        }
+        assert!(depth >= 0, "unbalanced Q in {layer:?}");
+    }
+    assert_eq!(depth, 0, "the layer leaves a q open: {layer:?}");
+}
+
 #[test]
 fn chinese_ocr_makes_mixed_scans_searchable() {
     use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
@@ -5455,6 +5486,9 @@ fn latin_ocr_keeps_german_accents_searchable() {
     let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "la".into(), ..Default::default() }).unwrap();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].skipped, None);
+    let boxes: Vec<_> = found[0].words.iter().map(|w| w.text.as_str()).collect();
+    assert!(boxes.iter().any(|t| t.contains("übersenden") && t.contains(' ')), "a Latin line stays one box: {boxes:?}");
+    assert!(boxes.iter().any(|t| t.contains("Förderband") && t.contains(' ')), "a Latin line stays one box: {boxes:?}");
     // The accents the English models drop as "?" (#524): umlauts, ß and the ö of Förderband.
     let text = found[0].text();
     for word in ["übersenden", "für", "Großformat", "Förderband", "Grüßen"] {

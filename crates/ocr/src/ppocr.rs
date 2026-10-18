@@ -51,6 +51,15 @@ impl PpOcr {
     }
 
     pub fn recognize(&self, rgb: &[u8], width: u32, height: u32, rect: [f32; 4], preferred: &str) -> Result<String, OcrError> {
+        let values = self.scores(rgb, width, height, rect)?;
+        if values.is_empty() {
+            return Ok(String::new());
+        }
+        decode(&values, &self.alphabet, preferred)
+    }
+
+    /// One score per class for every time step. An empty crop is an empty vector.
+    fn scores(&self, rgb: &[u8], width: u32, height: u32, rect: [f32; 4]) -> Result<Vec<f32>, OcrError> {
         let [left, top, right, bottom] = rect;
         if !rect.iter().all(|x| x.is_finite()) {
             return Err(OcrError::Recognize("non-finite text box".into()));
@@ -61,7 +70,7 @@ impl PpOcr {
         let bottom = (bottom.ceil() + 2.0).clamp(0.0, height as f32) as usize;
         let (cw, ch) = (right.saturating_sub(left), bottom.saturating_sub(top));
         if cw == 0 || ch == 0 {
-            return Ok(String::new());
+            return Ok(Vec::new());
         }
         let scaled = (cw as f64 * HEIGHT as f64 / ch as f64).ceil();
         if scaled > MAX_WIDTH as f64 {
@@ -99,14 +108,13 @@ impl PpOcr {
         if shape.len() != 3 || shape.first() != Some(&1) || shape.get(2) != Some(&self.alphabet.len()) {
             return Err(OcrError::Recognize("PP-OCR output has an unexpected shape".into()));
         }
-        let values: Vec<f32> = output.iter().copied().collect();
-        decode(&values, &self.alphabet, preferred)
+        Ok(output.iter().copied().collect())
     }
 }
 
-/// How close a preferred letter has to be to the top score before it replaces that score.
-/// Far-away letters, including names from another language, stay as read.
-const PREFERENCE_MARGIN: f32 = 1.0;
+/// How close a preferred letter has to be, on the model's softmax probability, before it
+/// replaces the winner. A lead larger than this stays, including a letter from another language.
+const PREFERENCE_MARGIN: f32 = 0.1;
 
 fn decode(values: &[f32], alphabet: &[char], preferred: &str) -> Result<String, OcrError> {
     if alphabet.is_empty() || !values.len().is_multiple_of(alphabet.len()) {
@@ -174,17 +182,51 @@ mod tests {
     }
 
     /// A close preferred letter replaces the winner. A letter that leads by more than the margin stays.
+    /// Scores are the model's softmax probabilities.
     #[test]
     fn a_close_preferred_letter_wins_and_a_clear_other_letter_stays() {
         let alphabet = ['\0', 'à', 'å'];
-        let close = [0.0, 5.0, 4.2];
+        let close = [0.0, 0.50, 0.45];
         assert_eq!(decode(&close, &alphabet, "å").unwrap(), "å");
-        let clear = [0.0, 5.0, 3.0];
+        let clear = [0.0, 0.50, 0.30];
         assert_eq!(decode(&clear, &alphabet, "å").unwrap(), "à");
         assert_eq!(decode(&close, &alphabet, "").unwrap(), "à");
         // A winning space is a gap, not a letter the language can replace.
-        let gap = [0.0, 5.0, 4.5, 4.4];
+        let gap = [0.0, 0.80, 0.10, 0.05];
         assert_eq!(preferred_near(&gap, &['\0', ' ', 'à', 'å'], "å", 1), 1);
+        // A foreign letter that leads clearly stays. The old margin of 1.0 replaced ä (0.99) with é (0.001).
+        let foreign = [0.0, 0.99, 0.001];
+        assert_eq!(decode(&foreign, &['\0', 'ä', 'é'], "é").unwrap(), "ä");
+    }
+
+    /// The Latin model's class scores are softmax probabilities, so the preference margin is on
+    /// that scale. Skipped when the model has not been fetched.
+    #[test]
+    fn the_latin_recogniser_emits_a_probability_per_class() {
+        let Some(models) = crate::Models::find_for("la") else {
+            eprintln!("skipped: Latin OCR models not installed");
+            return;
+        };
+        let ocr = PpOcr::load(&models.recognition, &models.recognition.with_file_name(crate::LATIN_DICTIONARY), 504).unwrap();
+        let (w, h) = (120u32, 40u32);
+        let mut rgb = vec![255u8; (w * h * 3) as usize];
+        for x in 8..100 {
+            for y in 12..28 {
+                if x % 7 < 3 {
+                    let i = ((y * w + x) * 3) as usize;
+                    rgb[i] = 0;
+                    rgb[i + 1] = 0;
+                    rgb[i + 2] = 0;
+                }
+            }
+        }
+        let values = ocr.scores(&rgb, w, h, [0.0, 0.0, w as f32, h as f32]).unwrap();
+        assert!(values.len() >= ocr.alphabet.len() && values.len().is_multiple_of(ocr.alphabet.len()), "{}", values.len());
+        let row = &values[..ocr.alphabet.len()];
+        let sum: f32 = row.iter().sum();
+        let max = row.iter().copied().fold(f32::MIN, f32::max);
+        assert!((sum - 1.0).abs() < 0.02, "a class row sums to {sum}, max {max}");
+        assert!((0.0..=1.0).contains(&max), "{max}");
     }
 
     #[test]

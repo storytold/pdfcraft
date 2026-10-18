@@ -92,6 +92,31 @@ fn german_is_a_document_language() {
     assert_eq!(h.state().ocr_draft.language, "de");
 }
 
+/// #1819: when the worker thread cannot start, the run is not left active and a retry works.
+#[test]
+fn recognition_that_cannot_start_a_thread_reports_an_error_and_can_retry() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("scan.pdf", None, scan()).unwrap();
+    app.fail_spawn = true;
+    app.start_ocr();
+    assert!(app.ocr_run.is_none(), "single run not left active");
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread");
+    app.toast = None;
+    app.start_ocr();
+    assert!(app.ocr_run.is_none());
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread", "not refused as already running");
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-spawn-{}", std::process::id()));
+    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+    app.toast = None;
+    app.ocr_files(vec![("one.pdf".into(), scan())]);
+    assert!(app.ocr_batch.is_none(), "batch not left active");
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread");
+    app.toast = None;
+    app.ocr_files(vec![("one.pdf".into(), scan())]);
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread", "not refused as already running");
+}
+
 #[test]
 fn latin_ocr_language_runs_from_the_dialog() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {

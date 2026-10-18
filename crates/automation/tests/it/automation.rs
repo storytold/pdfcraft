@@ -7366,6 +7366,40 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     }
 }
 
+/// #1795: recognizing a file into a folder that already has a file under its output name (the
+/// source itself, run in place, or an unrelated leftover from an earlier batch) never replaces it:
+/// the result gets the next free " (n)" name instead, like the batch export tools. One input is
+/// enough to show this; two inputs sharing a name are refused outright (the test above), a
+/// different scenario from a name only colliding with what is already on disk.
+#[test]
+fn ocr_recognize_files_keeps_an_existing_file_in_the_output_folder() {
+    let dir = workdir("ocr-files-clobber");
+    let mut a = auto(&dir);
+    let language = if pdfcraft_engine::ocr::available_for("la") {
+        "la"
+    } else if ok(&mut a, "ocr_status", json!({}))["available"] == true {
+        "en"
+    } else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Batch recognition works" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    // Recognized in place: the output folder is the source's own folder, so `report.pdf` is
+    // already there (the source itself) before the run starts, and `report (2).pdf` is an
+    // unrelated leftover from an earlier run.
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "in/report.pdf" }));
+    let original = std::fs::read(dir.join("in/report.pdf")).unwrap();
+    std::fs::write(dir.join("in/report (2).pdf"), b"keep me").unwrap();
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/report.pdf"], "folder": "in", "language": language }));
+    let output = r["files"][0]["output"].as_str().unwrap();
+    assert_eq!(std::path::Path::new(output).file_name().unwrap(), "report (3).pdf", "{r}");
+    assert_eq!(std::fs::read(dir.join("in/report.pdf")).unwrap(), original, "the source stays as it was");
+    assert_eq!(std::fs::read(dir.join("in/report (2).pdf")).unwrap(), b"keep me");
+}
+
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
 /// lines, every message with its details, and requests.
 #[test]

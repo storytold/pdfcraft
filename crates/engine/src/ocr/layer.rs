@@ -78,7 +78,9 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-    let mut content = String::from("/OCR BMC\nBT\n3 Tr\n");
+    // `3 Tr` and the font are graphics state. `ET` does not reset them, and a page with no earlier
+    // content is not wrapped, so without `q … Q` text added afterwards draws invisibly (#3029).
+    let mut content = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
     for w in words {
         let count = w.text.chars().count();
         if count == 0 || w.up[0].hypot(w.up[1]) <= 0.0 || w.across[0].hypot(w.across[1]) <= 0.0 {
@@ -118,6 +120,6 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
             emit(&mut content, font, start, &run);
         }
     }
-    content.push_str("ET\nEMC\n");
+    content.push_str("ET\nQ\nEMC\n");
     pdfcraft_edit::stamp(doc, page, "OCR", content.into_bytes())
 }
