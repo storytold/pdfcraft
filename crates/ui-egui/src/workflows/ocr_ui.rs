@@ -174,14 +174,22 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     });
     let readiness = readiness(ui, &d.language);
     let available = matches!(readiness, Some(Ok(())));
+    let detail = readiness.as_ref().and_then(|r| r.as_ref().err()).cloned();
     let message = match readiness {
-        None => Some("Checking Hungarian OCR installation…".to_string()),
+        None => Some(tl!("Checking Hungarian OCR installation…").to_string()),
         Some(Err(_)) if d.language == "en" => Some(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.").to_string()),
-        Some(Err(message)) => Some(message),
+        Some(Err(_)) => Some(tl!("Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart PdfCraft after installation.").to_string()),
         Some(Ok(())) => None,
     };
     if let Some(message) = message {
         ui.label(egui::RichText::new(message).small().color(t.text_muted));
+        if d.language != "en"
+            && let Some(detail) = detail
+        {
+            ui.collapsing(tl!("Details"), |ui| {
+                ui.label(egui::RichText::new(detail).small().color(t.text_muted));
+            });
+        }
         ui.add_space(6.0);
     }
     ui.add_space(6.0);

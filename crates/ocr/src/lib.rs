@@ -150,6 +150,7 @@ impl Ocr {
         }
     }
 
+    /// ISO 639-1 language selected by this recogniser, independent of the interface locale.
     pub fn language(&self) -> &'static str {
         match &self.engine {
             Backend::English(_) => "en",

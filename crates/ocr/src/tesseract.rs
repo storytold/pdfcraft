@@ -15,11 +15,13 @@ pub(super) struct Tesseract {
     executable: OsString,
 }
 
+/// Preserve process and I/O diagnostics in the OCR error reported to the caller.
 fn error(e: impl std::fmt::Display) -> OcrError {
     OcrError::Recognize(e.to_string())
 }
 
 impl Tesseract {
+    /// Locate the configured executable and require its installed Hungarian language model.
     pub(super) fn find() -> Result<Self, OcrError> {
         let t = Self { executable: std::env::var_os("PDFCRAFT_TESSERACT").unwrap_or_else(|| "tesseract".into()) };
         let mut cmd = Command::new(&t.executable);
@@ -31,6 +33,7 @@ impl Tesseract {
         Ok(t)
     }
 
+    /// Recognise a validated grey, RGB, or RGBA image through Tesseract's PPM/TSV interface.
     pub(super) fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         let count = crate::image_pixels(pixels, width, height)?;
         // A private, automatically removed file avoids pipe deadlocks and works on Windows too.
@@ -100,6 +103,7 @@ fn run(mut cmd: Command, timeout: Duration) -> Result<String, OcrError> {
     read_output(&mut stdout)
 }
 
+/// Read bounded UTF-8 output from the start of a process's temporary output file.
 fn read_output(file: &mut File) -> Result<String, OcrError> {
     file.seek(SeekFrom::Start(0)).map_err(error)?;
     let mut bytes = Vec::new();
@@ -110,6 +114,7 @@ fn read_output(file: &mut File) -> Result<String, OcrError> {
     String::from_utf8(bytes).map_err(error)
 }
 
+/// Group TSV words into lines, rejecting malformed rows and boxes outside the source image.
 fn parse_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
     let mut rows = tsv.lines();
     if rows.next() != Some("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext") {
