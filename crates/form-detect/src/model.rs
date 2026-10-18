@@ -91,7 +91,7 @@ pub fn install(dir: &Path, mut progress: impl FnMut(u64, u64) -> bool) -> Result
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
         .timeout_connect(Some(std::time::Duration::from_secs(20)))
-        .timeout_recv_body(Some(std::time::Duration::from_secs(20)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(20)))
         .tls_config(ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::new_with_certs(&certs)).build())
         .build()
         .new_agent();

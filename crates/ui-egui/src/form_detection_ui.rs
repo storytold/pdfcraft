@@ -332,6 +332,9 @@ pub(crate) fn dialog(_app: &mut crate::PdfCraftApp, _ctx: &egui::Context) -> boo
 #[cfg(target_arch = "wasm32")]
 impl crate::PdfCraftApp {
     pub fn detect_fields(&mut self) {
+        if !self.commit_form_typing() {
+            return;
+        }
         if let Some((_, id)) = self.active_ids() {
             self.detect_fields_basic(id);
         }
