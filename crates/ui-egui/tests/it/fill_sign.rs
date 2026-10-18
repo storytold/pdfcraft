@@ -1802,6 +1802,47 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// #2348 review: when locking the signature fails (here the document's security allows comments
+/// but not changes), nothing is lost: the next save asks again, and "Don't ask again" isn't
+/// remembered.
+#[test]
+fn a_lock_that_fails_keeps_the_question() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-fails-{}.pdf", std::process::id()));
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Everything but bit 4, modifying the document.
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let mut h = harness_bytes(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    let signed = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    assert_eq!(signed(&h), 1, "comments are allowed");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Lock and save").click();
+    h.run_steps(3);
+    assert_eq!(signed(&h), 1, "changes aren't allowed: still a comment");
+    assert!(!h.state().flatten_fill_sign_on_save, "the failed answer isn't remembered");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "the next save asks again");
+    h.run_steps(2);
+    h.get_by_label("Lock your signature into the page?");
+    let _ = std::fs::remove_file(&out);
+}
+
 /// #2149: Cancel saves nothing, and Keep editable with Don't ask again turns the question off.
 #[test]
 fn cancelling_the_lock_question_saves_nothing() {

@@ -171,17 +171,11 @@ impl PdfCraftApp {
 
     /// The Lock signatures dialog answered (#2149): lock the document's Fill & Sign marks into
     /// its pages first when `lock`, then save as was asked. With `remember`, the answer becomes
-    /// the preference (flatten on every save, or never ask again).
+    /// the preference (flatten on every save, or never ask again). Nothing changes when locking
+    /// fails: the document still counts as holding a placed signature, so the next save asks
+    /// again, and the answer isn't remembered.
     pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
-        self.placed_signatures.remove(&p.id);
-        if remember {
-            if lock {
-                self.flatten_fill_sign_on_save = true;
-            } else {
-                self.ask_to_lock_signatures = false;
-            }
-        }
         if lock && !self.flatten_fill_sign_on_save {
             let before = self.session.get(p.id).map(|d| d.edit_generation());
             if let Err(e) = self.session.apply(p.id, pdfcraft_engine::Edit::FlattenFillSign) {
@@ -193,6 +187,14 @@ impl PdfCraftApp {
                 && let Some(view) = self.views.iter_mut().find(|v| v.id == p.id)
             {
                 view.document_changed(&doc.info);
+            }
+        }
+        self.placed_signatures.remove(&p.id);
+        if remember {
+            if lock {
+                self.flatten_fill_sign_on_save = true;
+            } else {
+                self.ask_to_lock_signatures = false;
             }
         }
         if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
