@@ -2656,6 +2656,35 @@ fn invisible_unknown_annotations_and_popups_paint_nothing() {
     assert_eq!(px(275), white, "a popup's appearance is not painted on the page");
 }
 
+/// View ▸ Show line weights, off: a 12 pt line is one device pixel wide at any scale, and
+/// at its width again when they are shown; a print preview keeps the width regardless.
+#[test]
+fn hairline_strokes_draw_line_art_one_pixel_wide_except_for_print() {
+    let body = "12 w 10 50 m 90 50 l S";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{body}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        body.len()
+    );
+    let render = |hairlines: bool, scale: f32, tag: u64| {
+        let mut r =
+            PageRenderer::new(Arc::new(pdf.clone().into_bytes()), RenderConfig { hairline_strokes: hairlines, ..RenderConfig::default() });
+        r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag, ..Default::default() })
+    };
+    // Rows of column `x` with any ink: an antialiased hairline straddling two rows counts two.
+    let inked_rows =
+        |p: &RenderedPage, x: u32| (0..p.height).filter(|&y| p.rgba.get(((y * p.width + x) * 4) as usize).is_some_and(|&r| r < 240)).count();
+    for scale in [1.0_f32, 3.0] {
+        let x = (50.0 * scale) as u32;
+        let expected = (12.0 * scale) as usize;
+        let at_width = inked_rows(&render(false, scale, 0), x);
+        assert!((expected..=expected + 2).contains(&at_width), "scale {scale}: {at_width} rows at the document's width");
+        let hairline = inked_rows(&render(true, scale, 0), x);
+        assert!((1..=2).contains(&hairline), "scale {scale}: {hairline} rows as a hairline");
+        let printed = inked_rows(&render(true, scale, PRINT_TAG), x);
+        assert_eq!(printed, at_width, "scale {scale}: a print preview keeps the width");
+    }
+}
+
 #[test]
 fn inline_pool_renders_in_priority_order() {
     let pool = RenderPool::new_inline(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());

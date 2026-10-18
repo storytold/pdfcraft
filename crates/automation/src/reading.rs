@@ -1,7 +1,9 @@
-//! Reading colours: Acrobat's Replace Document Colors as a tool (#897, AGENTS.md §3).
+//! Reading colours: Acrobat's Replace Document Colors as a tool (#897, AGENTS.md §3), and line
+//! weights (View ▸ Show line weights).
 //!
-//! A per-document view setting: solid text and line-art paints remap for readability and the
-//! page clears to the setting's background when rendering. The file itself never changes.
+//! Per-document view settings: solid text and line-art paints remap for readability and the
+//! page clears to the setting's background when rendering; with line weights off, every stroke
+//! that isn't text is one device pixel wide. The file itself never changes.
 
 use pdfcraft_render::ReadingColors;
 use serde_json::{Value, json};
@@ -32,5 +34,18 @@ impl Automation {
             "only_black": colors.params.is_some_and(|p| p.only_black),
             "line_art": colors.params.is_some_and(|p| p.line_art),
         }))
+    }
+
+    /// Show line weights, or draw every stroke that isn't text one device pixel wide.
+    pub(crate) fn view_line_weights(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let shown = a
+            .opt_bool("shown")?
+            .ok_or_else(|| ToolError::InvalidArgs("shown is required: true draws strokes at their widths, false one pixel wide".into()))?;
+        if self.session.set_line_weights(id, shown) {
+            // Cached renderers baked the old setting into their config; page_render must re-read it.
+            self.renderers.remove(&id);
+        }
+        Ok(json!({ "shown": shown }))
     }
 }

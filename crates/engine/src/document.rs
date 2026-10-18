@@ -384,6 +384,12 @@ impl Document {
         self.editor.as_ref().is_some_and(|e| pdfcraft_annot::deletable(&e.cos, page, index).is_ok())
     }
 
+    /// Whether strokes are drawn at the widths the document gives them (View ▸ Show line
+    /// weights). Off, every stroke that isn't text is one device pixel wide.
+    pub fn line_weights_shown(&self) -> bool {
+        !self.config.hairline_strokes
+    }
+
     pub fn can_undo(&self) -> Option<&str> {
         self.undo_label().map(Label::as_str)
     }
