@@ -177,7 +177,9 @@ pub fn deny(_: &[String]) -> anyhow::Result<()> {
 
 /// Line coverage for one crate. Fails under 80% unless `--fail-under-lines N` says otherwise.
 ///
-/// Needs `cargo install cargo-llvm-cov` once. This is the check in `docs/developing.md`.
+/// The percentage is the whole crate. This does not compare it with an earlier run and does
+/// not measure only the lines a change added. Needs `cargo install cargo-llvm-cov` once.
+/// This is the check in `docs/developing.md`.
 pub fn cover(args: &[String]) -> anyhow::Result<()> {
     let mut package = None;
     let mut under = 80u32;
@@ -202,6 +204,8 @@ pub fn cover(args: &[String]) -> anyhow::Result<()> {
     if !installed {
         bail!("cargo-llvm-cov is not installed: cargo install cargo-llvm-cov");
     }
+    // The threshold covers the whole crate. A lower `--fail-under-lines` does not
+    // by itself show which new lines are covered.
     run_args(&["llvm-cov", "-p", package, "--fail-under-lines", &threshold])
 }
 

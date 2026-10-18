@@ -56,13 +56,17 @@ cargo xtask cover -p <crate>
 
 That runs `cargo llvm-cov` and fails when line coverage of that crate is under 80%. Install the runner once with `cargo install cargo-llvm-cov`. The first run builds the crate with coverage instrumentation, so it is slower than `cargo test`.
 
-80% is the floor for the crate you are changing, not a certificate for the whole workspace. If the crate is already under 80%, do not lower it, and cover every line the change adds. A line that cannot be reached in a test needs a comment that says why.
+```text
+cargo xtask cover -p <crate> --fail-under-lines 70
+```
+
+`--fail-under-lines` replaces the 80% floor for that run. The command measures the whole crate. It does not compare the number with a previous run, and it does not count only the lines the change added. If the crate is already under 80%, record its current percentage with `--fail-under-lines` and cover the lines the change adds by reading the report. Do not lower that percentage. A line that cannot be reached in a test needs a comment that says why.
 
 `cargo xtask cover` is a local check. CI runs `cargo test --workspace` on Linux and Windows. It does not yet fail the job on a coverage percentage.
 
 ### Human sessions
 
-`crates/ui-egui/tests/play/` is the in-process equivalent of a browser driver. A JSON file opens a synthetic page and drives the real editor widgets: `command`, `click_page`, `type`, `key`, `drag_edge`, then `expect_editor`, `expect_paragraph`, `expect_together`, or `expect_apart`. Each file runs on more than one window size and zoom, because that changes where a click lands.
+`crates/ui-egui/tests/play/` is the in-process equivalent of a browser driver. A JSON file opens a synthetic page and drives the real editor widgets: `command`, `click_page`, `type`, `key`, `drag_edge`, then `expect_editor` or `expect_paragraph`. A `page` field sets the MediaBox in points; omitted, the page is US Letter. Each file runs on more than one window size and zoom, because that changes where a click lands.
 
 ```text
 cargo test -p pdfcraft-ui-egui --test play -- --nocapture
@@ -87,4 +91,4 @@ cargo xtask cover -p <crate>
 
 Add `cargo test -p pdfcraft-ui-egui --test play` when the change is something a person does on screen, and `cargo test -p pdfcraft-automation --test automation` when a tool changed.
 
-In the pull request, list the command, the failure from before the fix, and the pass after it. Name any similar issue you ran and whether its own steps passed.
+For a bug fix, list the command, the failure observed before the fix, and the pass after it. For other changes, list the applicable checks and their results. Name any similar issue you ran and whether its own steps passed.
