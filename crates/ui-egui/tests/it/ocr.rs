@@ -348,3 +348,24 @@ fn only_the_edit_tool_recognizes_a_scanned_page() {
     h.run_steps(6);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
+
+#[test]
+fn hungarian_is_selectable_in_the_ocr_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("ocr.recognize");
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("Magyar").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.settings().language, "hu");
+    if let Ok(path) = std::env::var("PDFCRAFT_OCR_SCREENSHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+}
