@@ -7806,3 +7806,63 @@ fn copying_a_field_makes_an_independent_field() {
     assert!(copy_field(&mut doc.clone(), "size", &[2], 0, [0.0, 0.0]).is_err());
     assert!(copy_field(&mut doc.clone(), "size", &[], 3, [0.0, 0.0]).is_err());
 }
+
+#[test]
+fn copying_a_field_keeps_an_inherited_character_limit() {
+    let mut doc = fixture();
+    doc.update_dict(ObjRef::new(15, 0), |d| {
+        d.set(b"FT".to_vec(), Object::name("Tx"));
+        d.set(b"Ff".to_vec(), Object::Int(flags::COMB as i64));
+        d.set(b"MaxLen".to_vec(), Object::Int(5));
+    })
+    .unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").max_len, Some(5), "pdfcraft reads MaxLen as inherited");
+    let copy = copy_field(&mut doc, "address.city", &[], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert!(c.has(flags::COMB), "the comb flag came along");
+    assert_eq!(c.max_len, Some(5), "the inherited MaxLen came along");
+}
+
+#[test]
+fn copying_one_radio_button_keeps_its_export_value() {
+    let mut doc = fixture();
+    doc.update_dict(ObjRef::new(20, 0), |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("Small")), Object::String(PdfString::text("Large"))]));
+    })
+    .unwrap();
+    assert_eq!(field(&fields(&doc), "size").export_of(1), Some("Large"));
+    let copy = copy_field(&mut doc, "size", &[1], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert_eq!(c.widgets.len(), 1);
+    assert_eq!(c.options.len(), 1, "one /Opt entry per copied widget: {:?}", c.options);
+    assert_eq!(c.export_of(0), Some("Large"));
+}
+
+#[test]
+fn a_copied_signed_signature_field_is_drawn_blank() {
+    let mut doc = fixture();
+    let name = add_field(&mut doc, 0, [50.0, 220.0, 250.0, 270.0], &NewField::Signature, None).unwrap();
+    let sig = field(&fields(&doc), &name).obj;
+    // Signed: a value and the signer's visible appearance (object 7 stands in for it).
+    doc.update_dict(sig, |d| {
+        d.set(b"V".to_vec(), Object::Ref(ObjRef::new(8, 0)));
+        d.set(
+            b"AP".to_vec(),
+            Object::Dict({
+                let mut ap = Dict::new();
+                ap.set(b"N".to_vec(), Object::Ref(ObjRef::new(7, 0)));
+                ap
+            }),
+        );
+    })
+    .unwrap();
+    let copy = copy_field(&mut doc, &name, &[], 0, [0.0, -60.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    let w = doc.get(c.widgets[0].obj).as_dict().cloned().unwrap();
+    assert!(!w.contains(b"V"), "no signature value");
+    let n = w.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.get(b"N").cloned()));
+    assert_ne!(n, Some(Object::Ref(ObjRef::new(7, 0))), "the copy must not show the signer's appearance");
+}

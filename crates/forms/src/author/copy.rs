@@ -2,12 +2,13 @@
 //! field's widgets.
 
 use super::lifecycle::WIDGET_KEYS;
+use super::look::redraw_field;
 use super::tree::{add_to_fields, add_to_page, ensure_form, free_name, top_names};
 use super::{Dict, Document, FieldKind, FormError, Object, PdfString, Widget, fields, invalid, page_refs};
 
-
-/// Field entries a kid inherits from its ancestors (ISO 32000-2 §12.7.4.1, Tables 226 and 228).
-const INHERITED_KEYS: [&[u8]; 6] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q"];
+/// Field entries a kid inherits from its ancestors (ISO 32000-2 §12.7.4.1, Tables 226 and 228;
+/// `MaxLen` from Table 229).
+const INHERITED_KEYS: [&[u8]; 7] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen"];
 
 /// "Check Box1" → "Check Box", "address.city" → "city": what a copy's name counts up from.
 fn copy_base(name: &str) -> &str {
@@ -61,9 +62,18 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         up = d.reference(b"Parent");
     }
     // A signature's value is someone's signature: the copy is a blank signature field.
-    if field.name(b"FT") == Some(&b"Sig"[..]) {
+    let signature = field.name(b"FT") == Some(&b"Sig"[..]);
+    if signature {
         field.remove(b"V");
         field.remove(b"Lock");
+    }
+    // A check box or radio group's /Opt holds one export value per widget: the copied ones'.
+    if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+        let opt = field.get(b"Opt").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned());
+        if let Some(opt) = opt.filter(|o| o.len() == f.widgets.len()) {
+            let kept = picked.iter().filter_map(|p| f.widgets.iter().position(|w| w.obj == p.obj)).filter_map(|i| opt.get(i).cloned()).collect();
+            field.set(b"Opt".to_vec(), Object::Array(kept));
+        }
     }
     // Radio buttons copied without the selected one: none of the copies is selected.
     if f.kind == FieldKind::Radio && !f.value.iter().any(|v| picked.iter().any(|w| w.on_state.as_ref() == Some(v))) {
@@ -86,6 +96,11 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         };
         d.remove(b"Parent");
         d.remove(b"StructParent");
+        // The signer's visible signature isn't the copy's: redrawn blank below.
+        if signature {
+            d.remove(b"AP");
+            d.remove(b"AS");
+        }
         d.set(b"P".to_vec(), Object::Ref(page_ref));
         let r = w.rect;
         let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
@@ -121,6 +136,9 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         }
     };
     add_to_fields(doc, af, top)?;
+    if signature {
+        redraw_field(doc, &new_name)?;
+    }
     // A calculated field's copy calculates too.
     let co = doc.get(af).as_dict().and_then(|d| d.get(b"CO").cloned()).map(|c| doc.resolve(&c)).and_then(|c| c.as_array().cloned());
     if let Some(mut co) = co.filter(|co| co.iter().any(|o| o.as_ref() == Some(f.obj))) {
