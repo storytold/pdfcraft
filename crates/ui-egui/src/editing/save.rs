@@ -110,7 +110,10 @@ impl PdfCraftApp {
             };
             match delivered {
                 Ok(()) => {
-                    let _ = self.session.mark_saved(id, bytes, None);
+                    // As the native save does: what was saved isn't asked about again (#2149).
+                    if self.session.mark_saved(id, bytes, None).is_ok() {
+                        self.placed_signatures.remove(&id);
+                    }
                     if let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.get_mut(index)
                     {
