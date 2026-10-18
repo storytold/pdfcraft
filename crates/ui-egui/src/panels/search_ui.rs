@@ -18,10 +18,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     let Some(find) = view.find.as_mut() else { return };
     find.in_panel = true;
     let l = ui.label(egui::RichText::new(tl!("What word or phrase would you like to search for?")).color(t.text_muted));
-    let r = ui
-        .add(crate::widgets::line(&mut find.query).id(egui::Id::unique("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY))
-        .accessible_name(tl!("Search"))
-        .labelled_by(l.id);
+    let r =
+        crate::rtl_input::show_query(ui, &mut find.query, crate::rtl_input::QueryField::SearchPanel).accessible_name(tl!("Search")).labelled_by(l.id);
     if find.focus {
         r.request_focus();
         find.focus = false;

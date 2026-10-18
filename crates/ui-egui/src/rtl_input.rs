@@ -1,0 +1,571 @@
+//! The find bar and the Search panel type Arabic and Hebrew in reading order.
+//!
+//! egui shapes an Arabic word from the right, but it also emits a second, zero-width glyph for
+//! the same letter and walks the caret through those duplicates. Measured on
+//! `مؤشرات الأداء`: caret positions 9 through 13 all sat on the space, so the second word
+//! never moved the caret, and the two words were drawn in logical order. The stored query stays
+//! in typing order, because that is what search matches. The field shows the Unicode bidi
+//! visual order, with one glyph per character sorted left to right, and the caret sits on the
+//! leading edge of that line.
+
+use std::cell::RefCell;
+use std::ops::Range;
+use std::rc::Rc;
+
+use egui::epaint::text::{CharIndex, LayoutJob};
+use egui::text::CCursor;
+use egui::{Galley, TextBuffer};
+use unicode_bidi::{BidiInfo, Level};
+
+/// Above this, the field keeps the characters but does not reorder them. A search phrase is
+/// short; the cap stops a pasted document from building a giant bidi map.
+const MAX_CHARS: usize = 100_000;
+
+/// Which single-line search field is on screen. The two share one buffer so they cannot drift.
+#[derive(Clone, Copy)]
+pub(crate) enum QueryField {
+    /// The floating bar at the top of the page.
+    FindBar,
+    /// Edit ▸ Advanced Search.
+    SearchPanel,
+}
+
+/// Draw `text` for a search field. Right-to-left text comes back with one glyph per character
+/// in display order, so a caret index is a position on the line.
+pub(crate) fn layout_galley(ui: &egui::Ui, text: &str, _wrap: f32) -> std::sync::Arc<Galley> {
+    let font_id = egui::FontSelection::default().resolve(ui.style());
+    let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
+    let line_height = row_height + ui.spacing().extra_text_line_spacing;
+    let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+    let screen = screen_of(text);
+    // `visual_auto` is the order egui's shaper must receive so each word joins and the words
+    // themselves land in reading order. The caret then walks a cleaned copy of that galley.
+    let shaped = if crate::bidi::has_rtl(text) { crate::bidi::visual_auto(text).into_owned() } else { text.to_owned() };
+    // Single-line, like egui's own field: do not wrap. The widget clips what does not fit.
+    let mut job = LayoutJob::simple_singleline(shaped, font_id, color);
+    job.keep_trailing_whitespace = true;
+    for section in &mut job.sections {
+        section.format.line_height = Some(line_height);
+    }
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    if !crate::bidi::has_rtl(text) {
+        return galley;
+    }
+    let mut galley = std::sync::Arc::unwrap_or_clone(galley);
+    place_caret_glyphs(&mut galley, screen.chars().count());
+    std::sync::Arc::new(galley)
+}
+
+/// Replace each row's glyph list with the glyphs that have width, left to right.
+///
+/// egui's caret uses glyph index as character index. Arabic currently produces about two glyphs
+/// per letter, and the extras have no width and share one x, so the caret freezes. Dropping
+/// those extras leaves one glyph per character. If the counts disagree, the row is left as egui
+/// built it.
+fn place_caret_glyphs(galley: &mut Galley, chars: usize) {
+    let mut kept = Vec::new();
+    for row in &galley.rows {
+        for glyph in &row.glyphs {
+            if glyph.advance_width > 0.0 {
+                kept.push(*glyph);
+            }
+        }
+    }
+    if kept.len() != chars || chars == 0 {
+        return;
+    }
+    kept.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x).then(a.chr.cmp(&b.chr)));
+    let Some(row) = galley.rows.first_mut() else { return };
+    let glyphs = std::sync::Arc::make_mut(&mut row.row);
+    glyphs.glyphs = kept;
+    // One visual line. Extra rows would make the caret count characters twice.
+    galley.rows.truncate(1);
+}
+
+/// The search field. `text` stays in typing order.
+pub(crate) fn show_query(ui: &mut egui::Ui, text: &mut String, kind: QueryField) -> egui::Response {
+    let logical = Rc::new(RefCell::new(text.clone()));
+    let mut edit = RtlEdit::new(Rc::clone(&logical));
+    let shared = Rc::clone(&logical);
+    let mut layouter = move |ui: &egui::Ui, _: &dyn TextBuffer, wrap: f32| layout_galley(ui, &shared.borrow(), wrap);
+    // A new field puts the caret at the end of the buffer. For right-to-left text that end is
+    // the start of the stored phrase, so the caret starts on the leading edge instead.
+    let start_at_end = !analyze(&logical.borrow()).base_rtl;
+    let mut field = egui::TextEdit::singleline(&mut edit).layouter(&mut layouter).cursor_at_end(start_at_end);
+    field = match kind {
+        QueryField::FindBar => field.id(egui::Id::unique("find-input")).hint_text(tl!("Find text")).desired_width(220.0).frame(egui::Frame::NONE),
+        QueryField::SearchPanel => field
+            .id(egui::Id::unique("search-panel-input"))
+            .hint_text(tl!("Search"))
+            .desired_width(f32::INFINITY)
+            .margin(egui::Margin::symmetric(10, 6))
+            .min_size(egui::vec2(0.0, 30.0)),
+    };
+    let output = field.show(ui);
+    let focused = output.response.has_focus();
+    if focused {
+        let (copy, cut) =
+            ui.input(|i| (i.events.iter().any(|e| matches!(e, egui::Event::Copy)), i.events.iter().any(|e| matches!(e, egui::Event::Cut))));
+        if cut {
+            if let Some(removed) = edit.deleted.clone() {
+                ui.ctx().copy_text(removed);
+            }
+        } else if copy && let Some(range) = output.cursor_range {
+            let chars = range.as_sorted_char_range();
+            if chars.start.0 < chars.end.0 {
+                ui.ctx().copy_text(edit.logical_screen_slice(chars.start.0..chars.end.0));
+            }
+        }
+    }
+    *text = logical.borrow().clone();
+    output.response.response
+}
+
+/// What the field shows, and how each shown character maps back to the stored text.
+struct Screen {
+    text: String,
+    /// `order[shown character] = stored character index`.
+    order: Vec<usize>,
+    /// Whether that shown character is in a right-to-left run.
+    rtl: Vec<bool>,
+    /// The paragraph's base direction.
+    base_rtl: bool,
+}
+
+fn screen_of(text: &str) -> String {
+    analyze(text).text
+}
+
+fn analyze(text: &str) -> Screen {
+    let count = text.chars().count();
+    if count == 0 || count > MAX_CHARS || !crate::bidi::has_rtl(text) {
+        return Screen { text: text.to_owned(), order: (0..count).collect(), rtl: vec![false; count], base_rtl: false };
+    }
+    let info = BidiInfo::new(text, None);
+    let entries: Vec<(usize, usize, char)> = text.char_indices().enumerate().map(|(index, (byte, ch))| (byte, index, ch)).collect();
+    let mut text_out = String::with_capacity(text.len());
+    let mut order = Vec::with_capacity(count);
+    let mut rtl = Vec::with_capacity(count);
+    let mut claimed = vec![false; count];
+    let base_rtl = info.paragraphs.first().is_some_and(|p| p.level.is_rtl());
+    for para in &info.paragraphs {
+        if para.range.is_empty() {
+            continue;
+        }
+        let (levels, runs) = info.visual_runs(para, para.range.clone());
+        for run in runs {
+            let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
+            let mut items: Vec<(usize, char)> = Vec::new();
+            for &(byte, index, ch) in &entries {
+                if run.start <= byte && byte < run.end {
+                    items.push((index, ch));
+                    if let Some(slot) = claimed.get_mut(index) {
+                        *slot = true;
+                    }
+                }
+            }
+            if run_rtl {
+                items.reverse();
+            }
+            for (index, ch) in items {
+                text_out.push(if run_rtl { mirrored(ch) } else { ch });
+                order.push(index);
+                rtl.push(run_rtl);
+            }
+        }
+    }
+    // A character no run claimed stays in stored order, so the map is always a permutation.
+    for &(_, index, ch) in &entries {
+        if claimed.get(index).copied().unwrap_or(true) {
+            continue;
+        }
+        text_out.push(ch);
+        order.push(index);
+        rtl.push(false);
+    }
+    Screen { text: text_out, order, rtl, base_rtl }
+}
+
+fn mirrored(c: char) -> char {
+    match c {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        other => other,
+    }
+}
+
+struct RtlEdit {
+    logical: Rc<RefCell<String>>,
+    screen: Screen,
+    /// Logical text removed by a cut this frame, for the clipboard.
+    deleted: Option<String>,
+}
+
+impl RtlEdit {
+    fn new(logical: Rc<RefCell<String>>) -> Self {
+        let screen = analyze(&logical.borrow());
+        Self { logical, screen, deleted: None }
+    }
+
+    fn refresh(&mut self) {
+        self.screen = analyze(&self.logical.borrow());
+    }
+
+    /// Stored index where a caret before shown character `at` inserts.
+    ///
+    /// On a right-to-left line the left edge is the end of the stored text, and the right edge
+    /// is its start. A caret just to the left of a right-to-left character is after that
+    /// character in stored order.
+    fn insert_index(&self, at: usize) -> usize {
+        let n = self.screen.order.len();
+        let at = at.min(n);
+        if at == 0 {
+            return if self.screen.base_rtl { n } else { 0 };
+        }
+        if at == n {
+            return if self.screen.base_rtl { 0 } else { n };
+        }
+        let logical = self.screen.order.get(at).copied().unwrap_or(n);
+        let rtl = self.screen.rtl.get(at).copied().unwrap_or(self.screen.base_rtl);
+        if rtl { logical.saturating_add(1).min(n) } else { logical }
+    }
+
+    /// Shown caret index for a stored boundary (`0` = before the first stored character).
+    fn caret_for_boundary(&self, boundary: usize) -> usize {
+        let n = self.screen.order.len();
+        let boundary = boundary.min(n);
+        let mut hits = Vec::new();
+        for at in 0..=n {
+            if self.insert_index(at) == boundary {
+                hits.push(at);
+            }
+        }
+        let rtl_side = boundary > 0 && self.logical_is_rtl(boundary.saturating_sub(1));
+        if rtl_side { hits.first().copied().unwrap_or(0) } else { hits.last().copied().unwrap_or(boundary) }
+    }
+
+    fn logical_is_rtl(&self, index: usize) -> bool {
+        self.screen
+            .order
+            .iter()
+            .position(|&logical| logical == index)
+            .and_then(|shown| self.screen.rtl.get(shown))
+            .copied()
+            .unwrap_or(self.screen.base_rtl)
+    }
+
+    fn insert_at_boundary(&mut self, boundary: usize, text: &str) -> usize {
+        let text = text.replace(['\r', '\n'], " ");
+        if text.is_empty() {
+            return 0;
+        }
+        let added = text.chars().count();
+        {
+            let mut logical = self.logical.borrow_mut();
+            let boundary = boundary.min(logical.chars().count());
+            let byte = logical.char_indices().nth(boundary).map(|(b, _)| b).unwrap_or(logical.len());
+            // `byte` came from `char_indices`, so it is on a character boundary.
+            if byte > logical.len() || !logical.is_char_boundary(byte) {
+                return 0;
+            }
+            logical.insert_str(byte, &text);
+        }
+        self.refresh();
+        added
+    }
+
+    fn delete_shown(&mut self, range: Range<usize>) {
+        let Some(shown) = self.screen.order.get(range) else { return };
+        let mut gone = shown.to_vec();
+        if gone.is_empty() {
+            return;
+        }
+        gone.sort_unstable();
+        gone.dedup();
+        let mut removed = String::new();
+        {
+            let mut logical = self.logical.borrow_mut();
+            let mut kept = String::with_capacity(logical.len());
+            for (index, ch) in logical.chars().enumerate() {
+                if gone.binary_search(&index).is_ok() {
+                    removed.push(ch);
+                } else {
+                    kept.push(ch);
+                }
+            }
+            *logical = kept;
+        }
+        if !removed.is_empty() {
+            self.deleted = Some(removed);
+        }
+        self.refresh();
+    }
+
+    fn logical_screen_slice(&self, range: Range<usize>) -> String {
+        let Some(shown) = self.screen.order.get(range) else { return String::new() };
+        let mut wanted = shown.to_vec();
+        wanted.sort_unstable();
+        let logical = self.logical.borrow();
+        let mut out = String::new();
+        for (index, ch) in logical.chars().enumerate() {
+            if wanted.binary_search(&index).is_ok() {
+                out.push(ch);
+            }
+        }
+        out
+    }
+}
+
+impl TextBuffer for RtlEdit {
+    fn is_mutable(&self) -> bool {
+        true
+    }
+
+    fn as_str(&self) -> &str {
+        &self.screen.text
+    }
+
+    fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
+        let boundary = self.insert_index(char_index.0);
+        self.insert_at_boundary(boundary, text)
+    }
+
+    fn delete_char_range(&mut self, char_range: Range<CharIndex>) {
+        self.delete_shown(char_range.start.0..char_range.end.0);
+    }
+
+    fn insert_text_at(&mut self, ccursor: &mut CCursor, text_to_insert: &str, char_limit: usize) {
+        let room = char_limit.saturating_sub(self.logical.borrow().chars().count());
+        if room == 0 || text_to_insert.is_empty() {
+            return;
+        }
+        let end = text_to_insert.char_indices().nth(room).map(|(byte, _)| byte).unwrap_or(text_to_insert.len());
+        let text = text_to_insert.get(..end).unwrap_or("");
+        if text.is_empty() {
+            return;
+        }
+        let boundary = self.insert_index(ccursor.index.0);
+        let added = self.insert_at_boundary(boundary, text);
+        ccursor.index = CharIndex(self.caret_for_boundary(boundary.saturating_add(added)));
+    }
+
+    fn delete_previous_char(&mut self, ccursor: CCursor) -> CCursor {
+        if ccursor.index.0 == 0 {
+            if self.screen.base_rtl && !self.screen.order.is_empty() {
+                self.delete_shown(0..1);
+                return CCursor { index: CharIndex(0), prefer_next_row: true };
+            }
+            return ccursor;
+        }
+        let at = ccursor.index.0;
+        self.delete_shown(at.saturating_sub(1)..at);
+        CCursor { index: CharIndex(at.saturating_sub(1).min(self.screen.order.len())), prefer_next_row: true }
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<Self>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::epaint::text::cursor::CCursor;
+
+    fn edit(text: &str) -> RtlEdit {
+        RtlEdit::new(Rc::new(RefCell::new(text.to_owned())))
+    }
+
+    fn type_into(start: &str, added: &str) -> (String, usize) {
+        let mut field = edit(start);
+        let mut cursor = CCursor { index: CharIndex(field.caret_for_boundary(start.chars().count())), prefer_next_row: false };
+        field.insert_text_at(&mut cursor, added, usize::MAX);
+        (field.logical.borrow().clone(), cursor.index.0)
+    }
+
+    fn type_each(chars: &str) -> (String, usize) {
+        let mut field = edit("");
+        let mut cursor = CCursor::default();
+        for ch in chars.chars() {
+            field.insert_text_at(&mut cursor, &ch.to_string(), usize::MAX);
+        }
+        (field.logical.borrow().clone(), cursor.index.0)
+    }
+
+    fn assert_permutation(text: &str) {
+        let screen = analyze(text);
+        let mut seen = screen.order.clone();
+        seen.sort_unstable();
+        let expect: Vec<usize> = (0..text.chars().count()).collect();
+        assert_eq!(seen, expect, "{text:?} -> {:?}", screen.text);
+        assert_eq!(screen.text.chars().count(), text.chars().count());
+        assert_eq!(screen.rtl.len(), text.chars().count());
+    }
+
+    #[test]
+    fn latin_text_is_unchanged_and_the_caret_stays_at_the_end() {
+        assert_eq!(screen_of("page"), "page");
+        assert!(!analyze("page").base_rtl);
+        let (text, caret) = type_each("page");
+        assert_eq!((text.as_str(), caret), ("page", 4));
+        let (text, caret) = type_into("pa", "ge");
+        assert_eq!((text.as_str(), caret), ("page", 4));
+    }
+
+    #[test]
+    fn arabic_words_type_in_logical_order_and_draw_in_reading_order() {
+        // Typing order, the string search matches.
+        let phrase = "مؤشرات الأداء";
+        let (text, caret) = type_each(phrase);
+        assert_eq!(text, phrase);
+        // The leading edge of a right-to-left line is the left side.
+        assert_eq!(caret, 0);
+        // Shown left to right, the line is the stored characters reversed, so the first typed
+        // word is on the right. "الأداء مؤشرات" read right to left.
+        // Code points, not an Arabic literal: a literal in this file is reordered by the bidi
+        // algorithm of the editor, so the bytes would not be the order under test.
+        // ء ا د أ ل ا   ت ا ر ش ؤ م  — the stored phrase reversed, first word on the right.
+        let shown: Vec<u32> = screen_of(phrase).chars().map(u32::from).collect();
+        assert_eq!(shown, [0x0621, 0x0627, 0x062F, 0x0623, 0x0644, 0x0627, 0x20, 0x062A, 0x0627, 0x0631, 0x0634, 0x0624, 0x0645]);
+        assert!(analyze(phrase).base_rtl);
+        assert_ne!(screen_of(phrase), phrase);
+    }
+
+    #[test]
+    fn arabic_backspace_removes_the_last_typed_character() {
+        let mut field = edit("");
+        let mut cursor = CCursor::default();
+        for ch in "مؤشرات".chars() {
+            field.insert_text_at(&mut cursor, &ch.to_string(), usize::MAX);
+        }
+        assert_eq!(cursor.index.0, 0);
+        cursor = field.delete_previous_char(cursor);
+        assert_eq!(field.logical.borrow().as_str(), "مؤشرا");
+        assert_eq!(cursor.index.0, 0);
+        // Latin backspace still removes the character before the caret.
+        let mut field = edit("page");
+        let cursor = CCursor { index: CharIndex(4), prefer_next_row: false };
+        let cursor = field.delete_previous_char(cursor);
+        assert_eq!(field.logical.borrow().as_str(), "pag");
+        assert_eq!(cursor.index.0, 3);
+    }
+
+    #[test]
+    fn inserting_in_the_middle_of_latin_and_at_the_edges_of_arabic() {
+        let mut field = edit("ab");
+        let mut cursor = CCursor { index: CharIndex(1), prefer_next_row: false };
+        field.insert_text_at(&mut cursor, "X", usize::MAX);
+        assert_eq!(field.logical.borrow().as_str(), "aXb");
+        assert_eq!(cursor.index.0, 2);
+
+        // Right edge of an Arabic line is the start of the stored text.
+        let mut field = edit("مر");
+        let at = field.screen.order.len();
+        let mut cursor = CCursor { index: CharIndex(at), prefer_next_row: false };
+        field.insert_text_at(&mut cursor, "ا", usize::MAX);
+        assert_eq!(field.logical.borrow().as_str(), "امر");
+    }
+
+    #[test]
+    fn a_selection_copies_and_deletes_stored_order() {
+        let mut field = edit("مؤشرات");
+        let slice = field.logical_screen_slice(0..field.screen.order.len());
+        assert_eq!(slice, "مؤشرات");
+        field.delete_shown(0..2);
+        // The two shown characters on the left are the last two stored characters.
+        assert_eq!(field.logical.borrow().as_str(), "مؤشر");
+        assert_eq!(field.deleted.as_deref(), Some("ات"));
+    }
+
+    #[test]
+    fn hebrew_and_mixed_lines_keep_a_permutation() {
+        assert_eq!(screen_of("שלום עולם"), "םלוע םולש");
+        assert_eq!(screen_of("See واحد"), "See دحاو");
+        assert_eq!(screen_of("مرحبا (عالم)"), "(ملاع) ابحرم");
+        for text in ["شלום", "A ب", "ب A", "12 مؤشرات", "واحد\nاثنين", "بَاب", ""] {
+            assert_permutation(text);
+        }
+    }
+
+    #[test]
+    fn odd_input_stays_a_permutation_and_a_huge_paste_is_not_reordered() {
+        for text in ["\u{202E}مرحبا", "\u{064B}", "(((مرحبا", " ", "\0ا", "ا\u{200D}ب", "\n\nب"] {
+            assert_permutation(text);
+            let mut field = edit(text);
+            field.insert_text_at(&mut CCursor::default(), "ا", usize::MAX);
+            assert!(field.logical.borrow().chars().count() >= text.chars().count());
+        }
+        let long = "ا ".repeat(60_000);
+        assert_eq!(screen_of(&long), long, "past the cap the field does not build a bidi map");
+        assert_permutation(&"مر ".repeat(500));
+    }
+
+    #[test]
+    fn char_limit_stops_the_field_growing() {
+        let mut field = edit("مر");
+        field.insert_text_at(&mut CCursor::default(), "حب", 2);
+        assert_eq!(field.logical.borrow().as_str(), "مر");
+        field.insert_text_at(&mut CCursor::default(), "حب", 3);
+        assert_eq!(field.logical.borrow().chars().count(), 3);
+    }
+
+    /// Glyphs and caret x positions for `text`, using the same layout the field paints.
+    fn painted(text: &str) -> Option<(String, Vec<f32>, Vec<f32>, usize)> {
+        if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+            return None;
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut got = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let galley = layout_galley(ui, text, f32::INFINITY);
+            let mut chars = String::new();
+            let mut xs = Vec::new();
+            if let Some(row) = galley.rows.first() {
+                for glyph in &row.glyphs {
+                    if glyph.advance_width > 0.0 {
+                        chars.push(glyph.chr);
+                        xs.push(glyph.pos.x);
+                    }
+                }
+            }
+            let carets: Vec<f32> =
+                (0..=text.chars().count()).map(|i| galley.pos_from_cursor(CCursor { index: CharIndex(i), prefer_next_row: false }).left()).collect();
+            got = Some((chars, xs, carets, galley.num_vertices));
+        });
+        output.drop_without_applying_deltas();
+        got
+    }
+
+    #[test]
+    fn the_painted_line_reads_right_to_left_and_the_caret_reaches_every_word() {
+        let phrase = "مؤشرات الأداء";
+        let Some((chars, xs, carets, vertices)) = painted(phrase) else { return };
+        assert!(vertices > 0, "the line was tessellated");
+        assert_eq!(chars, screen_of(phrase));
+        // Glyphs sit left to right.
+        for pair in xs.windows(2) {
+            assert!(pair[0] <= pair[1] + 0.1, "{xs:?}");
+        }
+        // The reported freeze: caret slots for the second word shared one x. They must not.
+        let mut rounded: Vec<i32> = carets.iter().map(|x| (x * 2.0).round() as i32).collect();
+        let total = rounded.len();
+        rounded.sort_unstable();
+        rounded.dedup();
+        assert!(rounded.len() * 2 > total, "caret x positions collapsed: {carets:?}");
+        // The leading edge is the left of the line, next to the last typed letter.
+        let left = xs.iter().copied().fold(f32::MAX, f32::min);
+        assert!((carets[0] - left).abs() < 1.0, "caret {carets:?} glyphs {xs:?}");
+        // The first typed word is the right-hand side, not under the caret.
+        let right = xs.iter().copied().fold(f32::MIN, f32::max);
+        assert!(right > left + 20.0, "glyphs did not spread: {xs:?}");
+    }
+}
