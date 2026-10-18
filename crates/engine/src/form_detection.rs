@@ -174,8 +174,9 @@ fn user_rect(info: &PageInfo, normalized: [f32; 4]) -> Option<[f64; 4]> {
 fn same_region(a: [f64; 4], b: [f64; 4]) -> bool {
     let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
     let intersection = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
-    let smaller = area(a).min(area(b));
-    smaller > 0.0 && intersection / smaller >= 0.5
+    let a_area = area(a);
+    let b_area = area(b);
+    a_area.is_finite() && b_area.is_finite() && a_area.min(b_area) > 0.0 && intersection / a_area.max(b_area) >= 0.5
 }
 
 impl Session {

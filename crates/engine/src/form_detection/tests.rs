@@ -112,3 +112,44 @@ fn normalized_boxes_follow_page_rotation_and_keep_their_displayed_size() {
     }
     assert!(session.form_detection_job(id, &[usize::MAX]).is_err());
 }
+
+#[test]
+fn small_existing_widget_does_not_hide_a_larger_field_and_repeat_detection_skips_it() {
+    let (mut session, id) = setup();
+    let proposal = proposals().remove(0);
+    let job = session.form_detection_job(id, &[]).unwrap();
+    let rect = user_rect(&job.pages[0].info, proposal.rect).unwrap();
+    session
+        .apply(
+            id,
+            Edit::AddField {
+                page: 0,
+                rect: [rect[0] + 2.0, rect[1] + 2.0, rect[0] + 12.0, rect[1] + 12.0],
+                kind: NewField::CheckBox,
+                name: Some("Existing checkbox".into()),
+            },
+        )
+        .unwrap();
+    let run = |session: &Session| {
+        session.form_detection_job(id, &[]).unwrap().run_inner(0.3, &mut |_, _| true, |_, _, _| Ok(vec![proposal.clone()])).unwrap()
+    };
+    let found = run(&session);
+    assert_eq!(found.fields().len(), 1, "a small checkbox must not suppress the text field around it");
+    session.apply_detected_fields(found).unwrap();
+    assert_eq!(session.get(id).unwrap().form.len(), 2);
+    assert!(run(&session).fields().is_empty(), "the same text field is not added twice");
+}
+
+#[test]
+fn duplicate_regions_require_coverage_of_both_rectangles() {
+    let field = [0.0, 0.0, 200.0, 30.0];
+    let small = [0.0, 0.0, 10.0, 10.0];
+    assert!(!same_region(small, field));
+    assert!(!same_region(field, small));
+    assert!(same_region(field, field));
+    assert!(same_region(field, [2.0, 1.0, 202.0, 31.0]));
+    for invalid in [[0.0; 4], [f64::NAN; 4], [0.0, 0.0, f64::INFINITY, 30.0]] {
+        assert!(!same_region(invalid, field));
+        assert!(!same_region(field, invalid));
+    }
+}

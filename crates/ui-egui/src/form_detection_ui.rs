@@ -58,6 +58,10 @@ mod native {
         running: Option<Running>,
     }
     impl State {
+        /// A request owns the modal; a cancelled worker may outlive it.
+        pub(crate) fn is_open(&self) -> bool {
+            self.request.is_some()
+        }
         pub fn is_running(&self) -> bool {
             self.running.is_some()
         }
@@ -202,7 +206,7 @@ mod native {
     }
 
     pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) -> bool {
-        if app.form_detection.request.is_none() {
+        if !app.form_detection.is_open() {
             return false;
         }
         let (mut download, mut basic, mut cancel) = (false, false, false);
@@ -311,6 +315,9 @@ pub use native::{Installer, State};
 pub struct State;
 #[cfg(target_arch = "wasm32")]
 impl State {
+    pub(crate) fn is_open(&self) -> bool {
+        false
+    }
     pub fn is_running(&self) -> bool {
         false
     }

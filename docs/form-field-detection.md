@@ -1,6 +1,6 @@
 # Native form-field detection
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** desktop first-use download, background detection and model release preparation · **Status:** native desktop and automation implemented; public download awaits publication of the model release asset; browser retains geometry detection
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** modal input blocking, duplicate filtering and offline notice repair · **Status:** native desktop and automation implemented; public download awaits publication of the model release asset; browser retains geometry detection
 
 Prepare a form uses FFDetr to find text fields, checkboxes and signature areas
 on printed or scanned forms. It runs locally in Rust using RTen. No document is
@@ -14,12 +14,20 @@ consent. The user can cancel or explicitly use basic detection instead.
 Download progress, detection progress, cancellation and retry remain in the app;
 there is no model picker or technical configuration to complete.
 
+The consent and progress dialogs block document shortcuts and canvas input.
+Escape or Cancel dismisses the dialog and requests cancellation. Document input
+resumes when the dialog closes, even if a worker still needs time to stop.
+
 The download verifies its exact size and SHA-256, installs atomically and keeps
 licence/attribution notices beside it. A failed or cancelled transfer preserves
 the previous model and leaves the document unchanged. Retries restart the transfer.
 A verified installed model works offline. One detector is retained between jobs
 so repeated detection does not reload the weights. Corrupt installations offer
 the download again; filesystem errors are reported.
+
+An explicit install request repairs missing or incorrect licence notices beside
+an existing verified model without downloading it again. Correct notices stay
+in place, so repeated installation needs no notice writes.
 
 Models live in the user's application data directory: `$XDG_DATA_HOME/pdfcraft/models/ffdetr`
 (or `~/.local/share/pdfcraft/models/ffdetr`) on Unix, `~/Library/Application Support/PdfCraft/models/ffdetr`
@@ -79,6 +87,10 @@ undoable batch through the normal permission, transaction and save mechanisms.
 Cancellation never applies partial results. The UI uses the original document ID,
 so switching tabs cannot apply results to another document.
 
+A proposal duplicates an existing widget only when their intersection covers at
+least half of each rectangle. A small widget inside a larger distinct proposal
+does not suppress that proposal.
+
 Rendering is page-at-a-time, up to 144 dpi, capped at 3000px on the longest side.
 The image detector is limited to 12 million pixels. Coordinates account for crop
 origin and page rotation; widget text retains its displayed orientation. Names
@@ -120,5 +132,6 @@ properties and OCR-assisted label association are not inferred yet.
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | Detection dialogs own document input, duplicates require coverage of both rectangles, and explicit installation repairs notices offline. |
 | 2026-10-17 | Desktop download consent, progress/cancel/retry, reusable native detector, managed-model automation and separate release packaging. |
 | 2026-10-17 | Native FFDetr engine jobs and explicit-model CLI/MCP support. |

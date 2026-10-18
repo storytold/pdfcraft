@@ -72,6 +72,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Download the one supported artifact to a staging file, check its length and SHA-256,
 /// and publish it atomically. Cancellation or any failure leaves the previous model intact.
+/// Reusing a verified model repairs its licence notices without accessing the network.
 /// `progress` returns false to cancel and receives (bytes received, total bytes).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn install(dir: &Path, mut progress: impl FnMut(u64, u64) -> bool) -> Result<PathBuf, Error> {
@@ -79,6 +80,7 @@ pub fn install(dir: &Path, mut progress: impl FnMut(u64, u64) -> bool) -> Result
         return Err(Error::Cancelled);
     }
     if available(dir)? {
+        install_notices(dir)?;
         return Ok(dir.join(MODEL_FILE));
     }
     let found = rustls_native_certs::load_native_certs();
@@ -156,8 +158,7 @@ fn install_reader(
     }
     staging.as_file().sync_all()?;
     // All notices are installed before the model, which is the availability marker.
-    atomic_text(dir, "LICENSE-APACHE", LICENSE)?;
-    atomic_text(dir, "ATTRIBUTION.txt", ATTRIBUTION)?;
+    install_notices(dir)?;
     if !progress(done, expected) {
         return Err(Error::Cancelled);
     }
@@ -167,12 +168,31 @@ fn install_reader(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn install_notices(dir: &Path) -> Result<(), Error> {
+    atomic_text(dir, "LICENSE-APACHE", LICENSE)?;
+    atomic_text(dir, "ATTRIBUTION.txt", ATTRIBUTION)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn atomic_text(dir: &Path, name: &str, text: &str) -> Result<(), Error> {
     use std::io::Write;
+    let path = dir.join(name);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() == text.len() as u64 => {
+            let mut content = Vec::new();
+            std::fs::File::open(&path)?.take(metadata.len().saturating_add(1)).read_to_end(&mut content)?;
+            if content == text.as_bytes() {
+                return Ok(());
+            }
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let mut file = tempfile::NamedTempFile::new_in(dir)?;
     file.write_all(text.as_bytes())?;
     file.as_file().sync_all()?;
-    file.persist(dir.join(name)).map_err(|e| Error::Io(e.error))?;
+    file.persist(path).map_err(|e| Error::Io(e.error))?;
     Ok(())
 }
 
@@ -185,6 +205,21 @@ pub fn install(_dir: &Path, _progress: impl FnMut(u64, u64) -> bool) -> Result<P
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[cfg(unix)]
+    #[test]
+    fn correct_notices_do_not_need_a_writable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        atomic_text(dir.path(), "LICENSE-APACHE", LICENSE).unwrap();
+        atomic_text(dir.path(), "ATTRIBUTION.txt", ATTRIBUTION).unwrap();
+        let permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = atomic_text(dir.path(), "LICENSE-APACHE", LICENSE).and_then(|_| atomic_text(dir.path(), "ATTRIBUTION.txt", ATTRIBUTION));
+        std::fs::set_permissions(dir.path(), permissions).unwrap();
+        result.unwrap();
+    }
+
     #[test]
     fn download_verifies_then_publishes_and_credits_the_model() {
         let dir = tempfile::tempdir().unwrap();

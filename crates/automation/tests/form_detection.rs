@@ -92,6 +92,17 @@ fn managed_model_status_install_and_detection_are_headless_and_offline_when_inst
     assert_eq!(call(&mut a, "form_detection_status", args)["available"], true);
     let installed = call(&mut a, "form_detection_install", json!({"directory":dir,"confirm_download":true}));
     assert_eq!(installed["available"], true);
+    let licence = dir.join("LICENSE-APACHE");
+    let attribution = dir.join("ATTRIBUTION.txt");
+    assert_eq!(std::fs::read_to_string(&licence).unwrap(), include_str!("../../../LICENSE-APACHE"));
+    assert_eq!(std::fs::read_to_string(&attribution).unwrap(), pdfcraft_form_detect::model::ATTRIBUTION);
+    let original_model = std::fs::read(dir.join(pdfcraft_form_detect::MODEL_FILE)).unwrap();
+    std::fs::write(&licence, vec![b'x'; include_str!("../../../LICENSE-APACHE").len()]).unwrap();
+    std::fs::remove_file(&attribution).unwrap();
+    call(&mut a, "form_detection_install", json!({"directory":dir,"confirm_download":true}));
+    assert_eq!(std::fs::read_to_string(&licence).unwrap(), include_str!("../../../LICENSE-APACHE"));
+    assert_eq!(std::fs::read_to_string(&attribution).unwrap(), pdfcraft_form_detect::model::ATTRIBUTION);
+    assert_eq!(std::fs::read(dir.join(pdfcraft_form_detect::MODEL_FILE)).unwrap(), original_model);
     let result = call(&mut a, "form_detect_fields", json!({"doc":id,"backend":"ffdetr","directory":dir}));
     assert_eq!(result["fields"].as_array().unwrap().len(), 3);
     std::fs::remove_dir_all(dir).unwrap();

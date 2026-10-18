@@ -147,3 +147,62 @@ fn cancelling_the_prompt_or_a_live_download_keeps_the_document_unchanged() {
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
+
+#[test]
+fn consent_blocks_document_shortcuts_and_escape_restores_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut h = harness(directory.path().into(), None);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    assert!(h.state().form_detection.is_prompting());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1, "the consent dialog owns document shortcuts");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().form_detection.is_prompting());
+
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.state_mut().execute("form.detect");
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages[0].rotation, 90, "undo cannot edit behind the dialog");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages[0].rotation, 0, "undo works after cancellation");
+}
+
+#[test]
+fn download_blocks_close_and_escape_releases_shortcuts_before_the_worker_finishes() {
+    let directory = tempfile::tempdir().unwrap();
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, finish) = std::sync::mpsc::channel();
+    let finish = std::sync::Mutex::new(finish);
+    let install: Installer = Arc::new(move |_, progress| {
+        assert!(progress(1, 100));
+        entered.send(()).unwrap();
+        let _ = finish.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5));
+        Err(pdfcraft_form_detect::Error::Cancelled)
+    });
+    let mut h = harness(directory.path().into(), Some(install));
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().run_inline = false;
+    h.get_by_label("Download and detect").click();
+    h.run_steps(2);
+    started.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1, "the download dialog owns document shortcuts");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().form_detection.is_running(), "the cancelled worker is still waiting");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "cancellation releases shortcuts before the worker exits");
+    release.send(()).unwrap();
+}
