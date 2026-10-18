@@ -41,8 +41,7 @@ impl crate::PdfCraftApp {
     pub(crate) fn run_tool(&mut self, name: &str, args: &Value, root: Option<&str>) -> Reply {
         // An agent must not overwrite an editor's draft, save an older value, or leave stale
         // field/object indexes after changing the document. The person commits typing first.
-        if self.dialog.is_some()
-            || self.password_prompt.is_some()
+        if self.modal_open()
             || self.bookmark_rename.is_some()
             || self.views.iter().any(|v| {
                 v.comments.composer.is_some()

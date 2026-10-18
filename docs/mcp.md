@@ -103,8 +103,10 @@ config works across the suite) keep the agent to the folders you give it:
 - `--root DIR` still works and can be combined with these flags. Both then apply: a path must be
   inside `--root` and inside the matching automation root.
 
-`pdfcraft-cli mcp` always runs the session in its own process (there is no flag to connect it to a
-running app), so the roots cover every server it starts. The desktop app is not confined by them.
+Without `--connect`, `pdfcraft-cli mcp` runs the session in its own process, so the roots cover
+every server it starts. In connected mode (`--connect FILE`), `--root DIR` is forwarded to the
+window, but `--automation-read-root` and `--automation-write-root` are not supported yet and are
+refused at start.
 
 What the roots do not cover: tools that take no path still read and change the open documents, and
 `text_extract` and the other inspection tools return their content. Keychain and Windows
@@ -168,7 +170,8 @@ sent extra keys before get an error now.
   control method `tool.call {name, arguments, root?}`, which runs the same tool table on the
   window's session between frames, like a menu command, and draws what changed. `doc` ids are the
   window's (`doc_list`, `ui_state`); a document a tool opens or makes gets a tab behind the
-  person's. `--root` confines paths as it does headless.
+  person's. `--root` confines paths as it does headless; `--automation-read-root` and
+  `--automation-write-root` are not supported yet with `--connect`.
 - **Read-only window inspection**: `ui_state`, `ui_inspect` and `ui_screenshot` (an image) are
   listed in normal and compact mode. MCP inspection uses the protected `tool.inspect` boundary
   rather than the existing trusted UI driver's `ui.inspect`. MCP does not expose UI input or menu commands: those could

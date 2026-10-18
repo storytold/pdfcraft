@@ -2099,6 +2099,15 @@ fn control_tool_call_runs_on_the_windows_documents_and_shows_the_change() {
 }
 
 #[test]
+fn control_tool_call_refused_while_modal_open() {
+    let (mut h, c) = harness();
+    h.state_mut().tool_runner = Some(Box::new(|_, _, _, _| Ok(json!({}))));
+    h.state_mut().close_request = Some(pdfcraft_ui_egui::CloseRequest::Quit);
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "doc_list" })).unwrap_err();
+    assert!(e.contains("close the open dialog in the window before running a document tool"), "{e}");
+}
+
+#[test]
 fn control_does_not_expose_private_dialogs() {
     let (mut h, c) = harness();
     for dialog in [pdfcraft_ui_egui::Dialog::Signature, pdfcraft_ui_egui::Dialog::Sign, pdfcraft_ui_egui::Dialog::Protect] {

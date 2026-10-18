@@ -165,6 +165,9 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
     let (roots, args) = automation_roots("mcp", args)?;
     let args = args.as_slice();
     validate_options("mcp", args, MCP_OPTIONS)?;
+    if flag(args, "--connect").is_some() && roots.is_some() {
+        return Err("mcp: --connect does not support --automation-read-root/--automation-write-root yet; use --root".into());
+    }
     let compact = args.iter().any(|a| a == "--compact");
     let mut auto = automation(args)?;
     if let Some(roots) = roots {

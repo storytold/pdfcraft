@@ -163,6 +163,27 @@ fn mcp_connect_without_a_running_window_says_how_to_start_it() {
     }
 }
 
+#[test]
+fn mcp_connect_refuses_automation_roots() {
+    let dir = scratch("roots");
+    let control = dir.0.join("pc.json");
+    let child = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
+        .arg("mcp")
+        .arg("--connect")
+        .arg(&control)
+        .arg("--automation-read-root")
+        .arg(&dir.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--connect does not support --automation-read-root"), "{stderr}");
+}
+
 #[cfg(unix)]
 #[test]
 fn mcp_connect_refuses_a_control_file_other_users_can_read() {
