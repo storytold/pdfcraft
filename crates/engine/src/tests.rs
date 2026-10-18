@@ -5511,6 +5511,24 @@ fn inter_scan(lines: &[&str], jpeg_quality: Option<u8>) -> Vec<u8> {
     bytes
 }
 
+/// #3264: the German document language, not only `la`, keeps the umlauts and ß.
+#[test]
+fn german_document_language_keeps_umlauts_and_eszett() {
+    if !ocr::available_for("de") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Gerne übersenden wir Ihnen unser Angebot für den", "Großformat-Drucker mit Förderband. Mit freundlichen Grüßen"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("angebot.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "de".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["übersenden", "für", "Großformat", "Förderband", "Grüßen"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    assert!(!text.contains('?'), "{text}");
+}
+
 /// #524: `ç` and `ù` must come back as themselves. A reading of `facade` or `ou` has no `?` and
 /// would pass a test that only rejects question marks.
 #[test]

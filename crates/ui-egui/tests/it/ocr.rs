@@ -57,8 +57,10 @@ fn chinese_ocr_language_runs_from_the_dialog() {
     h.get_by_value("English").click();
     h.run_steps(1);
     h.get_by_label("Chinese (Simplified) and English").click();
-    h.run_steps(1);
+    // The menu closes on the following frame. A click before that hits the menu.
+    h.run_steps(2);
     assert_eq!(h.state().ocr_draft.language, "zh");
+    assert!(h.query_by_label("Polish").is_none(), "the language menu stayed open");
     if !pdfcraft_engine::ocr::available_for("zh") {
         eprintln!("skipped: Chinese OCR models not installed");
         return;
@@ -69,6 +71,25 @@ fn chinese_ocr_language_runs_from_the_dialog() {
     let app = h.state();
     let id = app.active_ids().unwrap().1;
     assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+}
+
+/// #3264: German is a document language in the Recognize Text dialog.
+#[test]
+fn german_is_a_document_language() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(1);
+    h.get_by_label("German").click();
+    h.run_steps(1);
+    assert_eq!(h.state().ocr_draft.language, "de");
 }
 
 #[test]
@@ -85,8 +106,10 @@ fn latin_ocr_language_runs_from_the_dialog() {
     h.get_by_value("English").click();
     h.run_steps(1);
     h.get_by_label("Latin (accented)").click();
-    h.run_steps(1);
+    // The menu closes on the following frame. A click before that hits the menu.
+    h.run_steps(2);
     assert_eq!(h.state().ocr_draft.language, "la");
+    assert!(h.query_by_label("Polish").is_none(), "the language menu stayed open");
     if !pdfcraft_engine::ocr::available_for("la") {
         eprintln!("skipped: Latin OCR models not installed");
         return;
@@ -96,7 +119,7 @@ fn latin_ocr_language_runs_from_the_dialog() {
     assert!(h.state().ocr_run.is_none());
     let app = h.state();
     let id = app.active_ids().unwrap().1;
-    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "{:?}", app.toast);
 }
 
 #[test]

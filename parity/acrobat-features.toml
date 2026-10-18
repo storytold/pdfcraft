@@ -6635,8 +6635,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/src/tests.rs::chinese_ocr_makes_mixed_scans_searchable", "crates/engine/src/tests.rs::latin_ocr_keeps_german_accents_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::chinese_ocr_language_runs_from_the_dialog", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "English, Simplified Chinese/mixed English and accented Latin (German, French, Czech, Polish, Nordic) use separate local recognisers (ocrs and PP-OCR models on RTen). Chinese and Latin require their ONNX model and dictionary from cargo xtask models; other OCR languages remain unsupported."
+evidence = ["crates/engine/src/tests.rs::chinese_ocr_makes_mixed_scans_searchable", "crates/engine/src/tests.rs::latin_ocr_keeps_german_accents_searchable", "crates/engine/src/tests.rs::german_document_language_keeps_umlauts_and_eszett", "crates/engine/src/tests.rs::latin_ocr_keeps_french_cedilla_and_grave", "crates/engine/src/tests.rs::latin_ocr_keeps_spanish_names_and_amounts", "crates/ocr/src/lib.rs::named_european_languages_use_the_latin_model", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::chinese_ocr_language_runs_from_the_dialog", "crates/ui-egui/tests/it/ocr.rs::latin_ocr_language_runs_from_the_dialog", "crates/ui-egui/tests/it/ocr.rs::german_is_a_document_language", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "English uses the ocrs model. Simplified Chinese and accented Latin use PP-OCR models on RTen. French, German, Spanish, Portuguese, Italian, Dutch, Danish, Norwegian, Swedish, Icelandic, Finnish, Czech and Polish share the Latin model and prefer that language's letters when two readings are close. Chinese and Latin require their model and dictionary from cargo xtask models. Other scripts remain unsupported. The dialog still starts on English."
 
 [[feature]]
 id = "ocr.searchable-image"

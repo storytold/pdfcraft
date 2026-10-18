@@ -561,6 +561,53 @@ mod tests {
         assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
     }
 
+    /// #524 and #3264: German is a named language on the accented Latin model, and it prefers
+    /// ä ö ü ß. The same model serves the other European names. English stays on its own model.
+    #[test]
+    fn named_european_languages_use_the_latin_model() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-langs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in [DETECTION_MODEL, RECOGNITION_MODEL, LATIN_MODEL, LATIN_DICTIONARY, CHINESE_MODEL, CHINESE_DICTIONARY] {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        for (code, _) in LANGUAGES {
+            let models = Models::in_dir_for(&dir, code).unwrap_or_else(|| panic!("{code} was not found"));
+            let expect = if *code == "en" {
+                RECOGNITION_MODEL
+            } else if *code == "zh" {
+                CHINESE_MODEL
+            } else {
+                LATIN_MODEL
+            };
+            assert!(models.recognition.ends_with(expect), "{code}: {}", models.recognition.display());
+            if !matches!(*code, "en" | "zh" | "la") {
+                assert!(!preferred_letters(code).is_empty(), "{code} has no preferred letters");
+            }
+        }
+        let german = preferred_letters("de");
+        assert!(german.contains('ä') && german.contains('ö') && german.contains('ü') && german.contains('ß'), "{german}");
+        assert!(Models::in_dir_for(&dir, "xx").is_none());
+        assert!(matches!(Ocr::find_for("xx"), Err(OcrError::Language(_))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A language can only prefer a letter the Latin dictionary actually contains.
+    #[test]
+    fn preferred_letters_are_in_the_latin_dictionary() {
+        let Some(models) = Models::find_for("la") else {
+            eprintln!("skipped: Latin OCR models not installed");
+            return;
+        };
+        let path = models.recognition.with_file_name(LATIN_DICTIONARY);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let have: std::collections::BTreeSet<char> = text.chars().collect();
+        for (code, _) in LANGUAGES {
+            for ch in preferred_letters(code).chars() {
+                assert!(have.contains(&ch), "{code} prefers {ch} (U+{:04X}), which {} does not contain", u32::from(ch), path.display());
+            }
+        }
+    }
+
     #[test]
     fn french_prefers_cedilla_and_grave_and_does_not_claim_the_nordic_ring() {
         assert!(preferred_letters("fr").contains('ç') && preferred_letters("fr").contains('ù'));
