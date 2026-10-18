@@ -7841,6 +7841,82 @@ fn copying_one_radio_button_keeps_its_export_value() {
 }
 
 #[test]
+fn copying_a_radio_button_keeps_an_inherited_export_value() {
+    let mut doc = fixture();
+    let opt = Object::Array(vec![Object::String(PdfString::text("Small")), Object::String(PdfString::text("Large"))]);
+    let group = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"T".to_vec(), PdfString::text("sizes"));
+        d.set(b"Opt".to_vec(), opt);
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(20, 0))]));
+        d
+    }));
+    doc.update_dict(ObjRef::new(20, 0), |d| d.set(b"Parent".to_vec(), Object::Ref(group))).unwrap();
+    doc.update_dict(ObjRef::new(4, 0), |d| {
+        let listed = d.get(b"Fields").and_then(|f| f.as_array().cloned()).unwrap_or_default();
+        let listed = listed.into_iter().map(|f| if f.as_ref() == Some(ObjRef::new(20, 0)) { Object::Ref(group) } else { f }).collect();
+        d.set(b"Fields".to_vec(), Object::Array(listed));
+    })
+    .unwrap();
+    let copy = copy_field(&mut doc, "sizes.size", &[1], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert_eq!(c.options, [("Large".to_string(), "Large".to_string())], "the parent's /Opt, cut to the copied button");
+    assert_eq!(c.export_of(0), Some("Large"));
+}
+
+/// A radio group whose on states are positions in its `/Opt` (`/0`, `/1`, `/2`), as ISO 32000-2
+/// allows for buttons with `/Opt`, with the third button selected.
+fn numbered_radio() -> Document {
+    let widget = |i: usize, on: bool| {
+        let (x, state) = (50 + 30 * i, if on { format!("/{i}") } else { "/Off".into() });
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS {state} /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /{i} 9 0 R /Off 9 0 R >> /D << /{i} 9 0 R /Off 9 0 R >> >> >>",
+            x + 15
+        )
+    };
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Btn /T (pick) /Ff 49152 /V /2 /DV /2 /Opt [(first) (second) (third)] /Kids [6 0 R 7 0 R 8 0 R] >>".into(),
+        widget(0, false),
+        widget(1, false),
+        widget(2, true),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ])
+}
+
+#[test]
+fn copying_a_numbered_radio_button_renumbers_its_state() {
+    let mut doc = numbered_radio();
+    let copy = copy_field(&mut doc, "pick", &[2], 0, [0.0, -40.0]).unwrap();
+    let all = fields(&doc);
+    let c = field(&all, &copy);
+    assert_eq!(c.widgets.len(), 1);
+    assert_eq!(c.widgets[0].on_state.as_deref(), Some("0"), "the only button is position 0 in the copy's /Opt");
+    assert_eq!(c.widgets[0].state.as_deref(), Some("0"));
+    assert_eq!((c.value.as_slice(), c.default.as_slice()), (&["0".to_string()][..], &["0".to_string()][..]));
+    assert_eq!(c.options, [("third".to_string(), "third".to_string())]);
+    let w = doc.get(c.widgets[0].obj).as_dict().cloned().unwrap();
+    let down = w.get(b"AP").and_then(|a| a.as_dict().and_then(|a| a.get(b"D").cloned())).unwrap();
+    let mut down: Vec<String> = down.as_dict().unwrap().iter().map(|(k, _)| name_text(k)).collect();
+    down.sort();
+    assert_eq!(down, ["0", "Off"], "the down appearance is renamed too");
+    assert_eq!(field(&all, "pick").widgets[2].on_state.as_deref(), Some("2"), "the original is untouched");
+}
+
+#[test]
+fn copying_an_unselected_numbered_radio_button_copies_it_off() {
+    let mut doc = numbered_radio();
+    let copy = copy_field(&mut doc, "pick", &[1], 0, [0.0, -40.0]).unwrap();
+    let c = doc.get(field(&fields(&doc), &copy).obj).as_dict().cloned().unwrap();
+    assert_eq!((c.name(b"V"), c.name(b"DV")), (Some(&b"Off"[..]), Some(&b"Off"[..])), "/2 isn't one of the copied buttons");
+    assert_eq!(c.name(b"AS"), Some(&b"Off"[..]));
+}
+
+#[test]
 fn a_copied_signed_signature_field_is_drawn_blank() {
     let mut doc = fixture();
     let name = add_field(&mut doc, 0, [50.0, 220.0, 250.0, 270.0], &NewField::Signature, None).unwrap();

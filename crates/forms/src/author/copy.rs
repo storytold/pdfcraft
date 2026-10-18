@@ -7,8 +7,45 @@ use super::tree::{add_to_fields, add_to_page, ensure_form, free_name, top_names}
 use super::{Dict, Document, FieldKind, FormError, Object, PdfString, Widget, fields, invalid, page_refs};
 
 /// Field entries a kid inherits from its ancestors (ISO 32000-2 §12.7.4.1, Tables 226 and 228;
-/// `MaxLen` from Table 229).
-const INHERITED_KEYS: [&[u8]; 7] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen"];
+/// `MaxLen` from Table 229, and a check box or radio group's `Opt`).
+const INHERITED_KEYS: [&[u8]; 8] = [b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen", b"Opt"];
+
+/// `name` as a position in a button field's `/Opt` (`/0`, `/1` ...), as ISO 32000-2 lets the
+/// on states of buttons with `/Opt` be named.
+fn opt_position(name: &[u8]) -> Option<usize> {
+    let s = std::str::from_utf8(name).ok()?;
+    s.parse().ok().filter(|i: &usize| i.to_string() == s)
+}
+
+/// `name` renamed after the new position `moved` gives its old one, when it is a position.
+fn renumbered(name: &[u8], moved: &std::collections::HashMap<usize, usize>) -> Option<Vec<u8>> {
+    opt_position(name).and_then(|i| moved.get(&i)).map(|j| j.to_string().into_bytes())
+}
+
+/// Rename a copied widget's on states that are `/Opt` positions (in `/AP /N`, `/AP /D` and
+/// `/AS`) after the positions its field's copied `/Opt` gives them. Other names stay.
+fn renumber_states(doc: &Document, w: &mut Dict, moved: &std::collections::HashMap<usize, usize>) {
+    if let Some(mut ap) = w.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) {
+        let mut changed = false;
+        for k in [&b"N"[..], b"D"] {
+            let Some(states) = ap.get(k).map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()) else { continue };
+            if states.iter().any(|(n, _)| renumbered(n, moved).is_some()) {
+                let mut out = Dict::new();
+                for (n, v) in states.iter() {
+                    out.set(renumbered(n, moved).unwrap_or_else(|| n.clone()), v.clone());
+                }
+                ap.set(k.to_vec(), Object::Dict(out));
+                changed = true;
+            }
+        }
+        if changed {
+            w.set(b"AP".to_vec(), Object::Dict(ap));
+        }
+    }
+    if let Some(s) = w.name(b"AS").and_then(|s| renumbered(s, moved)) {
+        w.set(b"AS".to_vec(), Object::Name(s));
+    }
+}
 
 /// "Check Box1" → "Check Box", "address.city" → "city": what a copy's name counts up from.
 fn copy_base(name: &str) -> &str {
@@ -68,11 +105,23 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
         field.remove(b"Lock");
     }
     // A check box or radio group's /Opt holds one export value per widget: the copied ones'.
+    // When its on states are named after those positions (/0, /1 ...), the copies' are renamed
+    // after their new ones, and a value naming a button left behind is off.
+    let mut moved = std::collections::HashMap::new();
     if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
         let opt = field.get(b"Opt").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned());
         if let Some(opt) = opt.filter(|o| o.len() == f.widgets.len()) {
-            let kept = picked.iter().filter_map(|p| f.widgets.iter().position(|w| w.obj == p.obj)).filter_map(|i| opt.get(i).cloned()).collect();
-            field.set(b"Opt".to_vec(), Object::Array(kept));
+            let at: Vec<usize> = picked.iter().filter_map(|p| f.widgets.iter().position(|w| w.obj == p.obj)).collect();
+            field.set(b"Opt".to_vec(), Object::Array(at.iter().filter_map(|i| opt.get(*i).cloned()).collect()));
+            if f.widgets.iter().enumerate().all(|(i, w)| w.on_state.as_deref().and_then(|s| opt_position(s.as_bytes())) == Some(i)) {
+                moved = at.iter().enumerate().map(|(new, old)| (*old, new)).collect();
+                for k in [&b"V"[..], b"DV"] {
+                    let v = field.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(<[u8]>::to_vec));
+                    if let Some(v) = v.filter(|v| opt_position(v).is_some()) {
+                        field.set(k.to_vec(), Object::Name(renumbered(&v, &moved).unwrap_or_else(|| b"Off".to_vec())));
+                    }
+                }
+            }
         }
     }
     // Radio buttons copied without the selected one: none of the copies is selected.
@@ -101,6 +150,7 @@ pub fn copy_field(doc: &mut Document, name: &str, widgets: &[usize], page: usize
             d.remove(b"AP");
             d.remove(b"AS");
         }
+        renumber_states(doc, &mut d, &moved);
         d.set(b"P".to_vec(), Object::Ref(page_ref));
         let r = w.rect;
         let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
