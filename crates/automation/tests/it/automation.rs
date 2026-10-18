@@ -9414,6 +9414,66 @@ fn text_box_and_callout_fill_and_border_through_tools() {
     }
 }
 
+/// #3273: images became pages as large as their pixels, so a set of photos gave pages of several
+/// sizes and none of them paper. `page_size` puts them all on one sheet, scaled to fit.
+#[test]
+fn image_pages_go_on_a_chosen_paper_size_through_every_create_tool() {
+    let dir = workdir("image-page-size");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Two pictures of different shapes, from the fixture's own pages.
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1, 2] }));
+    let shots = ["src/a_page_1.png", "src/a_page_2.png"];
+    let size = |a: &mut Automation, d: u64, page: usize| -> (f64, f64) {
+        let p = &ok(a, "doc_info", json!({ "doc": d }))["pages"][page];
+        (p["width"].as_f64().unwrap(), p["height"].as_f64().unwrap())
+    };
+    const A4: (f64, f64) = (595.28, 841.89);
+    let close = |got: (f64, f64), want: (f64, f64)| (got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01;
+
+    // Without it, pages follow the pixels, as they always have.
+    let plain = ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots }))["doc"].as_u64().unwrap();
+    assert!(!close(size(&mut a, plain, 0), A4), "the default is unchanged: {:?}", size(&mut a, plain, 0));
+
+    // doc_create: a paper name, with the sheet turned to each image by default.
+    let named = ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": "A4" }))["doc"].as_u64().unwrap();
+    for page in 0..2 {
+        let got = size(&mut a, named, page);
+        assert!(close(got, A4) || close(got, (A4.1, A4.0)), "page {page} is an A4 sheet either way up: {got:?}");
+    }
+    // page_turn: false pins the orientation, so every page is portrait A4.
+    let pinned =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": "A4", "page_turn": false }))["doc"].as_u64().unwrap();
+    for page in 0..2 {
+        assert!(close(size(&mut a, pinned, page), A4), "page {page}: {:?}", size(&mut a, pinned, page));
+    }
+    // An explicit size in points works too, and the names Print accepts are accepted here.
+    let explicit =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": [300, 300], "page_turn": false }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, explicit, 0), (300.0, 300.0)));
+    let letter =
+        ok(&mut a, "doc_create", json!({ "from": "images", "paths": shots, "page_size": "Letter", "page_turn": false }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, letter, 0), (612.0, 792.0)));
+
+    // doc_create_multiple takes it as well.
+    ok(&mut a, "doc_create_multiple", json!({ "paths": shots, "page_size": "A4", "page_turn": false, "out": "multiple.pdf" }));
+    let multiple = ok(&mut a, "doc_open", json!({ "path": "multiple.pdf" }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, multiple, 0), A4) && close(size(&mut a, multiple, 1), A4));
+
+    // mode "separate" writes one PDF per image, each on the sheet.
+    ok(&mut a, "doc_create_multiple", json!({ "paths": shots, "mode": "separate", "out_dir": "out", "page_size": "A4", "page_turn": false }));
+    let one = ok(&mut a, "doc_open", json!({ "path": "out/a_page_1.pdf" }))["doc"].as_u64().unwrap();
+    assert!(close(size(&mut a, one, 0), A4));
+
+    // A size that is not a paper name or a pair of points is refused, on every tool.
+    for bad in [json!("A9"), json!([300]), json!(["a", "b"]), json!(5), json!({})] {
+        assert!(
+            matches!(a.call("doc_create", &json!({ "from": "images", "paths": shots, "page_size": bad })), Err(ToolError::InvalidArgs(_))),
+            "{bad} should be refused"
+        );
+    }
+}
+
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
 /// of #2516. Alpha's last baseline is 35.6 pt above Bravo's; moving Alpha down 21.2 pt leaves
 /// 14.4 pt, Alpha's own leading, so the next read groups the two as one paragraph.

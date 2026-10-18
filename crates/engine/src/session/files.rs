@@ -1,7 +1,7 @@
 use super::{
-    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state,
-    source_kind, writable, write_full,
+    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImagePage, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport,
+    SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster,
+    set_default_layer_state, source_kind, writable, write_full,
 };
 
 impl Session {
@@ -22,7 +22,18 @@ impl Session {
 
     /// Create image pages at embedded resolution or a fixed dpi, without resampling.
     pub fn create_from_images_with_resolution(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Arc<Vec<u8>>, EditError> {
-        self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
+        self.create_from_images_with(images, resolution, ImagePage::Image)
+    }
+
+    /// Create image pages at a resolution, each on its own size or on one fixed sheet (scaled to
+    /// fit and centred). Pixels are never resampled either way.
+    pub fn create_from_images_with(
+        &self,
+        images: &[(String, Vec<u8>)],
+        resolution: ImageResolution,
+        page: ImagePage,
+    ) -> Result<Arc<Vec<u8>>, EditError> {
+        self.write_new(&pdfcraft_create::from_images_with(images, resolution, page)?)
     }
 
     /// A new document from plain text (US Letter, 11 pt Helvetica). Text Helvetica can't draw is
@@ -42,6 +53,12 @@ impl Session {
     /// Convert a file Create understands (an image or plain text) to PDF bytes; a PDF is checked
     /// (it must open and allow copying pages) and returned as it is.
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert_to_pdf_with(name, bytes, ImagePage::Image)
+    }
+
+    /// [`Self::convert_to_pdf`], putting an image source on `page`. A PDF or text source is
+    /// unaffected: only an image is laid onto a sheet of a chosen size.
+    pub fn convert_to_pdf_with(&self, name: &str, bytes: &Arc<Vec<u8>>, page: ImagePage) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
             return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
         };
@@ -49,7 +66,7 @@ impl Session {
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
-            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
+            SourceKind::Image => self.create_from_images_with(&[(name.to_string(), bytes.to_vec())], ImageResolution::Embedded, page),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
