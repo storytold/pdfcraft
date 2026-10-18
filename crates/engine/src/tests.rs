@@ -9880,8 +9880,15 @@ fn thick_line_fixture() -> Vec<u8> {
 fn line_weights_off_draws_hairlines_for_the_view_only() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("lines.pdf", None, Arc::new(thick_line_fixture()), None).expect("opens");
-    // Rows of the middle column with any ink (a hairline straddling two rows counts two).
-    let inked_rows = |s: &Session| (1..=300).filter(|&y| pixel(s, id, 0, 100, y)[0] < 240).count();
+    // Rows of the middle column with any ink (a hairline straddling two rows counts two), from one
+    // render per state.
+    let inked_rows = |s: &Session| {
+        let doc = s.get(id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        (0..out.height).filter(|&y| out.rgba[((y * out.width + 100) * 4) as usize] < 240).count()
+    };
     assert!(s.get(id).unwrap().line_weights_shown(), "line weights are shown by default");
     let at_width = inked_rows(&s);
     assert!((12..=14).contains(&at_width), "a 12 pt line at 72 dpi: {at_width} rows");
