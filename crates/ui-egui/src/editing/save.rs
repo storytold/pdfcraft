@@ -55,8 +55,12 @@ impl PdfCraftApp {
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         // A signature just placed with Fill & Sign is a removable comment unless it is flattened:
-        // ask once whether to lock it into the page (#2149).
-        if self.ask_to_lock_signatures && !self.flatten_fill_sign_on_save && self.placed_signatures.contains(&id) {
+        // ask once whether to lock it into the page (#2149). Only while a Fill & Sign mark is still
+        // there (undo may have taken it away), and never on a digitally signed document: locking
+        // changes page content in an update, which validators report as a change after signing.
+        let still_marked = self.session.get(id).is_some_and(|d| d.info.annotations.iter().any(|a| a.fill_sign));
+        let signed = self.session.get(id).is_some_and(|d| d.is_signed());
+        if self.ask_to_lock_signatures && !self.flatten_fill_sign_on_save && self.placed_signatures.contains(&id) && still_marked && !signed {
             self.pending_lock = Some(PendingLock { id, target, after: Box::new(after) });
             self.dialog = Some(crate::Dialog::LockSignatures);
             return false;

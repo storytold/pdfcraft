@@ -1843,6 +1843,71 @@ fn a_lock_that_fails_keeps_the_question() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// #2348 review: the lock question stays out of the way where it must. Answering it on a file
+/// that changed on disk leaves the changed-on-disk question showing (it was closed with the lock
+/// question, so the save silently didn't happen); a signature placed and then undone asks
+/// nothing; and a digitally signed document isn't asked, since locking would change it after
+/// signing.
+#[test]
+fn the_lock_question_is_skipped_or_kept_where_it_must_be() {
+    let place = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(2);
+        click(h, 40.0, 300.0);
+    };
+    // A file that changed on disk.
+    let path = std::env::temp_dir().join(format!("pdfcraft-lock-changed-{}.pdf", std::process::id()));
+    std::fs::write(&path, FIXTURE).unwrap();
+    let mut h = harness_bytes(FIXTURE);
+    h.state_mut().close_tab(0);
+    h.state_mut().open_path(&path.to_string_lossy());
+    for _ in 0..100 {
+        if !h.state().views.is_empty() {
+            break;
+        }
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(3);
+    place(&mut h);
+    std::fs::write(&path, [FIXTURE, b"\n% rewritten elsewhere\n".as_slice()].concat()).unwrap();
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::OverwriteChanged), "the changed-on-disk question shows");
+    let _ = std::fs::remove_file(&path);
+
+    // Placed, then undone: nothing to lock, so the save just saves.
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-undone-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    place(&mut h);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no question after the signature was undone");
+    let _ = std::fs::remove_file(&out);
+
+    // Digitally signed: never asked.
+    let mut doc = {
+        let mut h = harness();
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        app.session.sign(id, &digital_id, opts).expect("signs")
+    };
+    let mut h = harness_bytes(&std::mem::take(&mut doc));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    place(&mut h);
+    let id = h.state().views[0].id;
+    assert!(h.state().session.get(id).unwrap().is_signed());
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "a signed document isn't asked");
+    let _ = std::fs::remove_file(&out);
+}
+
 /// #2149: Cancel saves nothing, and Keep editable with Don't ask again turns the question off.
 #[test]
 fn cancelling_the_lock_question_saves_nothing() {

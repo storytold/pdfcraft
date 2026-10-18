@@ -2503,6 +2503,7 @@ animation effects	Off	ఆఫ్
 	Send backward	వెనుకకు పంపు
 	Send to back	అందరికంటే వెనుకకు పంపు
 
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
 	Lock your signature into the page?	మీ సంతకాన్ని పేజీలో లాక్ చేయాలా?
 	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	ఉంచిన సంతకం లాక్ చేసే వరకు ఒక వ్యాఖ్య మాత్రమే: PDF ఎడిటర్ ఉన్న ఎవరైనా దాన్ని తరలించవచ్చు లేదా తొలగించవచ్చు. లాక్ చేయడం వల్ల నింపి సంతకం చేయి వచనం, గుర్తులు, సంతకాలు పేజీలో భాగమవుతాయి.
 	Don't ask again	మళ్లీ అడగవద్దు

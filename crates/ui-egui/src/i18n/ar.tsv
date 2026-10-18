@@ -2278,6 +2278,7 @@ calendar date	December	ديسمبر
 	Smaller pages	صفحات أصغر
 	Reset page size	إعادة ضبط حجم الصفحة
 	Flatten Fill & Sign when saving	تسطيح التعبئة والتوقيع عند الحفظ
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
 	Lock your signature into the page?	هل تريد تثبيت توقيعك في الصفحة؟
 	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	التوقيع الموضوع تعليق إلى أن يُثبَّت: يستطيع أي شخص لديه محرر PDF نقله أو إزالته. التثبيت يجعل نصوص التعبئة والتوقيع وعلاماتها وتواقيعها جزءًا من الصفحة.
 	Don't ask again	عدم السؤال مرة أخرى

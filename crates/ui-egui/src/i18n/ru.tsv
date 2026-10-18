@@ -91,6 +91,7 @@
 	Side panels	Боковые панели
 	Enable Acrobat JavaScript	Включить Acrobat JavaScript
 	Flatten Fill & Sign when saving	Расплющить «Заполнить и подписать» при сохранении
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
 	Lock your signature into the page?	Закрепить подпись на странице?
 	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Размещённая подпись остаётся комментарием, пока не закреплена: любой с редактором PDF может её переместить или удалить. Закрепление делает текст, отметки и подписи из «Заполнить и подписать» частью страницы.
 	Don't ask again	Больше не спрашивать

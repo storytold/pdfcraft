@@ -62,6 +62,7 @@
 	Side panels	Yan paneller
 	Enable Acrobat JavaScript	Acrobat JavaScript'i etkinleştir
 	Flatten Fill & Sign when saving	Kaydederken Doldur ve İmzala'yı düzleştir
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
 	Lock your signature into the page?	İmzanız sayfaya sabitlensin mi?
 	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Yerleştirilen imza, sabitlenene kadar bir yorumdur: PDF düzenleyicisi olan herkes onu taşıyabilir veya kaldırabilir. Sabitlemek, Doldur ve İmzala metnini, işaretlerini ve imzalarını sayfanın parçası yapar.
 	Don't ask again	Bir daha sorma

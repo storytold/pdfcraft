@@ -329,8 +329,8 @@ pub struct PdfCraftApp {
     /// Ask on the first save after Fill & Sign places a signature or initials whether to lock
     /// them into the page (#2149). Off once the user says not to ask again.
     pub ask_to_lock_signatures: bool,
-    /// Documents with a signature or initials placed by Fill & Sign since they were last saved
-    /// (or asked about).
+    /// Documents with a Fill & Sign signature placed since their last save, asked about on
+    /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
     pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
     /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
     pub(crate) pending_lock: Option<editing::PendingLock>,

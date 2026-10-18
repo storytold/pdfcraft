@@ -1983,7 +1983,11 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     if modal_closed || req.close || replaces {
         // Only now: the number in Preferences can pass through 0 on its way to the one wanted.
         app.recent.truncate(app.recent_limit);
-        app.dialog = None;
+        // An answer may have opened another dialog this frame (saving a file that changed on
+        // disk asks about that): it stays.
+        if app.dialog == Some(dialog) {
+            app.dialog = None;
+        }
         app.props_draft = None;
         app.view_draft = None;
         app.custom_draft = None;
