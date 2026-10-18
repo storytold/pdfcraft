@@ -495,6 +495,9 @@ pub(crate) struct Renderer {
     pub(crate) scaler: Scaler,
     /// PdfCraft patch: low-detail preview render (see `InterpreterSettings::preview`).
     pub(crate) preview: bool,
+    /// PdfCraft patch: every stroke that isn't text is one device pixel wide (see
+    /// `RenderSettings::hairline_strokes`).
+    pub(crate) hairline_strokes: bool,
     // TODO: Remove this once vello_cpu bug with non-transparent images is fixed
     image_transparency_stack: Vec<bool>,
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
@@ -589,6 +592,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        hairline_strokes: bool,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -605,6 +609,7 @@ impl Renderer {
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
+            hairline_strokes,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
         }
@@ -630,6 +635,15 @@ impl Renderer {
         if transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph {
             line_width /= transformed_width;
             line_width *= threshold;
+        }
+
+        // PdfCraft patch: line weights off. Every stroke that isn't text is one device pixel
+        // wide, however wide the document says (a plan's 0.7 mm walls and 0.13 mm dimension
+        // lines then read alike at any zoom, as in Acrobat with Line Weights unticked). Text
+        // outlines keep their widths: stroked glyphs are letterforms, not line art. A transform
+        // that maps nothing to the device (zero or non-finite scale) draws nothing anyway.
+        if self.hairline_strokes && !is_text && min_factor.is_finite() && min_factor > 0.0 {
+            line_width = 1.0 / min_factor;
         }
 
         // PdfCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
@@ -711,6 +725,7 @@ impl Renderer {
                 in_type3_glyph: false,
                 scaler: self.scaler,
                 preview: self.preview,
+                hairline_strokes: self.hairline_strokes,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
             };
@@ -1485,6 +1500,7 @@ impl Renderer {
                                 in_type3_glyph: false,
                                 scaler: self.scaler,
                                 preview: self.preview,
+                                hairline_strokes: self.hairline_strokes,
                                 image_transparency_stack: Vec::new(),
                                 ink: InkState::default(),
                             };
@@ -1549,6 +1565,7 @@ impl Renderer {
                             in_type3_glyph: false,
                             scaler: self.scaler,
                             preview: self.preview,
+                            hairline_strokes: self.hairline_strokes,
                             image_transparency_stack: Vec::new(),
                             ink: InkState::default(),
                         };
@@ -1855,6 +1872,7 @@ impl<'a> Device<'a> for Renderer {
                                         in_type3_glyph: false,
                                         scaler: self.scaler,
                                         preview: self.preview,
+                                        hairline_strokes: self.hairline_strokes,
                                         image_transparency_stack: Vec::new(),
                                         ink: InkState::default(),
                                     };
@@ -2372,6 +2390,9 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
+        // PdfCraft patch: a soft mask's coverage is document geometry, not line art on show, so
+        // its strokes keep their widths whatever the viewer's line-weights setting.
+        hairline_strokes: false,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
     };
