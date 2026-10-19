@@ -4395,8 +4395,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.snap"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::drawing_tools_snap_to_the_pages_paths_with_f3", "crates/automation/tests/automation.rs::comment_add_snaps_points_to_the_drawing_on_request"]
-notes = "Not an Acrobat feature; CAD's object snap for commenting on drawings. With Snap to drawing on (F3, or the button on the drawing tools' quick bar; remembered across starts), the points of connected lines, polygons, clouds, lines, arrows, rectangles and ovals land on the page's own vector paths: endpoints, midpoints, intersections and the paths themselves, within 6 screen points, with a green ring and the target's name under the pointer, as the measuring tools do (same extraction, same limits and notices). Shift holds a line or the next segment to the nearest 45°. Freehand drawing and text markup don't snap. Headless: comment_add with snap: true (snap_tolerance in points). Not yet: a choice of targets for the drawing tools (the measuring tools' Endpoints/Midpoints/Intersections/Paths boxes apply to measuring only), snapping to raster or text outlines, snapping while a shape is moved or resized."
+evidence = ["crates/ui-egui/tests/it/comments.rs::drawing_tools_snap_to_the_pages_paths_with_f3", "crates/automation/tests/it/automation.rs::comment_add_snaps_points_to_the_drawing_on_request"]
+notes = "Not an Acrobat feature; CAD's object snap for commenting on drawings. With Snap to drawing on (F3, or the button on the drawing tools' quick bar; remembered across starts), the points of connected lines, polygons, clouds, lines, arrows, rectangles and ovals land on the page's own vector paths: endpoints, midpoints, intersections and the paths themselves, within 6 screen points, with a green ring and the target's name under the pointer, as the measuring tools do (same extraction, with room for a CAD plan: up to two million segments and 256 MiB of content per page, looked up through a grid of cells so a query stays under a millisecond on a plan with a million segments, and the same notices). Shift holds a line or the next segment to the nearest 45°. Freehand drawing and text markup don't snap. Headless: comment_add with snap: true (snap_tolerance in points). Not yet: a choice of targets for the drawing tools (the measuring tools' Endpoints/Midpoints/Intersections/Paths boxes apply to measuring only), snapping to raster or text outlines, snapping while a shape is moved or resized."
 
 [[feature]]
 id = "comment.measure-snap"
@@ -4408,7 +4408,7 @@ status = "shipped"
 commands = ["measure.snap"]
 tools = ["measure_snap"]
 evidence = ["crates/automation/tests/it/automation.rs::measurement_snap_tool_covers_all_targets", "crates/measure/src/tests.rs::nested_forms_transforms_curves_and_cycles_are_bounded", "crates/measure/src/tests.rs::snap_paths_endpoints_midpoints_and_intersections"]
-notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. Cubics flattened to 0.2 user units. Bounded extraction and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted."
+notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. Cubics flattened to 0.2 user units. Bounded extraction (two million segments and 256 MiB of content per page; a grid of cells keeps queries quick on CAD plans) and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted."
 
 [[feature]]
 id = "comment.measure-info-panel"
