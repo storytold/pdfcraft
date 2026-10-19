@@ -86,10 +86,28 @@ pub enum PsExportError {
 /// interpreter's nesting-depth and content budgets bounding hostile documents. Every
 /// degradation lands in [`ExportedPs::warnings`] *and* as a `%%PdfCraftNote:` comment in
 /// [`ExportedPs::bytes`].
-pub fn export(bytes: Arc<Vec<u8>>, password: Option<&str>, pages: &[usize], format: PsFormat) -> Result<ExportedPs, PsExportError> {
-    let pdf = Pdf::new_with_password(bytes, password.unwrap_or("")).map_err(|err| {
+///
+/// Equivalent to [`export_with_config`] over a default [`pdfcraft_render::RenderConfig`]:
+/// no password, the document's own layer state and comments visible.
+pub fn export(bytes: Arc<Vec<u8>>, pages: &[usize], format: PsFormat) -> Result<ExportedPs, PsExportError> {
+    export_with_config(bytes, &pdfcraft_render::RenderConfig::default(), pages, format)
+}
+
+/// Export with the viewer configuration the document is being shown under: the password
+/// that opens it, layer (OCG) visibility overrides and View ▸ Hide all comments — the
+/// same [`pdfcraft_render::RenderConfig`] the raster renderer's `page_render` honours, so
+/// an export matches what the user sees (an encrypted document exports with its password;
+/// a hidden layer or hidden comment stays out of the program). See [`export`] for the
+/// page selection and drive semantics.
+pub fn export_with_config(
+    bytes: Arc<Vec<u8>>,
+    config: &pdfcraft_render::RenderConfig,
+    pages: &[usize],
+    format: PsFormat,
+) -> Result<ExportedPs, PsExportError> {
+    let pdf = Pdf::new_with_password(bytes, config.password.as_deref().unwrap_or("")).map_err(|err| {
         let reason = match err {
-            LoadPdfError::Decryption(_) => "the document is encrypted; export needs a decrypted copy",
+            LoadPdfError::Decryption(_) => "the document is encrypted and no working password was given for it",
             LoadPdfError::Invalid => "the bytes are not a readable PDF",
         };
         PsExportError::UnreadableDocument(reason.to_string())
@@ -134,10 +152,11 @@ pub fn export(bytes: Arc<Vec<u8>>, password: Option<&str>, pages: &[usize], form
             // configures its page drives with (`page_font_resolver`: the craft-fonts
             // Japanese fallback over the standard-14 substitutes), so non-embedded
             // Adobe-Japan1 text meets the same face in the exported program and in
-            // `page_render`'s raster. No viewer overrides exist for export; the
+            // `page_render`'s raster. The layer overrides and comment visibility the
+            // caller's config carries apply on top, as they do on screen; the
             // nesting-depth/page-content budgets the safety rules pin live in the
             // interpreter's `Context` and reset with this fresh per-page context.
-            interpreter_settings(),
+            interpreter_settings(config),
         );
         let mut device = PsDevice::from_table(Some(no), page.resources(), std::mem::take(&mut fonts));
         // Mirror `render_into`: clip to the page box, wrap the page in a transparency
@@ -196,14 +215,20 @@ pub fn export(bytes: Arc<Vec<u8>>, password: Option<&str>, pages: &[usize], form
     Ok(ExportedPs { bytes: out, warnings })
 }
 
-/// The interpreter settings every exported page is driven with: exactly the
-/// font-resolver wiring the raster renderer's `RenderConfig::settings` installs
-/// ([`pdfcraft_render::page_font_resolver`]), so glyph substitution — including the
-/// craft-fonts Japanese fallback for non-embedded Adobe-Japan1 text — is identical on
-/// both sides of the oracle. Everything else stays at the defaults: export has no
-/// viewer overrides to layer on top.
-fn interpreter_settings() -> InterpreterSettings {
-    InterpreterSettings { font_resolver: pdfcraft_render::page_font_resolver(), ..InterpreterSettings::default() }
+/// The interpreter settings every exported page is driven with: the caller's
+/// [`pdfcraft_render::RenderConfig`] mapped onto the interpreter exactly as the raster
+/// renderer's own `RenderConfig::settings` maps it (layer overrides, comment visibility),
+/// plus the same font-resolver wiring ([`pdfcraft_render::page_font_resolver`]), so glyph
+/// substitution — including the craft-fonts Japanese fallback for non-embedded
+/// Adobe-Japan1 text — is identical on both sides of the oracle. Everything else stays
+/// at the defaults.
+fn interpreter_settings(config: &pdfcraft_render::RenderConfig) -> InterpreterSettings {
+    InterpreterSettings {
+        ocg_overrides: config.layers.clone(),
+        hide_comments: config.hide_comments,
+        font_resolver: pdfcraft_render::page_font_resolver(),
+        ..InterpreterSettings::default()
+    }
 }
 
 /// The axis-aligned box `rect` occupies after `transform`, as `[llx lly urx ury]`
@@ -481,7 +506,7 @@ mod tests {
     fn export_two_pages_has_pages_trailer_and_page_comments() {
         let bytes = std::sync::Arc::new(two_page_pdf());
         // Out-of-order request with a duplicate: output ascending, each page once.
-        let out = export(std::sync::Arc::clone(&bytes), None, &[1, 0, 1], PsFormat::Ps).expect("valid request");
+        let out = export(std::sync::Arc::clone(&bytes), &[1, 0, 1], PsFormat::Ps).expect("valid request");
         let s = text(&out);
         assert!(s.starts_with("%!PS-Adobe-3.0\n"), "PS header: {s}");
         assert!(s.contains("%%Pages: 2\n"), "exported page count: {s}");
@@ -503,9 +528,9 @@ mod tests {
     #[test]
     fn eps_requires_exactly_one_page() {
         let bytes = std::sync::Arc::new(two_page_pdf());
-        let err = export(std::sync::Arc::clone(&bytes), None, &[0, 1], PsFormat::Eps).expect_err("two pages cannot be one EPS");
+        let err = export(std::sync::Arc::clone(&bytes), &[0, 1], PsFormat::Eps).expect_err("two pages cannot be one EPS");
         assert_eq!(err, PsExportError::EpsNeedsExactlyOnePage { requested: 2 });
-        let err = export(std::sync::Arc::clone(&bytes), None, &[], PsFormat::Eps).expect_err("EPS needs a page");
+        let err = export(std::sync::Arc::clone(&bytes), &[], PsFormat::Eps).expect_err("EPS needs a page");
         assert_eq!(err, PsExportError::EpsNeedsExactlyOnePage { requested: 0 });
 
         let out = export(bytes, None, &[1], PsFormat::Eps).expect("one page exports as EPS");
@@ -527,6 +552,28 @@ mod tests {
     fn invalid_page_index_is_actionable() {
         let err = export(std::sync::Arc::new(fixture()), None, &[0, 3], PsFormat::Ps).expect_err("index 3 is out of range");
         assert_eq!(err, PsExportError::InvalidPages { requested: vec![0, 3], page_count: 1 });
+    }
+
+    /// The viewer configuration reaches the drive (finding: `postscript` used to pass
+    /// only the bytes). View ▸ Hide all comments keeps the fixture's square annotation
+    /// — a markup annotation whose appearance paints blue — out of the program, while
+    /// the default config draws it; and `export` is exactly `export_with_config` over a
+    /// default config, so the old API's behaviour is unchanged.
+    #[test]
+    fn config_reaches_the_drive_and_export_is_the_default_config() {
+        // The fixture's passthrough DCT payload is binary, so read the program lossily.
+        let lossy = |out: &super::ExportedPs| String::from_utf8_lossy(&out.bytes).into_owned();
+        let bytes = std::sync::Arc::new(fixture());
+        let plain = export(std::sync::Arc::clone(&bytes), &[0], PsFormat::Ps).expect("the default config exports");
+        let default = super::export_with_config(std::sync::Arc::clone(&bytes), &pdfcraft_render::RenderConfig::default(), &[0], PsFormat::Ps)
+            .expect("the default config exports");
+        assert_eq!(plain, default, "export() is export_with_config over a default config");
+        assert!(lossy(&plain).contains("0 0 1 setrgbcolor"), "the annotation's blue ink is drawn by default");
+
+        let hidden = pdfcraft_render::RenderConfig { hide_comments: true, ..pdfcraft_render::RenderConfig::default() };
+        let out = super::export_with_config(bytes, &hidden, &[0], PsFormat::Ps).expect("hidden comments export");
+        let s = lossy(&out);
+        assert!(!s.contains("0 0 1 setrgbcolor"), "the markup annotation is not drawn: {s}");
     }
 
     /// A `/BM /Multiply` ExtGState degrades to a fidelity note, not to pseudo-ops: the
@@ -690,7 +737,7 @@ mod tests {
         });
         let as_bytes =
             |resolved: Option<(hayro::hayro_interpret::font::FontData, u32)>| resolved.map(|(data, index)| (data.as_ref().as_ref().to_vec(), index));
-        let wired = as_bytes((super::interpreter_settings().font_resolver)(&query));
+        let wired = as_bytes((super::interpreter_settings(&pdfcraft_render::RenderConfig::default()).font_resolver)(&query));
         let bare = as_bytes((InterpreterSettings::default().font_resolver)(&query));
         if pdfcraft_fonts::document_japanese_font().is_none() {
             eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): both resolvers fall back alike");
