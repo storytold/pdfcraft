@@ -127,6 +127,39 @@ pub fn font_directories() -> Vec<std::path::PathBuf> {
     dirs.push(std::path::Path::new(manifest).join("../fonts"));
     dirs.push(std::path::Path::new(manifest).join("fonts"));
 
+    // 5. System font directories across platforms
+    #[cfg(windows)]
+    {
+        let windir = std::env::var_os("WINDIR")
+            .or_else(|| std::env::var_os("SystemRoot"))
+            .map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
+        dirs.push(windir.join("Fonts"));
+
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(std::path::PathBuf::from(local_app_data).join(r"Microsoft\Windows\Fonts"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(std::path::PathBuf::from("/Library/Fonts"));
+        dirs.push(std::path::PathBuf::from("/System/Library/Fonts"));
+        dirs.push(std::path::PathBuf::from("/System/Library/Fonts/Supplemental"));
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(std::path::PathBuf::from(home).join("Library/Fonts"));
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for base in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+            dirs.push(std::path::PathBuf::from(base));
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(std::path::PathBuf::from(home).join(".local/share/fonts"));
+        }
+    }
+
     // Filter to existing directories and deduplicate
     let mut unique = Vec::new();
     for d in dirs {
@@ -170,46 +203,59 @@ fn inspect_font_metadata(bytes: &[u8]) -> Option<(String, String, bool)> {
     Some((family, style, has_thai))
 }
 
+fn scan_dir_recursive(dir: &std::path::Path, depth: usize, entries: &mut Vec<ThaiFontEntry>) {
+    if depth > 2 {
+        return;
+    }
+    let Ok(read_dir) = std::fs::read_dir(dir) else { return };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth < 2 {
+                scan_dir_recursive(&path, depth + 1, entries);
+            }
+            continue;
+        }
+        let is_font_ext = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("ttf") || ext.eq_ignore_ascii_case("otf")
+        });
+        if !is_font_ext {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() || meta.len() == 0 || meta.len() > (64 << 20) {
+            continue;
+        }
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        if entries.iter().any(|e: &ThaiFontEntry| e.file_name.eq_ignore_ascii_case(&file_name)) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Some((family, style, has_thai)) = inspect_font_metadata(&bytes) else { continue };
+        if !has_thai {
+            continue;
+        }
+        let name = if style.eq_ignore_ascii_case("Regular") {
+            family.clone()
+        } else {
+            format!("{family} {style}")
+        };
+        entries.push(ThaiFontEntry {
+            name,
+            family,
+            style,
+            file_name,
+            path,
+        });
+    }
+}
+
 fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
     let mut entries = Vec::new();
     let dirs = font_directories();
 
     for dir in dirs {
-        let Ok(read_dir) = std::fs::read_dir(&dir) else { continue };
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let is_font_ext = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("ttf") || ext.eq_ignore_ascii_case("otf")
-            });
-            if !is_font_ext {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else { continue };
-            if !meta.is_file() || meta.len() == 0 || meta.len() > (64 << 20) {
-                continue;
-            }
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-            if entries.iter().any(|e: &ThaiFontEntry| e.file_name.eq_ignore_ascii_case(&file_name)) {
-                continue;
-            }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
-            let Some((family, style, has_thai)) = inspect_font_metadata(&bytes) else { continue };
-            if !has_thai {
-                continue;
-            }
-            let name = if style.eq_ignore_ascii_case("Regular") {
-                family.clone()
-            } else {
-                format!("{family} {style}")
-            };
-            entries.push(ThaiFontEntry {
-                name,
-                family,
-                style,
-                file_name,
-                path,
-            });
-        }
+        scan_dir_recursive(&dir, 0, &mut entries);
     }
 
     // Sort entries:
