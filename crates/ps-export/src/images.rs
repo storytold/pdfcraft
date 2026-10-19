@@ -128,13 +128,15 @@ fn raster_ops(raster: &RasterImage<'_>, emit: &mut Emitter) {
         [Filter::FlateDecode] if passthrough_sized => passthrough_components(dict)
             .filter(|&n| bpc_is_8(dict) && no_predictor(dict) && decode_is_identity(dict, n))
             .map(|n| Plan { width: raster.width(), height: raster.height(), components: n, source: "/FlateDecode filter".into(), bits: 8 }),
-        [Filter::CcittFaxDecode] if passthrough_sized => decode_is_identity(dict, 1).then(|| ccitt_source(dict)).flatten().map(|source| Plan {
-            width: raster.width(),
-            height: raster.height(),
-            components: 1,
-            source,
-            bits: 1,
-        }),
+        // CCITT passthrough additionally requires a plain DeviceGray space (1
+        // component): the samples leave verbatim with `0 setgray`, so any other
+        // space must take the decode path — an `/Indexed` palette especially, whose
+        // default 1-bit `/Decode [0 1]` the identity check below cannot distinguish
+        // from gray's, and whose colours the decode path's palette lookup restores.
+        [Filter::CcittFaxDecode] if passthrough_sized && passthrough_components(dict) == Some(1) => decode_is_identity(dict, 1)
+            .then(|| ccitt_source(dict))
+            .flatten()
+            .map(|source| Plan { width: raster.width(), height: raster.height(), components: 1, source, bits: 1 }),
         _ => None,
     };
 
@@ -644,6 +646,30 @@ mod tests {
         assert!(out.contains("0 setgray\n"), "1-component space: {out}");
         assert!(contains_bytes(&raw, &CCITT_PAYLOAD), "fax bytes verbatim: {out:?}");
         assert_eq!(notes, "", "no degradations");
+    }
+
+    /// A CCITT image in an `/Indexed` space does not pass through: the samples would
+    /// paint as grey levels (`0 setgray`) instead of through the palette, and the
+    /// decode-identity check cannot catch it (a 1-bit Indexed default `/Decode` is
+    /// also `[0 1]`). The decode path decodes the fax, applies the palette and
+    /// re-encodes as ASCII85/Flate RGB — the shape the renderer's own Indexed-CCITT
+    /// test covers on the raster side.
+    #[test]
+    fn indexed_ccitt_decodes_through_the_palette() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace [/Indexed /DeviceRGB 1 <FF0000 0000FF>] /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 2 /Rows 2 >>",
+            &CCITT_PAYLOAD,
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        assert!(!out.contains("CCITTFaxDecode"), "no passthrough for an Indexed space: {out}");
+        assert!(!out.contains("0 setgray\n"), "the samples are not painted as grey levels: {out}");
+        assert!(out.contains("/DeviceRGB setcolorspace\n"), "the palette decodes to RGB: {out}");
+        assert!(out.contains("/ASCII85Decode filter /FlateDecode filter"), "the decode path re-encodes: {out}");
+        assert!(!contains_bytes(&raw, &CCITT_PAYLOAD), "the fax bytes do not leave verbatim: {out:?}");
+        assert_eq!(notes, "", "applying the palette is not a degradation");
     }
 
     /// An opaque RGB raster straight from the flattener (no PDF, no interpreter behind
