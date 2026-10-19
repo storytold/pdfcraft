@@ -533,17 +533,31 @@ impl PdfCraftApp {
         }
     }
 
-    /// The tab already showing the file at `path` (the same path, or one that names the same
-    /// file once made absolute).
-    pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+    /// The window and document already showing the file at `path`, in any window: one file,
+    /// one tab (#2166) holds across windows.
+    pub(crate) fn window_showing(&self, path: &str) -> Option<(WindowId, DocId)> {
+        self.all_views()
+            .find(|(_, v)| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+            .map(|(w, v)| (w, v.id))
+    }
+
+    /// Bring `doc` to the front in window `window` (and the window to the front).
+    pub(crate) fn show_doc_in(&mut self, window: WindowId, doc: DocId) {
+        self.with_window(window, |a| {
+            if let Some(i) = a.views.iter().position(|v| v.id == doc) {
+                a.active = Some(i);
+            }
+        });
+        if window != self.current_window() {
+            self.queue_window_op(WindowOp::Focus(window));
+        }
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
-        if let Some(i) = self.tab_showing(path) {
-            self.active = Some(i);
+        if let Some((window, doc)) = self.window_showing(path) {
+            self.show_doc_in(window, doc);
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             self.open_path(path);
@@ -567,20 +581,23 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
-        // One file, one tab (#2166): a file that is open already comes to the front instead,
-        // and the tool it was opened for runs on it. One still being opened is left to that.
-        if let Some(i) = self.tab_showing(path) {
+        // One file, one tab (#2166), in whichever window: a file that is open already comes to
+        // the front instead, and the tool it was opened for runs on it there. One still being
+        // opened is left to that.
+        if let Some((window, doc)) = self.window_showing(path) {
             self.startup_superseded = true;
-            self.active = Some(i);
-            if let Some((layout, continuous)) = display_override
-                && let Some(view) = self.views.get_mut(i)
-            {
-                view.set_display(layout, continuous);
-                self.launch_display_target = Some(view.id);
-            }
-            if let Some(command) = then {
-                self.execute(command);
-            }
+            self.show_doc_in(window, doc);
+            self.with_window(window, |a| {
+                if let Some((layout, continuous)) = display_override
+                    && let Some(view) = a.views.iter_mut().find(|v| v.id == doc)
+                {
+                    view.set_display(layout, continuous);
+                    a.launch_display_target = Some(doc);
+                }
+                if let Some(command) = then {
+                    a.execute(command);
+                }
+            });
             return OpenOutcome::Focused;
         }
         if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {

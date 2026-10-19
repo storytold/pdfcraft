@@ -61,8 +61,13 @@ impl PdfCraftApp {
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
+                    // The choice arrives in whichever window has the focus then: the save, and
+                    // what follows it (a close), run in the window that asked.
+                    let origin = self.current_window();
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
-                        app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
+                        let _ = app.with_window(origin, |app| {
+                            app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
+                        });
                     });
                     return false;
                 }
