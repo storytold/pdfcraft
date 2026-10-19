@@ -18,6 +18,31 @@ pub struct OpenContext {
     js_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
+    /// The session's [`FileReadGuard`], which opens a file read besides the one the host
+    /// handed over.
+    pub(crate) file_read_guard: Option<FileReadGuard>,
+}
+
+/// Confinement for a file the engine reads on its own besides the one it was given: today the
+/// document beside a detached signature (`.p7s`, #2129). The guard performs the open itself,
+/// under the host's rules, and hands back the handle; the engine reads only from that, so the
+/// path is never resolved again after the host's check — a sibling (or a folder above it)
+/// swapped for a link after the guard returns cannot steer the engine's read to a file the
+/// host would refuse. What remains is the window inside the guard, between its check and its
+/// open; closing that needs no-follow opens, which the workspace does not carry a crate for.
+/// Hosts that hold every path to a root install one (AGENTS.md §3); the desktop UI, where the
+/// user picked the file themselves, has none.
+pub type FileReadGuard = Arc<dyn Fn(&std::path::Path) -> std::result::Result<std::fs::File, FileReadRefusal> + Send + Sync>;
+
+/// Why a [`FileReadGuard`] handed back no file. `Unreadable` carries no detail on purpose:
+/// every cause reads the same to whoever asked for the file, so the engine's caller cannot
+/// use it to probe the directory around the file it was given.
+#[derive(Debug)]
+pub enum FileReadRefusal {
+    /// The host's rules refuse this path; the message says why and becomes the open error.
+    Refused(String),
+    /// The file could not be opened at all: missing, unreadable, not a file.
+    Unreadable,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -61,7 +86,7 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1), file_read_guard: self.file_read_guard.clone() }
     }
 
     /// Prepare a document without adding it to this session.
@@ -124,10 +149,29 @@ impl Session {
                 let Some((sibling_path, doc_name, sig_name)) = path.as_deref().and_then(detached_sibling) else {
                     return Err(OpenError::Unsupported(DETACHED_ALONE.into()));
                 };
-                // Every way the read can fail — missing, unreadable, not a file — says the
-                // same thing, so opening a `.p7s` cannot be used to probe the directory around it.
-                let sibling = std::fs::read(&sibling_path)
-                    .map_err(|_| OpenError::Unsupported(format!("{sig_name} signs {doc_name}, which was not found beside it")))?;
+                // The sibling is a file of its own, one the host never resolved when it
+                // confined the `.p7s`: the host's guard opens it under its rules and hands
+                // back the handle, and the engine reads only from that. Nothing resolves
+                // the path a second time after the check (#2202 review), so a sibling or a
+                // folder above it swapped for a link once the guard has opened cannot move
+                // the bytes the engine verifies; the window that remains is inside the
+                // guard, between its check and its open. Without a guard — the desktop UI,
+                // where the user picked the file themselves — the engine opens the sibling
+                // itself. Every way the open or the read can fail — missing, unreadable,
+                // not a file — says the same thing, so opening a `.p7s` cannot be used to
+                // probe the directory around it.
+                let not_found = || OpenError::Unsupported(format!("{sig_name} signs {doc_name}, which was not found beside it"));
+                let mut sibling = Vec::new();
+                let mut opened = match &context.file_read_guard {
+                    Some(guard) => match guard(&sibling_path) {
+                        Ok(handle) => handle,
+                        Err(FileReadRefusal::Refused(message)) => return Err(OpenError::Unsupported(message)),
+                        Err(FileReadRefusal::Unreadable) => return Err(not_found()),
+                    },
+                    None => std::fs::File::open(&sibling_path).map_err(|_| not_found())?,
+                };
+                use std::io::Read as _;
+                opened.read_to_end(&mut sibling).map_err(|_| not_found())?;
                 if !sibling.starts_with(b"%PDF-") {
                     let kind = if sibling.starts_with(b"<?xml") || sibling.starts_with(b"<") { "XML data" } else { "non-PDF data" };
                     return Err(OpenError::Unsupported(format!("the detached signature's document is {kind}, not a PDF")));
@@ -155,6 +199,7 @@ impl Session {
             signers: env.signers,
             quirks: env.quirks.iter().map(|q| (*q).to_string()).collect(),
             detached,
+            source: path,
         });
         prepared.document.envelope_file = envelope_file;
         prepared.document.envelope_content = if detached { None } else { Some(content) };

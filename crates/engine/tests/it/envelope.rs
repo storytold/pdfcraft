@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Algorithm, Document as CosDocument, NewEncryption, SaveOptions, write_full};
-use pdfcraft_engine::{Edit, EditError, Session};
+use pdfcraft_engine::{Edit, EditError, FileReadRefusal, Session};
 use pdfcraft_render::OpenError;
 use pdfcraft_sign::pkcs12;
 
@@ -92,6 +92,7 @@ fn envelope_opens_read_only_without_repairs() {
     assert!(d.repair_log().is_empty(), "the embedded PDF is opened as it is: {:?}", d.repair_log());
     let env = d.envelope.as_ref().expect("an envelope document carries EnvelopeInfo");
     assert_eq!(env.signer, "PdfCraft Test");
+    assert_eq!(env.source.as_deref(), Some("/somewhere/cades-envelope.pdf.p7m"), "the file it was opened from is remembered");
     let time = env.signing_time.as_deref().expect("the OpenSSL fixture carries a signing time");
     assert_eq!(time.len(), 20, "YYYY-MM-DD HH:MM UTC: {time}");
     assert!(time.ends_with(" UTC") && time.as_bytes()[4] == b'-' && time.as_bytes()[10] == b' ', "{time}");
@@ -348,4 +349,70 @@ fn bytes_only_detached_open_keeps_today_error() {
         matches!(err, OpenError::Unsupported(ref m) if m == "this is a detached CAdES signature; the signed document is not inside the file"),
         "{err}"
     );
+}
+
+#[test]
+fn sibling_read_is_confined_by_the_hosts_guard() {
+    let dir = scratch("guard");
+    let pdf = data("openssl-signed.pdf");
+    let sig = detached_signature_over(&pdf);
+    std::fs::write(dir.join("openssl-signed.pdf.p7s"), &sig).unwrap();
+    std::fs::write(dir.join("openssl-signed.pdf"), &pdf).unwrap();
+    let path = dir.join("openssl-signed.pdf.p7s").to_string_lossy().into_owned();
+    // The host's guard refuses the sibling, as one resolving out of its root would be: the
+    // pair does not open, and the refusal is the host's own message.
+    let mut refused = Session::new().with_file_read_guard(Arc::new(|p: &std::path::Path| {
+        Err(FileReadRefusal::Refused(format!("{} is outside the allowed directory /root", p.display())))
+    }));
+    let err = refused.open("openssl-signed.pdf.p7s", Some(path.clone()), Arc::new(sig.clone()), None).unwrap_err();
+    assert!(matches!(err, OpenError::Unsupported(ref m) if m.contains("outside the allowed directory")), "{err}");
+    // A guard that opens the sibling leaves the pair opening as it does without one.
+    let mut allowed =
+        Session::new().with_file_read_guard(Arc::new(|p: &std::path::Path| std::fs::File::open(p).map_err(|_| FileReadRefusal::Unreadable)));
+    let id = allowed.open("openssl-signed.pdf.p7s", Some(path), Arc::new(sig), None).unwrap();
+    assert!(allowed.get(id).unwrap().envelope.as_ref().is_some_and(|e| e.detached));
+}
+
+#[test]
+fn extract_original_refuses_detached_pairs() {
+    let dir = scratch("extract-detached");
+    let pdf = data("openssl-signed.pdf");
+    let sig = detached_signature_over(&pdf);
+    std::fs::write(dir.join("openssl-signed.pdf.p7s"), &sig).unwrap();
+    std::fs::write(dir.join("openssl-signed.pdf"), &pdf).unwrap();
+    let path = dir.join("openssl-signed.pdf.p7s").to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let id = s.open("openssl-signed.pdf.p7s", Some(path), Arc::new(sig), None).unwrap();
+    assert_eq!(s.extract_original(id).unwrap_err(), "a detached signature has nothing to extract; open the PDF itself to edit it.");
+    // Nothing opened: the pair is still the only document.
+    assert_eq!(s.docs().len(), 1);
+}
+
+/// The guard performs the confined open and the engine reads from the handle it gets back
+/// (#2202 review): once the guard has opened the sibling, the path can be unlinked and the
+/// pair still opens, verified over the bytes of that handle. This fails if the engine
+/// resolves the sibling's path again after the guard — the time-of-check-to-time-of-use
+/// window in which a swapped link could steer the read outside the host's root.
+#[test]
+fn detached_sibling_is_read_from_the_guards_handle() {
+    let dir = scratch("guard-handle");
+    let pdf = data("openssl-signed.pdf");
+    let sig = detached_signature_over(&pdf);
+    std::fs::write(dir.join("openssl-signed.pdf.p7s"), &sig).unwrap();
+    std::fs::write(dir.join("openssl-signed.pdf"), &pdf).unwrap();
+    let path = dir.join("openssl-signed.pdf.p7s").to_string_lossy().into_owned();
+    // The host's guarded open, after which the sibling disappears from disk: nothing that
+    // resolves the path again can reach it.
+    let mut gone = Session::new().with_file_read_guard(Arc::new(|p: &std::path::Path| {
+        let handle = std::fs::File::open(p).map_err(|_| FileReadRefusal::Unreadable)?;
+        std::fs::remove_file(p).unwrap();
+        Ok(handle)
+    }));
+    let id = gone.open("openssl-signed.pdf.p7s", Some(path), Arc::new(sig), None).unwrap();
+    let d = gone.get(id).unwrap();
+    let env = d.envelope.as_ref().expect("the pair opens from the guard's handle");
+    assert!(env.detached);
+    assert!(env.digest_ok, "verified over the bytes the guard opened, not a later re-read of the path");
+    assert_eq!(d.name, "openssl-signed.pdf");
+    assert!(!dir.join("openssl-signed.pdf").exists(), "the sibling really is gone: the engine read the handle, not the path");
 }

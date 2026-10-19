@@ -142,7 +142,7 @@ pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
 pub use history::Label;
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
-pub use open::{OpenContext, PreparedDocument};
+pub use open::{FileReadGuard, FileReadRefusal, OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};

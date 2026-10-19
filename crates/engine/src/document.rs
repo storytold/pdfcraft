@@ -31,6 +31,10 @@ pub struct EnvelopeInfo {
     /// Whether the envelope is a detached signature (a `.p7s`) whose document was read from
     /// the file beside it, rather than carried inside the envelope.
     pub detached: bool,
+    /// The file the envelope was opened from (a `.p7m`, or the `.p7s` of a detached pair),
+    /// when it was opened from disk. Extraction hands out the PDF inside, never a rewrite of
+    /// this file: a host that writes an output refuses one naming it.
+    pub source: Option<String>,
 }
 
 pub struct Document {
