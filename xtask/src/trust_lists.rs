@@ -1,8 +1,9 @@
 //! `cargo xtask trust-lists [--out FILE]`: write `dist/trust/eutl-qualified-ca.der`, the CA
 //! certificates of the qualified trust services in the EU Trusted Lists (eIDAS, ETSI TS 119 612).
 //!
-//! The file is a trust list for the user to load (the `sign_trust` tool's `eu_trusted_list`
-//! argument); it is not part of the repository or of any binary. The lists are published under
+//! The file is a trust list for the user to load: the `eu_trusted_list` argument of the `sign_trust`
+//! tool, which the trust-list change (#622) adds. It is not part of the repository or of any
+//! binary. The lists are published under
 //! CC BY 4.0 by the European Commission and the Member States' supervisory bodies: keep that
 //! attribution when passing the file on.
 //!
@@ -38,8 +39,10 @@
 //! Uses `curl` (macOS, Windows 10+ and Linux have it), like `cargo xtask models`.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -51,7 +54,9 @@ const LOTL: &str = "https://ec.europa.eu/tools/lotl/eu-lotl.xml";
 const OUT: &str = "dist/trust/eutl-qualified-ca.der";
 const TSL_XML: &str = "application/vnd.etsi.tsl+xml";
 /// The largest list `fetch` accepts (the biggest national list is a few MB).
-const MAX_LIST_BYTES: &str = "64000000";
+const MAX_LIST_BYTES: u64 = 64_000_000;
+/// How often a list is tried before the run gives up on it.
+const ATTEMPTS: u32 = 3;
 /// How the lists write a certificate (XML base64Binary): the standard alphabet, padding present or
 /// not. Everything else stays strict: a stray character, a one-character tail or non-zero trailing
 /// bits is an error, not a certificate.
@@ -63,30 +68,73 @@ fn https(url: &str) -> String {
     url.strip_prefix("http://").map_or_else(|| url.to_string(), |rest| format!("https://{rest}"))
 }
 
+/// Why one try at a list failed.
+enum Failure {
+    /// The answer is over [`MAX_LIST_BYTES`]: trying again would not change that.
+    TooBig,
+    Other(String),
+}
+
+/// At most `max` bytes of `reader`, or `None` if it holds more (it is not read any further).
+fn read_bounded(reader: impl Read, max: u64) -> std::io::Result<Option<Vec<u8>>> {
+    let mut body = Vec::new();
+    reader.take(max + 1).read_to_end(&mut body)?;
+    Ok((body.len() as u64 <= max).then_some(body))
+}
+
+/// One try: curl's answer, never more than [`MAX_LIST_BYTES`] of it in memory, whatever the
+/// server says about its length and whichever curl is installed.
+fn curl_once(url: &str) -> Result<Vec<u8>, Failure> {
+    let other = |what: &str, e: &dyn std::fmt::Display| Failure::Other(format!("{what}: {e}"));
+    let mut child = Command::new("curl")
+        .args(["-sSfL", "--proto", "=https", "--proto-redir", "=https", "-m", "90", "--max-filesize"])
+        .arg(MAX_LIST_BYTES.to_string())
+        .arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| other("running curl", &e))?;
+    let Some(stdout) = child.stdout.take() else { return Err(Failure::Other("curl gave no output".into())) };
+    let body = read_bounded(stdout, MAX_LIST_BYTES);
+    if !matches!(body, Ok(Some(_))) {
+        // Over the limit, or unreadable: stop curl rather than leave it writing into a full pipe.
+        child.kill().ok();
+    }
+    let mut message = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        stderr.read_to_string(&mut message).ok();
+    }
+    let status = child.wait().map_err(|e| other("waiting for curl", &e))?;
+    match body {
+        Ok(None) => Err(Failure::TooBig),
+        Ok(Some(body)) if status.success() => Ok(body),
+        Ok(Some(_)) => Err(Failure::Other(message.trim().to_string())),
+        Err(e) => Err(other("reading curl's output", &e)),
+    }
+}
+
+/// Run `attempt` up to [`ATTEMPTS`] times, pausing `pause`, then twice that, between tries. Each
+/// try starts from nothing: what a failed try wrote is never part of the next one's answer, which
+/// curl's own `--retry` cannot promise when the output goes to a pipe.
+fn with_retries(url: &str, pause: Duration, mut attempt: impl FnMut(&str) -> Result<Vec<u8>, Failure>) -> Result<Vec<u8>> {
+    let mut last = String::new();
+    for n in 0..ATTEMPTS {
+        if n > 0 {
+            std::thread::sleep(pause * 2u32.pow(n - 1));
+        }
+        match attempt(url) {
+            Ok(body) => return Ok(body),
+            Err(Failure::TooBig) => bail!("{url}: more than {MAX_LIST_BYTES} bytes"),
+            Err(Failure::Other(e)) => last = e,
+        }
+    }
+    bail!("{url}: {last} (after {ATTEMPTS} tries)")
+}
+
 fn fetch(url: &str) -> Result<String> {
     let url = https(url);
-    let out = Command::new("curl")
-        .args([
-            "-sSfL",
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "-m",
-            "90",
-            "--max-filesize",
-            MAX_LIST_BYTES,
-            "--retry",
-            "3",
-            "--retry-all-errors",
-            &url,
-        ])
-        .output()
-        .context("running curl")?;
-    if !out.status.success() {
-        bail!("{url}: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    String::from_utf8(out.stdout).with_context(|| format!("{url}: not UTF-8"))
+    let body = with_retries(&url, Duration::from_secs(2), curl_once)?;
+    String::from_utf8(body).with_context(|| format!("{url}: not UTF-8"))
 }
 
 fn text<'a>(n: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
@@ -203,7 +251,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     std::fs::write(&out, &bundle)?;
     println!(
-        "{} certificates, {} bytes -> {}\nLoad it with the sign_trust tool: {{\"tool\": \"sign_trust\", \"args\": {{\"eu_trusted_list\": \"<path>\"}}}} (the path must be inside the --root of the session). Source: the EU Trusted Lists (CC BY 4.0, European Commission and Member States' supervisory bodies).",
+        "{} certificates, {} bytes -> {}\nOnce #622 (trust lists) is in, load it with the sign_trust tool: {{\"tool\": \"sign_trust\", \"args\": {{\"eu_trusted_list\": \"<path>\"}}}} (the path must be inside the --root of the session). Source: the EU Trusted Lists (CC BY 4.0, European Commission and Member States' supervisory bodies).",
         certs.len(),
         bundle.len(),
         out.display()
@@ -242,6 +290,43 @@ mod tests {
 
     fn list_of(services: &[String]) -> String {
         format!("<TrustServiceStatusList>{}</TrustServiceStatusList>", services.concat())
+    }
+
+    #[test]
+    fn every_try_starts_from_nothing_and_an_oversize_answer_is_not_retried() {
+        let mut calls = 0;
+        let body = with_retries("u", Duration::ZERO, |_| {
+            calls += 1;
+            if calls < 3 { Err(Failure::Other("connection reset".into())) } else { Ok(b"<ok/>".to_vec()) }
+        })
+        .unwrap();
+        assert_eq!((body.as_slice(), calls), (&b"<ok/>"[..], 3), "only the answer of the try that worked");
+        let mut calls = 0;
+        let err = with_retries("u", Duration::ZERO, |_| {
+            calls += 1;
+            Err(Failure::Other("connection reset".into()))
+        })
+        .unwrap_err();
+        assert_eq!(calls, ATTEMPTS);
+        assert!(err.to_string().contains("connection reset") && err.to_string().contains("u"), "{err}");
+        let mut calls = 0;
+        assert!(
+            with_retries("u", Duration::ZERO, |_| {
+                calls += 1;
+                Err(Failure::TooBig)
+            })
+            .is_err()
+        );
+        assert_eq!(calls, 1, "a list that is too big stays too big");
+    }
+
+    #[test]
+    fn an_answer_is_read_only_up_to_the_limit() {
+        assert_eq!(read_bounded(&b"abc"[..], 3).unwrap(), Some(b"abc".to_vec()));
+        assert_eq!(read_bounded(&b""[..], 3).unwrap(), Some(Vec::new()));
+        assert_eq!(read_bounded(&b"abcd"[..], 3).unwrap(), None);
+        // Endless input is cut off at the limit, not buffered.
+        assert_eq!(read_bounded(std::io::repeat(b'x'), 1000).unwrap(), None);
     }
 
     #[test]
