@@ -246,6 +246,8 @@ struct PendingOpen {
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
+    /// The window the open was asked in: its tab goes there, whichever window is focused by then.
+    window: WindowId,
 }
 
 pub struct PdfCraftApp {
