@@ -5858,6 +5858,19 @@ fn added_thai_text_wraps_between_dictionary_words() {
         assert!(rows[0].starts_with("      "), "the opening spaces are kept at width {width}: {rows:?}");
         assert_eq!(rows.concat().trim_start(), "ประปาสะอาด");
     }
+    // A first word that fits a row alone but not after the opening spaces breaks between clusters
+    // on the first row rather than running past its end.
+    let word = "ประปา";
+    let word_w = super::added::shaped_width(&t, word, false);
+    let indent_w = super::added::shaped_width(&t, "      ", false);
+    let width = word_w + indent_w / 2.0;
+    let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: format!("      {word}"), ..t.clone() };
+    let rows = super::added::lines(&indented);
+    for row in &rows {
+        assert!(super::added::shaped_width(&t, row, false) <= width + 0.5, "{row:?} overflows {width}: {rows:?}");
+    }
+    assert!(rows.len() > 1 && rows[0].starts_with("      "), "{rows:?}");
+    assert_eq!(rows.concat().trim_start(), word);
 }
 
 #[test]
