@@ -761,8 +761,10 @@ fn gs_text(ps: &[u8], tag: &str) -> Option<String> {
 }
 
 /// Geometry: fills (both rules), strokes, dashes, Bézier fills and round joins — the same
-/// image from both rasterizers. Observed delta ≈ 0.7 (edge coverage quantization; under
-/// matched gs policy the exported program is pixel-identical to the source PDF's).
+/// image from both rasterizers. Observed delta ≈ 0.7 against PdfCraft's own raster (edge
+/// coverage quantization). A separate manual gs-vs-gs run (gs on the exported program
+/// against gs on the source PDF, matched policy) measured 0.000 — a hand-run observation
+/// this test does not make: it compares gs's raster with PdfCraft's, never gs with gs.
 #[test]
 fn geometry_page_matches_ghostscript() {
     assert_matches_oracle("geometry", &geometry_pdf());
