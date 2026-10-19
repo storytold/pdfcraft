@@ -420,6 +420,17 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     }
 
     #[test]
+    fn close_others_with_a_gone_anchor_closes_nothing() {
+        // The anchor's own tab is closed before the call, so its DocId names no open tab.
+        let mut app = app_with_docs(&["a.pdf", "b.pdf", "anchor.pdf", "c.pdf"], &[2, 3]);
+        let anchor = app.views[2].id;
+        app.close_tab(2);
+        app.close_others(anchor);
+        assert_eq!(app.views.len(), 3, "a gone anchor closes no tab, clean or dirty");
+        assert_eq!(app.close_request, None, "and queues no prompt");
+    }
+
+    #[test]
     fn close_others_closes_clean_tabs_and_prompts_each_dirty_one() {
         let ctx = egui::Context::default();
         // Three clean documents plus a dirty anchor: everything but the anchor closes now.

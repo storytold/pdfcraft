@@ -46,8 +46,12 @@ impl PdfCraftApp {
     }
 
     /// Close every tab but `keep` (File ▸ Close all scoped to the anchor): clean tabs close at
-    /// once; each one with unsaved changes asks. The anchor never closes, dirty or not.
+    /// once; each one with unsaved changes asks. The anchor never closes, dirty or not. A `keep`
+    /// that names no open tab closes nothing, as in `close_tabs_right_of`.
     pub fn close_others(&mut self, keep: DocId) {
+        if !self.views.iter().any(|v| v.id == keep) {
+            return;
+        }
         for i in (0..self.views.len()).rev() {
             if self.views.get(i).is_some_and(|v| v.id != keep) && !self.has_unsaved_work(i) {
                 self.close_tab(i);
