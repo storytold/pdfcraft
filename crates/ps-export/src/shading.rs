@@ -461,7 +461,10 @@ fn mid_function(shading: &Shading) -> Option<&ShadingFunction> {
 /// The domain middle: where a degraded gradient's colour is sampled.
 fn mid_input(shading: &Shading) -> Option<Vec<f32>> {
     match &*shading.shading_type {
-        ShadingType::FunctionBased { domain, .. } => Some(vec![(domain[0] + domain[2]) / 2.0, (domain[1] + domain[3]) / 2.0]),
+        // The type 1 domain is [x0 x1 y0 y1] (the pairs `shading_dict` writes), so
+        // the middle averages each axis's own bounds — pairing x0 with y0 would
+        // sample a point that need not be in the domain at all.
+        ShadingType::FunctionBased { domain, .. } => Some(vec![(domain[0] + domain[1]) / 2.0, (domain[2] + domain[3]) / 2.0]),
         ShadingType::RadialAxial { domain, .. } => Some(vec![(domain[0] + domain[1]) / 2.0]),
         ShadingType::TriangleMesh { function, .. }
         | ShadingType::CoonsPatchMesh { function, .. }
@@ -1105,6 +1108,27 @@ mod tests {
         assert!(out.contains("/Extend [true true] >> shfill"), "extend + shfill: {out}");
         assert!(out.contains("\nclip\n"), "the path clips the shading: {out}");
         assert_eq!(notes, Vec::<FidelityNote>::new(), "no degradations");
+    }
+
+    /// An axial shading whose `/Function` is a type 3 stitch of two type 2 ramps —
+    /// the multi-stop gradient ordinary documents use — paints through `shfill`
+    /// with the stitched dictionary embedded and correctly closed: the dict ends
+    /// `>>` after `/Encode` (a stray `]` builds an array from the dict's entries,
+    /// and `shfill` rejects the whole program at the first such gradient).
+    #[test]
+    fn axial_stitched_shading_emits_shfill() {
+        let red_to_white = b"<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 1 1] /N 1 >>".to_vec();
+        let white_to_blue = b"<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 0 1] /N 1 >>".to_vec();
+        let stitch = b"<< /FunctionType 3 /Domain [0 1] /Functions [6 0 R 7 0 R] /Bounds [0.5] /Encode [0 1 0 1] >>".to_vec();
+        let (out, notes) = driven(&pattern_pdf(&axial_pattern("5 0 R"), &[stitch, red_to_white, white_to_blue]));
+        assert!(
+            out.contains("/Function << /FunctionType 3 /Domain [0 1] /Functions [ << /FunctionType 2"),
+            "the stitched dict embeds its subs: {out}"
+        );
+        assert!(out.contains("/Bounds [0.5] /Encode [0 1 0 1] >>"), "bounds and encode pairs close the dict: {out}");
+        assert!(out.contains("/Extend [true true] >> shfill"), "the shading still paints through shfill: {out}");
+        assert_eq!(out.matches("<<").count(), out.matches(">>").count(), "every opened dict is closed: {out}");
+        assert_eq!(notes, Vec::<FidelityNote>::new(), "a stitched shading function is not a degradation: {notes:?}");
     }
 
     /// A `/ca 0.5` ExtGState makes the shading pattern partially transparent; the
