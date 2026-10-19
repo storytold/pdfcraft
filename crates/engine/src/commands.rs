@@ -50,6 +50,8 @@ pub enum Needs {
     Undo,
     /// There is something to redo.
     Redo,
+    /// The open document is a CAdES envelope (read-only, with an extraction action).
+    Envelope,
     /// A document is open in two-page view. The engine has no views, so it checks the
     /// document and the frontend checks the view.
     TwoPageView,
@@ -193,7 +195,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("file.close_all", "Close all", FILE, Some(Shortcut::cmd_shift("W")), Document, "x"),
     c("file.revert", "Revert", FILE, None, Undo, "rotate-ccw"),
     // Only an envelope document offers this (the engine refuses plain ones).
-    c("file.extract_original", "Extract the original PDF…", FILE, None, Document, "file-output"),
+    // Only an envelope document offers this; the `Needs` gate keeps plain documents from
+    // reaching the engine's refusal.
+    c("file.extract_original", "Extract the original PDF…", FILE, None, Envelope, "file-output"),
     c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Printing, "printer"),
     c("file.properties", "Document properties…", FILE, Some(Shortcut::cmd("D")), Document, "info"),
     c("file.word_count", "Word count…", FILE, None, Copying, "hash"),
@@ -439,6 +443,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Unlock => doc.is_some_and(|d| d.can_unlock()),
         Undo => doc.is_some_and(|d| d.can_undo().is_some()),
         Redo => doc.is_some_and(|d| d.can_redo().is_some()),
+        Envelope => doc.is_some_and(|d| d.envelope.is_some()),
     }
 }
 

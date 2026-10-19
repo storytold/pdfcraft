@@ -121,6 +121,7 @@ impl PdfCraftApp {
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
+            commands::Needs::Envelope if self.active.is_some() => tl!("This document is not inside a CAdES envelope").to_string(),
             commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
             commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
             commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),

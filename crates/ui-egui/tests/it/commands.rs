@@ -175,6 +175,9 @@ fn disabled_commands_explain_themselves() {
     app.open_bytes("doc.pdf", None, fixture(2)).unwrap();
     assert!(!app.execute("edit.undo"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Nothing to undo"));
+    // Extraction is an envelope document's action: a plain one says so, not "open a document".
+    assert!(!app.execute("file.extract_original"));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("This document is not inside a CAdES envelope"));
     // View state counts too: the cover page exists only in two-page view.
     assert!(!app.execute("view.layout.cover"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
