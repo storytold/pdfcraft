@@ -21,12 +21,13 @@
 //! live in the device space of the draws beside it — true under `page_render`, whose
 //! interpreter root transform carries the render scale, but not for a pattern captured
 //! by this crate's page-points drive (the tiling-inside-group oracle gate caught the
-//! difference). Each [`ShadowScene::flatten`] builds a fresh page-sized
-//! renderer at 300 dpi, paints the white page base first (the same base `page_render`
-//! starts from, and what makes the emitted raster opaque), replays the log through the
-//! balanced prefix, pops any wrappers still open in reverse, finishes, and crops the
-//! region. Recording is cheap — closures over cloned values — so pages with no
-//! transparency never pay a render.
+//! difference). Each [`ShadowScene::flatten`] builds a fresh *region-sized* renderer
+//! at 300 dpi (never a page-sized pixmap), paints the white page base first (the same
+//! base `page_render` starts from, and what makes the emitted raster opaque), replays
+//! the log through the balanced prefix behind a whole-pixel offset onto the region's
+//! pixel grid ([`RegionReplay`]), pops any wrappers still open in reverse, and
+//! finishes — the pixmap is the region already, no crop. Recording is cheap —
+//! closures over cloned values — so pages with no transparency never pay a render.
 //!
 //! Every flatten is bounded: the page and the region must each stay under
 //! [`MAX_FLATTEN_AREA_PX`] and inside vello's u16 pixmap sides, at most
@@ -50,8 +51,8 @@ use std::rc::Rc;
 
 use hayro::OffscreenRenderer;
 use hayro::hayro_interpret::color::{AlphaColor, Color};
-use hayro::hayro_interpret::font::OutlineGlyph;
-use hayro::hayro_interpret::{BlendMode, CacheKey, ClipPath, Device, FillRule, Paint, PathDrawMode, SoftMask};
+use hayro::hayro_interpret::font::{Glyph, OutlineGlyph};
+use hayro::hayro_interpret::{BlendMode, CacheKey, ClipPath, Device, FillRule, GlyphDrawMode, Image, Paint, PathDrawMode, SoftMask};
 use hayro::vello_cpu::Pixmap;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use kurbo::{Affine, BezPath, Rect};
@@ -66,8 +67,9 @@ pub(crate) const FLATTEN_DPI: f64 = 300.0;
 /// allocating a raster that size. 100 Mpx is A3 at 300 dpi with margin.
 pub(crate) const MAX_FLATTEN_AREA_PX: u64 = 100_000_000;
 
-/// How many flattens one exported page may spend. Each is a full page render, so a
-/// document of stacked groups cannot grind export to a halt; the rest decline.
+/// How many flattens one exported page may spend. Each replays the whole recorded
+/// log, so a document of stacked groups cannot grind export to a halt; the rest
+/// decline.
 pub(crate) const MAX_FLATTENS_PER_PAGE: u32 = 128;
 
 /// The matrix that maps the device's y-up page space onto 300-dpi pixels: the page's
@@ -98,13 +100,19 @@ enum Balance {
     PopClip,
 }
 
+/// One recorded operation's replay closure, boxed so [`Entry`] stays a plain
+/// struct; the alias keeps the signature readable.
+type Replay<'a> = Box<dyn FnMut(&mut dyn Device<'a>) + 'a>;
+
 /// One recorded operation: a closure that replays it onto a fresh renderer, plus how
 /// it moves the wrapper stack. Closures must be replayable any number of times (the
 /// log stays after a flatten, so later groups replay it again) and self-contained:
 /// by-value arguments (`Image`, `SoftMask`) are cloned *inside* the closure, once
-/// per replay.
+/// per replay. The replay target is the `Device` trait, so the same log drives the
+/// whole-page renderer's replacement — [`RegionReplay`], which offsets every draw
+/// onto the region's pixel grid — exactly as it drove the page-sized render.
 struct Entry<'a> {
-    op: Box<dyn FnMut(&mut OffscreenRenderer) + 'a>,
+    op: Replay<'a>,
     balance: Balance,
 }
 
@@ -185,11 +193,11 @@ impl<'a> ShadowScene<'a> {
     }
 
     /// Record one replayable draw or state change. The closure drives the fresh
-    /// `OffscreenRenderer`'s `Device` methods and applies `matrix` itself — the
-    /// caller bakes the page matrix into the transforms it captures. The log replays
-    /// at every flatten, so the closure must be callable repeatedly: clone by-value
-    /// arguments (`Image`, `SoftMask`) inside, once per call.
-    pub(crate) fn record(&mut self, op: impl FnMut(&mut OffscreenRenderer) + 'a) {
+    /// renderer's `Device` methods and applies `matrix` itself — the caller bakes the
+    /// page matrix into the transforms it captures. The log replays at every flatten,
+    /// so the closure must be callable repeatedly: clone by-value arguments (`Image`,
+    /// `SoftMask`) inside, once per call.
+    pub(crate) fn record(&mut self, op: impl FnMut(&mut dyn Device<'a>) + 'a) {
         self.log.push(Entry { op: Box::new(op), balance: Balance::Draw });
     }
 
@@ -292,11 +300,12 @@ impl<'a> ShadowScene<'a> {
         }
     }
 
-    /// Replay the log into a fresh page-sized renderer (white page fill first), pop
-    /// everything still open in reverse — an enclosing group's params apply, which is
-    /// correct for the final page and disclosed-consistent when a decline flushes —
-    /// then crop the region of the frame closed by the most recent `pop_frame`,
-    /// intersected with the page, at 300 dpi.
+    /// Replay the log into a fresh *region-sized* renderer (white page fill first),
+    /// offset every draw onto the region's pixel grid, pop everything still open in
+    /// reverse — an enclosing group's params apply, which is correct for the final
+    /// page and disclosed-consistent when a decline flushes — and finish: the pixmap
+    /// of the frame closed by the most recent `pop_frame`, intersected with the page,
+    /// at 300 dpi, with no crop and no page-sized allocation.
     ///
     /// An empty region is a `width: 0, height: 0` raster (the caller emits nothing).
     /// `None` means *declined*: the scene is poisoned, the page or region exceeds
@@ -361,16 +370,27 @@ impl<'a> ShadowScene<'a> {
         if w == 0 || h == 0 {
             return Some(FlattenRaster { width: 0, height: 0, rgb: Vec::new(), place });
         }
-        let (x0u, y0u, wu, hu) = (x0 as u32, y0 as u32, w as u32, h as u32);
+        let (wu, hu) = (w as u32, h as u32);
 
-        // The render, under the panic guard: one panic poisons the scene forever.
+        // The render, under the panic guard: one panic poisons the scene forever. The
+        // renderer is region-sized (wu × hu), never page-sized: a page of alpha
+        // shapes spends up to MAX_FLATTENS_PER_PAGE flattens, and a page-sized pixmap
+        // each time would re-allocate the page's whole RGBA buffer (up to
+        // MAX_FLATTEN_AREA_PX) per flatten. Recorded draws arrive in the page's
+        // 300-dpi pixel space (the page matrix baked in at record time), so the
+        // replay runs through `RegionReplay`, whose whole-pixel translation
+        // (-x0, -y0) shifts the pixel grid onto itself — the raster is exactly the
+        // crop of the page-sized render it replaces.
         let rendered = catch_unwind(AssertUnwindSafe(|| {
-            let mut renderer = OffscreenRenderer::new(pw, ph);
+            // The caps above bound w and h by u16::MAX, so the casts are exact.
+            let mut renderer = OffscreenRenderer::new(wu as u16, hu as u16);
             // vello's WHITE — the same base `render_into` clears its pixmap with —
-            // carried into hayro's own color type for the `Device` call.
+            // carried into hayro's own color type for the `Device` call. The base
+            // covers the region: nothing outside it is visible in a wu × hu pixmap.
             let w = WHITE.to_rgba8();
             let white = Paint::Color(Color::from_rgba(AlphaColor::from_rgba8(w.r, w.g, w.b, w.a)));
-            renderer.draw_rect(&Rect::new(0.0, 0.0, f64::from(pw), f64::from(ph)), Affine::IDENTITY, &white, &PathDrawMode::Fill(FillRule::NonZero));
+            renderer.draw_rect(&Rect::new(0.0, 0.0, f64::from(wu), f64::from(hu)), Affine::IDENTITY, &white, &PathDrawMode::Fill(FillRule::NonZero));
+            let mut replay = RegionReplay { inner: &mut renderer, offset: Affine::translate((-x0, -y0)) };
             let mut open: Vec<Balance> = Vec::new();
             for entry in self.log.iter_mut() {
                 let replays = match entry.balance {
@@ -382,25 +402,24 @@ impl<'a> ShadowScene<'a> {
                     Balance::Draw => true,
                 };
                 if replays {
-                    (entry.op)(&mut renderer);
+                    (entry.op)(&mut replay);
                 }
             }
             // Wrappers still open (the page clip and group, any form's bbox clip)
             // close in reverse so `finish` meets vello's balanced-layers assert.
             for wrapper in open.into_iter().rev() {
                 match wrapper {
-                    Balance::PushGroup => renderer.pop_transparency_group(),
-                    Balance::PushClip => renderer.pop_clip_path(),
+                    Balance::PushGroup => replay.inner.pop_transparency_group(),
+                    Balance::PushClip => replay.inner.pop_clip_path(),
                     _ => {}
                 }
             }
-            let pixmap = renderer.finish();
-            crop(&pixmap, x0u, y0u, wu, hu).map(|rgb| FlattenRaster { width: wu, height: hu, rgb, place })
+            region_rgb(&renderer.finish()).map(|rgb| FlattenRaster { width: wu, height: hu, rgb, place })
         }));
         match rendered {
             Ok(Some(raster)) => Some(raster),
-            // A checked rail inside the crop tripped (unreachable behind the caps):
-            // decline without poisoning.
+            // A checked rail inside the region conversion tripped (unreachable
+            // behind the caps): decline without poisoning.
             Ok(None) => None,
             Err(_) => {
                 self.poisoned = true;
@@ -446,34 +465,94 @@ pub(crate) fn re_rooted_paint<'a>(paint: &Paint<'a>, matrix: Affine) -> Paint<'a
     }
 }
 
-/// Crop `w × h` pixels at (`x0`, `y0`) out of a finished page pixmap into straight
-/// RGB rows, row 0 (the top of the region) first. The white page base makes every
-/// alpha 255, so the premultiplied RGBA rows copy as straight RGB. `None` only if a
-/// checked rail trips — unreachable behind the caps, but never a panic.
-fn crop(pixmap: &Pixmap, x0: u32, y0: u32, w: u32, h: u32) -> Option<Vec<u8>> {
-    let stride = u32::from(pixmap.width()).checked_mul(4)?;
-    let row_bytes = w.checked_mul(4)?;
-    let len = w.checked_mul(h)?.checked_mul(3)?;
+/// The replay-time offset device: recorded draws arrive in the page's 300-dpi pixel
+/// space (the page matrix baked into every transform at record time), while the
+/// region renderer's pixmap starts at the region's top-left corner. Every
+/// transform-bearing call is pre-concatenated with the whole-pixel translation
+/// `(-x0, -y0)`, and geometry a record site already re-rooted by the page matrix
+/// (pattern paints, soft masks, a stencil's embedded paint — each pre-concatenating,
+/// so the composition is the region matrix exactly) is re-rooted once more by the
+/// same offset. An integer translate maps the pixel grid onto itself, so the replay
+/// paints precisely the crop of the page-sized render it replaced; nothing outside
+/// the region reaches the renderer any differently than it reached the page's edge.
+struct RegionReplay<'r> {
+    /// The region-sized offscreen renderer.
+    inner: &'r mut OffscreenRenderer,
+    /// `translate((-x0, -y0))` in whole pixels.
+    offset: Affine,
+}
+
+impl<'r, 'a> Device<'a> for RegionReplay<'r> {
+    fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
+        self.inner.set_soft_mask(mask.map(|m| m.re_rooted(self.offset)));
+    }
+
+    fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        self.inner.set_blend_mode(blend_mode);
+    }
+
+    fn draw_path(&mut self, path: &BezPath, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
+        self.inner.draw_path(path, self.offset * transform, &re_rooted_paint(paint, self.offset), draw_mode);
+    }
+
+    fn push_clip_path(&mut self, clip_path: &ClipPath) {
+        let mut path = clip_path.path.clone();
+        path.apply_affine(self.offset);
+        self.inner.push_clip_path(&ClipPath { path, fill: clip_path.fill });
+    }
+
+    fn push_transparency_group(&mut self, opacity: f32, mask: Option<SoftMask<'a>>, blend_mode: BlendMode) {
+        self.inner.push_transparency_group(opacity, mask.map(|m| m.re_rooted(self.offset)), blend_mode);
+    }
+
+    fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &Paint<'a>, draw_mode: &GlyphDrawMode) {
+        // The offset rides the placement transform, the outer factor of the glyph's
+        // total transform (`transform * glyph_transform` in the renderer).
+        self.inner.draw_glyph(glyph, self.offset * transform, glyph_transform, &re_rooted_paint(paint, self.offset), draw_mode);
+    }
+
+    fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+        // A stencil's embedded paint can be a pattern colorspace (the record site
+        // re-rooted it by the page matrix); it takes the offset like every paint.
+        let image = match image {
+            Image::Stencil(stencil) => Image::Stencil(stencil.re_rooted_paint(self.offset)),
+            other => other,
+        };
+        self.inner.draw_image(image, self.offset * transform);
+    }
+
+    fn pop_clip_path(&mut self) {
+        self.inner.pop_clip_path();
+    }
+
+    fn pop_transparency_group(&mut self) {
+        self.inner.pop_transparency_group();
+    }
+
+    fn draw_rect(&mut self, rect: &Rect, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
+        self.inner.draw_rect(rect, self.offset * transform, &re_rooted_paint(paint, self.offset), draw_mode);
+    }
+}
+
+/// Convert the finished region pixmap into straight RGB rows, row 0 (the top of the
+/// region) first. The white page base makes every alpha 255, so the premultiplied
+/// RGBA rows copy as straight RGB. `None` only if a checked rail trips —
+/// unreachable behind the caps, but never a panic.
+fn region_rgb(pixmap: &Pixmap) -> Option<Vec<u8>> {
+    let len = u32::from(pixmap.width()).checked_mul(u32::from(pixmap.height()))?.checked_mul(3)?;
     let mut rgb = Vec::new();
     // The caps already bounded the region; reserving can still fail on a full disk,
     // and that must decline, not abort.
     rgb.try_reserve_exact(len as usize).ok()?;
-    let data = pixmap.data_as_u8_slice();
-    for row in 0..h {
-        let y = y0.checked_add(row)?;
-        let start = y.checked_mul(stride)?.checked_add(x0.checked_mul(4)?)?;
-        let end = start.checked_add(row_bytes)?;
-        let rgba = data.get(start as usize..end as usize)?;
-        for &[r, g, b, _] in rgba.as_chunks::<4>().0 {
-            rgb.extend_from_slice(&[r, g, b]);
-        }
+    for &[r, g, b, _] in pixmap.data_as_u8_slice().as_chunks::<4>().0 {
+        rgb.extend_from_slice(&[r, g, b]);
     }
     Some(rgb)
 }
 
 /// The matrix mapping a flattened raster's pixels (row 0 first, x right, y down)
-/// back onto the device page space it was cropped from: the region's top-left
-/// corner, 72/300 pt per pixel, y flipped back up.
+/// back onto the device page space it renders: the region's top-left corner,
+/// 72/300 pt per pixel, y flipped back up.
 fn placement(region: Rect) -> Affine {
     Affine::translate((region.x0, region.y1)) * Affine::scale_non_uniform(72.0 / FLATTEN_DPI, -72.0 / FLATTEN_DPI)
 }
@@ -628,8 +707,10 @@ mod tests {
     /// Scene replay is pixel-for-pixel what rendering the same draws directly
     /// produces: the white page base, the page wrapper (clip + full-opacity group,
     /// still open at flatten time), a half-opacity group holding one red rect, popped
-    /// — the flatten raster must equal the direct render over the frame's region, and
-    /// the region's interior must be the red-over-white blend vello composites.
+    /// — the flatten raster must equal the direct page-sized render cropped to the
+    /// frame's region (the replay renders only the region, behind a whole-pixel
+    /// offset), and the region's interior must be the red-over-white blend vello
+    /// composites.
     #[test]
     fn replay_matches_direct_render() {
         let page = Rect::new(0.0, 0.0, 100.0, 100.0);
@@ -763,7 +844,7 @@ mod tests {
         let mut scene = ShadowScene::new(Rect::new(0.0, 0.0, 100.0, 100.0));
         scene.record_push_group(0.5, None, BlendMode::Normal);
         scene.push_frame();
-        scene.record(|_: &mut OffscreenRenderer| panic!("poison: a replayed draw panicked"));
+        scene.record(|_| panic!("poison: a replayed draw panicked"));
         scene.extend(Rect::new(10.0, 10.0, 90.0, 90.0));
         scene.record_pop_group();
         scene.pop_frame();
