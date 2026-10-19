@@ -1028,7 +1028,7 @@ fn degraded_shading_paints_ink() {
 /// ([`embedded_real_truetype_draws_and_extracts_as_type42`]). Skips its gs
 /// half when gs is not installed.
 #[test]
-fn cff_promotion_page_matches_ghostscript_and_extracts() {
+fn cff_promotion_page_matches_ghostscript() {
     let (program, from_checkout) = match craft_face(&["Latn"]) {
         Some((bytes, FaceFlavor::Cff)) => (bytes, true),
         Some((_, flavor)) => {
@@ -1090,7 +1090,7 @@ fn cff_promotion_page_matches_ghostscript_and_extracts() {
 /// **Extraction is deliberately not asserted — the plan's own scoping, on this
 /// build's semantics.** CID arms carry no glyph names, and txtwrite maps their
 /// text to the raw codes as Unicode (see
-/// [`cff_promotion_page_matches_ghostscript_and_extracts`] for the probes), so
+/// [`cff_promotion_page_matches_ghostscript`] for the probes), so
 /// identity-CID CJK text has no recoverable Unicode through any name route:
 /// the extracted bytes would be the codes, not the characters. CJK fidelity is
 /// proven the stronger way instead — structural shape + oracle ink + raster
