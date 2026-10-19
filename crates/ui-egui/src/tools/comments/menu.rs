@@ -293,6 +293,13 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
+    if tool.snaps() {
+        let key = crate::commands::command_shortcut_label(ui.ctx(), "comment.snap");
+        let tip = format!("{} ({key})", tl!(if prefs.snap { "Snap to drawing: on" } else { "Snap to drawing" }));
+        if icons::button(ui, "circle-dot", 32.0, prefs.snap, &tip).clicked() {
+            prefs.snap = !prefs.snap;
+        }
+    }
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));

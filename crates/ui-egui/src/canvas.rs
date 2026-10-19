@@ -1198,6 +1198,7 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    comment_notice: Option<&'static str>,
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
@@ -1235,6 +1236,8 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// Snap to drawing (M5): the paths of the page being drawn, when its tool snaps.
+    snap: Option<std::sync::Arc<pdfcraft_measure::snap::Geometry>>,
     /// A page took this frame's right-click.
     right_clicked: bool,
 }
@@ -1538,8 +1541,20 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
     }
 
+    // Snap to drawing (M5): the page's paths, for the drawing tools that set points.
+    frame.snap = match tool {
+        QuickTool::Comment(t) if prefs.snap && t.snaps() => {
+            let mut notice = None;
+            let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
+            if notice.is_some() {
+                view.comments.notice = notice;
+            }
+            geometry
+        }
+        _ => None,
+    };
     let slot = PageSlot { i, r, xf };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, snap: frame.snap.clone() };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
@@ -1742,6 +1757,7 @@ fn draw_pages(
         pressed_page: None,
         calc_hover: None,
         right_clicked: false,
+        snap: None,
     };
     for &i in visible_pages {
         draw_page(ui, view, &mut frame, i);
@@ -1990,9 +2006,11 @@ fn draw_pages(
     if !resp.context_menu_opened() {
         ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
     }
+    let comment_notice = view.comments.notice.take();
     *out = PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
         copy_selected,
         field_menu,
         field_placed,
@@ -3076,6 +3094,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
         mut copy_selected,
         field_menu,
         field_placed,
@@ -3422,6 +3441,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
