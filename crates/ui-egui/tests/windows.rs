@@ -231,3 +231,62 @@ fn the_window_commands_move_merge_and_close() {
     h.run_steps(2);
     assert_eq!(h.query_all_by_role_and_label(Role::Tab, "b.pdf").count(), 0);
 }
+
+/// The reading-colours preference reaches the documents of every window, not only the current
+/// one's.
+#[test]
+fn reading_colours_apply_to_the_documents_of_every_window() {
+    let mut h = harness(&["a.pdf", "b.pdf"]);
+    let ctx = h.ctx.clone();
+    let (a, b) = (h.state().views[0].id, h.state().views[1].id);
+    h.state_mut().active = Some(0);
+    assert!(h.state_mut().execute("window.move_tab_new"));
+    h.state_mut().apply_window_ops(&ctx);
+    h.run_steps(2);
+    assert_eq!(h.state().window_of_doc(a), Some(second_window(&h)));
+    h.state_mut().set_reading_colors(pdfcraft_render::ReadingColors::YELLOW_ON_BLACK);
+    h.run_steps(1);
+    for id in [a, b] {
+        assert_eq!(h.state().session.reading_colors(id), Some(pdfcraft_render::ReadingColors::YELLOW_ON_BLACK));
+    }
+    assert_eq!(h.state().current_window(), WindowId::ROOT, "the main window's state is back in place");
+}
+
+/// A file chosen in a picker asked from a window opens in that window, and the pick's follow-up
+/// runs with that window's state, although the main window has the focus when the choice
+/// arrives.
+#[test]
+fn a_file_picked_from_a_window_opens_there() {
+    let mut h = harness(&["a.pdf", "b.pdf"]);
+    let ctx = h.ctx.clone();
+    h.state_mut().active = Some(0);
+    assert!(h.state_mut().execute("window.move_tab_new"));
+    h.state_mut().apply_window_ops(&ctx);
+    h.run_steps(2);
+    let second = second_window(&h);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-window-pick-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("c.pdf");
+    std::fs::write(&path, PDF).unwrap();
+    // File ▸ Open from the second window; the choice arrives on a later frame, with the main
+    // window's state loaded.
+    h.state_mut()
+        .with_window(second, |a| {
+            a.pick_override = Some(vec![path.to_string_lossy().into_owned()]);
+            assert!(a.execute("file.open"));
+            a.pick_override = None;
+        })
+        .expect("second window");
+    assert_eq!(h.state().current_window(), WindowId::ROOT);
+    for _ in 0..300 {
+        h.run_steps(1);
+        if h.state().session.docs().len() == 3 {
+            break;
+        }
+    }
+    assert_eq!(h.state().session.docs().len(), 3, "c.pdf opened");
+    h.run_steps(2);
+    assert_eq!(names_in(&mut h, second), ["a.pdf", "c.pdf"], "in the window that asked");
+    assert_eq!(names(h.state()), ["b.pdf"], "not in the main window");
+    let _ = std::fs::remove_dir_all(dir);
+}
