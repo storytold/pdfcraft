@@ -7,6 +7,11 @@
 //! ([`crate::x509::build_chain`]) still applies to a list: a certificate in it only vouches for what
 //! a chain of CA certificates under it leads to.
 //!
+//! An entry that is not a CA stays in the list (the national lists file a few OCSP responder and
+//! time-stamp certificates under their CA services, so refusing them would refuse the real
+//! lists). It can issue nothing in chain building and vouches only for itself, which the signer
+//! checks of [`crate::x509::Certificate::signing_problem`] still judge.
+//!
 //! A list vouches for signers. It never vouches for a time-stamp authority: a CA that is trusted
 //! to issue signing certificates is not thereby a source of trusted time, so trusted time still
 //! comes only from the user's own certificates.
@@ -118,6 +123,17 @@ mod tests {
         // PEM that follows a note starting with "0" (the first byte DER starts with) is still PEM.
         let noted = format!("0 certificates have been revoked in this bundle\n{pem}");
         assert_eq!(TrustList::from_bytes("noted", noted.as_bytes()).unwrap().certs.len(), 3);
+        // A PEM bundle cut short is refused too, wherever the cut falls: in the last block, or
+        // right after the last complete one.
+        let blocks: Vec<String> = list.certs.iter().map(crate::x509::to_pem).collect();
+        let cut_inside = format!("{}{}", blocks[0], &blocks[1][..blocks[1].len() / 2]);
+        assert!(TrustList::from_bytes("cut pem", cut_inside.as_bytes()).is_err());
+        let cut_after = format!("{}{}-----BEGIN CERTIFICATE-----\n", blocks[0], blocks[1]);
+        assert!(TrustList::from_bytes("cut pem", cut_after.as_bytes()).is_err());
+        // So is a block that begins before the one before it ended.
+        let head: String = blocks[0].lines().take(2).map(|l| format!("{l}\n")).collect();
+        let spliced = format!("{head}{}", blocks[1]);
+        assert!(TrustList::from_bytes("spliced", spliced.as_bytes()).is_err());
         // A certificate listed twice, even apart, is one entry.
         let repeated = [certs[0].clone(), certs[1].clone(), certs[0].clone()].concat();
         assert_eq!(TrustList::from_bytes("dups", &repeated).unwrap().certs.len(), 2);

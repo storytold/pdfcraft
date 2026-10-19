@@ -416,7 +416,15 @@ struct Stamper {
 impl pdfcraft_sign::TimestampAuthority for Stamper {
     fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, pdfcraft_sign::SignError> {
         let q = pdfcraft_sign::timestamp::parse_request(request)?;
-        pdfcraft_sign::timestamp::respond(&self.key, &self.cert, &[], pdfcraft_sign::DigestAlg::Sha256, &q, "1.2.3.4", self.time, 7)
+        pdfcraft_sign::timestamp::respond(
+            pdfcraft_sign::timestamp::TimestampSigner {
+                key: &self.key,
+                certificate: &self.cert,
+                chain: &[],
+                digest: pdfcraft_sign::DigestAlg::Sha256,
+            },
+            pdfcraft_sign::timestamp::TimestampIssuance { query: &q, policy: "1.2.3.4", generation_time: self.time, serial: 7 },
+        )
     }
 }
 
@@ -428,7 +436,13 @@ fn a_list_vouches_for_a_signer_whose_file_carries_only_its_leaf_and_never_for_a_
     let r = root();
     let i = ca("Issuing CA", &r, None);
     let leaf = end_entity("Signer", &i);
-    let tsa = end_entity("Some Stamper", &root());
+    // A real time-stamp authority: its certificate is issued for time stamping (RFC 3161 §2.3).
+    let tsa = issue(
+        "Some Stamper",
+        Some(&root()),
+        FOREVER,
+        &[basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["1.3.6.1.5.5.7.3.8"])],
+    );
     let stamped_at = time(2026);
     let stamper = Stamper { key: tsa.key, cert: tsa.cert.clone(), time: stamped_at };
     let id = DigitalId { key: leaf.key, certificate: leaf.cert, chain: Vec::new(), friendly_name: None };

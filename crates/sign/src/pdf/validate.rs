@@ -1,7 +1,7 @@
 use super::changes::classify_changes;
 use super::listing::{DigestCache, list, nums, sig_fields, text};
 use super::locks::{Locked, locked_fields};
-use super::types::{Detail, Fill, Modification, Status, TrustStore, kind};
+use super::types::{Detail, Fill, Modification, Status, TrustSource, TrustStore, kind};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
 };

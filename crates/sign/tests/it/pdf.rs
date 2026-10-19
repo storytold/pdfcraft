@@ -273,7 +273,7 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
     let annots_ref = |bytes: &[u8]| open(bytes).get(page).as_dict().and_then(|d| d.get(b"Annots").and_then(Object::as_ref));
     let annots = annots_ref(&unsigned).unwrap();
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let first = pdfcraft_sign::sign(&open(&unsigned), &id, &opts()).unwrap();
     let second = pdfcraft_sign::sign(&open(&first), &id, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() }).unwrap();
     assert_eq!(annots_ref(&second), Some(annots), "the signer kept the page's array indirect");
@@ -330,7 +330,7 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
 #[test]
 fn removing_a_widget_from_an_inline_annots_array_is_not_a_comment_change() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let inline = open(&signed).get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
@@ -485,7 +485,7 @@ fn later_changes_are_classified_under_the_signature_permissions() {
 /// Certify `fixture` with "no changes allowed" (DocMDP P=1).
 fn certified_p1() -> (DigitalId, TrustStore, Vec<u8>) {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
     (id, trust, signed)
 }
@@ -565,7 +565,7 @@ fn certification_of(perms: &str) -> pdfcraft_sign::SignatureInfo {
         b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /Reference [<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>] >>",
         b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >>",
     ]);
-    signatures(&open(&bytes), &bytes, &TrustStore { certs: Vec::new() }).into_iter().find(|s| s.field == "Approval").unwrap()
+    signatures(&open(&bytes), &bytes, &TrustStore::default()).into_iter().find(|s| s.field == "Approval").unwrap()
 }
 
 /// Only the signature the catalog's `/Perms /DocMDP` names certifies the document: a DocMDP
@@ -1008,7 +1008,7 @@ fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
 #[test]
 fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
     let ext = |base: &[u8], level: i64| {
         let mut esic = pdfcraft_cos::Dict::new();
@@ -1106,7 +1106,7 @@ fn what_was_removed_before_signing_is_not_signed() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
-    let trust = TrustStore { certs: vec![anchor, tsa.id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![anchor, tsa.id.certificate.clone()], ..TrustStore::default() };
     let text = |s: &str| Object::String(PdfString::literal(s.as_bytes().to_vec()));
     let dict = |entries: &[(&str, Object)]| {
         let mut d = Dict::new();
@@ -1455,7 +1455,7 @@ fn rewrite_stream(num: u32, body: &'static [u8]) -> impl FnOnce(&mut Document) {
 #[test]
 fn rewriting_a_certified_forms_xfa_data_is_a_form_fill() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
     let certified = pdfcraft_sign::sign(&open(&xfa_fixture()), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
     assert_eq!(check(&certified).status, Status::Valid);
@@ -1578,7 +1578,7 @@ const MESSAGE_DIGEST: &str = "1.2.840.113549.1.9.4";
 #[test]
 fn signed_attributes_must_bind_the_document() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let (a, b) = contents_span(&signed);
     let digest = pdfcraft_sign::DigestAlg::Sha256.digest(&[&signed[..a - 1], &signed[b + 1..]]);
@@ -1949,7 +1949,7 @@ fn the_forms_signed_fields_are_not_dropped_after_signing() {
         id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
         time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
     };
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let signed = pdfcraft_sign::sign(&open(&fixture_with_indirect_acroform()), &id, &opts()).unwrap();
     let stamped = pdfcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006120000Z").unwrap();
     let mut failures = Vec::new();
@@ -2287,7 +2287,7 @@ fn a_revocation_behind_many_dss_entries_is_not_reported_valid() {
     let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
     let crl = self_crl(&id, t(2026), t(2027), Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 });
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
-    let trust = TrustStore { certs: vec![anchor] };
+    let trust = TrustStore { certs: vec![anchor], ..TrustStore::default() };
     // `/CRLs`: the revoking CRL after `benign` other entries; `repeated` lists one stream for all of them.
     let status = |benign: usize, repeated: bool| {
         let ltv = edit_after(&signed, |doc| {
@@ -2964,7 +2964,7 @@ fn visible_appearance_draws_central_european_characters_with_embedded_font() {
     assert!(fonts.contains(b"PCFull0"), "appearance should reference the embedded font: {fonts:?}");
     // Verify signature validation still passes.
     let doc = open(&signed);
-    let trust = TrustStore { certs: vec![luka_id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![luka_id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid);
     assert_eq!(s.reason.as_deref(), Some("Podpisano s potrdilom"));
@@ -3200,7 +3200,7 @@ fn append_revision(signed: &[u8], bodies: &[&str], trailer_extra: &str, xref: im
 #[test]
 fn an_unlisted_object_body_or_an_entry_that_points_at_no_object_is_not_permitted() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let text = "BT /F1 14 Tf 20 250 Td (Forged text) Tj ET";
     let forged = format!("4 0 obj\n<< /Length {} >>\nstream\n{text}\nendstream\nendobj\n", text.len());
     let unused = "60 0 obj\n(unused)\nendobj\n";
@@ -3315,7 +3315,7 @@ fn append_signature_with_unlisted_xref_stream(signed: &[u8], xref_num: u32, anno
 #[test]
 fn a_cross_reference_stream_without_a_row_for_itself_is_no_unlisted_body() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     for certify in [Some(2), None] {
         let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
         let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
@@ -3478,7 +3478,7 @@ fn switching_the_trailer_to_another_signed_catalog_is_not_permitted() {
         ],
     );
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let signed = pdfcraft_sign::sign(&open(&base), &id, &SignOptions { field: Some("Approval".into()), rect: None, ..opts() }).unwrap();
     let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
@@ -3495,13 +3495,13 @@ fn switching_the_trailer_to_another_signed_catalog_is_not_permitted() {
 fn a_timestamp_from_a_certificate_not_issued_for_time_stamping_is_not_trusted_time() {
     let tsa = TestTsa { id: tsa_id_with(&["1.3.6.1.5.5.7.3.4"]), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
     let stamped = pdfcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
-    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
     assert!(s.details.iter().any(|d| d.message.contains("not issued for time stamping")), "{:?}", s.details);
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone(), tsa.id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone(), tsa.id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     assert!(s.timestamp);
     assert_eq!(s.timestamp_time, None, "{:?}", s.details);
@@ -3514,7 +3514,7 @@ fn a_timestamp_from_a_certificate_not_issued_for_time_stamping_is_not_trusted_ti
 #[test]
 fn freeing_a_signed_object_or_rewriting_the_signed_widget_is_a_page_content_change() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let freed = check(&edit_after(&signed, |doc| doc.free(pdfcraft_cos::ObjRef { num: 5, generation: 0 })));
@@ -3539,7 +3539,7 @@ fn freeing_a_signed_object_or_rewriting_the_signed_widget_is_a_page_content_chan
 #[test]
 fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_valid() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let first = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let second = pdfcraft_sign::sign(&open(&first), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
     let all = signatures(&open(&second), &second, &trust);
@@ -3555,7 +3555,7 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
 #[test]
 fn fields_sharing_a_signature_value_are_listed_with_one_verdict() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
     let v = open(&signed).get(pdfcraft_cos::ObjRef { num: 6, generation: 0 }).as_dict().and_then(|d| d.get(b"V").cloned()).unwrap();
     let shared = edit_after(&signed, |doc| {
@@ -3587,7 +3587,7 @@ fn the_catalogs_perms_do_not_change_under_no_changes() {
     // /Perms names the certification signature (DocMDP). Under P=1 nothing may change, so a later
     // revision that drops it, or points it elsewhere, breaks the certification.
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
     let elsewhere = dict_of(vec![("DocMDP", oref(5))]);
     for (how, perms) in [("dropped", None), ("pointed elsewhere", Some(Object::Dict(elsewhere)))] {
