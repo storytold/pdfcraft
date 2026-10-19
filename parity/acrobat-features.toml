@@ -6223,7 +6223,7 @@ milestone = "M9"
 status = "shipped"
 commands = ["file.open", "file.extract_original"]
 tools = ["doc_extract_original"]
-evidence = ["crates/engine/tests/envelope.rs::envelope_opens_read_only_without_repairs", "crates/automation/tests/automation.rs::envelope_opens_with_info_and_no_repairs"]
+evidence = ["crates/engine/tests/envelope.rs::envelope_opens_read_only_without_repairs", "crates/engine/tests/envelope.rs::extracted_encrypted_original_opens_with_the_stored_password", "crates/automation/tests/automation.rs::envelope_opens_with_info_and_no_repairs"]
 notes = "beyond Acrobat parity: a .pdf.p7m CAdES envelope opens as the PDF it wraps, read-only, with the signer shown, and Extract the original PDF makes an editable copy (the envelope is never changed). v1 limits: no trust-chain validation, no detached .p7s pairs, non-PDF content refused with an error, no .p7m writing, and a single signer shown (the count is reported)"
 
 [[feature]]

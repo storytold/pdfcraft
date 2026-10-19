@@ -132,6 +132,24 @@ fn extracted_original_is_byte_identical() {
     assert!(!s.get(id).unwrap().editable());
 }
 
+/// An encrypted PDF inside an envelope, unlocked with its password, extracts without asking
+/// for that password again: the copy is the same encrypted bytes, and the password that opened
+/// the envelope opens it too (#1449).
+#[test]
+fn extracted_encrypted_original_opens_with_the_stored_password() {
+    let inner = encrypted_pdf("secret");
+    let wrapped = envelope_over(&inner);
+    let mut s = Session::new();
+    let id = s.open("locked.pdf.p7m", None, wrapped, Some("secret")).unwrap();
+    let copy = s.extract_original(id).unwrap();
+    let d = s.get(copy).unwrap();
+    assert!(d.editable(), "the extracted copy is editable, not blocked on its password");
+    assert!(d.envelope.is_none() && d.read_only_reason.is_none(), "a plain document: {:?}", d.read_only_reason);
+    assert!(d.password.as_deref().is_some_and(|p| p == "secret"), "the copy keeps the password it needs");
+    assert_eq!(&d.bytes[..], &inner[..], "byte-identical to the encrypted PDF that was signed");
+    assert_eq!(d.info.pages.len(), 1, "the copy's pages are read through its password");
+}
+
 #[test]
 fn extract_refuses_plain_documents() {
     let mut s = Session::new();
