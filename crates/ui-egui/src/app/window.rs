@@ -14,12 +14,14 @@ impl PdfCraftApp {
             return;
         }
         let app_frame = self.draws_window_frame();
-        if self.app_frame_shown != Some(app_frame) {
+        // Per window: a window opened later starts with the frame the preference asked for then.
+        let shown = &mut self.window_geometry.entry(self.current_window).or_default().app_frame;
+        if *shown != Some(app_frame) {
             // The window opens undecorated, so only a change from that needs a command.
-            if self.app_frame_shown.is_some() || !app_frame {
+            if shown.is_some() || !app_frame {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
             }
-            self.app_frame_shown = Some(app_frame);
+            *shown = Some(app_frame);
         }
     }
 

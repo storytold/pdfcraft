@@ -11,12 +11,19 @@ impl PdfCraftApp {
     pub fn open_combine_tab(&mut self) {
         self.combine_tab.open = true;
         self.combine_tab.focused = true;
-        self.active = None;
+        // The Combine files tab is the main window's: asked for from another window, it shows
+        // there (M14).
+        if self.current_window() == crate::WindowId::ROOT {
+            self.active = None;
+        } else {
+            self.with_window(crate::WindowId::ROOT, |a| a.active = None);
+            self.queue_window_op(crate::WindowOp::Focus(crate::WindowId::ROOT));
+        }
     }
 
-    /// Whether the Combine files tab is the one showing.
+    /// Whether the Combine files tab is the one showing (in the main window, which keeps it).
     pub fn combine_showing(&self) -> bool {
-        self.active.is_none() && self.combine_tab.open && self.combine_tab.focused
+        self.current_window() == crate::WindowId::ROOT && self.active.is_none() && self.combine_tab.open && self.combine_tab.focused
     }
 
     /// The selected rows, top to bottom (tests and automation).

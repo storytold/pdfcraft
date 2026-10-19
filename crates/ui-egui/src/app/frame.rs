@@ -93,9 +93,15 @@ impl PdfCraftApp {
 
 impl PdfCraftApp {
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
-        self.finish_document_copy(ctx);
-        // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
-        self.combine_thumbs_frame(ctx);
+        // A whole-document copy is finished in the window it was made in, which has the focus.
+        if self.current_window == self.focused_window {
+            self.finish_document_copy(ctx);
+        }
+        // The Combine grid's thumbnails, whichever tab of the main window shows (renders under
+        // way still finish).
+        if self.current_window == crate::windows::WindowId::ROOT {
+            self.combine_thumbs_frame(ctx);
+        }
         // Retire hidden documents before admitting the visible document's textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.

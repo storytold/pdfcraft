@@ -100,6 +100,13 @@ fn every_registered_command_is_implemented() {
         if spec.id == "edit.redo" {
             app.undo();
         }
+        // Merging windows needs a second one: the document's tab in a window of its own.
+        if spec.id == "window.merge_all" {
+            let doc = app.views[0].id;
+            app.queue_window_op(pdfcraft_ui_egui::WindowOp::MoveTab { doc, from: pdfcraft_ui_egui::WindowId::ROOT, to: None, at: None });
+            app.apply_window_ops(&egui::Context::default());
+            assert_eq!(app.window_count(), 2);
+        }
         if spec.id.starts_with("edit.") && (spec.id.ends_with(".update") || spec.id.ends_with(".remove")) {
             use pdfcraft_engine::{Background, Edit, HeaderFooter, Watermark};
             let mut hf = HeaderFooter::default();

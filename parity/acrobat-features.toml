@@ -1235,11 +1235,11 @@ title = "Multiple windows; drag a tab out into a window"
 area = "B"
 tier = "P1"
 milestone = "M14"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["window.move_tab_new", "window.merge_all", "window.close"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/windows.rs::dragging_a_tab_below_the_strip_opens_it_in_a_window_of_its_own", "crates/ui-egui/tests/windows.rs::a_tab_dropped_on_another_window_joins_its_strip_where_the_pointer_is", "crates/ui-egui/tests/windows.rs::escape_cancels_a_tab_drag_and_a_short_drag_only_reorders", "crates/ui-egui/tests/windows.rs::closing_a_window_with_unsaved_changes_asks_first", "crates/ui-egui/tests/windows.rs::quitting_asks_about_unsaved_documents_in_every_window", "crates/ui-egui/tests/windows.rs::the_window_commands_move_merge_and_close", "crates/ui-egui/src/windows.rs::a_tab_moves_into_a_new_window_and_back", "crates/ui-egui/src/windows.rs::closing_a_window_closes_its_documents_and_merging_brings_every_tab_home"]
+notes = "Desktop (#1683, #2848): a document tab dragged more than 40 pt above or below the strip, or past the window's sides, opens in a window of its own when released (placed so the tab sits under the pointer, with the source window's size, mode and panels); while it is held there a badge at the pointer says so, the drop marker is gone, and Escape cancels. A tab dragged onto another PdfCraft window joins it: at the gap under the pointer when it is over that window's strip (which marks it), after the last tab elsewhere in the window. The tab's context menu has Move to new window and Move to window ▸ (the other windows by name), and the Window menu Move tab to new window, Merge all windows and Close window. Each window keeps its own tabs, mode, panels, dialogs and dialog drafts; documents, undo, the recent list, preferences and the Combine files tab are the app's (one `PdfCraftApp` draws every window as an egui viewport inside the main window's pass, swapping the window's state in), and a document shows in one window at a time. Closing a window closes its tabs, asking about unsaved changes first; closing the main window quits, asking about every window's unsaved documents (they gather in the main window first); the last session remembers every window's files, reopened in one window. Not yet: a second view of one document (#596 has it); on Wayland, which tells no app where its windows are, a tab dropped on another window opens its own window (the context menu moves it); the web build has one window; windows' places and sizes are not remembered; work that belongs to no window (an opened file, a finished export or OCR run, the control channel's ui.* methods) lands in the window that has the focus; the only tab of a window other than the main one stays there (drag the window). Checked on X11 (Cinnamon) with real pointer events: detaching, dropping on another window's strip and on its document area, Escape; there the release over another window arrives together with the pointer leaving the window, which the strip allows for. Windows and macOS not checked by hand."
 
 [[feature]]
 id = "view.split-window"
