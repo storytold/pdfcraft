@@ -1038,11 +1038,7 @@ impl PdfCraftApp {
                         .set_title(tl!("Export").to_string())
                         .add_filter(tl!("PostScript / EPS").to_string(), &["ps", "eps"])
                         .set_file_name(format!("{stem}.ps"));
-                    self.ask_one(
-                        crate::pickers::Ask::Save(dialog),
-                        None,
-                        move |app, path| app.write_postscript(src, current, path),
-                    );
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| app.write_postscript(src, current, path));
                 }
             }
         }
@@ -1051,12 +1047,24 @@ impl PdfCraftApp {
         {
             use pdfcraft_engine::export::PsFormat;
             let pages: Vec<usize> = (0..src.pages).collect();
+            let name = format!("{stem}.ps");
             match pdfcraft_engine::export::postscript(&src, &pages, PsFormat::Ps) {
-                Ok(out) => {
-                    if let Err(e) = crate::editing::download(&format!("{stem}.ps"), &out.bytes) {
-                        self.notify_error(e);
+                Ok(out) => match crate::editing::download(&name, &out.bytes) {
+                    Ok(()) => {
+                        // The desktop path reports the degradations after a successful
+                        // write ("Exported to … (N warnings: …)"); a download that
+                        // failed shows its own error instead, never these.
+                        let mut msg = crate::i18n::fmt(tl!("Downloaded {name}"), &[("name", &name)]);
+                        if let Some(first) = out.warnings.first() {
+                            msg.push_str(&crate::i18n::fmt(
+                                tl!(" ({s} warnings: {first})"),
+                                &[("s", &out.warnings.len().to_string()), ("first", &first.text)],
+                            ));
+                        }
+                        self.notify(msg);
                     }
-                }
+                    Err(e) => self.notify_error(e),
+                },
                 Err(e) => self.notify_fmt("Export stopped: {e}", &[("e", &ps_error_text(e))]),
             }
         }
