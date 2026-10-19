@@ -139,3 +139,37 @@ fn extract_refuses_plain_documents() {
     assert_eq!(s.extract_original(id).unwrap_err(), "this document is not inside a CAdES envelope");
     assert_eq!(s.extract_original(pdfcraft_engine::DocId(999)).unwrap_err(), "no such document");
 }
+
+/// The `file.extract_original` command is registered for envelope documents only, so menus,
+/// the palette and the control channel never offer it — and never run it — on a plain one.
+#[test]
+fn extract_command_is_enabled_only_for_envelope_documents() {
+    use pdfcraft_engine::commands;
+    let spec = commands::command("file.extract_original").expect("registered");
+    assert_eq!(spec.menu, Some("File"));
+    let mut s = Session::new();
+    assert!(!commands::is_enabled(spec, &s, None), "no document, no extraction");
+    let plain = s.open("plain.pdf", None, Arc::new(data("openssl-signed.pdf")), None).unwrap();
+    assert!(!commands::is_enabled(spec, &s, Some(plain)), "a plain document offers no extraction");
+    let env = s.open("cades-envelope.pdf.p7m", None, Arc::new(data("cades-envelope.pdf.p7m")), None).unwrap();
+    assert!(commands::is_enabled(spec, &s, Some(env)));
+    // The extracted copy is a plain document: the command switches off once the work is done.
+    let copy = s.extract_original(env).unwrap();
+    assert!(!commands::is_enabled(spec, &s, Some(copy)));
+}
+
+#[test]
+fn save_as_hands_out_the_signed_envelope_not_the_pdf_inside() {
+    let mut s = Session::new();
+    let envelope = Arc::new(data("cades-envelope.pdf.p7m"));
+    let id = s.open("cades-envelope.pdf.p7m", None, envelope.clone(), None).unwrap();
+    // The read-only save path (Save As, `doc_save`) returns the file as opened: the signed
+    // envelope. Returning the working PDF would let a save over the `.p7m` silently replace
+    // the signed envelope with the unsigned document inside it.
+    let saved = s.save_bytes(id).unwrap();
+    assert_eq!(&saved[..], &envelope[..], "the envelope's own bytes");
+    assert_ne!(&saved[..], &data("openssl-signed.pdf")[..], "never the unsigned PDF inside");
+    assert_eq!(&s.get(id).unwrap().saved_bytes()[..], &envelope[..], "the envelope is also the saved base");
+    // The working file stays the PDF everything else processes (pages, printing, combining).
+    assert_eq!(&s.get(id).unwrap().bytes[..], &data("openssl-signed.pdf")[..]);
+}

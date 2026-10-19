@@ -107,7 +107,8 @@ impl Session {
         }
         // `path` stays None: Save writes a read-only document in full to its path, and that
         // file is the envelope, which is never rewritten.
-        let mut prepared = Self::prepare_open_unguarded(context, strip_p7m(&name), None, Arc::new(content), password)?;
+        let content = Arc::new(content);
+        let mut prepared = Self::prepare_open_unguarded(context, strip_p7m(&name), None, content.clone(), password)?;
         // The user's file is the envelope, not the PDF inside it: the document keeps the
         // envelope's bytes (what Extract hands out) and no editor of its own.
         prepared.document.editor = None;
@@ -120,6 +121,8 @@ impl Session {
             signers: env.signers,
             quirks: env.quirks.iter().map(|q| (*q).to_string()).collect(),
         });
+        prepared.document.envelope_file = Some(bytes);
+        prepared.document.envelope_content = Some(content);
         prepared.document.dirty = false;
         Ok(prepared)
     }
@@ -378,6 +381,8 @@ impl Session {
             snapshot_generation: 0,
             read_only_reason,
             envelope: None,
+            envelope_file: None,
+            envelope_content: None,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),

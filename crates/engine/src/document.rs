@@ -53,6 +53,14 @@ pub struct Document {
     pub read_only_reason: Option<String>,
     /// The CAdES envelope the document was opened from (read-only by nature), if so.
     pub envelope: Option<EnvelopeInfo>,
+    /// The envelope file's own bytes, as opened: what Save writes for an envelope document —
+    /// the signed envelope, never the unsigned PDF inside it, so saving over the `.p7m` cannot
+    /// replace it. `None` on every other document.
+    pub(crate) envelope_file: Option<Arc<Vec<u8>>>,
+    /// The exact PDF bytes the envelope encapsulated, untouched by any repair or layout its
+    /// open performed on the working `bytes`: what [`Session::extract_original`] hands out,
+    /// byte-identical to what was signed. `None` on every other document.
+    pub(crate) envelope_content: Option<Arc<Vec<u8>>>,
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,
@@ -643,7 +651,7 @@ impl Document {
     /// The file as last opened or saved, without unsaved edits: what an incremental save appends
     /// to. This stays that file when undo has restored an older snapshot.
     pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
-        self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
+        self.editor.as_ref().map_or_else(|| self.envelope_file.clone().unwrap_or_else(|| self.bytes.clone()), |e| e.saved.clone())
     }
 
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).

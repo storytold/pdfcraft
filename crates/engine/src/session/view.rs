@@ -210,7 +210,10 @@ impl Session {
         if doc.envelope.is_none() {
             return Err("this document is not inside a CAdES envelope".into());
         }
-        let (name, bytes) = (doc.name.clone(), doc.bytes.clone());
+        // The exact bytes the envelope carries, not the working file (whose open may have
+        // repaired the PDF or laid out a form): the copy is what was signed.
+        let name = doc.name.clone();
+        let bytes = doc.envelope_content.clone().ok_or("the envelope's content is unavailable")?;
         self.open_new(name, bytes).map_err(|e| e.to_string())
     }
 
