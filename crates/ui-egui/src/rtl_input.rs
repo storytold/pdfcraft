@@ -37,10 +37,16 @@ pub(crate) fn layout_galley(ui: &egui::Ui, text: &str, _wrap: f32) -> std::sync:
     let row_height = ui.fonts_mut(|f| f.row_height(&font_id));
     let line_height = row_height + ui.spacing().extra_text_line_spacing;
     let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
-    let screen = screen_of(text);
-    // `visual_auto` is the order egui's shaper must receive so each word joins and the words
-    // themselves land in reading order. The caret then walks a cleaned copy of that galley.
-    let shaped = if crate::bidi::has_rtl(text) { crate::bidi::visual_auto(text).into_owned() } else { text.to_owned() };
+    let count = text.chars().count();
+    // Past the cap the buffer stays in stored order, so the galley must too. Otherwise the caret
+    // index and the glyph index name different characters.
+    let screen = if count == 0 || count > MAX_CHARS || !crate::bidi::has_rtl(text) { None } else { Some(analyze(text)) };
+    // The shaper string is the same characters as the field shows, including spaces and marks.
+    // `visual_auto` drops a trailing space, and the caret then falls back to the frozen galley.
+    let shaped = match &screen {
+        Some(screen) => crate::bidi::for_shaper(&screen.text),
+        None => text.to_owned(),
+    };
     // Single-line, like egui's own field: do not wrap. The widget clips what does not fit.
     let mut job = LayoutJob::simple_singleline(shaped, font_id, color);
     job.keep_trailing_whitespace = true;
@@ -48,33 +54,64 @@ pub(crate) fn layout_galley(ui: &egui::Ui, text: &str, _wrap: f32) -> std::sync:
         section.format.line_height = Some(line_height);
     }
     let galley = ui.fonts_mut(|f| f.layout_job(job));
-    if !crate::bidi::has_rtl(text) {
-        return galley;
-    }
+    let Some(screen) = screen else { return galley };
     let mut galley = std::sync::Arc::unwrap_or_clone(galley);
-    place_caret_glyphs(&mut galley, screen.chars().count());
+    place_caret_glyphs(&mut galley, screen.text.chars().count());
     std::sync::Arc::new(galley)
 }
 
-/// Replace each row's glyph list with the glyphs that have width, left to right.
+/// Replace each row's glyph list with one glyph per character, left to right.
 ///
 /// egui's caret uses glyph index as character index. Arabic currently produces about two glyphs
-/// per letter, and the extras have no width and share one x, so the caret freezes. Dropping
-/// those extras leaves one glyph per character. If the counts disagree, the row is left as egui
-/// built it.
+/// per letter, and the extras have no width and share one x, so the caret freezes. A combining
+/// mark or a direction mark is only a zero-width glyph, so the row is padded or trimmed until
+/// the glyph count is the character count. Leaving the raw galley in place is what froze the caret.
 fn place_caret_glyphs(galley: &mut Galley, chars: usize) {
-    let mut kept = Vec::new();
+    if chars == 0 {
+        return;
+    }
+    let mut raw = Vec::new();
     for row in &galley.rows {
-        for glyph in &row.glyphs {
-            if glyph.advance_width > 0.0 {
-                kept.push(*glyph);
+        raw.extend(row.glyphs.iter().copied());
+    }
+    // A letter is often emitted twice: a zero-width copy and the real glyph. A combining mark
+    // is only the zero-width glyph, so it has to stay or the caret count no longer matches.
+    let mut kept = Vec::new();
+    for (i, glyph) in raw.iter().enumerate() {
+        if glyph.advance_width <= 0.0 {
+            let same = |other: Option<&egui::epaint::text::Glyph>| other.is_some_and(|g| g.chr == glyph.chr && g.advance_width > 0.0);
+            if same(raw.get(i.saturating_add(1))) || (i > 0 && same(raw.get(i - 1))) {
+                continue;
+            }
+        }
+        kept.push(*glyph);
+    }
+    let drawn: std::collections::HashSet<char> = kept.iter().filter(|g| g.advance_width > 0.0).map(|g| g.chr).collect();
+    kept.retain(|glyph| glyph.advance_width > 0.0 || !drawn.contains(&glyph.chr));
+    // Still more slots than characters: drop leftover zero-width copies, then the extras.
+    if kept.len() > chars {
+        let mut i = kept.len();
+        while kept.len() > chars && i > 0 {
+            i -= 1;
+            if kept.get(i).is_some_and(|glyph| glyph.advance_width <= 0.0) {
+                kept.remove(i);
             }
         }
     }
-    if kept.len() != chars || chars == 0 {
+    kept.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x).then(a.chr.cmp(&b.chr)));
+    if kept.len() > chars {
+        kept.truncate(chars);
+    }
+    while kept.len() < chars {
+        let Some(template) = kept.last().copied() else { return };
+        let mut pad = template;
+        pad.advance_width = 0.0;
+        pad.chr = '\u{200B}';
+        kept.push(pad);
+    }
+    if kept.is_empty() {
         return;
     }
-    kept.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x).then(a.chr.cmp(&b.chr)));
     let Some(row) = galley.rows.first_mut() else { return };
     let glyphs = std::sync::Arc::make_mut(&mut row.row);
     glyphs.glyphs = kept;
@@ -84,23 +121,25 @@ fn place_caret_glyphs(galley: &mut Galley, chars: usize) {
 
 /// The search field. `text` stays in typing order.
 pub(crate) fn show_query(ui: &mut egui::Ui, text: &mut String, kind: QueryField) -> egui::Response {
+    let id = match kind {
+        QueryField::FindBar => egui::Id::unique("find-input"),
+        QueryField::SearchPanel => egui::Id::unique("search-panel-input"),
+    };
+    // egui's undo stores the on-screen string from an earlier frame. The map from that string
+    // back to the typed query has to outlive this widget, which is built again every frame.
+    let snapshots = ui.data(|d| d.get_temp::<Vec<(String, String)>>(id.with("rtl-undo"))).unwrap_or_default();
     let logical = Rc::new(RefCell::new(text.clone()));
-    let mut edit = RtlEdit::new(Rc::clone(&logical));
+    let mut edit = RtlEdit::new(Rc::clone(&logical), snapshots);
     let shared = Rc::clone(&logical);
     let mut layouter = move |ui: &egui::Ui, _: &dyn TextBuffer, wrap: f32| layout_galley(ui, &shared.borrow(), wrap);
     // A new field puts the caret at the end of the buffer. For right-to-left text that end is
     // the start of the stored phrase, so the caret starts on the leading edge instead.
-    let start_at_end = !analyze(&logical.borrow()).base_rtl;
-    let mut field = egui::TextEdit::singleline(&mut edit).layouter(&mut layouter).cursor_at_end(start_at_end);
-    field = match kind {
-        QueryField::FindBar => field.id(egui::Id::unique("find-input")).hint_text(tl!("Find text")).desired_width(220.0).frame(egui::Frame::NONE),
-        QueryField::SearchPanel => field
-            .id(egui::Id::unique("search-panel-input"))
-            .hint_text(tl!("Search"))
-            .desired_width(f32::INFINITY)
-            .margin(egui::Margin::symmetric(10, 6))
-            .min_size(egui::vec2(0.0, 30.0)),
+    let start_at_end = !edit.screen.base_rtl;
+    let mut field = match kind {
+        QueryField::FindBar => egui::TextEdit::singleline(&mut edit).id(id).hint_text(tl!("Find text")).desired_width(220.0).frame(egui::Frame::NONE),
+        QueryField::SearchPanel => crate::widgets::line(&mut edit).id(id).hint_text(tl!("Search")).desired_width(f32::INFINITY),
     };
+    field = field.layouter(&mut layouter).cursor_at_end(start_at_end);
     let output = field.show(ui);
     let focused = output.response.has_focus();
     if focused {
@@ -118,6 +157,7 @@ pub(crate) fn show_query(ui: &mut egui::Ui, text: &mut String, kind: QueryField)
         }
     }
     *text = logical.borrow().clone();
+    ui.data_mut(|d| d.insert_temp(id.with("rtl-undo"), edit.snapshots.clone()));
     output.response.response
 }
 
@@ -132,6 +172,7 @@ struct Screen {
     base_rtl: bool,
 }
 
+#[cfg(test)]
 fn screen_of(text: &str) -> String {
     analyze(text).text
 }
@@ -155,20 +196,21 @@ fn analyze(text: &str) -> Screen {
         let (levels, runs) = info.visual_runs(para, para.range.clone());
         for run in runs {
             let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
+            // Entries are in byte order, so each run is a slice, not a scan of the whole line.
+            let lo = entries.partition_point(|entry| entry.0 < run.start);
+            let hi = entries.partition_point(|entry| entry.0 < run.end);
             let mut items: Vec<(usize, char)> = Vec::new();
-            for &(byte, index, ch) in &entries {
-                if run.start <= byte && byte < run.end {
-                    items.push((index, ch));
-                    if let Some(slot) = claimed.get_mut(index) {
-                        *slot = true;
-                    }
+            for &(_, index, ch) in entries.get(lo..hi).unwrap_or(&[]) {
+                items.push((index, ch));
+                if let Some(slot) = claimed.get_mut(index) {
+                    *slot = true;
                 }
             }
             if run_rtl {
                 items.reverse();
             }
             for (index, ch) in items {
-                text_out.push(if run_rtl { mirrored(ch) } else { ch });
+                text_out.push(if run_rtl { crate::bidi::mirrored(ch) } else { ch });
                 order.push(index);
                 rtl.push(run_rtl);
             }
@@ -186,37 +228,43 @@ fn analyze(text: &str) -> Screen {
     Screen { text: text_out, order, rtl, base_rtl }
 }
 
-fn mirrored(c: char) -> char {
-    match c {
-        '(' => ')',
-        ')' => '(',
-        '[' => ']',
-        ']' => '[',
-        '{' => '}',
-        '}' => '{',
-        '<' => '>',
-        '>' => '<',
-        '«' => '»',
-        '»' => '«',
-        other => other,
-    }
-}
-
 struct RtlEdit {
     logical: Rc<RefCell<String>>,
     screen: Screen,
+    /// Screen text egui has already been shown, with the stored query at that moment.
+    /// Undo restores one of these instead of writing the on-screen order into the query.
+    snapshots: Vec<(String, String)>,
     /// Logical text removed by a cut this frame, for the clipboard.
     deleted: Option<String>,
 }
 
 impl RtlEdit {
-    fn new(logical: Rc<RefCell<String>>) -> Self {
+    fn new(logical: Rc<RefCell<String>>, snapshots: Vec<(String, String)>) -> Self {
         let screen = analyze(&logical.borrow());
-        Self { logical, screen, deleted: None }
+        let mut edit = Self { logical, screen, snapshots, deleted: None };
+        edit.remember();
+        edit
     }
 
     fn refresh(&mut self) {
         self.screen = analyze(&self.logical.borrow());
+        self.remember();
+    }
+
+    fn remember(&mut self) {
+        let logical = self.logical.borrow().clone();
+        if self.snapshots.last().is_some_and(|(screen, stored)| screen == &self.screen.text && stored == &logical) {
+            return;
+        }
+        self.snapshots.push((self.screen.text.clone(), logical));
+        // egui keeps 100 undo points. Dropping an older screen string would make that undo a no-op.
+        if self.snapshots.len() > 100 {
+            self.snapshots.remove(0);
+        }
+    }
+
+    fn pure_rtl(&self) -> bool {
+        self.screen.base_rtl && !self.screen.rtl.is_empty() && self.screen.rtl.iter().all(|&rtl| rtl)
     }
 
     /// Stored index where a caret before shown character `at` inserts.
@@ -309,6 +357,16 @@ impl RtlEdit {
         self.refresh();
     }
 
+    /// Remove one stored character and leave the caret at that boundary.
+    fn delete_logical(&mut self, logical_index: usize) -> CCursor {
+        let Some(shown) = self.screen.order.iter().position(|&logical| logical == logical_index) else {
+            return CCursor { index: CharIndex(0), prefer_next_row: true };
+        };
+        self.delete_shown(shown..shown.saturating_add(1));
+        let boundary = logical_index.min(self.screen.order.len());
+        CCursor { index: CharIndex(self.caret_for_boundary(boundary)), prefer_next_row: true }
+    }
+
     fn logical_screen_slice(&self, range: Range<usize>) -> String {
         let Some(shown) = self.screen.order.get(range) else { return String::new() };
         let mut wanted = shown.to_vec();
@@ -357,17 +415,51 @@ impl TextBuffer for RtlEdit {
         ccursor.index = CharIndex(self.caret_for_boundary(boundary.saturating_add(added)));
     }
 
+    fn replace_with(&mut self, text: &str) {
+        if let Some((_, stored)) = self.snapshots.iter().rev().find(|(screen, _)| screen == text) {
+            let stored = stored.clone();
+            *self.logical.borrow_mut() = stored;
+            self.refresh();
+            return;
+        }
+        // An unknown right-to-left snapshot is the on-screen order. Storing it would make
+        // search look for the reversed words.
+        if !crate::bidi::has_rtl(text) {
+            *self.logical.borrow_mut() = text.to_owned();
+            self.refresh();
+        }
+    }
+
     fn delete_previous_char(&mut self, ccursor: CCursor) -> CCursor {
-        if ccursor.index.0 == 0 {
-            if self.screen.base_rtl && !self.screen.order.is_empty() {
-                self.delete_shown(0..1);
-                return CCursor { index: CharIndex(0), prefer_next_row: true };
+        if self.pure_rtl() {
+            let boundary = self.insert_index(ccursor.index.0);
+            if boundary == 0 {
+                return ccursor;
             }
+            return self.delete_logical(boundary - 1);
+        }
+        if ccursor.index.0 == 0 {
             return ccursor;
         }
         let at = ccursor.index.0;
         self.delete_shown(at.saturating_sub(1)..at);
         CCursor { index: CharIndex(at.saturating_sub(1).min(self.screen.order.len())), prefer_next_row: true }
+    }
+
+    fn delete_next_char(&mut self, ccursor: CCursor) -> CCursor {
+        if self.pure_rtl() {
+            let boundary = self.insert_index(ccursor.index.0);
+            if boundary >= self.screen.order.len() {
+                return ccursor;
+            }
+            return self.delete_logical(boundary);
+        }
+        let at = ccursor.index.0;
+        if at >= self.screen.order.len() {
+            return ccursor;
+        }
+        self.delete_shown(at..at + 1);
+        CCursor { index: CharIndex(at.min(self.screen.order.len())), prefer_next_row: true }
     }
 
     fn type_id(&self) -> std::any::TypeId {
@@ -381,7 +473,7 @@ mod tests {
     use egui::epaint::text::cursor::CCursor;
 
     fn edit(text: &str) -> RtlEdit {
-        RtlEdit::new(Rc::new(RefCell::new(text.to_owned())))
+        RtlEdit::new(Rc::new(RefCell::new(text.to_owned())), Vec::new())
     }
 
     fn type_into(start: &str, added: &str) -> (String, usize) {
@@ -472,6 +564,54 @@ mod tests {
         let mut cursor = CCursor { index: CharIndex(at), prefer_next_row: false };
         field.insert_text_at(&mut cursor, "ا", usize::MAX);
         assert_eq!(field.logical.borrow().as_str(), "امر");
+    }
+
+    #[test]
+    fn backspace_at_the_right_edge_of_arabic_deletes_nothing() {
+        let mut field = edit("مر");
+        let end = CCursor { index: CharIndex(field.screen.order.len()), prefer_next_row: false };
+        let cursor = field.delete_previous_char(end);
+        assert_eq!(field.logical.borrow().as_str(), "مر");
+        assert_eq!(cursor.index.0, end.index.0);
+        // The leading edge is after the last typed letter: Backspace removes that letter.
+        let cursor = field.delete_previous_char(CCursor { index: CharIndex(0), prefer_next_row: false });
+        assert_eq!(field.logical.borrow().as_str(), "م");
+        assert_eq!(cursor.index.0, 0);
+    }
+
+    #[test]
+    fn delete_at_the_right_edge_removes_the_first_stored_letter() {
+        let mut field = edit("مر");
+        let end = CCursor { index: CharIndex(field.screen.order.len()), prefer_next_row: false };
+        let _cursor = field.delete_next_char(end);
+        assert_eq!(field.logical.borrow().as_str(), "ر");
+    }
+
+    #[test]
+    fn undo_restores_the_stored_text_not_the_screen_text() {
+        let mut field = edit("");
+        let mut cursor = CCursor::default();
+        for ch in "مر".chars() {
+            field.insert_text_at(&mut cursor, &ch.to_string(), usize::MAX);
+        }
+        let screen = field.as_str().to_owned();
+        let stored = field.logical.borrow().clone();
+        assert_ne!(screen, stored);
+        field.insert_text_at(&mut cursor, "ا", usize::MAX);
+        field.replace_with(&screen);
+        assert_eq!(field.logical.borrow().as_str(), stored);
+        // A reversed string egui did not snapshot must not become the query.
+        field.replace_with(&screen.chars().rev().collect::<String>());
+        assert_eq!(field.logical.borrow().as_str(), stored);
+    }
+
+    #[test]
+    fn a_trailing_space_and_a_vowel_stay_in_the_field() {
+        let (text, _) = type_each("مر ");
+        assert_eq!(text, "مر ");
+        assert_eq!(screen_of("مر ").chars().count(), 3);
+        assert_eq!(screen_of("بَاب").chars().count(), "بَاب".chars().count());
+        assert_eq!(crate::bidi::for_shaper(&screen_of("مر ")).chars().count(), 3);
     }
 
     #[test]
@@ -567,5 +707,34 @@ mod tests {
         // The first typed word is the right-hand side, not under the caret.
         let right = xs.iter().copied().fold(f32::MIN, f32::max);
         assert!(right > left + 20.0, "glyphs did not spread: {xs:?}");
+    }
+
+    #[test]
+    fn a_trailing_space_and_a_vowel_still_get_a_caret_slot() {
+        if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for text in ["مر ", "بَاب", "مر\u{200F}", "ب\u{200D}اب", "ب\u{200C}اب"] {
+                let galley = layout_galley(ui, text, f32::INFINITY);
+                let glyphs = galley.rows.first().map(|row| row.glyphs.len()).unwrap_or(0);
+                let dump: Vec<String> = galley
+                    .rows
+                    .first()
+                    .map(|row| row.glyphs.iter().map(|g| format!("{:?}/{:.1}", g.chr, g.advance_width)).collect())
+                    .unwrap_or_default();
+                assert_eq!(glyphs, text.chars().count(), "{text:?} froze the caret: {glyphs} glyphs {dump:?}");
+                let xs: Vec<i32> = (0..=text.chars().count())
+                    .map(|i| (galley.pos_from_cursor(CCursor { index: CharIndex(i), prefer_next_row: false }).left() * 2.0).round() as i32)
+                    .collect();
+                let mut unique = xs.clone();
+                unique.sort_unstable();
+                unique.dedup();
+                assert!(unique.len() > 2, "caret x collapsed for {text:?}: {xs:?}");
+            }
+        });
+        output.drop_without_applying_deltas();
     }
 }
