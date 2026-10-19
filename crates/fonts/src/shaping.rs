@@ -274,6 +274,7 @@ mod thai_tests {
 
     #[test]
     fn thai_clusters_preserve_sara_am_and_stacked_marks() {
+        let _guard = crate::craft::THAI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if crate::document_thai_font().is_none() {
             assert_eq!(shape_thai("น้ำ"), Err(GlyphError::NoFont));
             assert!(!thai_has('ก'));

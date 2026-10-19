@@ -89,6 +89,41 @@ static LOADED_THAI_CACHE: std::sync::RwLock<Option<std::collections::HashMap<std
     std::sync::RwLock::new(None);
 static DISCOVERED_THAI_FONTS: std::sync::RwLock<Option<Vec<ThaiFontEntry>>> = std::sync::RwLock::new(None);
 
+fn get_active_thai_font() -> Option<&'static CraftFont> {
+    *ACTIVE_THAI_FONT.read().unwrap_or_else(|e| e.into_inner())
+}
+
+fn set_active_thai_font(font: Option<&'static CraftFont>) {
+    *ACTIVE_THAI_FONT.write().unwrap_or_else(|e| e.into_inner()) = font;
+}
+
+fn get_active_thai_entry() -> Option<ThaiFontEntry> {
+    ACTIVE_THAI_ENTRY.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn set_active_thai_entry(entry: Option<ThaiFontEntry>) {
+    *ACTIVE_THAI_ENTRY.write().unwrap_or_else(|e| e.into_inner()) = entry;
+}
+
+fn with_loaded_thai_cache_read<R>(f: impl FnOnce(&std::collections::HashMap<std::path::PathBuf, &'static CraftFont>) -> R) -> Option<R> {
+    let lock = LOADED_THAI_CACHE.read().unwrap_or_else(|e| e.into_inner());
+    lock.as_ref().map(f)
+}
+
+fn with_loaded_thai_cache_write(f: impl FnOnce(&mut std::collections::HashMap<std::path::PathBuf, &'static CraftFont>)) {
+    let mut lock = LOADED_THAI_CACHE.write().unwrap_or_else(|e| e.into_inner());
+    let map = lock.get_or_insert_with(std::collections::HashMap::new);
+    f(map);
+}
+
+fn get_discovered_thai_fonts() -> Option<Vec<ThaiFontEntry>> {
+    DISCOVERED_THAI_FONTS.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn set_discovered_thai_fonts(list: Vec<ThaiFontEntry>) {
+    *DISCOVERED_THAI_FONTS.write().unwrap_or_else(|e| e.into_inner()) = Some(list);
+}
+
 /// Candidate directories where font files may reside.
 /// Checks runtime environment variables, executable-relative paths, working directory paths,
 /// and manifest directories to ensure robust discovery across dev and packaged distributions.
@@ -291,24 +326,18 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
 /// Scan all font directories for Thai `.ttf` and `.otf` fonts and return a list of available entries.
 /// Results are sorted with `COURMT__.TTF` (Courier MonoThai Regular) as the default first option.
 pub fn available_thai_fonts() -> Vec<ThaiFontEntry> {
-    if let Ok(lock) = DISCOVERED_THAI_FONTS.read() {
-        if let Some(cached) = lock.as_ref() {
-            return cached.clone();
-        }
+    if let Some(cached) = get_discovered_thai_fonts() {
+        return cached;
     }
     let list = scan_thai_fonts_from_dirs();
-    if let Ok(mut lock) = DISCOVERED_THAI_FONTS.write() {
-        *lock = Some(list.clone());
-    }
+    set_discovered_thai_fonts(list.clone());
     list
 }
 
 /// Force a rescan of font directories (useful if new fonts were added to the directory).
 pub fn rescan_thai_fonts() -> Vec<ThaiFontEntry> {
     let list = scan_thai_fonts_from_dirs();
-    if let Ok(mut lock) = DISCOVERED_THAI_FONTS.write() {
-        *lock = Some(list.clone());
-    }
+    set_discovered_thai_fonts(list.clone());
     list
 }
 
@@ -349,34 +378,23 @@ pub fn load_custom_thai_font_named(
 
 /// Set the active Thai font using a `ThaiFontEntry`.
 pub fn set_active_thai_font_entry(entry: &ThaiFontEntry) -> Result<&'static CraftFont, crate::GlyphError> {
-    if let Ok(cache) = LOADED_THAI_CACHE.read() {
-        if let Some(map) = cache.as_ref() {
-            if let Some(&font) = map.get(&entry.path) {
-                if let Ok(mut lock) = ACTIVE_THAI_FONT.write() {
-                    *lock = Some(font);
-                }
-                if let Ok(mut elock) = ACTIVE_THAI_ENTRY.write() {
-                    *elock = Some(entry.clone());
-                }
-                crate::shaping::invalidate_thai_cache();
-                return Ok(font);
-            }
+    if let Some(cached) = with_loaded_thai_cache_read(|map| map.get(&entry.path).copied()) {
+        if let Some(font) = cached {
+            set_active_thai_font(Some(font));
+            set_active_thai_entry(Some(entry.clone()));
+            crate::shaping::invalidate_thai_cache();
+            return Ok(font);
         }
     }
 
     let bytes = std::fs::read(&entry.path).map_err(|_| crate::GlyphError::NoFont)?;
     let font = load_custom_thai_font_named(bytes, entry.family.clone(), entry.style.clone())?;
 
-    if let Ok(mut cache) = LOADED_THAI_CACHE.write() {
-        let map = cache.get_or_insert_with(std::collections::HashMap::new);
+    with_loaded_thai_cache_write(|map| {
         map.insert(entry.path.clone(), font);
-    }
-    if let Ok(mut lock) = ACTIVE_THAI_FONT.write() {
-        *lock = Some(font);
-    }
-    if let Ok(mut elock) = ACTIVE_THAI_ENTRY.write() {
-        *elock = Some(entry.clone());
-    }
+    });
+    set_active_thai_font(Some(font));
+    set_active_thai_entry(Some(entry.clone()));
     crate::shaping::invalidate_thai_cache();
     Ok(font)
 }
@@ -433,13 +451,11 @@ pub fn set_active_thai_font_by_path(path: impl AsRef<std::path::Path>) -> Result
 
 /// Get the metadata of the currently active Thai font (auto-initializing if needed).
 pub fn active_thai_font_entry() -> Option<ThaiFontEntry> {
-    if let Ok(lock) = ACTIVE_THAI_ENTRY.read() {
-        if let Some(entry) = lock.as_ref() {
-            return Some(entry.clone());
-        }
+    if let Some(entry) = get_active_thai_entry() {
+        return Some(entry);
     }
     let _ = document_thai_font();
-    ACTIVE_THAI_ENTRY.read().ok().and_then(|lock| lock.clone())
+    get_active_thai_entry()
 }
 
 /// Get the currently active Thai font object (equivalent to [`document_thai_font`]).
@@ -455,18 +471,14 @@ pub fn register_custom_thai_font(family: &'static str, style: &'static str, byte
         scripts: &["Thai"],
         bytes,
     }));
-    if let Ok(mut lock) = ACTIVE_THAI_FONT.write() {
-        *lock = Some(font);
-    }
-    if let Ok(mut elock) = ACTIVE_THAI_ENTRY.write() {
-        *elock = Some(ThaiFontEntry {
-            name: format!("{family} {style}"),
-            family: family.to_string(),
-            style: style.to_string(),
-            file_name: String::new(),
-            path: std::path::PathBuf::new(),
-        });
-    }
+    set_active_thai_font(Some(font));
+    set_active_thai_entry(Some(ThaiFontEntry {
+        name: format!("{family} {style}"),
+        family: family.to_string(),
+        style: style.to_string(),
+        file_name: String::new(),
+        path: std::path::PathBuf::new(),
+    }));
     crate::shaping::invalidate_thai_cache();
     Ok(())
 }
@@ -479,18 +491,14 @@ pub fn load_custom_thai_font(bytes: Vec<u8>) -> Result<&'static CraftFont, crate
         None => ("Thai Font".to_string(), "Regular".to_string()),
     };
     let font = load_custom_thai_font_named(bytes, family.clone(), style.clone())?;
-    if let Ok(mut lock) = ACTIVE_THAI_FONT.write() {
-        *lock = Some(font);
-    }
-    if let Ok(mut elock) = ACTIVE_THAI_ENTRY.write() {
-        *elock = Some(ThaiFontEntry {
-            name: format!("{family} {style}"),
-            family,
-            style,
-            file_name: String::new(),
-            path: std::path::PathBuf::new(),
-        });
-    }
+    set_active_thai_font(Some(font));
+    set_active_thai_entry(Some(ThaiFontEntry {
+        name: format!("{family} {style}"),
+        family,
+        style,
+        file_name: String::new(),
+        path: std::path::PathBuf::new(),
+    }));
     crate::shaping::invalidate_thai_cache();
     Ok(font)
 }
@@ -530,8 +538,8 @@ fn auto_init_thai_font() -> Option<&'static CraftFont> {
         }
     }
 
-    // Next try the first discovered Thai font
-    if let Some(entry) = list.first() {
+    // Next try each discovered Thai font until one loads successfully
+    for entry in &list {
         if let Ok(font) = set_active_thai_font_entry(entry) {
             return Some(font);
         }
@@ -636,15 +644,13 @@ pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
         if let Some(font) = document_thai_font() {
             fonts.push(font);
         }
-        if let Ok(cache) = LOADED_THAI_CACHE.read() {
-            if let Some(map) = cache.as_ref() {
-                for font in map.values() {
-                    if !fonts.iter().any(|f| std::ptr::eq(*f, *font)) {
-                        fonts.push(*font);
-                    }
+        with_loaded_thai_cache_read(|map| {
+            for font in map.values() {
+                if !fonts.iter().any(|f| std::ptr::eq(*f, *font)) {
+                    fonts.push(*font);
                 }
             }
-        }
+        });
     }
     fonts
 }
@@ -653,20 +659,18 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
     if let Some(f) = CRAFT_FONTS.iter().find(|f| f.covers("Thai")) {
         return Some(f);
     }
-    if let Ok(lock) = ACTIVE_THAI_FONT.read() {
-        if let Some(f) = *lock {
-            return Some(f);
-        }
+    if let Some(f) = get_active_thai_font() {
+        return Some(f);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        static INITIALIZING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !INITIALIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let res = auto_init_thai_font();
-            INITIALIZING.store(false, std::sync::atomic::Ordering::SeqCst);
-            if let Some(f) = res {
-                return Some(f);
-            }
+        static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _init_guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(f) = get_active_thai_font() {
+            return Some(f);
+        }
+        if let Some(f) = auto_init_thai_font() {
+            return Some(f);
         }
     }
     None
@@ -789,6 +793,9 @@ const fn find(family: &str, style: &str) -> Option<&'static [u8]> {
 /// Shippori Mincho Regular from craft-fonts, the preferred face for Japanese document text.
 /// `None` when PdfCraft was built without craft-fonts.
 pub static SHIPPORI_MINCHO: Option<&[u8]> = find("Shippori Mincho", "Regular");
+
+#[cfg(test)]
+pub(crate) static THAI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -916,8 +923,10 @@ mod tests {
 
     #[test]
     fn thai_font_discovery_and_registration() {
+        let _guard = THAI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         static FAKE_THAI_BYTES: &[u8] = b"fake-thai-font";
-        let prev = ACTIVE_THAI_FONT.read().map(|l| *l).unwrap_or(None);
+        let prev_font = get_active_thai_font();
+        let prev_entry = get_active_thai_entry();
         assert!(register_custom_thai_font("Custom Thai Test", "Regular", FAKE_THAI_BYTES).is_ok());
         let thai = document_thai_font();
         assert!(thai.is_some());
@@ -925,14 +934,14 @@ mod tests {
         assert_eq!(f.family, "Custom Thai Test");
         assert_eq!(f.bytes, FAKE_THAI_BYTES);
         assert!(ui_thai_fonts().iter().any(|f| f.family == "Custom Thai Test"));
-        if let Ok(mut lock) = ACTIVE_THAI_FONT.write() {
-            *lock = prev;
-        }
+        set_active_thai_font(prev_font);
+        set_active_thai_entry(prev_entry);
         crate::shaping::invalidate_thai_cache();
     }
 
     #[test]
     fn thai_font_directory_loading_and_selection() {
+        let _guard = THAI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dirs = font_directories();
         assert!(!dirs.is_empty(), "font_directories() should resolve candidates");
 
