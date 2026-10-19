@@ -1007,9 +1007,11 @@ impl PdfCraftApp {
     }
 
     /// Export a PDF ▸ PostScript / EPS: ask where (`save_override` in tests), then write. The
-    /// extension of the chosen file picks the flavour: `.ps` writes every page, `.eps` the page
-    /// being viewed when the export started (an EPS file holds exactly one). The engine path is
-    /// the one the `doc_export_postscript` tool takes, so both write the same bytes.
+    /// extension of the chosen file picks the flavour: `.ps` writes every page, `.eps` the
+    /// current page — the one page an EPS file holds (a document's visible page is the page
+    /// the user means; a longer document no longer has to be told "exactly one page"). The
+    /// engine path is the one the `doc_export_postscript` tool takes, so both write the same
+    /// bytes.
     pub fn export_postscript_dialog(&mut self) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
@@ -1084,8 +1086,9 @@ impl PdfCraftApp {
                 return;
             }
         };
-        // An EPS file holds one page: the one the user was looking at.
         let pages: Vec<usize> = match format {
+            // EPS holds one page: the one on screen (clamped into range, as `current`
+            // tracks a view of this document).
             PsFormat::Eps => vec![current.min(src.pages.saturating_sub(1))],
             PsFormat::Ps => (0..src.pages).collect(),
         };
