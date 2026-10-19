@@ -10455,3 +10455,35 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+/// `comment_add` with `snap: true` moves a polyline's points onto the page's paths (an endpoint
+/// and an intersection here) and says how many moved; without it the points stay.
+#[test]
+fn comment_add_snaps_points_to_the_drawing_on_request() {
+    let dir = workdir("comment-snap");
+    let mut a = auto(&dir);
+    let source = String::from_utf8(fixture(1)).unwrap();
+    let old = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    let drawing = "10 20 m 110 20 l S 60 0 m 60 80 l S";
+    let source = source.replace(old, &format!("{drawing:<width$}", width = old.len()));
+    std::fs::write(dir.join("drawing.pdf"), source).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "drawing.pdf" }))["doc"].as_u64().unwrap();
+    // Display coordinates (top-left origin): the line's left end is at [10, 280], the crossing at [60, 280].
+    let r =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polyline", "points": [[12, 278], [58, 282], [150, 150]], "snap": true }));
+    assert_eq!(r["snapped"], 2, "{r}");
+    // The vertices, in user space: the endpoint (10, 20), the crossing (60, 20), the free point.
+    ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "out.xfdf", "what": "comments" }));
+    let xfdf = std::fs::read_to_string(dir.join("out.xfdf")).unwrap();
+    assert!(xfdf.contains("<vertices>10,20;60,20;150,150</vertices>"), "{xfdf}");
+    let plain = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282] }));
+    assert!(plain.get("snapped").is_none());
+    assert!(matches!(
+        a.call(
+            "comment_add",
+            &json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282], "snap": true, "snap_tolerance": -1 })
+        ),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    let _ = std::fs::remove_dir_all(dir);
+}

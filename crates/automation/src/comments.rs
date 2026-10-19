@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use pdfcraft_engine::measure;
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -68,6 +69,37 @@ fn ending_pair(kind: &str, endings: Option<&[LineEnding]>) -> Result<[LineEnding
 fn hex(c: [f32; 3]) -> String {
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", b(c[0]), b(c[1]), b(c[2]))
+}
+
+/// A shape's points moved onto the page's drawing where one lies within `tolerance` (user
+/// units): line ends, polygon and polyline vertices, a box's corners. How many points snapped.
+fn snap_shape(shape: Shape, geometry: &measure::snap::Geometry, tolerance: f64) -> (Shape, Option<usize>) {
+    let options = measure::snap::SnapOptions::default();
+    let mut count = 0usize;
+    let mut snap = |p: [f64; 2]| -> [f64; 2] {
+        match geometry.snap(p, tolerance, options) {
+            Ok(Some(hit)) => {
+                count += 1;
+                hit.point
+            }
+            _ => p,
+        }
+    };
+    let shape = match shape {
+        Shape::Line { from, to, start, end } => Shape::Line { from: snap(from), to: snap(to), start, end },
+        Shape::Polygon { vertices, cloud } => Shape::Polygon { vertices: vertices.into_iter().map(&mut snap).collect(), cloud },
+        Shape::PolyLine { vertices, start, end } => Shape::PolyLine { vertices: vertices.into_iter().map(&mut snap).collect(), start, end },
+        Shape::Rectangle { rect } => {
+            let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
+            Shape::Rectangle { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])] }
+        }
+        Shape::Oval { rect } => {
+            let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
+            Shape::Oval { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])] }
+        }
+        other => other,
+    };
+    (shape, Some(count))
 }
 
 fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
@@ -447,8 +479,28 @@ impl Automation {
             Shape::TextMarkup { quads, .. } => Some(quads.len()),
             _ => None,
         };
+        // Snap to drawing: the shape's points move onto the page's paths within `snap_tolerance`
+        // points on the displayed page (6 by default), as the drawing tools do with F3 on.
+        let (shape, snapped) = if a.opt_bool("snap")?.unwrap_or(false) {
+            let tolerance = a.opt_num("snap_tolerance")?.unwrap_or(6.0);
+            if !tolerance.is_finite() || !(0.0..=1000.0).contains(&tolerance) {
+                return Err(ToolError::InvalidArgs("snap_tolerance must be between 0 and 1000 points".into()));
+            }
+            let doc = self.doc(a)?;
+            let geometry = doc.measurement_paths(page).map_err(failed)?;
+            // The tolerance in user units: the distance two display points apart map to.
+            let origin = doc.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;
+            let adjacent = doc.measurement_to_user(page, [tolerance, 0.0]).map_err(failed)?;
+            let tolerance = measure::distance(origin, adjacent);
+            snap_shape(shape, &geometry, tolerance)
+        } else {
+            (shape, None)
+        };
         let before: Vec<Option<String>> = self.doc(a)?.info.annotations.iter().map(|c| c.name.clone()).collect();
         let mut out = self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))?;
+        if let Some(n) = snapped {
+            out["snapped"] = json!(n);
+        }
         let added = self.doc(a)?.info.annotations.iter().find(|c| c.page == page && c.subtype != "Popup" && !before.contains(&c.name));
         out["comment"] = json!({ "id": added.and_then(|c| c.name.clone()), "page": page + 1, "index": added.map(|c| c.index + 1) });
         if let Some(n) = marked {

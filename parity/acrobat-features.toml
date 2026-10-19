@@ -4387,6 +4387,18 @@ evidence = ["crates/measure/src/tests.rs::viewport_precedence_first_point_user_u
 notes = "Persistent rectangular viewports with last-containing-viewport precedence, numeric scale and two-point calibration. First vertex selects the scale; prior annotations retain theirs. Partial: single-unit decimal rectilinear scales only; compound (ft-in), fractional and differing distance units can't be authored or imported, no viewport editing/removal UI, and interop with Acrobat's scale ratio dialog and its saved viewports is untested."
 
 [[feature]]
+id = "comment.snap-to-drawing"
+title = "Snap to drawing for the drawing tools (object snap)"
+area = "E"
+tier = "P2"
+milestone = "M5"
+status = "shipped"
+commands = ["comment.snap"]
+tools = ["comment_add"]
+evidence = ["crates/ui-egui/tests/comments.rs::drawing_tools_snap_to_the_pages_paths_with_f3", "crates/automation/tests/automation.rs::comment_add_snaps_points_to_the_drawing_on_request"]
+notes = "Not an Acrobat feature; CAD's object snap for commenting on drawings. With Snap to drawing on (F3, or the button on the drawing tools' quick bar; remembered across starts), the points of connected lines, polygons, clouds, lines, arrows, rectangles and ovals land on the page's own vector paths: endpoints, midpoints, intersections and the paths themselves, within 6 screen points, with a green ring and the target's name under the pointer, as the measuring tools do (same extraction, same limits and notices). Shift holds a line or the next segment to the nearest 45°. Freehand drawing and text markup don't snap. Headless: comment_add with snap: true (snap_tolerance in points). Not yet: a choice of targets for the drawing tools (the measuring tools' Endpoints/Midpoints/Intersections/Paths boxes apply to measuring only), snapping to raster or text outlines, snapping while a shape is moved or resized."
+
+[[feature]]
 id = "comment.measure-snap"
 title = "Snap to paths, endpoints, midpoints and intersections"
 area = "E"

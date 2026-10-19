@@ -2888,3 +2888,6 @@ certificate	Version	الإصدار
 	No image on clipboard to paste	لا توجد صورة في الحافظة للصقها
 	Pinned {tool} to Home	تم تثبيت {tool} في الرئيسية
 	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	الالتقاط إلى الرسم: مفعّل
+	Snap to drawing: off	الالتقاط إلى الرسم: معطّل

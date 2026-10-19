@@ -2611,3 +2611,6 @@ animation effects	Off	Өшірулі
 	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
 	Pinned {tool} to Home	{tool} басты бетке бекітілді
 	Unpinned {tool} from Home	{tool} басты беттен ажыратылды
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Сызбаға бекіту: қосулы
+	Snap to drawing: off	Сызбаға бекіту: өшірулі

@@ -172,6 +172,13 @@ pub struct CommentView {
     pub tool_done: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
+    /// A notice for the app to show (the page input has no app).
+    pub notice: Option<&'static str>,
+    /// The page's paths for snapping (see [`SnapCache`]).
+    pub snap_cache: SnapCache,
+    /// Where the pointer would snap to right now: (page, point in user space, what it is), for
+    /// the marker on the page.
+    pub snap_hover: Option<(usize, [f64; 2], measure::snap::SnapKind)>,
 }
 
 /// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor
@@ -319,9 +326,27 @@ pub(crate) struct PageCx<'a> {
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
+    /// The page's paths, when the tool's points snap to the drawing (Snap to drawing is on and
+    /// the tool sets points or corners).
+    pub snap: Option<std::sync::Arc<measure::snap::Geometry>>,
 }
 
 impl PageCx<'_> {
+    /// A pointer position as a point in user space, moved onto the page's drawing when snapping
+    /// is on and a path, endpoint, midpoint or intersection lies within reach; with what it
+    /// snapped to.
+    fn snapped(&self, p: Pos2) -> ([f64; 2], Option<measure::snap::SnapKind>) {
+        let u = self.to_user(p);
+        let Some(geometry) = &self.snap else { return (u, None) };
+        // The reach in user units: the screen distance of one user unit, at this zoom.
+        let pixels_per_unit = self.to_screen([u[0] + 1.0, u[1]]).distance(self.to_screen(u)).max(1e-6);
+        let tolerance = (SNAP_SENSITIVITY / f64::from(pixels_per_unit)).min(10_000.0);
+        match geometry.snap(u, tolerance, measure::snap::SnapOptions::default()) {
+            Ok(Some(hit)) => (hit.point, Some(hit.kind)),
+            _ => (u, None),
+        }
+    }
+
     pub(super) fn to_user(&self, p: Pos2) -> [f64; 2] {
         let (vx, vy) = self.xf.screen_to_view(p);
         let u = self.info.pages[self.page].view_to_user(vx, vy);

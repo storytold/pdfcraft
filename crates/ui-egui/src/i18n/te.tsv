@@ -2522,3 +2522,6 @@ animation effects	Off	ఆఫ్
 	No image on clipboard to paste	అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు
 	Pinned {tool} to Home	{tool} హోమ్‌కు పిన్ చేయబడింది
 	Unpinned {tool} from Home	{tool} హోమ్ నుండి అన్‌పిన్ చేయబడింది
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	డ్రాయింగ్‌కు స్నాప్: ఆన్
+	Snap to drawing: off	డ్రాయింగ్‌కు స్నాప్: ఆఫ్

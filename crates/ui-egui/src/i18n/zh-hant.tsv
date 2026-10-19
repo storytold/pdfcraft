@@ -2563,3 +2563,6 @@ animation effects	Off	關
 	No image on clipboard to paste	剪貼簿中沒有可貼上的影像
 	Pinned {tool} to Home	已將 {tool} 釘選至首頁
 	Unpinned {tool} from Home	已從首頁取消釘選 {tool}
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	吸附至圖形：開
+	Snap to drawing: off	吸附至圖形：關

@@ -777,6 +777,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "width": { "type": "number", "minimum": 0, "description": "Line width in points." },
                 "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
+                "snap": { "type": "boolean", "description": "Snap to drawing: line ends, polygon/polyline points and box corners move onto the page's own vector paths (endpoints, midpoints, intersections, paths) within snap_tolerance, as the drawing tools do with F3 on. The result's `snapped` counts the points that moved." },
+                "snap_tolerance": { "type": "number", "minimum": 0, "maximum": 1000, "description": "Reach of the snap in points on the displayed page (default 6)." },
             }),
             &["doc", "page", "type"],
         )),

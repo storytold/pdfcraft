@@ -19,6 +19,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let draw_grab = draw_grabs(cx, view);
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
+    if cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
+        cv.snap_hover = None;
+    }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
         cv.cancelled_drag = true;
@@ -330,11 +333,20 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
+        // Snapping (shapes and lines, not freehand): the marker shows where a point would
+        // land; Shift holds a line to the nearest 45°.
+        if tool.snaps()
+            && let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         if resp.drag_started()
             && pressed_here
             && let Some(o) = origin
         {
-            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+            let first = if tool.snaps() { cx.snapped(o).0 } else { cx.to_user(o) };
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![first] });
             cv.selected = None;
         }
         if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
@@ -342,13 +354,27 @@ impl Gestures<'_> {
             && let Some(p) = pointer
         {
             let p = clamp_to(page_rect, p);
-            let u = cx.to_user(p);
             if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
+                let mut u = cx.snapped(p).0;
+                // Shift holds the next segment to the nearest 45° from the last point.
+                if ui.input(|i| i.modifiers.shift)
+                    && let Some(Gesture::Draw { points, .. }) = &cv.gesture
+                    && let Some(last) = points.last()
+                {
+                    u = measure::snap::constrain(*last, u);
+                }
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
                     points.push(u);
                 }
             } else {
+                let mut u = cx.snapped(p).0;
+                if matches!(*tool, CommentTool::Line | CommentTool::Arrow)
+                    && ui.input(|i| i.modifiers.shift)
+                    && let Some(first) = points.first()
+                {
+                    u = measure::snap::constrain(*first, u);
+                }
                 points.truncate(1);
                 points.push(u);
             }
@@ -391,6 +417,11 @@ impl Gestures<'_> {
         }
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        }
+        if let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
         }
         let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
         // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.

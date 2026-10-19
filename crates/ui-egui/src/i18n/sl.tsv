@@ -2618,3 +2618,6 @@ animation effects	Off	Izklopljeni
 	No image on clipboard to paste	V odložišču ni slike za lepljenje
 	Pinned {tool} to Home	{tool} pripeto na domačo stran
 	Unpinned {tool} from Home	{tool} odpeto z domače strani
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Pripenjanje na risbo: vklopljeno
+	Snap to drawing: off	Pripenjanje na risbo: izklopljeno

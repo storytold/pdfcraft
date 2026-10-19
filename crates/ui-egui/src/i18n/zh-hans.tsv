@@ -2577,3 +2577,6 @@ animation effects	Off	关
 	No image on clipboard to paste	剪贴板中没有可粘贴的图像
 	Pinned {tool} to Home	已将 {tool} 固定到主页
 	Unpinned {tool} from Home	已从主页取消固定 {tool}
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	吸附到图形：开
+	Snap to drawing: off	吸附到图形：关

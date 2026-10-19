@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Document, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style, measure};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
 use crate::canvas::{DocView, PageXform};
@@ -217,6 +217,12 @@ impl CommentTool {
         matches!(self, Self::Polygon | Self::PolyLine | Self::Cloud)
     }
 
+    /// Tools whose points snap to the page's drawing when snapping is on (M5): the ones that
+    /// set points or corners, not freehand drawing.
+    pub fn snaps(self) -> bool {
+        self.clicks_points() || matches!(self, Self::Line | Self::Arrow | Self::Rectangle | Self::Oval)
+    }
+
     /// Whether the line-thickness control applies.
     pub fn has_width(self) -> bool {
         self.draws() || self.clicks_points() || matches!(self, Self::TextBox | Self::Callout)
@@ -288,6 +294,10 @@ pub struct CommentPrefs {
     pub group_tool: [CommentTool; 3],
     /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
     pub hide_empty_highlight_hover: bool,
+    /// Snap to drawing (F3): points of the drawing tools land on the page's own vector paths
+    /// (endpoints, midpoints, intersections, paths), as the measuring tools do and as CAD's
+    /// object snap does.
+    pub snap: bool,
 }
 
 impl Default for CommentPrefs {
@@ -298,7 +308,43 @@ impl Default for CommentPrefs {
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
+            snap: false,
         }
+    }
+}
+
+/// How close (screen points) the pointer must be to a path for a drawing tool's point to snap.
+pub const SNAP_SENSITIVITY: f64 = 6.0;
+
+/// The page's vector paths for snapping, kept per page and edit generation (extraction is
+/// bounded but not free), shared by every drawing tool.
+#[derive(Clone, Debug, Default)]
+pub struct SnapCache {
+    paths: Option<(usize, u64, Option<std::sync::Arc<measure::snap::Geometry>>)>,
+    warned: Option<(usize, u64)>,
+}
+
+impl SnapCache {
+    /// The paths of `page` as the document is now (`None` when the page can't be read). A page
+    /// whose extraction hit a limit says so once, through `notice`.
+    pub fn geometry(&mut self, doc: &Document, page: usize, notice: &mut Option<&'static str>) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        if self.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != generation) {
+            let geometry = doc.measurement_paths(page).ok().map(std::sync::Arc::new);
+            if let Some(g) = &geometry
+                && (g.truncated || g.unreadable > 0)
+                && self.warned != Some((page, generation))
+            {
+                *notice = Some(if g.truncated {
+                    "This drawing exceeds the snapping limit; only the first paths are used."
+                } else {
+                    "Some page content couldn't be read; snapping uses the rest."
+                });
+                self.warned = Some((page, generation));
+            }
+            self.paths = Some((page, generation, geometry));
+        }
+        self.paths.as_ref().and_then(|(_, _, g)| g.clone())
     }
 }
 

@@ -3022,3 +3022,84 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// A page with a horizontal line (50,50)–(250,50) and a vertical one (150,20)–(150,180), in
+/// user space: endpoints, a midpoint and an intersection at (150, 50) to snap to.
+const DRAWING_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 44 >> stream
+50 50 m 250 50 l S 150 20 m 150 180 l S
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With Snap to drawing on (F3), the points of connected lines land on the page's paths: an
+/// endpoint and the intersection here; off, they stay where they were clicked.
+#[test]
+fn drawing_tools_snap_to_the_pages_paths_with_f3() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("drawing.pdf", None, DRAWING_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("quick", "polyline").unwrap();
+        // At 100 % a user unit is a screen point, so the 6-point reach is 6 units here.
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    assert!(!h.state().comment_prefs.snap, "off until asked for");
+    // Off: the clicks land where they were made (a little off the drawing).
+    for p in [(53.0, 47.0), (147.0, 53.0)] {
+        click_pt(&mut h, p);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let free = comments(&h);
+    assert_eq!(free.len(), 1);
+    assert_eq!(free[0].subtype, "PolyLine");
+    // (A polyline's rect is its points padded by the line width's 2 pt.)
+    assert!((free[0].rect[0] + 2.0 - 53.0).abs() < 1.5 && (free[0].rect[1] + 2.0 - 47.0).abs() < 1.5, "unsnapped: {:?}", free[0].rect);
+    // F3 turns snapping on (and says so); the same clicks now land on the endpoint and the
+    // intersection, with the marker showing the target under the pointer.
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    h.hover_at(at(&h, 53.0, 47.0));
+    h.run_steps(2);
+    assert!(
+        matches!(h.state().views[0].comments.snap_hover, Some((0, p, pdfcraft_engine::measure::snap::SnapKind::Endpoint)) if (p[0] - 50.0).abs() < 0.01 && (p[1] - 50.0).abs() < 0.01),
+        "{:?}",
+        h.state().views[0].comments.snap_hover
+    );
+    for p in [(53.0, 47.0), (147.0, 53.0)] {
+        click_pt(&mut h, p);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let snapped = comments(&h);
+    assert_eq!(snapped.len(), 2, "{snapped:?}");
+    let line = &snapped[1];
+    assert_eq!(line.subtype, "PolyLine");
+    assert!(
+        (line.rect[0] + 2.0 - 50.0).abs() < 0.5 && (line.rect[1] + 2.0 - 50.0).abs() < 0.5 && (line.rect[2] - 2.0 - 150.0).abs() < 0.5,
+        "snapped to the drawing: {:?}",
+        line.rect
+    );
+    // Away from any path nothing snaps, and the marker is gone.
+    h.hover_at(at(&h, 280.0, 180.0));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.snap_hover.is_none());
+    // The setting is remembered across starts.
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(restored.comment_prefs.snap);
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(!h.state().comment_prefs.snap);
+}

@@ -2880,3 +2880,6 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Bắt dính vào bản vẽ: bật
+	Snap to drawing: off	Bắt dính vào bản vẽ: tắt

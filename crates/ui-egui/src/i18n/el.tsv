@@ -2619,3 +2619,6 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Προσκόλληση στο σχέδιο: ενεργή
+	Snap to drawing: off	Προσκόλληση στο σχέδιο: ανενεργή

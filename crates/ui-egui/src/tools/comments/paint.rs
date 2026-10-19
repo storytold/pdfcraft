@@ -57,6 +57,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
+    paint_snap_marker(painter, cx, view);
     paint_gesture(painter, cx, view);
 }
 
@@ -108,6 +109,30 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
     paint_gesture(painter, cx, view);
+}
+
+/// Where a drawing tool's next point would snap to: a ring and the kind of target, as the
+/// measuring tools show it.
+fn paint_snap_marker(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+    if let Some((page, point, kind)) = view.comments.snap_hover
+        && page == cx.page
+    {
+        let at = cx.to_screen(point);
+        let green = Color32::from_rgb(46, 158, 92);
+        painter.circle_stroke(at, 6.0, Stroke::new(1.5, green));
+        painter.text(
+            at + vec2(10.0, -10.0),
+            egui::Align2::LEFT_BOTTOM,
+            tl!(match kind {
+                measure::snap::SnapKind::Endpoint => "Endpoint",
+                measure::snap::SnapKind::Midpoint => "Midpoint",
+                measure::snap::SnapKind::Intersection => "Intersection",
+                measure::snap::SnapKind::Path => "Path",
+            }),
+            crate::theme::regular(11.0),
+            green,
+        );
+    }
 }
 
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {

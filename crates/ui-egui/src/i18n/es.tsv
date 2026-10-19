@@ -2936,3 +2936,6 @@ theme	Appearance	Aspecto
 	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
 	Pinned {tool} to Home	{tool} fijado en Inicio
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Ajustar al dibujo: activado
+	Snap to drawing: off	Ajustar al dibujo: desactivado

@@ -2612,3 +2612,6 @@ animation effects	Off	Ki
 	No image on clipboard to paste	Nincs beilleszthető kép a vágólapon
 	Pinned {tool} to Home	{tool} rögzítve a kezdőlapra
 	Unpinned {tool} from Home	{tool} leválasztva a kezdőlapról
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Igazítás a rajzhoz: be
+	Snap to drawing: off	Igazítás a rajzhoz: ki
