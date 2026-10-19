@@ -87,6 +87,26 @@ fn find_bar_keeps_arabic_typing_order() {
 }
 
 #[test]
+fn find_bar_undo_keeps_typing_order() {
+    let mut h = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    let phrase = "مؤشرات الأداء";
+    type_chars(&mut h, phrase);
+    // egui records an undo point only after the text has sat still for a second.
+    h.run_steps(6);
+    type_chars(&mut h, "ء");
+    assert_eq!(query(&h), format!("{phrase}ء"));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    let q = query(&h);
+    assert_eq!(q, phrase, "undo restores the typed phrase, got {q:?}");
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(query(&h), format!("{phrase}ء"), "redo puts the last typed letter back in typing order");
+}
+
+#[test]
 fn find_bar_still_types_latin_at_the_end() {
     let mut h = harness();
     h.state_mut().views[0].open_find();

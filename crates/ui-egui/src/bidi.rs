@@ -1,19 +1,21 @@
-//! Wrapping right-to-left text into logical lines, and display-order helpers.
+//! Wrapping right-to-left text into logical lines, and test-only display-order helpers.
 //!
 //! egui 0.37's epaint shapes text with the Unicode bidirectional algorithm (UAX #9), so
-//! production painting passes it logical (typing-order) text: [`wrap`] breaks a comment into
-//! logical lines and lets epaint reorder each one. [`visual`] and [`display_rtl`] are kept only
-//! for the tests that prove the old preordering is gone; they must not be used for painting with
-//! egui 0.37, where they would reverse mixed-direction text a second time. [`visual_auto`] is the
-//! one exception: the find bar and the Search panel's single-line `TextEdit` need the glyphs it
-//! shapes with in display order already, to work around egui 0.37 producing duplicate
-//! zero-width glyphs (and a frozen caret) when it reorders an editable field itself
-//! (`rtl_input::layout_galley`).
+//! production code passes it logical (typing-order) text: [`wrap`] breaks a comment into logical
+//! lines and lets epaint reorder each one. [`visual`], [`visual_auto`] and [`display_rtl`] are
+//! kept for the tests that prove the old preordering is gone; they must not be used for painting
+//! with egui 0.37, where they would reverse mixed-direction text a second time. [`for_shaper`]
+//! and [`mirrored`] are the exception: the find bar and the Search panel's editable field
+//! (`rtl_input::layout_galley`) already keep their own text in display order, and call these two
+//! directly for the per-script joining and bracket mirroring that step still needs.
 
+#[cfg(test)]
 use std::borrow::Cow;
 use std::ops::Range;
 
-use unicode_bidi::{BidiInfo, Level, ParagraphInfo};
+use unicode_bidi::BidiInfo;
+#[cfg(test)]
+use unicode_bidi::{Level, ParagraphInfo};
 
 /// `text` rearranged for an egui call that lays out one line. Text without right-to-left
 /// characters comes back borrowed and unchanged.
@@ -32,6 +34,7 @@ pub fn visual(text: &str) -> Cow<'_, str> {
 }
 
 /// `text` in display order for the paragraph direction `base`, appended to `out`.
+#[cfg(test)]
 fn push_visual(out: &mut String, text: &str, base: Level) {
     let info = BidiInfo::new(text, Some(base));
     for para in &info.paragraphs {
@@ -41,6 +44,7 @@ fn push_visual(out: &mut String, text: &str, base: Level) {
 
 /// The `line` of paragraph `para` (a non-empty byte range of `text`) in display order, as egui
 /// needs it, appended to `out`.
+#[cfg(test)]
 fn push_line(out: &mut String, text: &str, info: &BidiInfo<'_>, para: &ParagraphInfo, line: Range<usize>) {
     let (levels, runs) = info.visual_runs(para, line);
     // First the true display order, every character left to right as it appears on screen.
@@ -64,6 +68,16 @@ fn push_line(out: &mut String, text: &str, info: &BidiInfo<'_>, para: &Paragraph
 /// each such stretch goes back to logical order. What lies between them (spaces, punctuation,
 /// Latin) is drawn by the Latin face left to right and stays as it is. The stretches include
 /// Persian and Arabic-Indic digits: Arabic script to the shaper, though they read left to right.
+///
+/// The find bar and the Search panel's editable field call this directly
+/// (`rtl_input::layout_galley`): the stored query is already in display order there, so only the
+/// per-script joining this function does is needed, not a full preordering.
+pub(crate) fn for_shaper(shown: &str) -> String {
+    let mut out = String::with_capacity(shown.len());
+    push_for_shaper(&mut out, shown);
+    out
+}
+
 fn push_for_shaper(out: &mut String, shown: &str) {
     let mut stretch: Vec<char> = Vec::new();
     for c in shown.chars() {
@@ -150,10 +164,9 @@ pub fn wrap(text: &str, mut fits: impl FnMut(&str) -> bool) -> Vec<Line> {
 /// One line of `text` in display order, its direction from its first strong character (an
 /// author's name). Text without right-to-left characters comes back borrowed and unchanged.
 ///
-/// Interface labels keep logical text and let the egui fork reorder; no label painting calls
-/// this. The find bar and the Search panel's single-line editable field are the one caller that
-/// needs preordered text, to work around a caret bug in egui 0.37's own reordering of an
-/// editable `TextEdit` (`rtl_input::layout_galley`). Bidi unit tests cover the rest.
+/// Only the bidi unit tests use this now: interface labels keep logical text and let the egui
+/// fork reorder, so no production call site preorders a label.
+#[cfg(test)]
 pub fn visual_auto(text: &str) -> Cow<'_, str> {
     if !has_rtl(text) {
         return Cow::Borrowed(text);
@@ -368,11 +381,12 @@ fn is_joiner(c: char) -> bool {
 }
 
 /// Direction marks, embeddings, overrides and isolates: they steer the reordering and are not drawn.
+#[cfg(test)]
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
-fn mirrored(c: char) -> char {
+pub(crate) fn mirrored(c: char) -> char {
     match c {
         '(' => ')',
         ')' => '(',
