@@ -5,10 +5,11 @@ use hayro_interpret::{BlendMode, ClipPath, Device, GlyphDrawMode, Image, Paint, 
 use kurbo::{Affine, BezPath, Rect};
 use vello_cpu::{Level, Pixmap, RenderMode, RenderSettings};
 
-/// PdfCraft patch (ps-export): a page-sized offscreen `Renderer` the PostScript
-/// exporter's transparency flattener drives with its recorded draws, so flattened
-/// regions composite exactly as `page_render` composites them (same `Device`
-/// implementation, same tiling/shading/image/mask logic).
+/// PdfCraft patch (ps-export): an offscreen `Renderer` sized by its caller (the
+/// PostScript exporter's transparency flattener, which renders the flattened
+/// region at region dimensions) driven through the `Device` trait it already
+/// implements, so flattened regions composite exactly as `page_render` composites
+/// them (same `Device` implementation, same tiling/shading/image/mask logic).
 ///
 /// The device draws in pixel space, like the device `render_into` constructs: any
 /// y-flip or page matrix is the caller's (the flattener's) job, baked into the
@@ -18,9 +19,9 @@ pub struct OffscreenRenderer {
 }
 
 impl OffscreenRenderer {
-    /// Page-sized context, `RenderCache::new()`, no colour replacement, not a
-    /// preview, vello settings matching `render_into` (Level::new, 0 threads,
-    /// OptimizeSpeed).
+    /// Offscreen context of the caller's dimensions, `RenderCache::new()`, no colour
+    /// replacement, not a preview, vello settings matching `render_into` (Level::new,
+    /// 0 threads, OptimizeSpeed).
     pub fn new(width: u16, height: u16) -> Self {
         let cache = RenderCache::new();
         Self {
