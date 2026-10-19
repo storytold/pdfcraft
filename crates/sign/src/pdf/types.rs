@@ -20,10 +20,16 @@ pub enum TrustSource {
 }
 
 impl TrustStore {
-    /// Load `list`, replacing a list of the same name, or with `None` remove the list `name`.
-    pub fn set_list(&mut self, name: &str, list: Option<crate::trust::TrustList>) {
+    /// Load `list`, replacing a list of the same name. A list is known by its own name, so
+    /// [`remove_list`](Self::remove_list) takes back exactly what was loaded.
+    pub fn add_list(&mut self, list: crate::trust::TrustList) {
+        self.remove_list(&list.name);
+        self.lists.push(list);
+    }
+
+    /// Remove the list called `name`, if one is loaded.
+    pub fn remove_list(&mut self, name: &str) {
         self.lists.retain(|l| l.name != name);
-        self.lists.extend(list);
     }
 
     /// Every certificate that can anchor a signer's chain: the user's, then the loaded lists'.
