@@ -65,13 +65,19 @@ impl Automation {
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
             "doc_extract_original" => {
+                // Resolve the output path first: a refused path (outside the root, say) must
+                // fail before an extracted copy exists that would then need cleaning up.
+                let target = a.opt_str("out")?.map(|p| self.resolve(p, true)).transpose()?;
                 let id = self.doc(&a)?.id;
                 let copy = self.session.extract_original(id).map_err(failed)?;
                 let mut out = summary(self.session.get(copy).ok_or_else(|| failed("the document vanished"))?);
-                if let Some(p) = a.opt_str("out")? {
+                if let Some(path) = target {
                     let bytes = self.session.get(copy).ok_or_else(|| failed("the document vanished"))?.bytes.clone();
-                    let path = self.resolve(p, true)?;
-                    write_atomic(&path, &bytes)?;
+                    // A failed write leaves no half-done extraction behind: the copy is closed
+                    // and the error says where the writing stopped.
+                    write_atomic(&path, &bytes).inspect_err(|_| {
+                        self.session.close(copy);
+                    })?;
                     out["written"] = json!(path.to_string_lossy().into_owned());
                 }
                 out
