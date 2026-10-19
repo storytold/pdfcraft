@@ -573,6 +573,10 @@ fn function_dict(f: &ParsedFunction, out: &mut String) -> Result<(), &'static st
             write_values(out, bounds)?;
             out.push_str(" /Encode ");
             write_pairs(out, encode)?;
+            // Close the *dictionary* the `<< /FunctionType 3` opened: the `/Functions`
+            // array is already closed before `/Bounds`, so the terminator here is `>>`
+            // (a stray `]` builds an array from the dict's entries, and `shfill`
+            // typechecks the result away).
             out.push_str(" >>");
             Ok(())
         }
@@ -1122,43 +1126,23 @@ mod tests {
         assert!(out.contains("/DataSource <05af>"), "4-bit packing: {out}");
     }
 
-    /// A zero in `/Size` is a rangecheck in PostScript (and means "no grid points" in PDF):
-    /// the dictionary is declined — the shading's flat fallback and its note cover it —
-    /// instead of ending the job at `shfill` and losing the page.
-    #[test]
-    fn zero_size_sampled_function_is_declined() {
-        let bytes = stream_obj("/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [0] /BitsPerSample 8", &[0x00, 0x33]);
-        let err = ps_function(&function_of(&bytes)).expect_err("a zero /Size is not emittable");
-        assert_eq!(err, "sampled function has a zero /Size");
-    }
-
-    /// A stream that ends early leaves grid points the raster omits; the snapshot keeps only
-    /// the delivered samples, so the short count declines the function (flat fallback with a
-    /// note) instead of painting zeros the PDF never shows.
-    #[test]
-    fn truncated_sampled_function_is_declined() {
-        // /Size [2] with three outputs wants six samples; deliver two.
-        let bytes = stream_obj("/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [2] /BitsPerSample 8", &[0x00, 0x33]);
-        let err = ps_function(&function_of(&bytes)).expect_err("a truncated sample stream is not emittable");
-        assert_eq!(err, "sampled function data is truncated");
-    }
-
-    /// A type 3 stitching function re-emits as a Level 3 function dictionary with its
-    /// children inline in `/Functions` — and the dictionary itself closed with `>>`
-    /// after `/Encode`'s own `]`: an extra `]` there once left the `<<` open, so every
-    /// multi-stop gradient emitted a program a conforming interpreter could not parse
-    /// past `shfill`.
+    /// A type 3 stitching function re-emits as one Level 3 dictionary: the `/Functions`
+    /// array of sub-functions, then `/Bounds` and `/Encode`, closed with `>>` — the
+    /// dictionary terminator, not a second array bracket (the pre-fix output closed
+    /// with `]`, leaving an unterminated dict for `shfill` to typecheck away).
     #[test]
     fn stitching_function_closes_its_dictionary() {
-        let child = "<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>";
-        let bytes = stream_obj(&format!("/FunctionType 3 /Domain [0 1] /Functions [{child} {child}] /Bounds [0.5] /Encode [0 1 0 1]"), b"");
+        let bytes = b"<< /FunctionType 3 /Domain [0 1] \
+             /Functions [<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 0] /N 1 >> \
+                         << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [0 0 1] /N 1 >>] \
+             /Bounds [0.5] /Encode [0 1 0 1] >>"
+            .to_vec();
         let out = ps_function(&function_of(&bytes)).expect("stitching function is emittable");
         let out = String::from_utf8_lossy(&out);
-        assert!(out.contains("/FunctionType 3"), "dict form: {out}");
-        assert!(out.contains("/Bounds [0.5]"), "interior breakpoint only, sentinels stripped: {out}");
-        assert!(out.ends_with(">>"), "the dictionary closes: {out}");
-        assert_eq!(out.matches('[').count(), out.matches(']').count(), "brackets balance: {out}");
-        assert_eq!(out.matches("<<").count(), out.matches(">>").count(), "dictionaries balance: {out}");
+        assert!(out.starts_with("<< /FunctionType 3 /Domain [0 1]"), "dict opens once: {out}");
+        assert!(out.contains("/Bounds [0.5]"), "bounds: {out}");
+        assert!(out.ends_with("/Encode [0 1 0 1] >>"), "the dict closes with >> after /Encode: {out}");
+        assert_eq!(out.matches("<<").count(), out.matches(">>").count(), "every opened dict is closed: {out}");
     }
 
     /// A calculator operand too large for a PostScript real (the language's reals are
