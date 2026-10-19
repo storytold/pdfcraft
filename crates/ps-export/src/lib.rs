@@ -105,7 +105,13 @@ pub fn export_with_config(
     pages: &[usize],
     format: PsFormat,
 ) -> Result<ExportedPs, PsExportError> {
-    let pdf = Pdf::new_with_password(bytes, config.password.as_deref().unwrap_or("")).map_err(|err| {
+    // AGENTS §4's last-resort guard, the same one the raster renderer keeps around its
+    // own parse and page drives: a panic inside hayro on a hostile document becomes an
+    // error (parse) or a fidelity note (page drive), never an unwind into the caller —
+    // the UI and wasm paths call this on their thread.
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Pdf::new_with_password(bytes, config.password.as_deref().unwrap_or(""))))
+        .map_err(|_| PsExportError::UnreadableDocument("the PDF parser crashed on this document".into()))?;
+    let pdf = parsed.map_err(|err| {
         let reason = match err {
             LoadPdfError::Decryption(_) => "the document is encrypted and no working password was given for it",
             LoadPdfError::Invalid => "the bytes are not a readable PDF",
@@ -165,7 +171,13 @@ pub fn export_with_config(
         clip_path.apply_affine(initial);
         device.push_clip_path(&ClipPath { path: clip_path, fill: FillRule::NonZero });
         device.push_transparency_group(1.0, None, BlendMode::Normal);
-        interpret_page(page, &mut state, &mut device);
+        // The raster renderer's last-resort guard again: a panic while interpreting a
+        // hostile page is caught and disclosed as a note instead of unwinding; the
+        // page's partial buffer still lands, wrapped in its own gsave/grestore.
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| interpret_page(page, &mut state, &mut device))).is_err();
+        if crashed {
+            device.emit.note("page interpretation crashed; output truncated");
+        }
         device.pop_transparency_group();
         device.pop_clip_path();
         device.finish();
