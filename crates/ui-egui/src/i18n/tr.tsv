@@ -2609,3 +2609,11 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Pencere
+	Move tab to new window	Sekmeyi yeni pencereye taşı
+	Merge all windows	Tüm pencereleri birleştir
+	Close window	Pencereyi kapat
+	Move to new window	Yeni pencereye taşı
+	Move to window	Pencereye taşı
+	Too many windows are open	Çok fazla pencere açık

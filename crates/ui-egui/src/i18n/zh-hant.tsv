@@ -2563,3 +2563,11 @@ animation effects	Off	關
 	No image on clipboard to paste	剪貼簿中沒有可貼上的影像
 	Pinned {tool} to Home	已將 {tool} 釘選至首頁
 	Unpinned {tool} from Home	已從首頁取消釘選 {tool}
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	視窗
+	Move tab to new window	將分頁移至新視窗
+	Merge all windows	合併所有視窗
+	Close window	關閉視窗
+	Move to new window	移至新視窗
+	Move to window	移至視窗
+	Too many windows are open	開啟的視窗過多

@@ -2577,3 +2577,11 @@ animation effects	Off	关
 	No image on clipboard to paste	剪贴板中没有可粘贴的图像
 	Pinned {tool} to Home	已将 {tool} 固定到主页
 	Unpinned {tool} from Home	已从主页取消固定 {tool}
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	窗口
+	Move tab to new window	将标签页移到新窗口
+	Merge all windows	合并所有窗口
+	Close window	关闭窗口
+	Move to new window	移到新窗口
+	Move to window	移到窗口
+	Too many windows are open	打开的窗口过多

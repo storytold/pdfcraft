@@ -2936,3 +2936,11 @@ theme	Appearance	Aspecto
 	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
 	Pinned {tool} to Home	{tool} fijado en Inicio
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Ventana
+	Move tab to new window	Mover pestaña a una ventana nueva
+	Merge all windows	Combinar todas las ventanas
+	Close window	Cerrar ventana
+	Move to new window	Mover a una ventana nueva
+	Move to window	Mover a la ventana
+	Too many windows are open	Hay demasiadas ventanas abiertas

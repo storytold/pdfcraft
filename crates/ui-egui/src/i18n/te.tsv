@@ -2522,3 +2522,11 @@ animation effects	Off	ఆఫ్
 	No image on clipboard to paste	అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు
 	Pinned {tool} to Home	{tool} హోమ్‌కు పిన్ చేయబడింది
 	Unpinned {tool} from Home	{tool} హోమ్ నుండి అన్‌పిన్ చేయబడింది
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	విండో
+	Move tab to new window	ట్యాబ్‌ను కొత్త విండోకు తరలించు
+	Merge all windows	అన్ని విండోలను విలీనం చేయి
+	Close window	విండోను మూసివేయి
+	Move to new window	కొత్త విండోకు తరలించు
+	Move to window	విండోకు తరలించు
+	Too many windows are open	చాలా ఎక్కువ విండోలు తెరిచి ఉన్నాయి

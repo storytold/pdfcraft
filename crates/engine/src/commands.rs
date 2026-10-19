@@ -120,7 +120,7 @@ impl Shortcut {
 pub struct CommandSpec {
     pub id: &'static str,
     pub label: &'static str,
-    /// Top-level menu it appears in (`File`, `Edit`, `View`, `Pages`, `Help`), if any.
+    /// Top-level menu it appears in (`File`, `Edit`, `View`, `Pages`, `Window`, `Help`), if any.
     pub menu: Option<&'static str>,
     pub shortcut: Option<Shortcut>,
     pub needs: Needs,
@@ -160,6 +160,7 @@ const EDIT: Option<&str> = Some("Edit");
 const VIEW: Option<&str> = Some("View");
 const PAGES: Option<&str> = Some("Pages");
 const HELP: Option<&str> = Some("Help");
+const WINDOW: Option<&str> = Some("Window");
 
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
@@ -227,6 +228,12 @@ pub const COMMANDS: &[CommandSpec] = &[
     // also run from Combine files, which has no document open.
     c("view.next_tab", "Next tab", VIEW, Some(Shortcut { command: false, shift: false, mac_ctrl: true, key: "Tab" }), Nothing, "chevron-right"),
     c("view.previous_tab", "Previous tab", VIEW, Some(Shortcut { command: false, shift: true, mac_ctrl: true, key: "Tab" }), Nothing, "chevron-left"),
+    // Several windows (M14): a tab moves into a window of its own (the strip's drag does the
+    // same, see ui-egui chrome.rs), every window folds back into the main one, and a window
+    // closes with its tabs (the main window's close is the application's, with its save guard).
+    c("window.move_tab_new", "Move tab to new window", WINDOW, None, Document, "app-window"),
+    c("window.merge_all", "Merge all windows", WINDOW, None, Nothing, "layers"),
+    c("window.close", "Close window", WINDOW, None, Nothing, "x"),
     // View-local history also appears in the Page navigation section; don't duplicate its menu.
     c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron-left"),
     c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron-right"),

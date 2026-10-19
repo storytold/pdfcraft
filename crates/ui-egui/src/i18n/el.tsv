@@ -2619,3 +2619,11 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Παράθυρο
+	Move tab to new window	Μετακίνηση καρτέλας σε νέο παράθυρο
+	Merge all windows	Συγχώνευση όλων των παραθύρων
+	Close window	Κλείσιμο παραθύρου
+	Move to new window	Μετακίνηση σε νέο παράθυρο
+	Move to window	Μετακίνηση σε παράθυρο
+	Too many windows are open	Είναι ανοιχτά πάρα πολλά παράθυρα

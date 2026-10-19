@@ -5,6 +5,10 @@ pub(crate) enum Action {
     Close(DocId),
     Reopen,
     Reveal(DocId),
+    /// Move the tab into a window of its own (M14).
+    Detach(DocId),
+    /// Move the tab into that window, after its last tab.
+    MoveTo(DocId, crate::WindowId),
 }
 
 impl crate::PdfCraftApp {
@@ -42,6 +46,14 @@ impl crate::PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
+            }
+            Action::Detach(id) => {
+                let from = self.current_window();
+                self.queue_window_op(crate::WindowOp::MoveTab { doc: id, from, to: None, at: None });
+            }
+            Action::MoveTo(id, window) => {
+                let from = self.current_window();
+                self.queue_window_op(crate::WindowOp::MoveTab { doc: id, from, to: Some((window, None)), at: None });
             }
         }
     }

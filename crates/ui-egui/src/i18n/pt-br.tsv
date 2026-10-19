@@ -2898,3 +2898,11 @@ theme	Appearance	Aparência
 	No image on clipboard to paste	Nenhuma imagem na área de transferência para colar
 	Pinned {tool} to Home	{tool} fixado no Início
 	Unpinned {tool} from Home	{tool} desafixado do Início
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Janela
+	Move tab to new window	Mover aba para uma nova janela
+	Merge all windows	Mesclar todas as janelas
+	Close window	Fechar janela
+	Move to new window	Mover para uma nova janela
+	Move to window	Mover para a janela
+	Too many windows are open	Há janelas demais abertas
