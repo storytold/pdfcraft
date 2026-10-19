@@ -107,7 +107,8 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
             end_row(&mut lines, &mut line);
             used = 0.0;
         }
-        let too_wide = blank(&line) && ink > width;
+        // Too wide for what is left of the row, counting the spaces that open the paragraph.
+        let too_wide = blank(&line) && used + ink > width;
         for (text, advance) in word {
             if too_wide && !blank(&line) && !blank(&text) && used + advance > width {
                 end_row(&mut lines, &mut line);
@@ -319,7 +320,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
 
 /// The width of `s` in a shaped-text item; the item's font's estimate if it can't be shaped (drawing
 /// then reports why).
-fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
+pub(crate) fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
     shaped_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
 }
 
