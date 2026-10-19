@@ -185,7 +185,106 @@ fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     assert!(geometry.midpoints.contains(&[110.0, 222.5]));
     assert!(geometry.segments.len() > 4 && geometry.segments.len() < 200);
     let d = fixture(&"0 0 m 1 1 l S ".repeat(20_001), "", &[]);
-    assert!(snap::geometry(&d, 0).unwrap().truncated);
+    let small = snap::Limits { segments: 20_000, ..snap::Limits::default() };
+    assert!(snap::geometry_within(&d, 0, small).unwrap().truncated);
+    assert!(!snap::geometry(&d, 0).unwrap().truncated, "the default cap has room for a CAD plan");
+}
+
+/// A query looks at the pointer's neighbourhood through the grid; its answers are the ones a
+/// search over every target and segment gives, long segments (frame, axes) and all.
+#[test]
+fn grid_queries_match_a_search_over_everything() {
+    use snap::{Snap, SnapKind, SnapOptions};
+    fn nearest(p: Point, a: Point, b: Point) -> Point {
+        let v = [b[0] - a[0], b[1] - a[1]];
+        let length = v[0] * v[0] + v[1] * v[1];
+        if length < 1e-18 {
+            return a;
+        }
+        let t = (((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / length).clamp(0.0, 1.0);
+        [a[0] + v[0] * t, a[1] + v[1] * t]
+    }
+    fn everything(g: &snap::Geometry, at: Point, tolerance: f64, options: SnapOptions) -> Option<Snap> {
+        let mut best: Option<Snap> = None;
+        let consider = |best: &mut Option<Snap>, p: Point, kind: SnapKind| {
+            let distance = distance(at, p);
+            if distance <= tolerance && best.is_none_or(|b| distance < b.distance - 1e-9) {
+                *best = Some(Snap { point: p, kind, distance });
+            }
+        };
+        if options.endpoints {
+            g.endpoints.iter().for_each(|&p| consider(&mut best, p, SnapKind::Endpoint));
+        }
+        if options.midpoints {
+            g.midpoints.iter().for_each(|&p| consider(&mut best, p, SnapKind::Midpoint));
+        }
+        let local: Vec<_> = g.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
+        if options.intersections {
+            for (i, s) in local.iter().enumerate() {
+                for t in local.iter().skip(i + 1) {
+                    if let Some(p) = snap::intersection(s[0], s[1], t[0], t[1]) {
+                        consider(&mut best, p, SnapKind::Intersection);
+                    }
+                }
+            }
+        }
+        if options.paths && best.is_none() {
+            g.segments.iter().for_each(|[a, b]| consider(&mut best, nearest(at, *a, *b), SnapKind::Path));
+        }
+        best
+    }
+    // A page frame and axes (long segments), a hatch, scattered short lines, a few curves.
+    let mut content = String::from("10 10 3800 2400 re S 0 1200 m 3820 1200 l S 1900 0 m 1900 2420 l S ");
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % 10_000) as f64 / 10_000.0
+    };
+    for i in 0..400 {
+        let x = 200.0 + f64::from(i) * 3.0;
+        content += &format!("{x} 300 m {} 700 l S ", x + 120.0);
+    }
+    for _ in 0..1500 {
+        let (x, y) = (next() * 3800.0, next() * 2400.0);
+        let (dx, dy) = ((next() - 0.5) * 60.0, (next() - 0.5) * 60.0);
+        content += &format!("{x:.2} {y:.2} m {:.2} {:.2} l S ", x + dx, y + dy);
+    }
+    for _ in 0..30 {
+        let (x, y) = (next() * 3600.0, next() * 2200.0);
+        content += &format!("{x:.1} {y:.1} m {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} c S ", x + 50.0, y + 120.0, x + 150.0, y - 80.0, x + 200.0, y);
+    }
+    let d = fixture(&content, "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert!(!g.truncated && g.segments.len() > 2000, "{}", g.segments.len());
+    let options = [
+        SnapOptions::default(),
+        SnapOptions { intersections: false, ..SnapOptions::default() },
+        SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true },
+        SnapOptions { endpoints: true, midpoints: false, intersections: true, paths: false },
+    ];
+    let mut hits = 0;
+    for k in 0..300 {
+        let at = [next() * 4000.0 - 100.0, next() * 2600.0 - 100.0];
+        for tolerance in [0.5, 4.0, 25.0] {
+            for o in options {
+                let found = g.snap(at, tolerance, o).unwrap();
+                assert_eq!(found, everything(&g, at, tolerance, o), "query {k} at {at:?} within {tolerance}, {o:?}");
+                hits += usize::from(found.is_some());
+            }
+            let dense = g.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(257).count() > 256;
+            assert_eq!(g.intersection_limited(at, tolerance), dense);
+        }
+    }
+    assert!(hits > 100, "the queries hit something: {hits}");
+    // Far off the page: nothing, and no panic.
+    assert_eq!(g.snap([1e6, -1e6], 25.0, SnapOptions::default()).unwrap(), None);
+    assert_eq!(
+        g.snap([-50.0, 1200.0], 60.0, SnapOptions::default()).unwrap().map(|s| s.kind),
+        Some(SnapKind::Endpoint),
+        "the axis' end, a long segment"
+    );
 }
 #[test]
 fn measurement_csv_quotes_newlines_and_blocks_formula_cells() {
@@ -249,14 +348,15 @@ fn degenerate_and_dense_paths_keep_snap_targets_bounded() {
     let g = snap::geometry(&d, 0).unwrap();
     assert!(g.segments.is_empty() && g.endpoints.is_empty() && g.midpoints.is_empty(), "{} {}", g.endpoints.len(), g.midpoints.len());
     // Every paint drains into the page geometry; the page-wide target cap still holds.
+    let small = snap::Limits { segments: 20_000, ..snap::Limits::default() };
     let d = fixture(&"0 0 1 1 re f ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_within(&d, 0, small).unwrap();
     assert!(g.truncated);
-    assert!(g.endpoints.len() + g.midpoints.len() <= 40_000 + 12, "{}", g.endpoints.len() + g.midpoints.len());
+    assert!(g.endpoints.len() + g.midpoints.len() <= 3 * 20_000 + 12, "{}", g.endpoints.len() + g.midpoints.len());
     assert!(g.segments.len() <= 20_000 + 4);
     // Unpainted curves and lines are capped too.
     let d = fixture(&"0 0 m 5 9 1 9 7 0 c 0 3 l ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_within(&d, 0, small).unwrap();
     assert!(g.truncated && g.endpoints.is_empty());
 }
 #[test]
