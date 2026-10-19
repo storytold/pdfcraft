@@ -22,9 +22,9 @@ impl crate::PdfCraftApp {
             Action::Reopen => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(path) = self.closed_tabs.last().cloned() {
-                    // A tab may already have been reopened through File > Open.
-                    if let Some(index) = self.views.iter().position(|v| self.session.get(v.id).is_some_and(|d| d.path.as_deref() == Some(&path))) {
-                        self.active = Some(index);
+                    // A tab may already have been reopened through File > Open, in any window.
+                    if let Some((window, doc)) = self.window_showing(&path) {
+                        self.show_doc_in(window, doc);
                         self.closed_tabs.pop();
                     } else {
                         let tabs = self.views.len();
