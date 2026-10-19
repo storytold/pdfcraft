@@ -3103,3 +3103,38 @@ fn drawing_tools_snap_to_the_pages_paths_with_f3() {
     h.run_steps(2);
     assert!(!h.state().comment_prefs.snap);
 }
+
+/// The snap cache keeps several pages' paths for the current edit generation: a second page on
+/// screen doesn't throw the first out (extraction takes up to a second on a plan), and an
+/// edit starts over.
+#[test]
+fn snap_paths_stay_cached_per_page_until_an_edit() {
+    let h = harness(|_| {});
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.info.pages.len() >= 2, "{}", doc.info.pages.len());
+    let mut cache = pdfcraft_ui_egui::comments::SnapCache::default();
+    let mut notice = None;
+    let first = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    let second = cache.geometry(doc, 1, &mut notice).expect("page 1 reads");
+    let again = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "page 0 stays cached while page 1 is in use");
+    assert!(std::sync::Arc::ptr_eq(&second, &cache.geometry(doc, 1, &mut notice).unwrap()));
+    assert!(notice.is_none(), "{notice:?}");
+    drop((first, second, again));
+    // An edit (even to a comment) is a new generation: the paths are read again.
+    let mut h = h;
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Box".into(),
+        author: "Tester".into(),
+    })));
+    let doc = h.state().session.get(id).unwrap();
+    let before = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    let after = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    assert!(std::sync::Arc::ptr_eq(&before, &after), "read once for the new generation");
+}

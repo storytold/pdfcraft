@@ -2265,9 +2265,21 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
     }
 
-    // Snap to drawing (M5): the page's paths, for the drawing tools that set points.
+    // Snap to drawing (M5): the page's paths, for the drawing tools that set points, on the
+    // page the pointer is over or a gesture runs on (extracting a plan's paths takes up to a
+    // second). `resp` covers every page, so it can't tell which one that is.
+    let gesture_page = match &view.comments.gesture {
+        Some(
+            comments::Gesture::Draw { page, .. }
+            | comments::Gesture::Move { page, .. }
+            | comments::Gesture::Resize { page, .. }
+            | comments::Gesture::Reshape { page, .. },
+        ) => Some(*page),
+        _ => None,
+    };
+    let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i);
     frame.snap = match tool {
-        QuickTool::Comment(t) if prefs.snap && t.snaps() => {
+        QuickTool::Comment(t) if prefs.snap && t.snaps() && here => {
             let mut notice = None;
             let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
             if notice.is_some() {

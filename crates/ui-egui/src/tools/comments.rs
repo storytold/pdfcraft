@@ -316,12 +316,19 @@ impl Default for CommentPrefs {
 /// How close (screen points) the pointer must be to a path for a drawing tool's point to snap.
 pub const SNAP_SENSITIVITY: f64 = 6.0;
 
-/// The page's vector paths for snapping, kept per page and edit generation (extraction is
-/// bounded but not free), shared by every drawing tool.
+/// How many pages' paths the snap cache keeps: enough for the pages on screen, few enough for
+/// a CAD plan's geometry (tens of MB a page).
+const SNAP_CACHE_PAGES: usize = 4;
+
+/// The pages' vector paths for snapping, kept per page for the current edit generation
+/// (extraction is bounded but not free: up to a second on an A0 plan), shared by every
+/// drawing tool. Several pages at a time, so two pages on screen don't throw each other out.
 #[derive(Clone, Debug, Default)]
 pub struct SnapCache {
-    paths: Option<(usize, u64, Option<std::sync::Arc<measure::snap::Geometry>>)>,
-    warned: Option<(usize, u64)>,
+    /// Page, generation and its paths (`None` when the page can't be read), oldest first.
+    paths: Vec<(usize, u64, Option<std::sync::Arc<measure::snap::Geometry>>)>,
+    /// Pages (and generations) whose limit notice has been shown.
+    warned: Vec<(usize, u64)>,
 }
 
 impl SnapCache {
@@ -329,22 +336,29 @@ impl SnapCache {
     /// whose extraction hit a limit says so once, through `notice`.
     pub fn geometry(&mut self, doc: &Document, page: usize, notice: &mut Option<&'static str>) -> Option<std::sync::Arc<measure::snap::Geometry>> {
         let generation = doc.edit_generation();
-        if self.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != generation) {
-            let geometry = doc.measurement_paths(page).ok().map(std::sync::Arc::new);
-            if let Some(g) = &geometry
-                && (g.truncated || g.unreadable > 0)
-                && self.warned != Some((page, generation))
-            {
-                *notice = Some(if g.truncated {
-                    "This drawing exceeds the snapping limit; only the first paths are used."
-                } else {
-                    "Some page content couldn't be read; snapping uses the rest."
-                });
-                self.warned = Some((page, generation));
-            }
-            self.paths = Some((page, generation, geometry));
+        // An edit starts the document over.
+        self.paths.retain(|(_, g, _)| *g == generation);
+        self.warned.retain(|(_, g)| *g == generation);
+        if let Some((_, _, cached)) = self.paths.iter().find(|(p, _, _)| *p == page) {
+            return cached.clone();
         }
-        self.paths.as_ref().and_then(|(_, _, g)| g.clone())
+        let geometry = doc.measurement_paths(page).ok().map(std::sync::Arc::new);
+        if let Some(g) = &geometry
+            && (g.truncated || g.unreadable > 0)
+            && !self.warned.contains(&(page, generation))
+        {
+            *notice = Some(if g.truncated {
+                "This drawing exceeds the snapping limit; only the first paths are used."
+            } else {
+                "Some page content couldn't be read; snapping uses the rest."
+            });
+            self.warned.push((page, generation));
+        }
+        if self.paths.len() >= SNAP_CACHE_PAGES {
+            self.paths.remove(0);
+        }
+        self.paths.push((page, generation, geometry.clone()));
+        geometry
     }
 }
 
