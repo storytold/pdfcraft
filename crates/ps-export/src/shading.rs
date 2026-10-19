@@ -41,7 +41,7 @@ pub(crate) fn shading_fill(sp: &ShadingPattern, emit: &mut Emitter, rule: FillRu
         emit.note("transfer function ignored (shading pattern)");
     }
     if sp.opacity < 1.0 {
-        emit.note("transparency ignored (shading pattern opacity)");
+        emit.note_once("transparency ignored (shading pattern opacity)");
     }
     // The Dummy variant "should just be drawn transparent": nothing at all.
     if matches!(&*sp.shading.shading_type, ShadingType::Dummy) {
@@ -806,6 +806,42 @@ mod tests {
         .into_bytes()
     }
 
+    /// The pattern fixture over custom page content (the default content fills one
+    /// rectangle with `P1` once), with a `/ca 0.5` ExtGState as object `5 + extras`
+    /// and the page last as usual.
+    fn pattern_pdf_content(pattern: &[u8], extra_objects: &[Vec<u8>], content: &[u8]) -> Vec<u8> {
+        let gs_no = 5 + extra_objects.len();
+        let page_no = gs_no + 1;
+        let page =
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Pattern << /P1 3 0 R >> /ExtGState << /GS1 {gs_no} 0 R >> >> >>")
+                .into_bytes();
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            format!("<< /Type /Pages /Kids [{page_no} 0 R] /Count 1 /MediaBox [0 0 200 300] >>").into_bytes(),
+            pattern.to_vec(),
+            stream_obj("", content),
+        ];
+        objs.extend(extra_objects.iter().cloned());
+        objs.push(b"<< /Type /ExtGState /ca 0.5 >>".to_vec());
+        objs.push(page);
+        let objs_len = objs.len();
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs_len + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs_len + 1).as_bytes());
+        out
+    }
+
     /// Drive one page of `bytes` through the PostScript device: (program, notes).
     fn driven(bytes: &[u8]) -> (String, Vec<FidelityNote>) {
         let pdf = Pdf::new(bytes.to_vec()).expect("fixture parses");
@@ -1074,6 +1110,25 @@ mod tests {
         assert!(out.contains("/Extend [true true] >> shfill"), "extend + shfill: {out}");
         assert!(out.contains("\nclip\n"), "the path clips the shading: {out}");
         assert_eq!(notes, Vec::<FidelityNote>::new(), "no degradations");
+    }
+
+    /// A `/ca 0.5` ExtGState makes the shading pattern partially transparent; the
+    /// degradation is recorded once however many fills paint through it (the module's
+    /// transparency policy: first occurrence only).
+    #[test]
+    fn shading_opacity_notes_once() {
+        let function = "<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>";
+        let (out, notes) = driven(&pattern_pdf_content(
+            &axial_pattern(function),
+            &[],
+            b"q /GS1 gs /Pattern cs /P1 scn 20 20 160 60 re f Q\nq /GS1 gs /Pattern cs /P1 scn 20 120 160 60 re f Q",
+        ));
+        assert_eq!(out.matches("shfill").count(), 2, "both shading fills still emit: {out}");
+        assert_eq!(
+            notes,
+            vec![FidelityNote { page: None, text: "transparency ignored (shading pattern opacity)".into() }],
+            "one note for the page, first occurrence only: {notes:?}"
+        );
     }
 
     /// A type 4 calculator function re-emits as a Level 3 function dictionary whose

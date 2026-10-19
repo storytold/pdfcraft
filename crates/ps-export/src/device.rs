@@ -404,7 +404,7 @@ pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
                 emit.op("setrgbcolor");
             }
             if a < 1.0 {
-                emit.note("transparency ignored (paint alpha)");
+                emit.note_once("transparency ignored (paint alpha)");
             }
         }
         Paint::Pattern(_) => shading::pattern_approx(paint, emit),
