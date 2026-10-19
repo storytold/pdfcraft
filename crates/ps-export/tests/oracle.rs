@@ -635,8 +635,10 @@ fn gs_args(output: &std::path::Path) -> Vec<String> {
 }
 
 /// Rasterize the exported PostScript with Ghostscript at 50 dpi into a 200×250 RGB
-/// raster. `None` (after a skip message) when gs is not installed; a failed gs run fails
-/// the test with gs's own stderr — the oracle exists to catch broken programs.
+/// raster. `None` (after a skip message) when gs is not installed — unless
+/// `PDFCRAFT_ORACLES_REQUIRED` is set, when the missing oracle fails the test
+/// (crates/oracle's contract); a failed gs run fails the test with gs's own stderr —
+/// the oracle exists to catch broken programs.
 fn gs_raster(ps: &[u8], tag: &str) -> Option<(u32, u32, Vec<u8>)> {
     let base = std::env::temp_dir().join(format!("pdfcraft-ps-oracle-{}-{tag}", std::process::id()));
     let ps_path = base.with_extension("ps");
@@ -646,8 +648,15 @@ fn gs_raster(ps: &[u8], tag: &str) -> Option<(u32, u32, Vec<u8>)> {
     let output = match run {
         Ok(output) => output,
         Err(why) => {
-            eprintln!("skipping the {tag} oracle fixture: gs could not be spawned ({why})");
             let _ = std::fs::remove_file(&ps_path);
+            // The shared oracle contract (crates/oracle): a missing oracle is a declared
+            // skip or a failure, never a silent pass — CI sets the variable, so absence
+            // breaks the build there and skips on a contributor's machine.
+            assert!(
+                std::env::var_os("PDFCRAFT_ORACLES_REQUIRED").is_none(),
+                "gs is required (PDFCRAFT_ORACLES_REQUIRED is set) but could not be spawned: {why}"
+            );
+            eprintln!("skipping the {tag} oracle fixture: gs could not be spawned ({why})");
             return None;
         }
     };
@@ -723,7 +732,9 @@ fn dump_png(path: std::path::PathBuf, width: u32, height: u32, rgb: &[u8]) {
 }
 
 /// The exported PS's extractable text via gs's txtwrite device (the ps2ascii
-/// engine). `None` (after a skip message) when gs is not installed. `-q` keeps
+/// engine). `None` (after a skip message) when gs is not installed — unless
+/// `PDFCRAFT_ORACLES_REQUIRED` is set, when the missing oracle fails the test
+/// (crates/oracle's contract). `-q` keeps
 /// gs's banner out of the capture, so the string is exactly what txtwrite
 /// wrote (CRLF line endings included — assert with `contains`, not equality).
 /// The Type 1 subsetting gate and the Inter extraction gate reuse this.
@@ -735,8 +746,12 @@ fn gs_text(ps: &[u8], tag: &str) -> Option<String> {
     let output = match run {
         Ok(output) => output,
         Err(why) => {
-            eprintln!("skipping the {tag} text oracle: gs could not be spawned ({why})");
             let _ = std::fs::remove_file(&ps_path);
+            assert!(
+                std::env::var_os("PDFCRAFT_ORACLES_REQUIRED").is_none(),
+                "gs is required (PDFCRAFT_ORACLES_REQUIRED is set) but could not be spawned: {why}"
+            );
+            eprintln!("skipping the {tag} text oracle: gs could not be spawned ({why})");
             return None;
         }
     };
@@ -930,6 +945,11 @@ fn eps_output_raster_matches_ghostscript() {
     let output = match run {
         Ok(output) => output,
         Err(why) => {
+            let _ = std::fs::remove_file(&eps_path);
+            assert!(
+                std::env::var_os("PDFCRAFT_ORACLES_REQUIRED").is_none(),
+                "gs is required (PDFCRAFT_ORACLES_REQUIRED is set) but could not be spawned: {why}"
+            );
             eprintln!("skipping the EPS oracle fixture: gs could not be spawned ({why})");
             return;
         }
