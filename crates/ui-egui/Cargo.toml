@@ -100,6 +100,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
 proptest = { workspace = true }
+# Export tests write into a dir that is unique per run and removes itself, panic or not.
+tempfile = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

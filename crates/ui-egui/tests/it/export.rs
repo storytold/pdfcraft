@@ -14,10 +14,9 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn export_dialogs_write_images_and_text() {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-export-ui-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let d = dir.clone();
+    // A `TempDir` is unique per run and removes itself at the end, panic or not.
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().to_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -31,13 +30,13 @@ fn export_dialogs_write_images_and_text() {
     h.get_by_label("Export to Image");
     h.get_by_label("Export").click();
     h.run_steps(4);
-    assert!(dir.join("doc_page_1.png").exists() && dir.join("doc_page_2.png").exists());
+    assert!(dir.path().join("doc_page_1.png").exists() && dir.path().join("doc_page_2.png").exists());
     h.get_by_label_contains("Exported 2 images");
     assert!(h.state_mut().execute("export.text"));
     h.run_steps(2);
     h.get_by_label("Export").click();
     h.run_steps(4);
-    assert!(dir.join("doc.txt").exists());
+    assert!(dir.path().join("doc.txt").exists());
     // Export all images: this document has none, and says so.
     assert!(h.state_mut().execute("export.all_images"));
     h.run_steps(2);
@@ -76,11 +75,10 @@ fn two_ink_pages() -> Vec<u8> {
 /// `%%Page` block; `doc.ps` from the same state holds both.
 #[test]
 fn eps_export_takes_the_current_page_and_ps_all_pages() {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-export-ps-ui-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let eps = dir.join("doc.eps");
-    let ps = dir.join("doc.ps");
+    // Same isolation as above: unique per run, removed when the test ends.
+    let dir = tempfile::tempdir().unwrap();
+    let eps = dir.path().join("doc.eps");
+    let ps = dir.path().join("doc.ps");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -95,7 +93,7 @@ fn eps_export_takes_the_current_page_and_ps_all_pages() {
     h.state_mut().save_override = Some(eps.to_string_lossy().into_owned());
     assert!(h.state_mut().execute("export.ps"));
     h.run_steps(4);
-    let eps = String::from_utf8_lossy(&std::fs::read(dir.join("doc.eps")).expect("the EPS was written")).into_owned();
+    let eps = String::from_utf8_lossy(&std::fs::read(dir.path().join("doc.eps")).expect("the EPS was written")).into_owned();
     assert!(eps.starts_with("%!PS-Adobe-3.0 EPSF-3.0"), "EPSF header: {eps}");
     assert!(eps.contains("%%Pages: 1"), "one page: {eps}");
     assert!(eps.contains("0 0 1 setrgbcolor"), "page 2's blue ink: {eps}");
@@ -106,7 +104,7 @@ fn eps_export_takes_the_current_page_and_ps_all_pages() {
     h.run_steps(2);
     assert!(h.state_mut().execute("export.ps"));
     h.run_steps(4);
-    let ps = String::from_utf8_lossy(&std::fs::read(dir.join("doc.ps")).expect("the PS was written")).into_owned();
+    let ps = String::from_utf8_lossy(&std::fs::read(dir.path().join("doc.ps")).expect("the PS was written")).into_owned();
     assert!(ps.starts_with("%!PS-Adobe-3.0\n"), "PS header: {ps}");
     assert!(ps.contains("%%Pages: 2"), "both pages: {ps}");
     assert!(ps.contains("1 0 0 setrgbcolor") && ps.contains("0 0 1 setrgbcolor"), "both inks: {ps}");
