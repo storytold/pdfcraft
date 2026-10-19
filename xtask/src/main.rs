@@ -49,7 +49,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     (
         "trust-lists",
-        "Write dist/trust/eutl-qualified-ca.der (or --out FILE) from the EU Trusted Lists: a trust list for the `sign_trust` tool's `eu_trusted_list` argument (needs network and curl)",
+        "Write dist/trust/eutl-qualified-ca.der (or --out FILE) from the EU Trusted Lists: a trust list for the `sign_trust` tool's `eu_trusted_list` argument, which #622 adds (needs network and curl)",
         trust_lists::run,
     ),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
