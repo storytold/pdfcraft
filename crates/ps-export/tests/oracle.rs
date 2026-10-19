@@ -121,6 +121,32 @@ fn image_pdf() -> Vec<u8> {
     ])
 }
 
+/// Group 4 fax bytes that decode to an all-black image — the renderer's own #3308 fixture
+/// (`crates/render/src/raster.rs`), where `/BlackIs1 true` is observed to turn the same
+/// bytes white in PdfCraft, MuPDF and Acrobat alike.
+const ALL_BLACK_FAX_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+
+/// A page drawing that 8×4 Group 4 fax image on the oracle's pixel grid, with or without
+/// `/BlackIs1 true`. PDF and PostScript give the flag the same meaning (decoded 1s are
+/// black) and both images carry the identity `/Decode`, so the passthrough must keep the
+/// polarity the source itself renders — `/BlackIs1 true` inverts on both sides alike, and
+/// no compensating `/Decode [1 0]` may appear in the export.
+fn fax_pdf(black_is_1: bool) -> Vec<u8> {
+    let parms = if black_is_1 { "/K -1 /Columns 8 /Rows 4 /BlackIs1 true" } else { "/K -1 /Columns 8 /Rows 4" };
+    assemble(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 288 360] >>".to_vec(),
+        stream_obj(
+            &format!(
+                "/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << {parms} >>"
+            ),
+            &ALL_BLACK_FAX_8X4,
+        ),
+        stream_obj("", b"q 144 0 0 180 28.8 72 cm /Im1 Do Q"),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 3 0 R >> >> >>".to_vec(),
+    ])
+}
+
 // The Type 1 program builder and its encryption helpers mirror the unit-test builders in
 // `src/fonts.rs` (a minimal, real PFA program gs loads and self-defines); the TrueType
 // builder mirrors `src/fonts.rs::ttf_program` (a 1000-upem font with two box glyphs).
@@ -536,6 +562,22 @@ fn geometry_page_matches_ghostscript() {
 #[test]
 fn image_page_matches_ghostscript() {
     assert_matches_oracle("image", &image_pdf());
+}
+
+/// The CCITTFaxDecode passthrough, with and without `/BlackIs1 true`: the same fax bytes
+/// through PDF's and PostScript's decoders. The flag inverts the decoded polarity on both
+/// sides identically (measured: PdfCraft's raster and gs's rasterization of the export are
+/// pixel-equal in both configurations), so the passthrough's identity `/Decode` is the
+/// faithful choice — this test pins that no compensating `/Decode [1 0]` sneaks in.
+#[test]
+fn fax_page_matches_ghostscript() {
+    assert_matches_oracle("fax-black", &fax_pdf(false));
+    assert_matches_oracle("fax-blackis1", &fax_pdf(true));
+    let out = export(Arc::new(fax_pdf(true)), None, &[0], PsFormat::Ps).expect("exports");
+    let ps = String::from_utf8_lossy(&out.bytes);
+    assert!(ps.contains("/BlackIs1 true"), "the flag itself passes through: {ps}");
+    assert!(ps.contains("/Decode [0 1]"), "the identity decode passes through: {ps}");
+    assert!(!ps.contains("/Decode [1 0]"), "no compensating inversion: {ps}");
 }
 
 /// Text over every Layer A strategy: Type 1 as `show` (gs's FreeType against skrifa's

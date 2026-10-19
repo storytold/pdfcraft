@@ -524,15 +524,17 @@ impl<'a> Device<'a> for PsDevice<'a> {
             // Render mode 3 suppresses them too (the interpreter maps only that mode
             // onto Type 3 text): the procedure would paint what invisible text hides.
             Glyph::Type3(g) => {
-                if matches!(draw_mode, GlyphDrawMode::Invisible) {
+                if matches!(draw_mode, GlyphDrawMode::Invisible | GlyphDrawMode::Clip) {
                     return;
                 }
                 self.flush_text();
                 g.interpret(self, transform, glyph_transform, paint);
             }
             Glyph::Outline(outline) => match draw_mode {
-                // Invisible text renders nothing (as in the raster renderer).
-                GlyphDrawMode::Invisible => {}
+                // Invisible text renders nothing, as in the raster renderer; neither does
+                // clipping text (7 Tr): the interpreter reports it without painting a glyph
+                // (its clip is hayro-side, patch 64), and PostScript has no clip-from-text.
+                GlyphDrawMode::Invisible | GlyphDrawMode::Clip => {}
                 GlyphDrawMode::Fill => {
                     let strategy = self.fonts.strategy(glyph);
                     for note in self.fonts.drain_notes() {

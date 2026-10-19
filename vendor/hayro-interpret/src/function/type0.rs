@@ -175,30 +175,8 @@ impl Type0 {
             .iter()
             .try_fold(1usize, |acc, &s| acc.checked_mul(s as usize))
             .unwrap_or(0);
-        let comps = self.range.len();
-        let mut samples = Vec::with_capacity(total.saturating_mul(comps).min(1 << 23));
-        let mut parts: IntVec = smallvec![0; self.sizes.len()];
-
-        for _ in 0..total {
-            let key = Key::from_raw(&self.sizes, &parts);
-            let entry = self.table.get(&key);
-            for c in 0..comps {
-                samples.push(entry.and_then(|e| e.get(c).copied()).unwrap_or(0));
-            }
-
-            // Advance the odometer: dimension 0 varies fastest.
-            for i in 0..parts.len() {
-                let size = self.sizes.get(i).copied().unwrap_or(1).max(1) as usize;
-                if let Some(part) = parts.get_mut(i) {
-                    *part += 1;
-                    if (*part as usize) < size {
-                        break;
-                    }
-                    *part = 0;
-                }
-            }
-        }
-
+        let mut samples = self.samples.clone();
+        samples.resize(total.saturating_mul(self.range.len()), 0);
         samples
     }
 }
