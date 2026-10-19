@@ -86,7 +86,9 @@ pub(crate) fn subset_type1(program: &[u8], used: &[&str]) -> Option<Vec<u8>> {
     // A kept charstring that composes accents references other glyphs by
     // name; dropping those would break it silently, so any seac-shaped one
     // declines the whole subset (verbatim fallback — correct, only larger).
-    let len_iv = len_iv(&plain);
+    // A `/lenIV` the scan cannot judge (negative: unencrypted charstrings)
+    // declines too.
+    let len_iv = len_iv(&plain)?;
     if len_iv > MAX_LEN_IV || may_compose_accents(&split.kept, len_iv) {
         return None;
     }
@@ -187,23 +189,29 @@ fn eexec_decrypt(seed: u32, data: &[u8]) -> Vec<u8> {
 /// The private dict's `/lenIV`: how many random bytes prefix every
 /// charstring, which the seac scan decrypts past. The format's default is
 /// 4; the last definition wins, matching consumers that read the dict
-/// sequentially. A negative value (charstrings not encrypted) reads as no
-/// integer here, so the previous value stands — a skip that can only cost
-/// size, never correctness.
-fn len_iv(plain: &[u8]) -> usize {
+/// sequentially. `None` declines the subset: a negative value means the
+/// charstrings are not encrypted at all, and the decrypting scan would
+/// judge garbage (it cannot decide `seac` either way); a bare `lenIV` token
+/// that is not a definition is skipped so a later real one still wins.
+fn len_iv(plain: &[u8]) -> Option<usize> {
     const NAME: &[u8] = b"lenIV";
     let mut value = 4usize;
     let mut from = 0usize;
-    while let Some(at) = find_sub(plain, NAME, from)
-        && at > 0
-        && plain.get(at - 1) == Some(&b'/')
-    {
-        if let Some((n, _)) = read_count(plain, skip_ws(plain, at + NAME.len())) {
-            value = n;
+    while let Some(at) = find_sub(plain, NAME, from) {
+        if at > 0 && plain.get(at - 1) == Some(&b'/') {
+            let pos = skip_ws(plain, at + NAME.len());
+            // Unencrypted charstrings (negative lenIV) cannot be judged by the
+            // decrypting scan: decline rather than guess.
+            if plain.get(pos) == Some(&b'-') {
+                return None;
+            }
+            if let Some((n, _)) = read_count(plain, pos) {
+                value = n;
+            }
         }
         from = at + 1;
     }
-    value
+    Some(value)
 }
 
 /// Whether any kept charstring may compose accents — `seac`, the
@@ -861,5 +869,34 @@ mod tests {
         hostile.extend_from_slice(b"/lenIV 9999 def");
         hostile.extend_from_slice(&private[at + "/lenIV 0 def".len()..]);
         assert!(subset_type1(&t1_over_raw(&hostile), &["A"]).is_none(), "an absurd /lenIV declines (the bytes cannot be judged)");
+        // A negative /lenIV means unencrypted charstrings: the decrypting scan would
+        // judge garbage, so the subset declines instead of defaulting to 4 (which
+        // could drop a real seac's base and accent glyphs with no note). The seac
+        // here lives in the charstring's first four bytes — exactly what a
+        // default-to-4 judgement never sees.
+        let early_seac = t1_private(&[(".notdef", &notdef), ("A", &[12, 6, 0, 0, 9, 14]), ("B", &box_ops(700))]);
+        let early_at = early_seac.windows(b"/lenIV 0 def".len()).position(|w| w == b"/lenIV 0 def").expect("the lenIV line");
+        let mut negative = early_seac[..early_at].to_vec();
+        negative.extend_from_slice(b"/lenIV -1 def");
+        negative.extend_from_slice(&early_seac[early_at + "/lenIV 0 def".len()..]);
+        assert!(subset_type1(&t1_over_raw(&negative), &["A"]).is_none(), "a negative /lenIV declines (unencrypted charstrings)");
+    }
+
+    /// The `/lenIV` scan keeps searching past a `lenIV` that is not a definition (a
+    /// comment mentioning it, a name used as data): the real `/lenIV 0` later in the
+    /// dict still wins. The scan used to stop at the first non-definition match, fall
+    /// back to 4, and mis-judge charstrings whose first four bytes carry the seac.
+    #[test]
+    fn len_iv_scan_passes_non_definitions() {
+        let notdef = [139, 248, 136, 13, 14];
+        // `12 6` (explicit seac) inside the first four bytes, then padding and a
+        // plain tail: correctly judged with lenIV 0 it declines the subset.
+        let accenting = [12, 6, 0, 0, 9, 14];
+        let private = t1_private(&[(".notdef", &notdef), ("A", &accenting), ("B", &box_ops(700))]);
+        let at = private.windows(b"/lenIV 0 def".len()).position(|w| w == b"/lenIV 0 def").expect("the lenIV line");
+        let mut mentioned = private[..at].to_vec();
+        mentioned.extend_from_slice(b"% the lenIV default is 4\n");
+        mentioned.extend_from_slice(&private[at..]);
+        assert!(subset_type1(&t1_over_raw(&mentioned), &["A"]).is_none(), "the real /lenIV 0 after a bare mention still judges the seac");
     }
 }
