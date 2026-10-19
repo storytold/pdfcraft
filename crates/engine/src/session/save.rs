@@ -256,10 +256,14 @@ impl Session {
         &self.trust.lists
     }
 
-    /// Load `list` (replacing a list of the same name), or with `None` remove the list called
-    /// `name`, and revalidate every open document.
-    pub fn set_trust_list(&mut self, name: &str, list: Option<pdfcraft_sign::trust::TrustList>) {
-        self.update_trust(|trust| trust.set_list(name, list));
+    /// Load `list` (replacing a list of the same name) and revalidate every open document.
+    pub fn add_trust_list(&mut self, list: pdfcraft_sign::trust::TrustList) {
+        self.update_trust(|trust| trust.add_list(list));
+    }
+
+    /// Remove the trust list called `name` and revalidate every open document.
+    pub fn remove_trust_list(&mut self, name: &str) {
+        self.update_trust(|trust| trust.remove_list(name));
     }
 
     fn revalidate_signatures(&mut self) {

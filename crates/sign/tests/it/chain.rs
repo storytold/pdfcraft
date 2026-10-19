@@ -428,7 +428,13 @@ fn a_list_vouches_for_a_signer_whose_file_carries_only_its_leaf_and_never_for_a_
     let r = root();
     let i = ca("Issuing CA", &r, None);
     let leaf = end_entity("Signer", &i);
-    let tsa = end_entity("Some Stamper", &root());
+    // A real time-stamp authority: its certificate is issued for time stamping (RFC 3161 §2.3).
+    let tsa = issue(
+        "Some Stamper",
+        Some(&root()),
+        FOREVER,
+        &[basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["1.3.6.1.5.5.7.3.8"])],
+    );
     let stamped_at = time(2026);
     let stamper = Stamper { key: tsa.key, cert: tsa.cert.clone(), time: stamped_at };
     let id = DigitalId { key: leaf.key, certificate: leaf.cert, chain: Vec::new(), friendly_name: None };

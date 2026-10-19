@@ -3994,13 +3994,16 @@ fn several_trust_changes_revalidate_the_open_documents_once() {
     let list = sign::trust::TrustList::from_bytes("Test list", &cert.raw).unwrap();
     s.update_trust(|trust| {
         trust.certs = vec![cert.clone()];
-        trust.set_list("Test list", Some(list));
+        trust.add_list(list.clone());
     });
     assert_eq!(s.revalidations, 3);
     assert_eq!((s.trusted_certificates().len(), s.trust_lists().len()), (1, 1));
-    // Replacing a list by name, and removing it.
-    s.set_trust_list("Test list", None);
+    // A list loaded again under its name replaces itself; removing it by that name takes it back.
+    s.add_trust_list(list);
+    assert_eq!(s.trust_lists().len(), 1);
+    s.remove_trust_list("Test list");
     assert!(s.trust_lists().is_empty());
+    assert_eq!(s.revalidations, 5);
 }
 
 #[test]

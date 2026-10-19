@@ -592,6 +592,10 @@ pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     let mut block: Option<(&str, String)> = None;
     for line in text.lines().map(str::trim) {
         if let Some(label) = line.strip_prefix("-----BEGIN ").and_then(|l| l.strip_suffix("-----")) {
+            // A block that begins before the open one ended is a file cut short or spliced.
+            if block.is_some() {
+                return Err(SignError::Malformed("a PEM block is not closed".into()));
+            }
             block = matches!(label, "CERTIFICATE" | "PKCS7" | "CMS").then(|| (label, String::new()));
         } else if let Some(label) = line.strip_prefix("-----END ").and_then(|l| l.strip_suffix("-----")) {
             // An END that doesn't close the open block ends nothing.

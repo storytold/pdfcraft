@@ -363,8 +363,10 @@ impl Automation {
                 if certs_changed {
                     trust.certs = certs;
                 }
-                if let Some(list) = eu_list {
-                    trust.set_list(EU_LIST, list);
+                match eu_list {
+                    Some(Some(list)) => trust.add_list(list),
+                    Some(None) => trust.remove_list(EU_LIST),
+                    None => {}
                 }
             });
         }
