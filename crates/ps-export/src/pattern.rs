@@ -210,9 +210,13 @@ pub(crate) fn tiling_paint(
         return decline(emit, draw_mode, build, "tiling pattern approximated (unusable makepattern matrix)");
     }
 
-    // The resource: dict first, the collected cell as the PaintProc body.
+    // The resource: dict first, the collected cell as the PaintProc body. The
+    // procedure starts with `pop`: PLRM hands the PaintProc the pattern dictionary
+    // as an operand, and the procedure must consume it — Ghostscript cleans up after
+    // a leftover, but a strict RIP does not have to, and nested patterns would stack
+    // one dictionary per tile.
     let body = format!(
-        "<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [{x0} {y0} {x1} {y1}] /XStep {x_step} /YStep {y_step} /PaintProc {{\n{} }} >>",
+        "<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [{x0} {y0} {x1} {y1}] /XStep {x_step} /YStep {y_step} /PaintProc {{ pop\n{} }} >>",
         String::from_utf8_lossy(&cell_ops),
     );
     // The table lives inside the emitter, so lend it out for the call (the
@@ -336,8 +340,8 @@ mod tests {
         // The prolog resource: the dict head, the collected cell, the def.
         assert!(s.contains("%%BeginResource: pattern PdfCraftPat0\n"), "one pattern resource: {s}");
         assert!(
-            s.contains("/PdfCraftPat0 << /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 20 /YStep 20 /PaintProc {\n"),
-            "the dict head: {s}"
+            s.contains("/PdfCraftPat0 << /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 20 /YStep 20 /PaintProc { pop\n"),
+            "the dict head opens a PaintProc that first pops its dictionary operand: {s}"
         );
         assert!(s.contains("0 0 1 setrgbcolor\n"), "the cell's own colour operator: {s}");
         assert!(
