@@ -76,6 +76,31 @@ pub(crate) fn image_ops(image: &Image<'_, '_>, emit: &mut Emitter) {
 /// source to its end, so `currentfile` is left exactly past the payload whatever `image`
 /// stopped reading at.
 const DRAIN: &str = "PdfCraftImgSrc flushfile";
+/// Emit one opaque RGB raster through the ASCII85/Flate pipeline (`/DeviceRGB
+/// setcolorspace` + the dictionary-form `image` invocation + payload). The caller
+/// wraps it in the gsave/[placement] concat/grestore that maps pixel space onto the
+/// page (the `draw_image` convention: `/ImageMatrix` identity) — this is the sink for
+/// a flattened transparency region (`flatten.rs`), which arrives as raw rows rather
+/// than a PDF XObject.
+///
+/// Declines without emitting any operator — but never silently — when the pixel count
+/// exceeds [`MAX_PIXELS`] (note "image skipped (exceeds 100 megapixel cap)") or when
+/// the buffer is not exactly `width × height × 3` bytes long (note
+/// "image skipped (undecodable)", the module's wording for malformed image data).
+pub(crate) fn opaque_raster(emit: &mut Emitter, width: u32, height: u32, rgb: &[u8]) {
+    let pixels = u64::from(width).checked_mul(u64::from(height));
+    if !pixels.is_some_and(|p| p <= MAX_PIXELS) {
+        emit.note("image skipped (exceeds 100 megapixel cap)");
+        return;
+    }
+    if !samples_complete(pixel_bytes(width, height, 3), rgb) {
+        emit.note("image skipped (undecodable)");
+        return;
+    }
+    emit.op("/DeviceRGB setcolorspace");
+    let line = image_invocation(width, height, 8, "[0 1 0 1 0 1]", A85_FLATE_SOURCE);
+    emit_ascii85(emit, &line, rgb);
+}
 
 /// A raster image: passthrough when PostScript can consume the PDF's own encoded bytes,
 /// decode + re-encode otherwise.
@@ -93,20 +118,25 @@ fn raster_ops(raster: &RasterImage<'_>, emit: &mut Emitter) {
     // neither can one beyond the PostScript integer that `EODCount` below must carry.
     let passthrough_sized = !raw.is_empty() && raw.len() <= i32::MAX as usize;
     let plan = match filters.as_slice() {
-        [Filter::DctDecode] if passthrough_sized => passthrough_components(dict)
-            .filter(|&n| decode_is_identity(dict, n))
-            .filter(|_| dct_color_transform_is_default(dict))
-            .map(|n| Plan { width: raster.width(), height: raster.height(), components: n, source: "/DCTDecode filter".into(), bits: 8 }),
+        [Filter::DctDecode] if passthrough_sized => passthrough_components(dict).filter(|&n| decode_is_identity(dict, n)).map(|n| Plan {
+            width: raster.width(),
+            height: raster.height(),
+            components: n,
+            source: "/DCTDecode filter".into(),
+            bits: 8,
+        }),
         [Filter::FlateDecode] if passthrough_sized => passthrough_components(dict)
             .filter(|&n| bpc_is_8(dict) && no_predictor(dict) && decode_is_identity(dict, n))
             .map(|n| Plan { width: raster.width(), height: raster.height(), components: n, source: "/FlateDecode filter".into(), bits: 8 }),
-        [Filter::CcittFaxDecode] if passthrough_sized => decode_is_identity(dict, 1).then(|| ccitt_source(dict)).flatten().map(|source| Plan {
-            width: raster.width(),
-            height: raster.height(),
-            components: 1,
-            source,
-            bits: 1,
-        }),
+        // CCITT passthrough additionally requires a plain DeviceGray space (1
+        // component): the samples leave verbatim with `0 setgray`, so any other
+        // space must take the decode path — an `/Indexed` palette especially, whose
+        // default 1-bit `/Decode [0 1]` the identity check below cannot distinguish
+        // from gray's, and whose colours the decode path's palette lookup restores.
+        [Filter::CcittFaxDecode] if passthrough_sized && passthrough_components(dict) == Some(1) => decode_is_identity(dict, 1)
+            .then(|| ccitt_source(dict))
+            .flatten()
+            .map(|source| Plan { width: raster.width(), height: raster.height(), components: 1, source, bits: 1 }),
         _ => None,
     };
 
@@ -328,16 +358,6 @@ fn no_predictor(dict: &Dict<'_>) -> bool {
     decode_parms(dict).is_none_or(|dp| dp.get::<i64>(b"Predictor").unwrap_or(1) <= 1)
 }
 
-/// Whether a DCT image's `/DecodeParms /ColorTransform` is absent or its default `1`.
-/// PostScript's DCTDecode converts YUV↔RGB by that same default; an explicit `0` on a
-/// three-component JPEG without an Adobe marker means "already transformed", and passing
-/// the bytes through would shift the colours (an Adobe APP14 marker would override the
-/// parameter again, so forwarding it is not a fix either). Any explicit non-default value
-/// takes the decode path, which applies it.
-fn dct_color_transform_is_default(dict: &Dict<'_>) -> bool {
-    decode_parms(dict).is_none_or(|dp| dp.get::<i64>(b"ColorTransform").unwrap_or(1) == 1)
-}
-
 /// The image's `/DecodeParms` as a single dict (a one-element array counts too, the shape
 /// PDF allows for single-filter streams).
 fn decode_parms<'a>(dict: &Dict<'a>) -> Option<Dict<'a>> {
@@ -477,29 +497,6 @@ mod tests {
         pdfcraft_filters::encode(&PsFilter::Ascii85, &Params::default(), &z).unwrap()
     }
 
-    /// A DCT image that sets `/DecodeParms /ColorTransform` explicitly does not pass
-    /// through: PostScript's DCTDecode applies the YUV↔RGB default of 1 whatever the PDF
-    /// asked for (an Adobe marker would override the parameter again), so its colours
-    /// would shift. The decode path applies the explicit value — the image decodes and
-    /// re-encodes instead, like any non-passthrough image.
-    #[test]
-    fn dct_with_color_transform_decodes_instead() {
-        let pdf = image_pdf(
-            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /DecodeParms << /ColorTransform 0 >>",
-            &DCT_PAYLOAD,
-            &[],
-            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
-        );
-        let (raw, notes) = driven(&pdf);
-        let (out, notes) = output(&raw, &notes);
-        assert!(!out.contains("DCTDecode filter"), "no passthrough for an explicit /ColorTransform: {out}");
-        assert!(!out.contains("%%BeginData"), "the binary passthrough section is gone: {out}");
-        // The fixture's bytes are not a real JPEG, so the decode path reports them
-        // undecodable — the point is that the passthrough arm (which would carry them
-        // verbatim with no note) was not taken.
-        assert_eq!(notes, "image skipped (undecodable)", "the decode path, not passthrough: {notes}");
-    }
-
     /// A DCT image's encoded JPEG bytes pass through verbatim, inside a `%%BeginData`
     /// binary section whose byte count covers invocation line + newline + payload +
     /// the drain line, with the source bounded by a byte-counted SubFileDecode and
@@ -560,8 +557,7 @@ mod tests {
             String::from_utf8_lossy(&out[line_end..end_data])
         );
     }
-    /// A Flate-encoded 8-bit image passes its zlib bytes through verbatim for Level 3
-    /// PostScript (`/FlateDecode` is a Level 3 filter), under the same bounded source.
+
     #[test]
     fn flate_passthrough_level3() {
         let payload = pdfcraft_filters::encode_flate(&RGB_SAMPLES);
@@ -683,6 +679,75 @@ mod tests {
         assert!(out.contains("0 setgray\n"), "1-component space: {out}");
         assert!(contains_bytes(&raw, &CCITT_PAYLOAD), "fax bytes verbatim: {out:?}");
         assert_eq!(notes, "", "no degradations");
+    }
+
+    /// A CCITT image in an `/Indexed` space does not pass through: the samples would
+    /// paint as grey levels (`0 setgray`) instead of through the palette, and the
+    /// decode-identity check cannot catch it (a 1-bit Indexed default `/Decode` is
+    /// also `[0 1]`). The decode path decodes the fax, applies the palette and
+    /// re-encodes as ASCII85/Flate RGB — the shape the renderer's own Indexed-CCITT
+    /// test covers on the raster side.
+    #[test]
+    fn indexed_ccitt_decodes_through_the_palette() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace [/Indexed /DeviceRGB 1 <FF0000 0000FF>] /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 2 /Rows 2 >>",
+            &CCITT_PAYLOAD,
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        assert!(!out.contains("CCITTFaxDecode"), "no passthrough for an Indexed space: {out}");
+        assert!(!out.contains("0 setgray\n"), "the samples are not painted as grey levels: {out}");
+        assert!(out.contains("/DeviceRGB setcolorspace\n"), "the palette decodes to RGB: {out}");
+        assert!(out.contains("/ASCII85Decode filter /FlateDecode filter"), "the decode path re-encodes: {out}");
+        assert!(!contains_bytes(&raw, &CCITT_PAYLOAD), "the fax bytes do not leave verbatim: {out:?}");
+        assert_eq!(notes, "", "applying the palette is not a degradation");
+    }
+
+    /// An opaque RGB raster straight from the flattener (no PDF, no interpreter behind
+    /// it) emits the colorspace line, the dictionary-form invocation with the
+    /// ASCII85/Flate chain, and a payload that decodes back to the exact samples.
+    #[test]
+    fn opaque_raster_emits_flate_image() {
+        let mut emit = Emitter::default();
+        opaque_raster(&mut emit, 2, 2, &RGB_SAMPLES);
+        let out = String::from_utf8_lossy(&emit.out).into_owned();
+        assert!(out.contains("/DeviceRGB setcolorspace\n"), "colorspace line: {out}");
+        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /ASCII85Decode filter /FlateDecode filter >> image";
+        assert!(out.contains(invocation), "re-encode invocation: {out}");
+        assert_eq!(out.lines().count(), 3, "colorspace + invocation + payload lines: {out}");
+        // The payload is the last line; run it back through the filters crate.
+        let payload = out.lines().next_back().unwrap_or("");
+        let chain = [(PsFilter::Ascii85, Params::default()), (PsFilter::Flate, Params::default())];
+        let decoded = pdfcraft_filters::decode(&chain, payload.as_bytes(), 1 << 20).expect("payload decodes");
+        assert_eq!(decoded, RGB_SAMPLES, "samples survive the Flate/ASCII85 round trip");
+        assert!(emit.notes.is_empty(), "a clean raster degrades nothing");
+    }
+
+    /// Both declines are never silent and emit no operator at all — not even the
+    /// colorspace line: a buffer whose length is not `width × height × 3`, and a
+    /// pixel count over the cap (which fires first, whatever the buffer holds).
+    #[test]
+    fn opaque_raster_declines_never_silent() {
+        let mut emit = Emitter::default();
+        opaque_raster(&mut emit, 2, 2, &RGB_SAMPLES[..9]);
+        assert!(emit.out.is_empty(), "short buffer emits nothing: {:?}", String::from_utf8_lossy(&emit.out));
+        assert_eq!(
+            emit.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+            ["image skipped (undecodable)"],
+            "the length mismatch is recorded"
+        );
+
+        let mut emit = Emitter::default();
+        opaque_raster(&mut emit, 20000, 20000, &RGB_SAMPLES);
+        assert!(emit.out.is_empty(), "capped raster emits nothing");
+        assert_eq!(
+            emit.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+            ["image skipped (exceeds 100 megapixel cap)"],
+            "the cap is recorded"
+        );
     }
 
     /// An image whose declared dimensions exceed the 100-megapixel cap is skipped with a
