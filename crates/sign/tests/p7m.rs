@@ -1,6 +1,7 @@
 //! CAdES envelope files (issue #1449): `.pdf.p7m` and `.p7s` classification and reading,
 //! against fixtures made by OpenSSL 3 (tests/data/README.md).
 
+use pdfcraft_sign::DigestAlg;
 use pdfcraft_sign::cms;
 use pdfcraft_sign::der::{self, Tlv, tag};
 use pdfcraft_sign::p7m;
@@ -98,6 +99,54 @@ fn digest_mismatch_is_reported() {
     let mut tampered = blob.clone();
     let at = tampered.windows(MARKER.len()).position(|w| w == MARKER).expect("the marker is in the content");
     tampered[at + 5] ^= 0x20;
+    let env = p7m::read(&tampered).unwrap();
+    assert_ne!(env.content.as_deref(), Some(content.as_slice()), "the corrupted byte is in the content");
+    assert!(!env.digest_ok);
+}
+
+/// `cms::sign_encapsulated`'s assembly with the message-digest attribute left out, signed with
+/// the test key: a signer RFC 5652 §11.1 forbids (the attribute is mandatory once there are
+/// signed attributes), whose signature over the attributes is nonetheless valid. `digest` names
+/// the SignerInfo's hash so the signature checks against the same one `read` uses.
+fn envelope_without_message_digest(id: &pkcs12::DigitalId, alg: DigestAlg, content: &[u8]) -> Vec<u8> {
+    const CONTENT_TYPE: &str = "1.2.840.113549.1.9.3"; // id-contentType, as in cms::build
+    let attrs = der::seq(&[&der::oid(CONTENT_TYPE), &der::set_of(&[&der::oid(cms::DATA)])]);
+    let set = der::set_of(&[&attrs]);
+    let signature = id.key.sign(alg, &set).unwrap();
+    let mut signed_attrs = set.clone();
+    signed_attrs[0] = tag::ctx(0);
+    let sid = der::seq(&[&id.certificate.issuer.raw, &der::uint(&id.certificate.serial)]);
+    let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &id.key.signature_algorithm(alg), &der::octets(&signature)]);
+    let mut certs: Vec<&[u8]> = vec![&id.certificate.raw];
+    certs.extend(id.chain.iter().map(|c| c.raw.as_slice()));
+    let encap = der::seq(&[&der::oid(cms::DATA), &der::explicit(0, &der::octets(content))]);
+    let signed_data =
+        der::seq(&[&der::int(1), &der::set_of(&[&alg.algorithm()]), &encap, &der::tlv(tag::ctx(0), &certs.concat()), &der::set_of(&[&signer])]);
+    der::seq(&[&der::oid(cms::SIGNED_DATA), &der::explicit(0, &signed_data)])
+}
+
+#[test]
+fn signed_attributes_without_message_digest_fail_closed() {
+    let id = test_id();
+    let alg = id.key.preferred_digest();
+    let content = b"%PDF-a document nothing commits to\n".to_vec();
+    let blob = envelope_without_message_digest(&id, alg, &content);
+    // The envelope reads, and the signature over the attributes verifies: only the missing
+    // message digest can (and must) make the content check fail.
+    let sd = cms::SignedData::parse(&blob).unwrap();
+    let cert = sd.signer_certificate().expect("the certificate is carried");
+    let digest = sd.signer.digest.digest(&[&content]);
+    assert!(matches!(sd.verify_signature(cert, &digest), Ok(true)), "the signature over the attributes is valid");
+    let env = p7m::read(&blob).unwrap();
+    assert_eq!(env.content.as_deref(), Some(content.as_slice()));
+    assert_eq!(env.signer_name, "Test Signer RSA");
+    assert!(!env.digest_ok, "no message-digest attribute: the content is signed by nothing");
+
+    // Tampering the content changes nothing above: with nothing tying the content to the
+    // signature it was unverifiable before the tamper and stays so after it.
+    let mut tampered = blob.clone();
+    let at = tampered.windows(5).position(|w| w == b"%PDF-").expect("the marker is in the content");
+    tampered[at + 4] ^= 0x20;
     let env = p7m::read(&tampered).unwrap();
     assert_ne!(env.content.as_deref(), Some(content.as_slice()), "the corrupted byte is in the content");
     assert!(!env.digest_ok);

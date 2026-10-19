@@ -68,9 +68,12 @@ pub fn read(bytes: &[u8]) -> Result<Envelope, SignError> {
             // CAdES always — what is signed is the message-digest attribute rather than the
             // content, so the attribute is what ties the content to the signature: it is
             // compared first (as the PDF validator does), and the signature over it is
-            // checked as well. An algorithm that cannot be checked here is "not verified".
+            // checked as well. The attribute is mandatory then (RFC 5652 §11.1); without it
+            // the signature, however valid, commits to nothing, so the content is treated as
+            // not matching. An algorithm that cannot be checked here is "not verified".
             let digest = sd.signer.digest.digest(&[content]);
-            sd.signer.message_digest.as_ref().is_none_or(|md| md == &digest) && matches!(sd.verify_signature(cert, &digest), Ok(true))
+            (sd.signer.signed_attrs.is_none() || sd.signer.message_digest.as_ref().is_some_and(|md| md == &digest))
+                && matches!(sd.verify_signature(cert, &digest), Ok(true))
         }
         // Detached (nothing carried to check against), or no certificate to check with.
         None => false,
