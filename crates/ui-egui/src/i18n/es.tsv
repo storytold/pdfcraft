@@ -102,6 +102,9 @@
 	Keep editable	Mantener editable
 	Lock into the page when saving	Fijar en la página al guardar
 	Otherwise, ask on the first save after a signature is placed	Si no, preguntar al guardar por primera vez tras colocar una firma
+	Signature added. Others can move it until it's locked.	Firma añadida. Otros pueden moverla hasta que se fije.
+	Lock now	Fijar ahora
+	Signature locked into the page.	Firma fijada en la página.
 	Text, marks and signatures become part of the page. Other comments stay editable.	El texto, las marcas y las firmas pasan a formar parte de la página. Los demás comentarios siguen siendo editables.
 	OK	Aceptar
 	Join our Discord	Únete a nuestro Discord

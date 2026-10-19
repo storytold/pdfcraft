@@ -2223,6 +2223,9 @@
 	Keep editable	Mantieni modificabile
 	Lock into the page when saving	Blocca nella pagina al salvataggio
 	Otherwise, ask on the first save after a signature is placed	Altrimenti, chiedi al primo salvataggio dopo aver inserito una firma
+	Signature added. Others can move it until it's locked.	Firma aggiunta. Altri possono spostarla finché non viene bloccata.
+	Lock now	Blocca ora
+	Signature locked into the page.	Firma bloccata nella pagina.
 	H / Space (hold)	H / Spazio (tieni premuto)
 	Home / End	Home / Fine
 	Inserted text	Testo inserito

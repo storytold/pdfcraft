@@ -2307,6 +2307,9 @@ calendar date	December	prosince
 	Keep editable	Ponechat upravitelné
 	Lock into the page when saving	Při ukládání zamknout do stránky
 	Otherwise, ask on the first save after a signature is placed	Jinak se zeptat při prvním uložení po umístění podpisu
+	Signature added. Others can move it until it's locked.	Podpis byl přidán. Ostatní ho mohou přesouvat, dokud nebude zamčen.
+	Lock now	Zamknout nyní
+	Signature locked into the page.	Podpis byl zamčen do stránky.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Text, značky a podpisy se stanou součástí stránky. Ostatní komentáře zůstanou upravitelné.
 	Date format	Formát data
 	Fill & Sign dates	Datum pro Vyplnit a podepsat

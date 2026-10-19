@@ -478,6 +478,11 @@ impl PdfCraftApp {
                 }
             }
             Some(crate::canvas::ViewAction::CameraLevel) => self.camera_level(i),
+            Some(crate::canvas::ViewAction::LockSignatures) => {
+                if let Some(id) = self.views.get(i).map(|v| v.id) {
+                    self.lock_signatures_now(id);
+                }
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);
@@ -681,6 +686,10 @@ impl PdfCraftApp {
                 && let Some(id) = doc_id
             {
                 self.placed_signatures.insert(id);
+                // A new signature shows the Lock now notice again, even if the last was dismissed.
+                if let Some(view) = self.views.get_mut(i) {
+                    view.lock_offer_dismissed = false;
+                }
             }
             // Tab can wrap to the same field (including another widget of that field).
             // Its new editor was opened before this edit ran, so it still holds the old

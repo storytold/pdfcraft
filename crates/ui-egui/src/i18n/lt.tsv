@@ -598,6 +598,9 @@
 	Keep editable	Palikti redaguojamą
 	Lock into the page when saving	Įrašant įtvirtinti puslapyje
 	Otherwise, ask on the first save after a signature is placed	Kitaip klausti pirmą kartą įrašant po parašo padėjimo
+	Signature added. Others can move it until it's locked.	Parašas pridėtas. Kiti gali jį perkelti, kol jis neįtvirtintas.
+	Lock now	Įtvirtinti dabar
+	Signature locked into the page.	Parašas įtvirtintas puslapyje.
 	Flip Horizontal	Apversti horizontaliai
 	Flip Vertical	Apversti vertikaliai
 	Flip horizontal	Apversti horizontaliai

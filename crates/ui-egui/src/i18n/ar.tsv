@@ -2286,6 +2286,9 @@ calendar date	December	ديسمبر
 	Keep editable	إبقاؤه قابلًا للتحرير
 	Lock into the page when saving	التثبيت في الصفحة عند الحفظ
 	Otherwise, ask on the first save after a signature is placed	وإلا فاسأل عند أول حفظ بعد وضع توقيع
+	Signature added. Others can move it until it's locked.	تمت إضافة التوقيع. يمكن للآخرين نقله إلى أن يتم تثبيته.
+	Lock now	التثبيت الآن
+	Signature locked into the page.	تم تثبيت التوقيع في الصفحة.
 	Text, marks and signatures become part of the page. Other comments stay editable.	النص والعلامات والتوقيعات تصبح جزءًا من الصفحة. التعليقات الأخرى تبقى قابلة للتحرير.
 	Date format	تنسيق التاريخ
 	Fill & Sign dates	تواريخ التعبئة والتوقيع

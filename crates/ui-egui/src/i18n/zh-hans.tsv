@@ -152,6 +152,9 @@
 	Keep editable	保持可编辑
 	Lock into the page when saving	保存时锁定到页面
 	Otherwise, ask on the first save after a signature is placed	否则，在放置签名后首次保存时询问
+	Signature added. Others can move it until it's locked.	已添加签名。锁定之前，其他人可以移动它。
+	Lock now	立即锁定
+	Signature locked into the page.	签名已锁定到页面。
 	Text, marks and signatures become part of the page. Other comments stay editable.	文字、标记和签名会成为页面内容。其他注释仍可编辑。
 	OK	确定
 	Cancel	取消

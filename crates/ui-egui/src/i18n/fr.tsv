@@ -79,6 +79,9 @@
 	Keep editable	Garder modifiable
 	Lock into the page when saving	Intégrer à la page à l’enregistrement
 	Otherwise, ask on the first save after a signature is placed	Sinon, demander au premier enregistrement après avoir placé une signature
+	Signature added. Others can move it until it's locked.	Signature ajoutée. D’autres peuvent la déplacer tant qu’elle n’est pas intégrée.
+	Lock now	Intégrer maintenant
+	Signature locked into the page.	Signature intégrée à la page.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Le texte, les marques et les signatures deviennent partie de la page. Les autres commentaires restent modifiables.
 	OK	OK
 	Join our Discord	Rejoindre notre Discord

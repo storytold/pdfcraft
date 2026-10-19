@@ -2257,6 +2257,9 @@ signature pad	Type	Wpisz
 	Keep editable	Zachowaj edytowalny
 	Lock into the page when saving	Utrwalaj na stronie przy zapisie
 	Otherwise, ask on the first save after a signature is placed	W przeciwnym razie pytaj przy pierwszym zapisie po umieszczeniu podpisu
+	Signature added. Others can move it until it's locked.	Dodano podpis. Inni mogą go przesunąć, dopóki nie zostanie utrwalony.
+	Lock now	Utrwal teraz
+	Signature locked into the page.	Podpis utrwalono na stronie.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Tekst, oznaczenia i podpisy stają się częścią strony. Pozostałe komentarze pozostają edytowalne.
 	Scroll tabs left	Przewiń karty w lewo
 	Scroll tabs right	Przewiń karty w prawo

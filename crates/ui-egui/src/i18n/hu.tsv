@@ -2263,6 +2263,9 @@ action wizard	Start	Indítás
 	Keep editable	Szerkeszthető marad
 	Lock into the page when saving	Mentéskor rögzítés az oldalba
 	Otherwise, ask on the first save after a signature is placed	Különben kérdezzen rá az aláírás elhelyezése utáni első mentéskor
+	Signature added. Others can move it until it's locked.	Aláírás hozzáadva. Mások áthelyezhetik, amíg nincs rögzítve.
+	Lock now	Rögzítés most
+	Signature locked into the page.	Az aláírás rögzítve az oldalba.
 	Text, marks and signatures become part of the page. Other comments stay editable.	A szöveg, a jelek és az aláírások az oldal részévé válnak. A többi megjegyzés szerkeszthető marad.
 	Date format	Dátumformátum
 	Fill & Sign dates	Kitöltés és aláírás dátumai

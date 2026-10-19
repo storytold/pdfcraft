@@ -2278,6 +2278,9 @@ signature pad	Type	入力
 	Keep editable	編集可能のままにする
 	Lock into the page when saving	保存時にページに固定
 	Otherwise, ask on the first save after a signature is placed	それ以外は、署名を配置した後の最初の保存時に確認する
+	Signature added. Others can move it until it's locked.	署名を追加しました。固定するまでは他の人が移動できます。
+	Lock now	今すぐ固定
+	Signature locked into the page.	署名をページに固定しました。
 	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。
 	Scroll tabs left	タブを左にスクロール
 	Scroll tabs right	タブを右にスクロール

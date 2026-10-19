@@ -70,6 +70,9 @@
 	Keep editable	Düzenlenebilir bırak
 	Lock into the page when saving	Kaydederken sayfaya sabitle
 	Otherwise, ask on the first save after a signature is placed	Aksi halde, imza yerleştirildikten sonraki ilk kayıtta sor
+	Signature added. Others can move it until it's locked.	İmza eklendi. Sabitlenene kadar başkaları onu taşıyabilir.
+	Lock now	Şimdi sabitle
+	Signature locked into the page.	İmza sayfaya sabitlendi.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Metin, işaretler ve imzalar sayfanın bir parçası olur. Diğer yorumlar düzenlenebilir kalır.
 	OK	Tamam
 	Join our Discord	Discord'umuza katılın

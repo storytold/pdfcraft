@@ -2286,6 +2286,9 @@ calendar date	December	грудня
 	Keep editable	Залишити редагованим
 	Lock into the page when saving	Закріплювати на сторінці під час збереження
 	Otherwise, ask on the first save after a signature is placed	Інакше питати під час першого збереження після розміщення підпису
+	Signature added. Others can move it until it's locked.	Підпис додано. Інші можуть переміщувати його, доки його не закріплено.
+	Lock now	Закріпити зараз
+	Signature locked into the page.	Підпис закріплено на сторінці.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Текст, позначки й підписи стають частиною сторінки. Інші коментарі залишаються редагованими.
 	Date format	Формат дати
 	Fill & Sign dates	Дати заповнення й підпису

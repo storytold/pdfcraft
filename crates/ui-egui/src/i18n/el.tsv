@@ -294,6 +294,9 @@
 	Keep editable	Να παραμείνει επεξεργάσιμη
 	Lock into the page when saving	Κλείδωμα στη σελίδα κατά την αποθήκευση
 	Otherwise, ask on the first save after a signature is placed	Διαφορετικά, ερώτηση στην πρώτη αποθήκευση μετά την τοποθέτηση υπογραφής
+	Signature added. Others can move it until it's locked.	Η υπογραφή προστέθηκε. Άλλοι μπορούν να τη μετακινήσουν μέχρι να κλειδωθεί.
+	Lock now	Κλείδωμα τώρα
+	Signature locked into the page.	Η υπογραφή κλειδώθηκε στη σελίδα.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Το κείμενο, τα σημάδια και οι υπογραφές γίνονται μέρος της σελίδας. Τα υπόλοιπα σχόλια παραμένουν επεξεργάσιμα.
 	Current page — type a page number or label (such as iv) and press Enter	Τρέχουσα σελίδα — πληκτρολογήστε αριθμό ή ετικέτα σελίδας (π.χ. iv) και πατήστε Enter
 	Zoom — type a percentage and press Enter	Ζουμ — πληκτρολογήστε ένα ποσοστό και πατήστε Enter

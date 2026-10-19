@@ -146,6 +146,9 @@
 	Keep editable	Да остане редактируем
 	Lock into the page when saving	Заключване в страницата при запис
 	Otherwise, ask on the first save after a signature is placed	Иначе питай при първия запис след поставяне на подпис
+	Signature added. Others can move it until it's locked.	Подписът е добавен. Други могат да го преместват, докато не бъде заключен.
+	Lock now	Заключи сега
+	Signature locked into the page.	Подписът е заключен в страницата.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Текстът, маркировките и подписите стават част от страницата. Другите коментари остават редактируеми.
 	OK	OK
 	Cancel	Отказ

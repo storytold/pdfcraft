@@ -79,6 +79,9 @@
 	Keep editable	Bearbeitbar lassen
 	Lock into the page when saving	Beim Speichern fest in die Seite übernehmen
 	Otherwise, ask on the first save after a signature is placed	Andernfalls beim ersten Speichern nach dem Platzieren einer Unterschrift fragen
+	Signature added. Others can move it until it's locked.	Unterschrift hinzugefügt. Andere können sie verschieben, bis sie fest übernommen ist.
+	Lock now	Jetzt übernehmen
+	Signature locked into the page.	Unterschrift fest in die Seite übernommen.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Text, Markierungen und Unterschriften werden Teil der Seite. Andere Kommentare bleiben bearbeitbar.
 	OK	OK
 	Join our Discord	Unserem Discord beitreten

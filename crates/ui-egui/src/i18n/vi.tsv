@@ -2894,3 +2894,6 @@ key	Space	Space
 	Lock into the page when saving	Khóa vào trang khi lưu
 	Lock your signature into the page?	Khóa chữ ký của bạn vào trang?
 	Otherwise, ask on the first save after a signature is placed	Nếu không, hỏi ở lần lưu đầu tiên sau khi đặt chữ ký
+	Signature added. Others can move it until it's locked.	Đã thêm chữ ký. Người khác có thể di chuyển nó cho đến khi được khóa.
+	Lock now	Khóa ngay
+	Signature locked into the page.	Đã khóa chữ ký vào trang.

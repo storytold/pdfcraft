@@ -2552,6 +2552,9 @@ animation effects	Off	關
 	Keep editable	保持可編輯
 	Lock into the page when saving	儲存時鎖定到頁面
 	Otherwise, ask on the first save after a signature is placed	否則，在放置簽名後第一次儲存時詢問
+	Signature added. Others can move it until it's locked.	已加入簽名。鎖定之前，其他人可以移動它。
+	Lock now	立即鎖定
+	Signature locked into the page.	簽名已鎖定到頁面。
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天

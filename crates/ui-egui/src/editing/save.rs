@@ -183,18 +183,8 @@ impl PdfCraftApp {
     /// again, and the answer isn't remembered.
     pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
-        if lock && !self.flatten_fill_sign_on_save {
-            let before = self.session.get(p.id).map(|d| d.edit_generation());
-            if let Err(e) = self.session.apply(p.id, pdfcraft_engine::Edit::FlattenFillSign) {
-                self.notify_error(e);
-                return;
-            }
-            if before != self.session.get(p.id).map(|d| d.edit_generation())
-                && let Some(doc) = self.session.get(p.id)
-                && let Some(view) = self.views.iter_mut().find(|v| v.id == p.id)
-            {
-                view.document_changed(&doc.info);
-            }
+        if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(p.id) {
+            return;
         }
         self.placed_signatures.remove(&p.id);
         if remember {
@@ -207,6 +197,37 @@ impl PdfCraftApp {
         if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
             self.save_then(index, p.target, p.after);
         }
+    }
+
+    /// Lock now, on the notice shown after a signature is placed (#2149): lock document `id`'s
+    /// Fill & Sign marks into its pages, as the save-time question's Lock does but without
+    /// saving. Undoable. The next save doesn't ask, as no Fill & Sign mark is left to lock; the
+    /// placed-signature mark itself stays, so undoing the lock brings back both the notice and the
+    /// save-time question. Never on a digitally signed document.
+    pub(crate) fn lock_signatures_now(&mut self, id: pdfcraft_engine::DocId) {
+        if self.session.get(id).is_none_or(|d| d.is_signed()) {
+            return;
+        }
+        if self.flatten_fill_sign_in(id) {
+            self.notify_tr("Signature locked into the page.");
+        }
+    }
+
+    /// Lock document `id`'s Fill & Sign marks into its pages (an undoable edit). Returns false,
+    /// having told the user why, when that fails.
+    fn flatten_fill_sign_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let before = self.session.get(id).map(|d| d.edit_generation());
+        if let Err(e) = self.session.apply(id, pdfcraft_engine::Edit::FlattenFillSign) {
+            self.notify_error(e);
+            return false;
+        }
+        if before != self.session.get(id).map(|d| d.edit_generation())
+            && let Some(doc) = self.session.get(id)
+            && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
+        {
+            view.document_changed(&doc.info);
+        }
+        true
     }
 
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.

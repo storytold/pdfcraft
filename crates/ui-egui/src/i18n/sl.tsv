@@ -2211,6 +2211,9 @@ signature pad	Type	Vtipkaj
 	Keep editable	Ohrani urejljivo
 	Lock into the page when saving	Ob shranjevanju zakleni v stran
 	Otherwise, ask on the first save after a signature is placed	Sicer vprašaj ob prvem shranjevanju po postavitvi podpisa
+	Signature added. Others can move it until it's locked.	Podpis je dodan. Drugi ga lahko premaknejo, dokler ni zaklenjen.
+	Lock now	Zakleni zdaj
+	Signature locked into the page.	Podpis je zaklenjen v stran.
 	Font size 0 uses automatic sizing.	Velikost pisave 0 pomeni samodejno velikost.
 	Import list…	Uvozi seznam…
 	Larger pages	Večje strani

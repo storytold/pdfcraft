@@ -1754,7 +1754,8 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
 
 /// #2149: the first save after Fill & Sign places a signature asks whether to lock it into the
 /// page. Lock and save flattens it; Keep editable keeps it a comment; Don't ask again becomes
-/// the preference; the Sign menu has the switch too.
+/// the preference; the Fill & Sign panel has the switch too, once, and the Sign menu no longer
+/// does (review on #2348).
 #[test]
 fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     let out = std::env::temp_dir().join(format!("pdfcraft-lock-signature-{}.pdf", std::process::id()));
@@ -1790,16 +1791,108 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     assert_eq!(signed(&h), 0, "locked into the page");
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert!(h.state().flatten_fill_sign_on_save, "remembered as the preference");
-    // The Sign menu shows the same switch.
+    // The switch is in the panel's Sign yourself section, once; the Sign menu over the page,
+    // where it was easy to miss, no longer has it.
     h.state_mut().flatten_fill_sign_on_save = false;
     h.get_by_label("Fill & Sign").click();
     h.run_steps(2);
     h.get_by_label("Fill & Sign").click();
     h.run_steps(2);
+    h.get_by_label("Use signature");
+    assert!(h.query_by_label("Lock into the page when saving").is_none(), "not in the Sign menu");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label("Lock into the page when saving").is_none(), "the panel is closed");
+    h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
+    h.state_mut().left_open = true;
+    h.run_steps(3);
+    h.get_by_label("Use signature");
+    assert_eq!(h.query_all_by_label("Lock into the page when saving").count(), 1, "once, in the panel");
     h.get_by_label("Lock into the page when saving").click();
     h.run_steps(2);
     assert!(h.state().flatten_fill_sign_on_save);
     let _ = std::fs::remove_file(&out);
+}
+
+/// #2348 review (benandez): right after a signature is placed, a notice offers to lock it into
+/// the page now. Lock now flattens it (undoable) without saving, so the save that follows doesn't
+/// ask; undoing the lock brings back both the notice and the question. Dismiss hides the notice
+/// until the next signature. A digitally signed document, or one whose saves lock anyway, gets no
+/// notice.
+#[test]
+fn placing_a_signature_offers_to_lock_it_now() {
+    const NOTICE: &str = "Signature added. Others can move it until it's locked.";
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-now-{}.pdf", std::process::id()));
+    let place = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(2);
+        click(h, 40.0, y);
+        h.run_steps(2);
+    };
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.query_by_label(NOTICE).is_none(), "nothing placed yet");
+    place(&mut h, 300.0);
+    h.get_by_label(NOTICE);
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 0, "locked into the page");
+    assert!(h.query_by_label(NOTICE).is_none(), "nothing left to lock");
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "locked, not saved");
+    // Undo brings the movable signature back, with the notice and the save-time question.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    h.get_by_label(NOTICE);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks again after undoing the lock");
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    // Locked again, the save doesn't ask.
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "already locked: no question");
+    // Dismiss hides it until the next signature.
+    place(&mut h, 200.0);
+    h.get_by_label(NOTICE);
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label(NOTICE).is_none(), "dismissed");
+    place(&mut h, 100.0);
+    h.get_by_label(NOTICE);
+    // Once saved, a signature kept as a comment is no longer just placed: no notice.
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(marks(&h) > 0, "still a comment");
+    assert!(h.query_by_label(NOTICE).is_none(), "saved: nothing just placed");
+    place(&mut h, 50.0);
+    h.get_by_label(NOTICE);
+    // Saves that lock anyway need no offer.
+    h.state_mut().flatten_fill_sign_on_save = true;
+    h.run_steps(2);
+    assert!(h.query_by_label(NOTICE).is_none(), "saving locks it anyway");
+    let _ = std::fs::remove_file(&out);
+
+    // Digitally signed: no notice, as locking would change the document after signing.
+    let mut doc = {
+        let mut h = harness();
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        app.session.sign(id, &digital_id, opts).expect("signs")
+    };
+    let mut h = harness_bytes(&std::mem::take(&mut doc));
+    place(&mut h, 300.0);
+    assert_eq!(marks(&h), 1);
+    assert!(h.query_by_label(NOTICE).is_none(), "a signed document isn't offered the lock");
 }
 
 /// #2348 review: when locking the signature fails (here the document's security allows comments

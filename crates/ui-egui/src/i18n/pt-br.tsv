@@ -2216,6 +2216,9 @@ action wizard	Start	Iniciar
 	Keep editable	Manter editável
 	Lock into the page when saving	Fixar na página ao salvar
 	Otherwise, ask on the first save after a signature is placed	Caso contrário, perguntar ao salvar pela primeira vez após colocar uma assinatura
+	Signature added. Others can move it until it's locked.	Assinatura adicionada. Outras pessoas podem movê-la até que seja fixada.
+	Lock now	Fixar agora
+	Signature locked into the page.	Assinatura fixada na página.
 	H / Space (hold)	H / Espaço (manter pressionado)
 	Home / End	Home / End
 	Inserted text	Texto inserido
