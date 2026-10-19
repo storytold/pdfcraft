@@ -13,15 +13,22 @@ fn line(out: &mut String, text: &str) {
     out.push('\n');
 }
 
-/// Round a bounding-box coordinate to an integer. Non-finite input (which the emitter never
-/// passes, but PDF data is hostile) maps to `0` rather than saturating to `i64::MAX`.
-fn int(v: f64) -> i64 {
-    if v.is_finite() { v.round() as i64 } else { 0 }
+/// Round a bounding-box coordinate onto the enclosing integer: DSC requires
+/// `%%BoundingBox` to enclose the page's marks, so the lower-left corner floors and
+/// the upper-right corner ceils — nearest-integer rounding would cut up to half a
+/// point of artwork at an edge (an A4 page's 595.28 pt right edge becomes 595).
+/// Non-finite input (which the emitter never passes, but PDF data is hostile) maps
+/// to `0` rather than saturating to `i64::MAX`.
+fn int(v: f64, up: bool) -> i64 {
+    if !v.is_finite() {
+        return 0;
+    }
+    (if up { v.ceil() } else { v.floor() }) as i64
 }
 
 /// Render a `%%…BoundingBox: llx lly urx ury` comment body for `key`.
 fn bbox_line(key: &str, [llx, lly, urx, ury]: [f64; 4]) -> String {
-    format!("{key}: {} {} {} {}", int(llx), int(lly), int(urx), int(ury))
+    format!("{key}: {} {} {} {}", int(llx, false), int(lly, false), int(urx, true), int(ury, true))
 }
 
 /// The document preamble: `%!PS-Adobe-3.0` (EPS adds ` EPSF-3.0`), the integer-rounded
@@ -92,12 +99,14 @@ mod tests {
         assert_eq!(bytes.as_slice(), b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 200 300\n%%Creator: PdfCraft\n%%EndComments\n",);
     }
 
-    /// Bounding-box coordinates are rounded to integers (half away from zero); the `pages`
-    /// argument is ignored by the EPS header.
+    /// Bounding-box integers enclose the marks: the lower-left corner floors and the
+    /// upper-right corner ceils (nearest-integer rounding would cut up to half a point
+    /// of artwork at an edge — an A4 page's 595.28 pt right edge must not become 595);
+    /// the `pages` argument is ignored by the EPS header.
     #[test]
     fn bbox_rounds_to_integers() {
         let bytes = document_header(PsFormat::Eps, 1, [-0.4, 9.6, 199.5, 300.4]);
-        assert_eq!(bytes.as_slice(), b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 10 200 300\n%%Creator: PdfCraft\n%%EndComments\n",);
+        assert_eq!(bytes.as_slice(), b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: -1 9 200 301\n%%Creator: PdfCraft\n%%EndComments\n",);
         let bytes = page_header(7, [-0.5, 0.2, 99.5, 100.6]);
         assert_eq!(bytes.as_slice(), b"%%Page: 7 7\n%%PageBoundingBox: -1 0 100 101\n");
     }
