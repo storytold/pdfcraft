@@ -1048,12 +1048,24 @@ impl PdfCraftApp {
             let src = doc.export_source();
             let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
             let pages: Vec<usize> = (0..src.pages).collect();
+            let name = format!("{stem}.ps");
             match pdfcraft_engine::export::postscript(&src, &pages, PsFormat::Ps) {
-                Ok(out) => {
-                    if let Err(e) = crate::editing::download(&format!("{stem}.ps"), &out.bytes) {
-                        self.notify_error(e);
+                Ok(out) => match crate::editing::download(&name, &out.bytes) {
+                    Ok(()) => {
+                        // The desktop path reports the degradations after a successful
+                        // write ("Exported to … (N warnings: …)"); a download that
+                        // failed shows its own error instead, never these.
+                        let mut msg = crate::i18n::fmt(tl!("Downloaded {name}"), &[("name", &name)]);
+                        if let Some(first) = out.warnings.first() {
+                            msg.push_str(&crate::i18n::fmt(
+                                tl!(" ({s} warnings: {first})"),
+                                &[("s", &out.warnings.len().to_string()), ("first", &first.text)],
+                            ));
+                        }
+                        self.notify(msg);
                     }
-                }
+                    Err(e) => self.notify_error(e),
+                },
                 Err(e) => self.notify_fmt("Export stopped: {e}", &[("e", &ps_error_text(e))]),
             }
         }
