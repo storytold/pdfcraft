@@ -21,6 +21,13 @@ use unicode_bidi::{BidiInfo, Level};
 /// short; the cap stops a pasted document from building a giant bidi map.
 const MAX_CHARS: usize = 100_000;
 
+/// Screen strings kept so undo can turn egui's on-screen snapshot back into the typed query.
+///
+/// egui groups keystrokes into one undo point until the text sits still for a second, or for
+/// 30 seconds if it never does. A held key repeats much faster than a person types, so one undo
+/// point can cover far more than egui's 100 stored points. 4096 is that whole burst, twice over.
+const SNAPSHOT_CAP: usize = 4096;
+
 /// Which single-line search field is on screen. The two share one buffer so they cannot drift.
 #[derive(Clone, Copy)]
 pub(crate) enum QueryField {
@@ -257,8 +264,7 @@ impl RtlEdit {
             return;
         }
         self.snapshots.push((self.screen.text.clone(), logical));
-        // egui keeps 100 undo points. Dropping an older screen string would make that undo a no-op.
-        if self.snapshots.len() > 100 {
+        if self.snapshots.len() > SNAPSHOT_CAP {
             self.snapshots.remove(0);
         }
     }
@@ -367,6 +373,35 @@ impl RtlEdit {
         CCursor { index: CharIndex(self.caret_for_boundary(boundary)), prefer_next_row: true }
     }
 
+    /// Remove stored characters `start..end` and leave the caret at `start`.
+    fn delete_logical_span(&mut self, start: usize, end: usize) -> CCursor {
+        let count = self.logical.borrow().chars().count();
+        let start = start.min(count);
+        let end = end.min(count).max(start);
+        if start == end {
+            return CCursor { index: CharIndex(self.caret_for_boundary(start)), prefer_next_row: true };
+        }
+        let mut removed = String::new();
+        {
+            let mut logical = self.logical.borrow_mut();
+            let mut kept = String::with_capacity(logical.len());
+            for (index, ch) in logical.chars().enumerate() {
+                if (start..end).contains(&index) {
+                    removed.push(ch);
+                } else {
+                    kept.push(ch);
+                }
+            }
+            *logical = kept;
+        }
+        if !removed.is_empty() {
+            self.deleted = Some(removed);
+        }
+        self.refresh();
+        let boundary = start.min(self.screen.order.len());
+        CCursor { index: CharIndex(self.caret_for_boundary(boundary)), prefer_next_row: true }
+    }
+
     fn logical_screen_slice(&self, range: Range<usize>) -> String {
         let Some(shown) = self.screen.order.get(range) else { return String::new() };
         let mut wanted = shown.to_vec();
@@ -460,6 +495,33 @@ impl TextBuffer for RtlEdit {
         }
         self.delete_shown(at..at + 1);
         CCursor { index: CharIndex(at.min(self.screen.order.len())), prefer_next_row: true }
+    }
+
+    fn delete_previous_word(&mut self, ccursor: CCursor) -> CCursor {
+        if self.pure_rtl() {
+            let boundary = self.insert_index(ccursor.index.0);
+            let logical = self.logical.borrow().clone();
+            let previous = egui::text_selection::text_cursor_state::ccursor_previous_word(&logical, CCursor::new(boundary));
+            return self.delete_logical_span(previous.index.0, boundary);
+        }
+        let screen = self.as_str().to_owned();
+        let previous = egui::text_selection::text_cursor_state::ccursor_previous_word(&screen, ccursor);
+        self.delete_char_range(previous.index..ccursor.index);
+        CCursor { index: previous.index, prefer_next_row: true }
+    }
+
+    fn delete_next_word(&mut self, ccursor: CCursor) -> CCursor {
+        if self.pure_rtl() {
+            let boundary = self.insert_index(ccursor.index.0);
+            let logical = self.logical.borrow().clone();
+            let next = egui::text_selection::text_cursor_state::ccursor_next_word(&logical, CCursor::new(boundary));
+            return self.delete_logical_span(boundary, next.index.0);
+        }
+        let screen = self.as_str().to_owned();
+        let next = egui::text_selection::text_cursor_state::ccursor_next_word(&screen, ccursor);
+        let at = ccursor.index;
+        self.delete_char_range(at..next.index);
+        CCursor { index: CharIndex(at.0.min(self.screen.order.len())), prefer_next_row: true }
     }
 
     fn type_id(&self) -> std::any::TypeId {
@@ -605,6 +667,55 @@ mod tests {
         assert_eq!(field.logical.borrow().as_str(), stored);
     }
 
+    /// egui records one undo point for a whole burst of keystrokes. The screen string from
+    /// before that burst has to still be in the map after more edits than the old cap of 100.
+    #[test]
+    fn a_long_burst_still_undoes_to_the_phrase_typed_before_it() {
+        let mut field = edit("");
+        let mut cursor = CCursor::default();
+        for ch in "مر".chars() {
+            field.insert_text_at(&mut cursor, &ch.to_string(), usize::MAX);
+        }
+        let screen = field.as_str().to_owned();
+        let stored = field.logical.borrow().clone();
+        for _ in 0..150 {
+            field.insert_text_at(&mut cursor, "ا", usize::MAX);
+        }
+        assert!(field.logical.borrow().chars().count() > stored.chars().count());
+        field.replace_with(&screen);
+        assert_eq!(field.logical.borrow().as_str(), stored, "undo lost the phrase from before the burst");
+    }
+
+    /// Alt+Backspace deletes the previous word in typing order. On a pure right-to-left line
+    /// that word is on the left of the caret, not the left of the screen string.
+    #[test]
+    fn word_backspace_removes_the_last_typed_word() {
+        let phrase = "مر حب";
+        let mut field = edit(phrase);
+        let end = phrase.chars().count();
+        let previous = egui::text_selection::text_cursor_state::ccursor_previous_word(phrase, CCursor::new(end));
+        let kept: String = phrase.chars().take(previous.index.0).collect();
+        let cursor = field.delete_previous_word(CCursor { index: CharIndex(0), prefer_next_row: false });
+        assert_eq!(field.logical.borrow().as_str(), kept, "word backspace must follow stored order");
+        assert_eq!(cursor.index.0, field.caret_for_boundary(previous.index.0));
+        // The right edge is the start of the stored text: nothing comes before it.
+        let right = field.screen.order.len();
+        let cursor = field.delete_previous_word(CCursor { index: CharIndex(right), prefer_next_row: false });
+        assert_eq!(field.logical.borrow().as_str(), kept);
+        assert_eq!(cursor.index.0, right.min(field.screen.order.len()));
+    }
+
+    #[test]
+    fn word_delete_at_the_right_edge_removes_the_first_stored_word() {
+        let phrase = "مر حب";
+        let mut field = edit(phrase);
+        let next = egui::text_selection::text_cursor_state::ccursor_next_word(phrase, CCursor::new(0));
+        let kept: String = phrase.chars().skip(next.index.0).collect();
+        let right = field.screen.order.len();
+        field.delete_next_word(CCursor { index: CharIndex(right), prefer_next_row: false });
+        assert_eq!(field.logical.borrow().as_str(), kept, "delete at the right edge removes the first stored word");
+    }
+
     #[test]
     fn a_trailing_space_and_a_vowel_stay_in_the_field() {
         let (text, _) = type_each("مر ");
@@ -691,6 +802,13 @@ mod tests {
         let Some((chars, xs, carets, vertices)) = painted(phrase) else { return };
         assert!(vertices > 0, "the line was tessellated");
         assert_eq!(chars, screen_of(phrase));
+        // Reading order, locked by code point: the last typed word starts at the left (hamza),
+        // and the first typed word ends at the right (meem). A swapped line fails this.
+        let painted_chars: Vec<char> = chars.chars().collect();
+        assert_eq!(painted_chars.first().copied(), Some('\u{0621}'), "left edge {chars:?}");
+        assert_eq!(painted_chars.last().copied(), Some('\u{0645}'), "right edge {chars:?}");
+        let space = painted_chars.iter().position(|ch| *ch == ' ');
+        assert!(space.is_some_and(|i| i > 0 && i + 1 < painted_chars.len()), "the space sits between the words: {chars:?}");
         // Glyphs sit left to right.
         for pair in xs.windows(2) {
             assert!(pair[0] <= pair[1] + 0.1, "{xs:?}");
@@ -717,7 +835,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::theme::font_definitions());
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            for text in ["مر ", "بَاب", "مر\u{200F}", "ب\u{200D}اب", "ب\u{200C}اب"] {
+            for text in ["مر ", "بَاب", "مر\u{200F}", "ب\u{200D}اب", "ب\u{200C}اب", "בּאב"] {
                 let galley = layout_galley(ui, text, f32::INFINITY);
                 let glyphs = galley.rows.first().map(|row| row.glyphs.len()).unwrap_or(0);
                 let dump: Vec<String> = galley

@@ -107,6 +107,58 @@ fn find_bar_undo_keeps_typing_order() {
 }
 
 #[test]
+fn find_bar_word_backspace_removes_the_last_typed_word() {
+    let mut h = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    type_chars(&mut h, "مر حب");
+    assert_eq!(query(&h), "مر حب");
+    // Alt+Backspace is the word delete on every platform egui ships (alt or ctrl).
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Backspace);
+    h.run_steps(2);
+    assert_eq!(query(&h), "مر ", "word backspace removed the last typed word, got {:?}", query(&h));
+}
+
+/// The find bar's pixels, not only the glyph list: both words are painted, and the ink is wider
+/// than one letter so a frozen caret stack cannot pass.
+#[test]
+fn find_bar_paints_both_words_across_the_line() {
+    let mut h = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    type_chars(&mut h, "مؤشرات الأداء");
+    let bar = h.ctx.memory(|m| m.area_rect(egui::Id::new("find-bar"))).expect("the find bar is on screen");
+    let image = h.render().expect("the find bar renders");
+    let ppp = h.ctx.pixels_per_point();
+    let x0 = (bar.left() * ppp).floor().max(0.0) as u32;
+    let y0 = (bar.top() * ppp).floor().max(0.0) as u32;
+    let x1 = ((bar.right() * ppp).ceil() as u32).min(image.width());
+    let y1 = ((bar.bottom() * ppp).ceil() as u32).min(image.height());
+    let mut columns = Vec::new();
+    for x in x0..x1 {
+        let mut ink = 0u32;
+        for y in y0..y1 {
+            let [r, g, b, a] = image.get_pixel(x, y).0;
+            if a > 0 && r < 160 && g < 160 && b < 160 {
+                ink = ink.saturating_add(1);
+            }
+        }
+        if ink > 2 {
+            columns.push(x);
+        }
+    }
+    let (Some(&first), Some(&last)) = (columns.first(), columns.last()) else {
+        panic!("the find bar painted no text");
+    };
+    let width = last.saturating_sub(first);
+    assert!(width > 40, "the painted line is only {width}px wide, so the words collapsed");
+    let mid = first + width / 2;
+    let left = columns.iter().filter(|x| **x < mid).count();
+    let right = columns.iter().filter(|x| **x > mid).count();
+    assert!(left > 4 && right > 4, "ink is not on both sides of the line: left {left} right {right} width {width}");
+}
+
+#[test]
 fn find_bar_still_types_latin_at_the_end() {
     let mut h = harness();
     h.state_mut().views[0].open_find();
