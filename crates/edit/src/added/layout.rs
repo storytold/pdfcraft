@@ -102,13 +102,14 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     for word in words {
         // The word's own width: the spaces after it may hang past the row's end.
         let ink: f64 = word.iter().filter(|(s, _)| !blank(s)).map(|(_, w)| w).sum();
-        if !line.is_empty() && used + ink > width {
+        // A row holding only the spaces that open the paragraph has nothing to end yet.
+        if !blank(&line) && used + ink > width {
             end_row(&mut lines, &mut line);
             used = 0.0;
         }
-        let too_wide = line.is_empty() && ink > width;
+        let too_wide = blank(&line) && ink > width;
         for (text, advance) in word {
-            if too_wide && !line.is_empty() && !blank(&text) && used + advance > width {
+            if too_wide && !blank(&line) && !blank(&text) && used + advance > width {
                 end_row(&mut lines, &mut line);
                 used = 0.0;
             }
