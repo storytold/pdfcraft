@@ -368,6 +368,18 @@ mod tests {
         ])
     }
 
+    /// A one-page PDF that sets an `/ca 0.5` ExtGState before each of two draws: the
+    /// emitter sees partial paint alpha twice but must record the degradation once.
+    fn alpha_pdf() -> Vec<u8> {
+        assemble(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> >> >>".to_vec(),
+            stream_obj("", b"q /GS1 gs 1 0 0 rg 20 40 160 60 re f Q\nq /GS1 gs 0 1 0 rg 20 120 160 60 re f Q"),
+            b"<< /Type /ExtGState /ca 0.5 >>".to_vec(),
+        ])
+    }
+
     /// A one-page PDF drawing a form XObject whose resources include itself: left
     /// unbounded, `/Fm0 Do` recurses forever. The interpreter's nesting depth must
     /// bound it, so `export()` returns.
@@ -545,7 +557,7 @@ mod tests {
         let err = export(std::sync::Arc::clone(&bytes), &[], PsFormat::Eps).expect_err("EPS needs a page");
         assert_eq!(err, PsExportError::EpsNeedsExactlyOnePage { requested: 0 });
 
-        let out = export(bytes, None, &[1], PsFormat::Eps).expect("one page exports as EPS");
+        let out = export(bytes, &[1], PsFormat::Eps).expect("one page exports as EPS");
         let s = text(&out);
         assert!(s.starts_with("%!PS-Adobe-3.0 EPSF-3.0\n"), "EPSF header: {s}");
         assert!(!s.contains("showpage"), "EPS never ejects the importing application's page: {s}");
@@ -606,6 +618,7 @@ mod tests {
         assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
     }
 
+<<<<<<< HEAD
     /// A Type 3 glyph under render mode 3 (`3 Tr`) draws nothing: the interpreter hands
     /// the device `GlyphDrawMode::Invisible` for the glyph procedure too (only mode 3
     /// affects Type 3 text), and the device must skip it as it skips invisible outline
@@ -631,6 +644,21 @@ mod tests {
         // glyph procedure must not leave behind.
         assert!(!s.contains("fill\n") && !s.contains("eofill\n") && !s.contains("stroke\n"), "render mode 3 suppresses the glyph procedure: {s}");
         assert!(s.ends_with("%%EOF\n"), "the program is still complete: {s}");
+=======
+    /// A `/ca 0.5` ExtGState degrades to one paint-alpha note per page however many
+    /// draws carry it (the module's transparency policy: first occurrence only).
+    #[test]
+    fn paint_alpha_produces_one_note() {
+        let out = export(std::sync::Arc::new(alpha_pdf()), &[0], PsFormat::Ps).expect("partially transparent content exports");
+        let s = text(&out);
+        assert_eq!(s.matches("fill\n").count(), 2, "both draws still emit: {s}");
+        assert_eq!(
+            out.warnings,
+            vec![FidelityNote { page: Some(1), text: "transparency ignored (paint alpha)".into() }],
+            "one note per page, first occurrence only"
+        );
+        assert_eq!(s.matches("%%PdfCraftNote: transparency ignored (paint alpha)\n").count(), 1, "note embedded once: {s}");
+>>>>>>> 1a4ab50e (M10: note ignored transparency once per page (paint alpha, shading opacity))
     }
 
     /// Stroked text's line width is a user-space operand (it scales with the CTM, never the
