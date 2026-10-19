@@ -12,11 +12,19 @@
 //! %%BeginData: <bytes> Binary Bytes          %% binary passthrough sections only
 //! << /ImageType 1 /Width w /Height h /BitsPerComponent 8 /Decode [0 1 0 1 0 1]
 //!    /ImageMatrix [1 0 0 1 0 0]
-//!    /DataSource currentfile /DCTDecode filter >> image
+//!    /DataSource currentfile << /EODCount n /EODString () >> /SubFileDecode filter
+//!               dup /PdfCraftImgSrc exch def /DCTDecode filter >> image
 //! <bytes …>                                  %% the payload, after the invocation line
+//! PdfCraftImgSrc flushfile                   %% drain what `image` left unread
 //! %%EndData
 //! grestore
 //! ```
+//!
+//! The byte-counted `SubFileDecode` (empty `/EODString` makes `/EODCount` a byte count)
+//! bounds the decode filter's reads to exactly the payload, and the `flushfile` drain
+//! leaves `currentfile` exactly past it — so neither read-ahead past the payload (which
+//! would swallow the program text after it) nor an early stop (which would leave payload
+//! bytes for the interpreter to execute) can happen.
 //!
 //! `/ImageMatrix` is the identity because the interpreter's `transform` already maps
 //! *image pixel space* ([0,w]×[0,h], row 0 first) onto the page: it pre-concats
@@ -64,6 +72,11 @@ pub(crate) fn image_ops(image: &Image<'_, '_>, emit: &mut Emitter) {
     }
 }
 
+/// The drain issued after a passthrough payload: it reads the named SubFileDecode
+/// source to its end, so `currentfile` is left exactly past the payload whatever `image`
+/// stopped reading at.
+const DRAIN: &str = "PdfCraftImgSrc flushfile";
+
 /// A raster image: passthrough when PostScript can consume the PDF's own encoded bytes,
 /// decode + re-encode otherwise.
 fn raster_ops(raster: &RasterImage<'_>, emit: &mut Emitter) {
@@ -76,19 +89,21 @@ fn raster_ops(raster: &RasterImage<'_>, emit: &mut Emitter) {
     // Passthrough: single filter, colour space known by name, decode array identity (or
     // absent), and for Flate also 8 bits per component without a predictor (PostScript's
     // FlateDecode knows nothing of PDF's PNG/TIFF predictors). An empty payload cannot
-    // pass through (the filter would error mid-page), so it falls to the decode path.
+    // pass through (the filter would error mid-page), so it falls to the decode path;
+    // neither can one beyond the PostScript integer that `EODCount` below must carry.
+    let passthrough_sized = !raw.is_empty() && raw.len() <= i32::MAX as usize;
     let plan = match filters.as_slice() {
-        [Filter::DctDecode] if !raw.is_empty() => passthrough_components(dict).filter(|&n| decode_is_identity(dict, n)).map(|n| Plan {
+        [Filter::DctDecode] if passthrough_sized => passthrough_components(dict).filter(|&n| decode_is_identity(dict, n)).map(|n| Plan {
             width: raster.width(),
             height: raster.height(),
             components: n,
             source: "/DCTDecode filter".into(),
             bits: 8,
         }),
-        [Filter::FlateDecode] if !raw.is_empty() => passthrough_components(dict)
+        [Filter::FlateDecode] if passthrough_sized => passthrough_components(dict)
             .filter(|&n| bpc_is_8(dict) && no_predictor(dict) && decode_is_identity(dict, n))
             .map(|n| Plan { width: raster.width(), height: raster.height(), components: n, source: "/FlateDecode filter".into(), bits: 8 }),
-        [Filter::CcittFaxDecode] if !raw.is_empty() => decode_is_identity(dict, 1).then(|| ccitt_source(dict)).flatten().map(|source| Plan {
+        [Filter::CcittFaxDecode] if passthrough_sized => decode_is_identity(dict, 1).then(|| ccitt_source(dict)).flatten().map(|source| Plan {
             width: raster.width(),
             height: raster.height(),
             components: 1,
@@ -193,16 +208,26 @@ impl Plan {
             _ => ("/DeviceCMYK setcolorspace", "[0 1 0 1 0 1 0 1]"),
         };
         emit.op(setup);
-        let line = image_invocation(self.width, self.height, self.bits, decode, &self.source);
+        // The decode filter must never read past the payload: DCT and CCITT decide
+        // their own block boundaries (a truncated or corrupt payload would otherwise
+        // swallow the program text that follows), and `image` may stop well before
+        // the payload's end. A byte-counted SubFileDecode (empty `/EODString`, so
+        // `/EODCount` counts bytes — PLRM) bounds reads to exactly `payload.len()`,
+        // and naming the stream lets the drain below consume whatever `image` left
+        // unread, leaving `currentfile` exactly past the payload either way.
+        let source = format!("<< /EODCount {} /EODString () >> /SubFileDecode filter dup /PdfCraftImgSrc exch def {}", payload.len(), self.source);
+        let line = image_invocation(self.width, self.height, self.bits, decode, &source);
         // The payload is binary: bracket it as a DSC data section so consumers can skip
-        // the bytes, and count the invocation line plus its newline plus the payload, in
-        // the DSC 3.0 form `<numberof> <type> <bytesorlines>` ("Binary Bytes" — the
-        // examples in Adobe 5001.DSC_Spec.pdf, e.g. `%%BeginData: 135174 Hex Bytes`).
-        let count = line.len() + 1 + payload.len();
+        // the bytes, counting the whole region between this comment and `%%EndData` —
+        // the invocation line, its newline, the payload, and the drain line — in the
+        // DSC 3.0 form `<numberof> <type> <bytesorlines>` ("Binary Bytes"; the examples
+        // in Adobe 5001.DSC_Spec.pdf, e.g. `%%BeginData: 135174 Hex Bytes`).
+        let count = line.len() + 1 + payload.len() + 1 + DRAIN.len();
         emit.op(&format!("%%BeginData: {count} Binary Bytes"));
         emit.op(&line);
         emit.out.extend_from_slice(payload);
         emit.out.push(b'\n');
+        emit.op(DRAIN);
         emit.op("%%EndData");
     }
 }
@@ -445,7 +470,9 @@ mod tests {
     }
 
     /// A DCT image's encoded JPEG bytes pass through verbatim, inside a `%%BeginData`
-    /// binary section whose byte count covers invocation line + newline + payload.
+    /// binary section whose byte count covers invocation line + newline + payload +
+    /// the drain line, with the source bounded by a byte-counted SubFileDecode and
+    /// drained after `image`.
     #[test]
     fn jpeg_passthrough_keeps_bytes() {
         let pdf = image_pdf(
@@ -457,19 +484,23 @@ mod tests {
         let (raw, notes) = driven(&pdf);
         let (out, notes) = output(&raw, &notes);
         let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
-             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /DCTDecode filter >> image";
-        assert!(out.contains(invocation), "DCT invocation: {out}");
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile \
+             << /EODCount 6 /EODString () >> /SubFileDecode filter dup /PdfCraftImgSrc exch def /DCTDecode filter >> image";
+        assert!(out.contains(invocation), "DCT invocation bounded by SubFileDecode: {out}");
         assert!(out.contains("[10 0 0 -10 10 30] concat\n"), "pixel-space transform: {out}");
         assert!(out.contains("/DeviceRGB setcolorspace\n"), "3-component space: {out}");
         assert!(contains_bytes(&raw, &DCT_PAYLOAD), "exact DCT bytes verbatim: {out:?}");
-        let count = invocation.len() + 1 + DCT_PAYLOAD.len();
-        assert!(out.contains(&format!("%%BeginData: {count} Binary Bytes\n")), "count covers line+payload: {out}");
-        assert!(out.contains("\n%%EndData\n"), "DSC data section closed: {out}");
+        let count = invocation.len() + 1 + DCT_PAYLOAD.len() + 1 + super::DRAIN.len();
+        assert!(out.contains(&format!("%%BeginData: {count} Binary Bytes\n")), "count covers line+payload+drain: {out}");
+        let drain = out.find("PdfCraftImgSrc flushfile\n").expect("the drain");
+        let payload_at = out.find(String::from_utf8_lossy(&DCT_PAYLOAD).as_ref()).unwrap_or(usize::MAX);
+        let end_data = out.find("%%EndData").expect("the data section closes");
+        assert!(payload_at < drain && drain < end_data, "payload, then drain, then %%EndData: {out}");
         assert_eq!(notes, "", "no degradations for a clean passthrough");
     }
 
     /// A Flate-encoded 8-bit image passes its zlib bytes through verbatim for Level 3
-    /// PostScript (`/FlateDecode` is a Level 3 filter).
+    /// PostScript (`/FlateDecode` is a Level 3 filter), under the same bounded source.
     #[test]
     fn flate_passthrough_level3() {
         let payload = pdfcraft_filters::encode_flate(&RGB_SAMPLES);
@@ -481,9 +512,13 @@ mod tests {
         );
         let (raw, notes) = driven(&pdf);
         let (out, notes) = output(&raw, &notes);
-        let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
-             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile /FlateDecode filter >> image";
-        assert!(out.contains(invocation), "Flate invocation: {out}");
+        let invocation = format!(
+            "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1 0 1 0 1] \
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile \
+             << /EODCount {} /EODString () >> /SubFileDecode filter dup /PdfCraftImgSrc exch def /FlateDecode filter >> image",
+            payload.len()
+        );
+        assert!(out.contains(&invocation), "Flate invocation bounded by SubFileDecode: {out}");
         assert!(contains_bytes(&raw, &payload), "zlib bytes verbatim: {out:?}");
         assert!(out.contains("/DeviceRGB setcolorspace\n"), "{out}");
         assert_eq!(notes, "", "no degradations for a clean passthrough");
@@ -580,8 +615,10 @@ mod tests {
         let (raw, notes) = driven(&pdf);
         let (out, notes) = output(&raw, &notes);
         let invocation = "<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 1 /Decode [0 1] \
-             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile << /K -1 /Columns 2 /Rows 2 >> /CCITTFaxDecode filter >> image";
-        assert!(out.contains(invocation), "CCITT invocation with params: {out}");
+             /ImageMatrix [1 0 0 1 0 0] /DataSource currentfile \
+             << /EODCount 6 /EODString () >> /SubFileDecode filter dup /PdfCraftImgSrc exch def \
+             << /K -1 /Columns 2 /Rows 2 >> /CCITTFaxDecode filter >> image";
+        assert!(out.contains(invocation), "CCITT invocation with params, bounded source: {out}");
         assert!(out.contains("0 setgray\n"), "1-component space: {out}");
         assert!(contains_bytes(&raw, &CCITT_PAYLOAD), "fax bytes verbatim: {out:?}");
         assert_eq!(notes, "", "no degradations");
