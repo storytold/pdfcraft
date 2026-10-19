@@ -119,14 +119,9 @@ fn find_bar_word_backspace_removes_the_last_typed_word() {
     assert_eq!(query(&h), "مر ", "word backspace removed the last typed word, got {:?}", query(&h));
 }
 
-/// The find bar's pixels, not only the glyph list: both words are painted, and the ink is wider
-/// than one letter so a frozen caret stack cannot pass.
-#[test]
-fn find_bar_paints_both_words_across_the_line() {
-    let mut h = harness();
-    h.state_mut().views[0].open_find();
-    h.run_steps(2);
-    type_chars(&mut h, "مؤشرات الأداء");
+/// Dark pixels in each column of the find bar. The search icon and the buttons are in this
+/// picture too, so a before-and-after difference is what belongs to the query.
+fn find_bar_ink(h: &mut Harness<'static, PdfCraftApp>) -> Vec<u32> {
     let bar = h.ctx.memory(|m| m.area_rect(egui::Id::new("find-bar"))).expect("the find bar is on screen");
     let image = h.render().expect("the find bar renders");
     let ppp = h.ctx.pixels_per_point();
@@ -134,7 +129,7 @@ fn find_bar_paints_both_words_across_the_line() {
     let y0 = (bar.top() * ppp).floor().max(0.0) as u32;
     let x1 = ((bar.right() * ppp).ceil() as u32).min(image.width());
     let y1 = ((bar.bottom() * ppp).ceil() as u32).min(image.height());
-    let mut columns = Vec::new();
+    let mut columns = vec![0u32; image.width() as usize];
     for x in x0..x1 {
         let mut ink = 0u32;
         for y in y0..y1 {
@@ -143,19 +138,38 @@ fn find_bar_paints_both_words_across_the_line() {
                 ink = ink.saturating_add(1);
             }
         }
-        if ink > 2 {
-            columns.push(x);
+        if let Some(slot) = columns.get_mut(x as usize) {
+            *slot = ink;
         }
     }
-    let (Some(&first), Some(&last)) = (columns.first(), columns.last()) else {
-        panic!("the find bar painted no text");
+    columns
+}
+
+/// The query's pixels, not the search icon: columns that grew after typing. Both words have to
+/// be in that band. A frozen stack of glyphs is only a few columns wide.
+#[test]
+fn find_bar_paints_both_words_across_the_line() {
+    let mut h = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    let before = find_bar_ink(&mut h);
+    type_chars(&mut h, "مؤشرات الأداء");
+    let after = find_bar_ink(&mut h);
+    let mut gained = Vec::new();
+    for (x, (earlier, later)) in before.iter().zip(after.iter()).enumerate() {
+        if later.saturating_sub(*earlier) > 2 {
+            gained.push(x as u32);
+        }
+    }
+    let (Some(&first), Some(&last)) = (gained.first(), gained.last()) else {
+        panic!("typing did not add ink to the find bar");
     };
     let width = last.saturating_sub(first);
-    assert!(width > 40, "the painted line is only {width}px wide, so the words collapsed");
+    assert!(width > 40, "the query is only {width}px wide, so the words collapsed");
     let mid = first + width / 2;
-    let left = columns.iter().filter(|x| **x < mid).count();
-    let right = columns.iter().filter(|x| **x > mid).count();
-    assert!(left > 4 && right > 4, "ink is not on both sides of the line: left {left} right {right} width {width}");
+    let left = gained.iter().filter(|x| **x < mid).count();
+    let right = gained.iter().filter(|x| **x > mid).count();
+    assert!(left > 4 && right > 4, "the query's ink is not on both sides: left {left} right {right} width {width}");
 }
 
 #[test]
