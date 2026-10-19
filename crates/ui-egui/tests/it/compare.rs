@@ -310,3 +310,34 @@ fn export_to_postscript() {
         assert_eq!(std::fs::read(&out).unwrap(), expected.bytes, "{ext} matches the engine");
     }
 }
+
+/// A `.eps` export from the UI takes the page being viewed, so a multi-page document
+/// exports that page instead of failing with "EPS needs exactly one page": the bytes are
+/// the viewed page's, as the engine writes them, not page 1's.
+#[test]
+fn eps_export_takes_the_viewed_page_of_a_many_page_document() {
+    let mut s = Session::new();
+    let id = s.open("two.pdf", None, s.create_blank(200.0, 300.0, 2).unwrap(), None).unwrap();
+    // Turn page 2, so the two blank pages' exports differ byte for byte.
+    s.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    let doc = s.save_bytes(id).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-eps-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("two.pdf", None, doc.to_vec()).unwrap();
+    let (view, id) = app.active_ids().unwrap();
+    app.views[view].current = 1;
+
+    let out = dir.join("page2.eps");
+    app.save_override = Some(out.to_string_lossy().into_owned());
+    assert!(app.execute("export.ps"));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(text.starts_with("%!PS-Adobe-3.0 EPSF-3.0\n"), "EPS header: {text}");
+    let src = app.session.get(id).unwrap().export_source();
+    let expected = pdfcraft_engine::export::postscript(&src, &[1], pdfcraft_engine::export::PsFormat::Eps).unwrap();
+    assert_eq!(std::fs::read(&out).unwrap(), expected.bytes, "the viewed page, as the engine writes it");
+    let page1 = pdfcraft_engine::export::postscript(&src, &[0], pdfcraft_engine::export::PsFormat::Eps).unwrap();
+    assert_ne!(std::fs::read(&out).unwrap(), page1.bytes, "the exported EPS is the viewed page, not page 1");
+}

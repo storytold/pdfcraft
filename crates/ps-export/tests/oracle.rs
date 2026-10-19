@@ -494,7 +494,7 @@ fn mean_channel_delta(a: &[u8], b: &[u8]) -> f64 {
 /// Export `pdf` as PostScript, rasterize both sides and compare: the whole oracle loop.
 /// Returns the achieved mean delta, or `None` when gs is absent (already skipped).
 fn assert_matches_oracle(tag: &str, pdf: &[u8]) -> Option<f64> {
-    let out = export(Arc::new(pdf.to_vec()), &[0], PsFormat::Ps).expect("the fixture exports");
+    let out = export(Arc::new(pdf.to_vec()), None, &[0], PsFormat::Ps).expect("the fixture exports");
     let gs = gs_raster(&out.bytes, tag)?;
     let mine = pdfcraft_raster(pdf);
     assert_eq!((gs.0, gs.1), (mine.0, mine.1), "the two rasters of {tag} cover the same canvas");
@@ -572,7 +572,7 @@ fn shading_page_matches_ghostscript() {
 #[test]
 fn eps_output_raster_matches_ghostscript() {
     let pdf = geometry_pdf();
-    let out = export(Arc::new(pdf.clone()), &[0], PsFormat::Eps).expect("the fixture exports as EPS");
+    let out = export(Arc::new(pdf.clone()), None, &[0], PsFormat::Eps).expect("the fixture exports as EPS");
     let base = std::env::temp_dir().join(format!("pdfcraft-ps-oracle-{}-eps", std::process::id()));
     let eps_path = base.with_extension("eps");
     let png_path = base.with_extension("png");
@@ -609,7 +609,7 @@ fn eps_output_raster_matches_ghostscript() {
 /// completes, both draws emit and the degradation is recorded — never raster-compared.
 #[test]
 fn transparency_page_exports_with_note() {
-    let out = export(Arc::new(transparency_pdf()), &[0], PsFormat::Ps).expect("transparent content exports");
+    let out = export(Arc::new(transparency_pdf()), None, &[0], PsFormat::Ps).expect("transparent content exports");
     let s = String::from_utf8_lossy(&out.bytes).into_owned();
     assert_eq!(s.matches("fill\n").count(), 2, "both draws still emit: {s}");
     assert!(out.warnings.iter().any(|n| n.text.contains("transparency ignored (blend Multiply)")), "the degradation is recorded: {:?}", out.warnings);
@@ -623,7 +623,7 @@ fn transparency_page_exports_with_note() {
 /// sequence), the raster wherever gs is installed.
 #[test]
 fn degraded_shading_paints_ink() {
-    let out = export(Arc::new(degraded_shading_pdf()), &[0], PsFormat::Ps).expect("the fixture exports");
+    let out = export(Arc::new(degraded_shading_pdf()), None, &[0], PsFormat::Ps).expect("the fixture exports");
     let s = String::from_utf8_lossy(&out.bytes).into_owned();
     assert!(!s.contains("shfill"), "no shading dictionary painted: {s}");
     assert!(

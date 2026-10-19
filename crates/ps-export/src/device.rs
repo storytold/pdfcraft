@@ -521,7 +521,12 @@ impl<'a> Device<'a> for PsDevice<'a> {
         match glyph {
             // Type 3 glyphs re-interpret their PDF drawing instructions through
             // this device as ordinary path calls — faithful, no font machinery.
+            // Render mode 3 suppresses them too (the interpreter maps only that mode
+            // onto Type 3 text): the procedure would paint what invisible text hides.
             Glyph::Type3(g) => {
+                if matches!(draw_mode, GlyphDrawMode::Invisible) {
+                    return;
+                }
                 self.flush_text();
                 g.interpret(self, transform, glyph_transform, paint);
             }

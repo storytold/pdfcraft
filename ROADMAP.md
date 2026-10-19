@@ -166,13 +166,13 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Area | Breadth (measured) | Ready (estimated) | Remaining (h) |
 |---|---|---|---|
-| A Core model and fidelity | 76.8% | 70% | 25–45 |
-| B View and navigation | 62.5% | 55% | 110–190 |
-| C Content editing | 53.3% | 30% | 100–180 |
-| D Organize pages | 61.2% | 70% | 12–25 |
+| A Core model and fidelity | 77.6% | 70% | 25–45 |
+| B View and navigation | 63.2% | 55% | 110–190 |
+| C Content editing | 57.4% | 30% | 100–180 |
+| D Organize pages | 65.6% | 70% | 12–25 |
 | E Comments and review | 77.7% | 70% | 12–25 |
-| F Forms and JavaScript | 78.5% | 65% | 40–75 |
-| G Protect, redact, sanitize | 58.5% | 55% | 15–30 |
+| F Forms and JavaScript | 79.7% | 65% | 40–75 |
+| G Protect, redact, sanitize | 59.5% | 55% | 15–30 |
 | H Digital signatures | 62.2% | 45% | 40–70 |
 | I Scan and OCR | 23.1% | 15% | 40–75 |
 | J Create and export | 39.7% | 25% | 55–100 |

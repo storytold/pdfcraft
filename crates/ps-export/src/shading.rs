@@ -558,7 +558,7 @@ fn function_dict(f: &ParsedFunction, out: &mut String) -> Result<(), &'static st
             write_values(out, bounds)?;
             out.push_str(" /Encode ");
             write_pairs(out, encode)?;
-            out.push(']');
+            out.push_str(" >>");
             Ok(())
         }
         ParsedFunction::Calculator { domain, range, program } => {
@@ -1105,6 +1105,24 @@ mod tests {
         let out = String::from_utf8_lossy(&out);
         assert!(out.contains("/BitsPerSample 4"), "bit depth: {out}");
         assert!(out.contains("/DataSource <05af>"), "4-bit packing: {out}");
+    }
+
+    /// A type 3 stitching function re-emits as a Level 3 function dictionary with its
+    /// children inline in `/Functions` — and the dictionary itself closed with `>>`
+    /// after `/Encode`'s own `]`: an extra `]` there once left the `<<` open, so every
+    /// multi-stop gradient emitted a program a conforming interpreter could not parse
+    /// past `shfill`.
+    #[test]
+    fn stitching_function_closes_its_dictionary() {
+        let child = "<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>";
+        let bytes = stream_obj(&format!("/FunctionType 3 /Domain [0 1] /Functions [{child} {child}] /Bounds [0.5] /Encode [0 1 0 1]"), b"");
+        let out = ps_function(&function_of(&bytes)).expect("stitching function is emittable");
+        let out = String::from_utf8_lossy(&out);
+        assert!(out.contains("/FunctionType 3"), "dict form: {out}");
+        assert!(out.contains("/Bounds [0.5]"), "interior breakpoint only, sentinels stripped: {out}");
+        assert!(out.ends_with(">>"), "the dictionary closes: {out}");
+        assert_eq!(out.matches('[').count(), out.matches(']').count(), "brackets balance: {out}");
+        assert_eq!(out.matches("<<").count(), out.matches(">>").count(), "dictionaries balance: {out}");
     }
 
     /// A calculator operand too large for a PostScript real (the language's reals are

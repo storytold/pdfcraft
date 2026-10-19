@@ -70,6 +70,10 @@ pub enum PsExportError {
 
 /// Export the given PDF `bytes` to PostScript (`PsFormat::Ps`) or EPS (`PsFormat::Eps`).
 ///
+/// `password` opens an encrypted `bytes` (the document's user password; empty for a plain
+/// file), the same way the raster renderer's `RenderConfig::password` opens its copy —
+/// a protected document exports as it displays.
+///
 /// `pages` are 0-based page indices; they are validated against the page count (out of
 /// range → [`PsExportError::InvalidPages`]), emitted in ascending order, and duplicates
 /// collapse. EPS output needs exactly one page
@@ -79,8 +83,8 @@ pub enum PsExportError {
 /// interpreter's nesting-depth and content budgets bounding hostile documents. Every
 /// degradation lands in [`ExportedPs::warnings`] *and* as a `%%PdfCraftNote:` comment in
 /// [`ExportedPs::bytes`].
-pub fn export(bytes: Arc<Vec<u8>>, pages: &[usize], format: PsFormat) -> Result<ExportedPs, PsExportError> {
-    let pdf = Pdf::new(bytes).map_err(|err| {
+pub fn export(bytes: Arc<Vec<u8>>, password: Option<&str>, pages: &[usize], format: PsFormat) -> Result<ExportedPs, PsExportError> {
+    let pdf = Pdf::new_with_password(bytes, password.unwrap_or("")).map_err(|err| {
         let reason = match err {
             LoadPdfError::Decryption(_) => "the document is encrypted; export needs a decrypted copy",
             LoadPdfError::Invalid => "the bytes are not a readable PDF",
@@ -474,7 +478,7 @@ mod tests {
     fn export_two_pages_has_pages_trailer_and_page_comments() {
         let bytes = std::sync::Arc::new(two_page_pdf());
         // Out-of-order request with a duplicate: output ascending, each page once.
-        let out = export(std::sync::Arc::clone(&bytes), &[1, 0, 1], PsFormat::Ps).expect("valid request");
+        let out = export(std::sync::Arc::clone(&bytes), None, &[1, 0, 1], PsFormat::Ps).expect("valid request");
         let s = text(&out);
         assert!(s.starts_with("%!PS-Adobe-3.0\n"), "PS header: {s}");
         assert!(s.contains("%%Pages: 2\n"), "exported page count: {s}");
@@ -496,12 +500,12 @@ mod tests {
     #[test]
     fn eps_requires_exactly_one_page() {
         let bytes = std::sync::Arc::new(two_page_pdf());
-        let err = export(std::sync::Arc::clone(&bytes), &[0, 1], PsFormat::Eps).expect_err("two pages cannot be one EPS");
+        let err = export(std::sync::Arc::clone(&bytes), None, &[0, 1], PsFormat::Eps).expect_err("two pages cannot be one EPS");
         assert_eq!(err, PsExportError::EpsNeedsExactlyOnePage { requested: 2 });
-        let err = export(std::sync::Arc::clone(&bytes), &[], PsFormat::Eps).expect_err("EPS needs a page");
+        let err = export(std::sync::Arc::clone(&bytes), None, &[], PsFormat::Eps).expect_err("EPS needs a page");
         assert_eq!(err, PsExportError::EpsNeedsExactlyOnePage { requested: 0 });
 
-        let out = export(bytes, &[1], PsFormat::Eps).expect("one page exports as EPS");
+        let out = export(bytes, None, &[1], PsFormat::Eps).expect("one page exports as EPS");
         let s = text(&out);
         assert!(s.starts_with("%!PS-Adobe-3.0 EPSF-3.0\n"), "EPSF header: {s}");
         assert!(!s.contains("showpage"), "EPS never ejects the importing application's page: {s}");
@@ -518,7 +522,7 @@ mod tests {
     /// so a caller can act on exactly what was wrong.
     #[test]
     fn invalid_page_index_is_actionable() {
-        let err = export(std::sync::Arc::new(fixture()), &[0, 3], PsFormat::Ps).expect_err("index 3 is out of range");
+        let err = export(std::sync::Arc::new(fixture()), None, &[0, 3], PsFormat::Ps).expect_err("index 3 is out of range");
         assert_eq!(err, PsExportError::InvalidPages { requested: vec![0, 3], page_count: 1 });
     }
 
@@ -527,7 +531,7 @@ mod tests {
     /// is set, and no transparency pseudo-operator appears.
     #[test]
     fn blend_mode_produces_note_not_ops() {
-        let out = export(std::sync::Arc::new(blend_pdf()), &[0], PsFormat::Ps).expect("transparent content exports");
+        let out = export(std::sync::Arc::new(blend_pdf()), None, &[0], PsFormat::Ps).expect("transparent content exports");
         let s = text(&out);
         assert_eq!(s.matches("fill\n").count(), 2, "both draws still emit: {s}");
         assert!(!s.contains("/Blend"), "no transparency pseudo-ops: {s}");
@@ -540,11 +544,38 @@ mod tests {
         assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
     }
 
+    /// A Type 3 glyph under render mode 3 (`3 Tr`) draws nothing: the interpreter hands
+    /// the device `GlyphDrawMode::Invisible` for the glyph procedure too (only mode 3
+    /// affects Type 3 text), and the device must skip it as it skips invisible outline
+    /// glyphs — the procedure paints what invisible text is meant to hide.
+    #[test]
+    fn invisible_type3_glyphs_draw_nothing() {
+        fn type3_pdf(render_mode: u8) -> Vec<u8> {
+            assemble(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+                b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>".to_vec(),
+                stream_obj("", format!("BT /F1 100 Tf {render_mode} Tr 20 100 Td (a) Tj ET").as_bytes()),
+                b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+                stream_obj("", b"0 0 100 100 re f"),
+            ])
+        }
+        let visible = export(std::sync::Arc::new(type3_pdf(0)), None, &[0], PsFormat::Ps).expect("visible Type 3 text exports");
+        let s = text(&visible);
+        assert!(s.contains("fill\n"), "the glyph procedure paints when visible: {s}");
+        let invisible = export(std::sync::Arc::new(type3_pdf(3)), None, &[0], PsFormat::Ps).expect("invisible Type 3 text exports");
+        let s = text(&invisible);
+        // The page's own crop-box clip still emits path operators; ink is what the
+        // glyph procedure must not leave behind.
+        assert!(!s.contains("fill\n") && !s.contains("eofill\n") && !s.contains("stroke\n"), "render mode 3 suppresses the glyph procedure: {s}");
+        assert!(s.ends_with("%%EOF\n"), "the program is still complete: {s}");
+    }
+
     /// A self-referencing form XObject exports to completion (the interpreter's nesting
     /// depth bound holds) with a balanced graphics-state stack.
     #[test]
     fn deep_form_xobjects_complete() {
-        let out = export(std::sync::Arc::new(deep_form_pdf()), &[0], PsFormat::Ps).expect("deep recursion is bounded");
+        let out = export(std::sync::Arc::new(deep_form_pdf()), None, &[0], PsFormat::Ps).expect("deep recursion is bounded");
         let s = text(&out);
         assert!(s.contains("fill\n"), "content after the form drew: {s}");
         assert!(s.ends_with("%%EOF\n"), "document closed: {s}");
@@ -555,7 +586,7 @@ mod tests {
     /// valid DSC PostScript with a zero page count.
     #[test]
     fn empty_pages_slice_yields_header_only_valid_ps() {
-        let out = export(std::sync::Arc::new(fixture()), &[], PsFormat::Ps).expect("empty selection exports");
+        let out = export(std::sync::Arc::new(fixture()), None, &[], PsFormat::Ps).expect("empty selection exports");
         assert_eq!(
             out.bytes,
             b"%!PS-Adobe-3.0\n\
@@ -598,7 +629,7 @@ mod tests {
             stream_obj("", &inter),
             b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
         ];
-        let out = export(std::sync::Arc::new(assemble(objs)), &[0], PsFormat::Ps).expect("real-font page exports");
+        let out = export(std::sync::Arc::new(assemble(objs)), None, &[0], PsFormat::Ps).expect("real-font page exports");
         let s = text(&out);
         assert!(!s.contains("/FontType 42"), "no Type 42 dictionary: {s}");
         assert!(!s.contains("xyshow") && !s.contains("findfont"), "no text-as-text: {s}");
