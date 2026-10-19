@@ -32,6 +32,8 @@ const TELUGU_PROBE: char = '\u{0C15}';
 const SINHALA_PROBE: char = '\u{0D9A}';
 /// Tamil letter ka (க): the face must have it to cover Tamil.
 const TAMIL_PROBE: char = '\u{0B95}';
+/// Thai letter ko kai (ก): the face must have it to cover Thai.
+const THAI_PROBE: char = '\u{0E01}';
 /// 欢 (U+6B22): Simplified only, absent from the Japanese craft-fonts faces.
 const HANS_PROBE: char = '\u{6B22}';
 /// 說 (U+8AAA): Traditional only, absent from the Japanese craft-fonts faces.
@@ -101,6 +103,13 @@ pub fn sinhala_fallback() -> Option<Arc<FontData>> {
 pub fn tamil_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&tamil_candidates(), TAMIL_PROBE)).clone()
+}
+
+/// The installed fallback face for Thai, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn thai_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&thai_candidates(), THAI_PROBE)).clone()
 }
 
 fn script_fallback(candidates: &[PathBuf], probe: char) -> Option<Arc<FontData>> {
@@ -223,6 +232,90 @@ fn tamil_candidates() -> Vec<PathBuf> {
             "noto/NotoSansTamilUI-Regular.ttf",
             "lohit-tamil-fonts/Lohit-Tamil.ttf",
             "truetype/lohit-tamil/Lohit-Tamil.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Thai faces, best first.
+fn thai_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(font_path) = std::env::var_os("PDFCRAFT_THAI_FONT").or_else(|| std::env::var_os("PDFCRAFT_CUSTOM_FONT")).map(PathBuf::from) {
+        paths.push(font_path);
+    }
+    // Discovered Thai fonts from project's fonts directory:
+    for entry in pdfcraft_fonts::available_thai_fonts() {
+        if !paths.contains(&entry.path) {
+            paths.push(entry.path);
+        }
+    }
+    for dir in pdfcraft_fonts::font_directories() {
+        paths.push(dir.join("COURMT__.TTF"));
+        paths.push(dir.join("THSarabunNew.ttf"));
+        paths.push(dir.join("THSarabun.ttf"));
+        paths.push(dir.join("Sarabun-Regular.ttf"));
+    }
+    for base in [PathBuf::from("fonts"), PathBuf::from("../fonts")] {
+        paths.push(base.join("COURMT__.TTF"));
+        paths.push(base.join("THSarabunNew.ttf"));
+        paths.push(base.join("THSarabun.ttf"));
+        paths.push(base.join("Sarabun-Regular.ttf"));
+    }
+    if cfg!(windows) {
+        if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            paths.push(home.join(r"OneDrive\Documents\fonts\Sarabun-Regular.ttf"));
+            paths.push(home.join(r"OneDrive\Documents\fonts\THSarabunNew.ttf"));
+            paths.push(home.join(r"Documents\fonts\Sarabun-Regular.ttf"));
+            paths.push(home.join(r"Documents\fonts\THSarabunNew.ttf"));
+            paths.push(home.join(r"fonts\Sarabun-Regular.ttf"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            paths.push(local.join(r"Microsoft\Windows\Fonts\THSarabunNew.ttf"));
+            paths.push(local.join(r"Microsoft\Windows\Fonts\Sarabun-Regular.ttf"));
+        }
+        let win = windows_fonts();
+        for file in [
+            "THSarabunNew.ttf",
+            "THSarabun.ttf",
+            "Sarabun-Regular.ttf",
+            "COURMT__.TTF",
+            "LeelawUI.ttf",
+            "LeelaUIb.ttf",
+            "leelawad.ttf",
+            "leelawdb.ttf",
+            "tahoma.ttf",
+            "angsana.ttc",
+            "cordia.ttc",
+        ] {
+            paths.push(win.join(file));
+        }
+        paths
+    } else if cfg!(target_os = "macos") {
+        let mut paths = Vec::new();
+        if let Some(font_path) = std::env::var_os("PDFCRAFT_THAI_FONT").map(PathBuf::from) {
+            paths.push(font_path);
+        }
+        for file in [
+            "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+            "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
+            "/System/Library/Fonts/Thonburi.ttc",
+            "/System/Library/Fonts/Supplemental/Sathu.ttf",
+            "/System/Library/Fonts/Supplemental/Silom.ttf",
+            "/System/Library/Fonts/Supplemental/Krungthep.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ] {
+            paths.push(PathBuf::from(file));
+        }
+        paths
+    } else {
+        unix_fonts(&[
+            "truetype/noto/NotoSansThai-Regular.ttf",
+            "noto/NotoSansThai-Regular.ttf",
+            "google-noto/NotoSansThai-Regular.ttf",
+            "google-noto-vf/NotoSansThai[wght].ttf",
+            "truetype/tlwg/Loma.ttf",
+            "truetype/tlwg/Waree.ttf",
+            "truetype/tlwg/Garuda.ttf",
+            "truetype/thai/Sarabun-Regular.ttf",
         ])
     }
 }
@@ -407,14 +500,15 @@ mod tests {
         assert!(script_fallback(&candidates, DEVANAGARI_PROBE).is_none());
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
+        assert!(script_fallback(&candidates, THAI_PROBE).is_none());
     }
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates()] {
+        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), thai_candidates()] {
             assert!(!list.is_empty());
-            assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
-            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
+            assert!(list.iter().all(|p| p.is_absolute() || p.starts_with("fonts") || p.starts_with("../fonts") || cfg!(windows)), "{list:?}");
+            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc"))), "{list:?}");
         }
     }
 

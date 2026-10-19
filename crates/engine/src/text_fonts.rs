@@ -22,6 +22,14 @@ pub fn installed_directories() -> Vec<PathBuf> {
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             dirs.push(PathBuf::from(local).join("Microsoft/Windows/Fonts"));
         }
+        if let Some(user) = std::env::var_os("USERPROFILE") {
+            let u = PathBuf::from(user);
+            dirs.push(u.join(r"OneDrive\Documents\fonts"));
+            dirs.push(u.join(r"Documents\fonts"));
+            dirs.push(u.join("fonts"));
+        }
+        dirs.push(PathBuf::from("fonts"));
+        dirs.push(PathBuf::from("../fonts"));
         dirs
     } else {
         let mut dirs = vec![PathBuf::from("/usr/share/fonts"), PathBuf::from("/usr/local/share/fonts")];

@@ -219,6 +219,33 @@ fn system_fallback_covers_sinhala_and_tamil() {
     }
 }
 
+/// On a machine with an installed Thai font (or workspace fonts), the installed definitions include it
+/// and Thai text, such as a file name or input, has glyphs instead of boxes.
+#[test]
+fn system_fallback_covers_thai() {
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_THAI_FALLBACK));
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    let off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
+    if !defs.font_data.contains_key(theme::SYSTEM_THAI_FALLBACK) && off {
+        eprintln!("skipping system_fallback_covers_thai: PDFCRAFT_SYSTEM_FONTS=0");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_THAI_FALLBACK)));
+        return;
+    }
+    if !defs.font_data.contains_key(theme::SYSTEM_THAI_FALLBACK) {
+        eprintln!("skipping system_fallback_covers_thai: no installed Thai fallback font");
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_THAI_FALLBACK).count(), 1, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    const THAI_SAMPLE: &str = "สวัสดีภาษาไทย น้ำ ผู้ใช้ กิ่ ๑๒๓";
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, THAI_SAMPLE), "{id:?} lacks {THAI_SAMPLE}");
+    }
+    assert!(layout_widths(&mut fonts, THAI_SAMPLE).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
 /// The Han characters of a catalog's translations.
 fn catalog_han(catalog: &str) -> String {
     let mut han: Vec<char> = catalog
