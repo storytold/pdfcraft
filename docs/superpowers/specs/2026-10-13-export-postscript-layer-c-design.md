@@ -1,13 +1,5 @@
 # Layer C + Layer B follow-ups design — PS/EPS export: transparency flattened, true CMYK/Separation, tiling patterns, AGL naming (approved 2026-10-13, btw session)
 
-> Handoff note: this design was brainstormed and approved in a side session.
-> Main-thread pickup: (1) create a worktree (using-git-worktrees; stack on `ps-layer-b`
-> after it merges — W1 is the promised small follow-up PR; rebase/retarget as stacks land);
-> (2) commit this as `docs/superpowers/specs/2026-10-13-export-postscript-layer-c-design.md`;
-> (3) run writing-plans for the implementation plan (the wave structure W1–W3 maps to plan
-> tasks); (4) execute (subagent-driven or native, per the plan-time choice). The design below
-> is the approved content, verbatim in substance.
-
 ## Context
 
 Layer A (PR #1785) shipped the exporter with Type 1 passthrough and vectorize-everything-else;
