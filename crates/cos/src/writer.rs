@@ -663,43 +663,50 @@ fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypt
     trailer.set(b"ID".to_vec(), Object::Array(pair));
 }
 
-/// Sixteen bytes for a file identifier. Without `SaveOptions::id_entropy` the standard library's
-/// random hash keys (seeded by the operating system on native targets) and a process-wide counter
-/// make each call differ. On WebAssembly those keys are fixed, so there the counter and the written
-/// bytes are what differ. The identifier only has to be unique, not secret. The whole written file
-/// is hashed, once, so the cost is one linear pass over the output.
+/// FNV-1a over 64 bits, with its published offset basis and prime. The identifier is built from it
+/// rather than from `std`'s `DefaultHasher`, whose algorithm the standard library does not specify.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a(state: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(state, |h, b| (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME))
+}
+
+/// Sixteen bytes for a file identifier, one 8-byte half per lane. The bytes are a pure function of
+/// `SaveOptions::id_entropy`, `id_seed` and the written file: the hash is FNV-1a (above) and every
+/// integer is written as a fixed-width big-endian value, so the same input gives the same identifier
+/// on every platform and toolchain. Without entropy only the salt changes (see `id_salt`). FNV is
+/// not collision-resistant against chosen content; the identifier only has to be unique, not secret.
+/// Every written byte is hashed, once, in a single traversal of the output.
 fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
-    use std::hash::{BuildHasher, Hasher};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let salt = match &opts.id_entropy {
-        Some(entropy) => {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            h.write(entropy);
-            h.finish()
-        }
-        None => std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed)),
-    };
-    // Every written byte is hashed, in one traversal that feeds both halves of the identifier. A
-    // prefix would give two rewrites that differ only later in the file the same identifier.
+    let salt = id_salt(opts);
+    let length = u64::try_from(written.len()).unwrap_or(u64::MAX);
     let mut halves = [0u8, 1].map(|lane| {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        h.write_u64(salt);
-        h.write_u8(lane);
-        h.write_u64(opts.id_seed);
-        h.write_usize(written.len());
-        h
+        let mut h = fnv1a(FNV_OFFSET, &salt.to_be_bytes());
+        h = fnv1a(h, &[lane]);
+        h = fnv1a(h, &opts.id_seed.to_be_bytes());
+        fnv1a(h, &length.to_be_bytes())
     });
     for chunk in written.chunks(4096) {
         for h in &mut halves {
-            h.write(chunk);
+            *h = fnv1a(*h, chunk);
         }
     }
-    let mut id = Vec::with_capacity(16);
-    for h in halves {
-        id.extend_from_slice(&h.finish().to_be_bytes());
+    halves.iter().flat_map(|h| h.to_be_bytes()).collect()
+}
+
+/// The salt of an identifier. With caller entropy it is a fixed hash of that entropy. Without it, the
+/// standard library's random hash keys (seeded by the operating system on native targets) mixed with a
+/// process-wide counter make each call differ; on WebAssembly those keys are fixed, so there the
+/// counter and the written bytes are what differ.
+fn id_salt(opts: &SaveOptions) -> u64 {
+    use std::hash::BuildHasher;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    match &opts.id_entropy {
+        Some(entropy) => fnv1a(FNV_OFFSET, entropy),
+        None => std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed)),
     }
-    id
 }
 
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
@@ -734,6 +741,14 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+
+    #[test]
+    fn fnv1a_is_the_published_64_bit_algorithm() {
+        // Published FNV-1a (64 bit) test vectors, so the identifier can be reproduced outside this crate.
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"foobar"), 0x8594_4171_f739_67e8);
+    }
 
     use super::*;
     use crate::Lexer;
