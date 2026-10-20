@@ -79,7 +79,8 @@ semantics; they never silently act on partial text.
 and optional `confidence` (default 0.3). The model is read under the same root
 rules as documents and verified before execution; no download occurs. Preview
 with `add: false`, or create exactly the proposed fields in one undoable step.
-Without `model`, the existing geometry detector is used. See
+With neither `model` nor `backend`, the existing geometry detector is used.
+With `backend: "ffdetr"` and no `model`, detection uses the installed managed model. See
 [native field detection](../../docs/form-field-detection.md) for the model
 format, rectangle convention, job safety and current limitations.
 
