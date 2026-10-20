@@ -2881,3 +2881,8 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+	Ink	Muste
+	Dark ink	Tumma muste
+	Light ink	Vaalea muste
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Allekirjoitusta ei löytynyt. Säädä musteen herkkyyttä tai säilytä alkuperäinen kuva.
+	Signature cleanup stopped unexpectedly.	Allekirjoituksen puhdistus keskeytyi odottamatta.

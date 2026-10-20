@@ -140,6 +140,7 @@ pub struct SignatureCleanup {
 }
 
 impl Default for SignatureCleanup {
+    /// Use automatic ink detection and medium sensitivity for a new image import.
     fn default() -> Self {
         Self { remove_background: true, ink: SignatureInk::Auto, sensitivity: 50 }
     }
@@ -273,6 +274,7 @@ impl SignatureImage {
         Ok(image)
     }
 
+    /// Normalize generated pixels through the same bounded PNG decoder as imported signatures.
     fn from_rgba(rgba: image::RgbaImage) -> Result<Self, SignatureImageError> {
         let mut png = Cursor::new(Vec::new());
         DynamicImage::ImageRgba8(rgba).write_to(&mut png, ImageFormat::Png)?;
@@ -335,6 +337,7 @@ impl SignatureImage {
 mod tests {
     use super::*;
 
+    /// Build a synthetic closed pen loop with no personal signature data.
     fn cleanup_fixture(background: [u8; 4], ink: [u8; 4]) -> SignatureImage {
         let mut rgba = image::RgbaImage::from_pixel(200, 80, image::Rgba(background));
         // Synthetic pen loops with a clear hole and detached dot; no personal signature assets.
@@ -348,6 +351,7 @@ mod tests {
         SignatureImage::from_rgba(rgba).unwrap()
     }
 
+    /// Paper and low-alpha haze disappear while holes, ink and reversible originals survive.
     #[test]
     fn signature_cleanup_removes_low_alpha_scanner_haze_and_coloured_paper() {
         for background in [[0, 0, 128, 5], [235, 225, 195, 255], [245, 245, 245, 255]] {
@@ -364,6 +368,25 @@ mod tests {
         }
     }
 
+    /// Light strokes keep their transparent holes even when a hazy border needs cleanup.
+    #[test]
+    fn signature_cleanup_light_ink_with_alpha_keeps_background_transparent() {
+        for background in [[0, 0, 128, 5], [0, 0, 0, 0]] {
+            let mut source = cleanup_fixture(background, [255, 255, 255, 220]);
+            // A faint border pixel prevents the already-isolated-cutout shortcut.
+            let mut pixels = image::RgbaImage::from_raw(200, 80, source.rgba().to_vec()).unwrap();
+            pixels.put_pixel(0, 0, image::Rgba([0, 0, 0, 5]));
+            source = SignatureImage::from_rgba(pixels).unwrap();
+            let cleaned = source.clean_background(SignatureCleanup { ink: SignatureInk::Light, ..Default::default() }).unwrap();
+            let [w, h] = cleaned.size();
+            let pixels = cleaned.rgba().as_chunks::<4>().0;
+            assert_eq!(pixels[(h / 2) * w + w / 2][3], 0, "the stroke loop stays empty");
+            assert!(pixels.iter().any(|p| p[3] > 100), "light strokes survive");
+            assert!(pixels.iter().all(|p| p[..3] == [0, 0, 0]), "extracted ink is black");
+        }
+    }
+
+    /// Automatic light-ink detection preserves strokes and rejects blank or invalid inputs.
     #[test]
     fn light_ink_cleanup_and_empty_input_are_handled() {
         let source = cleanup_fixture([30, 35, 40, 255], [240, 240, 240, 255]);

@@ -3908,6 +3908,7 @@ fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 2, "errors leave the PDF intact");
 }
 
+/// Headless cleanup preserves transparency through save, undo and redo and validates its arguments.
 #[test]
 fn signature_background_cleanup_through_tools_survives_save_and_undo() {
     let dir = workdir("signature-background-cleanup");

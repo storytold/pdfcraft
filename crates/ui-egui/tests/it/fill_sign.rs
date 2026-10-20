@@ -626,6 +626,7 @@ fn settle_image(h: &mut Harness<'static, PdfCraftApp>) {
     panic!("image cleanup did not finish");
 }
 
+/// Image import previews transparent ink, restores the original and places an undoable signature.
 #[test]
 fn image_signature_cleanup_removes_haze_and_can_restore_the_original() {
     let _gpu = gpu();

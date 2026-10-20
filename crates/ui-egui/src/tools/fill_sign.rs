@@ -4,7 +4,7 @@
 //! can be moved, deleted and undone like any comment.
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::signature_image::{SignatureCleanup, SignatureInk};
+use pdfcraft_engine::signature_image::{SignatureCleanup, SignatureImageError, SignatureInk};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
 use pdfcraft_render::{DocInfo, PageInfo};
@@ -135,6 +135,7 @@ impl SigDraft {
         self.drawing && !self.image_mode && !self.scan_mode
     }
 
+    /// Only a complete preview for the latest settings can be placed.
     fn ready(&self) -> bool {
         if self.scan_mode {
             // A preview made while the frame or slider is still moving is not the result.
@@ -149,6 +150,7 @@ impl SigDraft {
         }
     }
 
+    /// Convert the current draft into a reusable signature only when its preview is ready.
     pub fn saved(&self) -> Option<SavedSig> {
         if self.scan_mode {
             self.ready().then(|| self.image.clone().map(SavedSig::Image)).flatten()
@@ -171,7 +173,8 @@ pub struct ImageImportDraft {
     worker: ImageCleanupWorker,
 }
 
-type CleanupAnswer = Result<SignatureImage, String>;
+/// Keep engine errors typed across the worker boundary; localize only on the UI thread.
+type CleanupAnswer = Result<Result<SignatureImage, SignatureImageError>, String>;
 
 #[derive(Default)]
 struct ImageCleanupWorker {
@@ -179,37 +182,50 @@ struct ImageCleanupWorker {
 }
 
 impl Clone for ImageCleanupWorker {
+    /// Cloning draft state never clones an in-flight worker.
     fn clone(&self) -> Self {
         Self::default()
     }
 }
 
 impl PartialEq for ImageCleanupWorker {
+    /// Preview jobs do not contribute to the editable draft value.
     fn eq(&self, _: &Self) -> bool {
         true
     }
 }
 
 impl std::fmt::Debug for ImageCleanupWorker {
+    /// Show worker activity without exposing channel internals.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ImageCleanupWorker").field("running", &self.running.is_some()).finish()
     }
 }
 
 impl ImageImportDraft {
+    /// Start a reversible import with cleanup enabled and no worker running.
     fn new(original: SignatureImage) -> Self {
         Self { original, options: SignatureCleanup::default(), problem: None, worker: Default::default() }
     }
 
+    /// Reopen a saved signature without cleaning its pixels again.
     fn saved(original: SignatureImage) -> Self {
         Self { options: SignatureCleanup { remove_background: false, ..Default::default() }, ..Self::new(original) }
     }
 
+    /// Run bounded cleanup behind the engine panic guard without translating on the worker.
     fn run(original: &SignatureImage, options: SignatureCleanup) -> CleanupAnswer {
-        pdfcraft_engine::guard(|| original.clean_background(options))?.map_err(|e| e.to_string())
+        pdfcraft_engine::guard(|| original.clean_background(options))
     }
 
+    /// Publish the current preview, translating recoverable errors in the UI thread's language.
     fn apply(&mut self, image: &mut Option<SignatureImage>, result: CleanupAnswer) {
+        let result = result.and_then(|answer| {
+            answer.map_err(|error| match error {
+                SignatureImageError::NoInk => tl!("No signature was found. Adjust the ink sensitivity or keep the original image.").to_string(),
+                error => error.to_string(),
+            })
+        });
         match result {
             Ok(cleaned) => {
                 *image = Some(cleaned);
@@ -222,6 +238,7 @@ impl ImageImportDraft {
         }
     }
 
+    /// Invalidate Apply immediately and schedule only the latest settings after a running job.
     fn rebuild(&mut self, image: &mut Option<SignatureImage>, ctx: Option<&egui::Context>) {
         *image = None; // Apply cannot accept an older preview while the latest settings run.
         self.problem = None;
@@ -251,6 +268,7 @@ impl ImageImportDraft {
         }
     }
 
+    /// Consume a worker answer, discarding it if the user changed cleanup options.
     fn poll(&mut self, image: &mut Option<SignatureImage>, ctx: &egui::Context) {
         let Some((options, rx)) = &self.worker.running else {
             return;
@@ -261,7 +279,7 @@ impl ImageImportDraft {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 return;
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Signature cleanup stopped unexpectedly.".into()),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(tl!("Signature cleanup stopped unexpectedly.").to_string()),
         };
         let options = *options;
         self.worker.running = None;
@@ -1005,6 +1023,7 @@ impl crate::PdfCraftApp {
         }
     }
 
+    /// Accept a browser picker result only while its original signature dialog is still active.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn process_signature_images(&mut self) {
         let picked = self.signature_images.picked.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
@@ -1030,6 +1049,7 @@ impl crate::PdfCraftApp {
         self.use_signature_image(result);
     }
 
+    /// Initialize the active import tab from a decoded image or display its read error.
     fn use_signature_image(&mut self, result: Result<SignatureImage, String>) {
         match result {
             Ok(image) => {
@@ -1088,6 +1108,46 @@ impl crate::PdfCraftApp {
 
 #[cfg(test)]
 mod tests {
+    /// Worker errors are translated on the UI thread, whose language may differ from the worker.
+    #[test]
+    fn image_cleanup_worker_errors_use_the_ui_language() {
+        use super::*;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(20, 10, image::Rgba([255, 255, 255, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let source = SignatureImage::from_bytes(bytes.get_ref()).unwrap();
+        let result = std::thread::spawn(move || ImageImportDraft::run(&source, SignatureCleanup::default())).join().unwrap();
+        let source = SignatureImage::from_bytes(&bytes.into_inner()).unwrap();
+        let mut draft = ImageImportDraft::new(source);
+        let mut image = None;
+        let previous = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("it").unwrap());
+        draft.apply(&mut image, result);
+        crate::i18n::set_current(previous);
+        assert_eq!(draft.problem.as_deref(), Some("Nessuna firma trovata. Regola la sensibilità all’inchiostro o mantieni l’immagine originale."));
+        assert!(image.is_none());
+    }
+
+    /// A failed worker reports a localized error instead of leaving Apply waiting indefinitely.
+    #[test]
+    fn image_cleanup_disconnected_worker_uses_the_ui_language() {
+        use super::*;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(20, 10, image::Rgba([255, 255, 255, 255])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let source = SignatureImage::from_bytes(&bytes.into_inner()).unwrap();
+        let mut draft = ImageImportDraft::new(source);
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        draft.worker.running = Some((draft.options, rx));
+        let mut image = None;
+        let previous = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("it").unwrap());
+        draft.poll(&mut image, &egui::Context::default());
+        crate::i18n::set_current(previous);
+        assert_eq!(draft.problem.as_deref(), Some("La pulizia della firma si è interrotta in modo imprevisto."));
+        assert!(draft.worker.running.is_none());
+    }
+
+    /// Changing settings while cleanup runs must discard the obsolete result.
     #[test]
     fn undo_removes_the_last_stroke_and_skips_empty_ones() {
         let mut d = super::SigDraft { drawing: true, ..Default::default() };

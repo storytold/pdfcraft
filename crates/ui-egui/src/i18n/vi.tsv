@@ -2880,3 +2880,8 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+	Ink	Mực
+	Dark ink	Mực tối
+	Light ink	Mực sáng
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Không tìm thấy chữ ký. Hãy điều chỉnh độ nhạy mực hoặc giữ ảnh gốc.
+	Signature cleanup stopped unexpectedly.	Quá trình làm sạch chữ ký đã dừng đột ngột.

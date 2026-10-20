@@ -2923,3 +2923,5 @@ certificate	Version	Verze
 	Ink	Inkoust
 	Dark ink	Tmavý inkoust
 	Light ink	Světlý inkoust
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nebyl nalezen žádný podpis. Upravte citlivost na inkoust nebo ponechte původní obrázek.
+	Signature cleanup stopped unexpectedly.	Čištění podpisu se neočekávaně zastavilo.

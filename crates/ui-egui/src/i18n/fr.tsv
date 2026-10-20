@@ -2881,3 +2881,5 @@ certificate	Version	Version
 	Ink	Encre
 	Dark ink	Encre foncée
 	Light ink	Encre claire
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Aucune signature trouvée. Réglez la sensibilité à l’encre ou conservez l’image d’origine.
+	Signature cleanup stopped unexpectedly.	Le nettoyage de la signature s’est arrêté de manière inattendue.

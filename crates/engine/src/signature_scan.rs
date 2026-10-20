@@ -133,14 +133,15 @@ pub struct SignaturePhoto {
 }
 
 impl SignaturePhoto {
-    /// Composite imported alpha on white before estimating paper. Transparent RGB is undefined;
-    /// treating it as ink would turn low-alpha scanner noise into a rectangular background.
+    /// Composite alpha on white for dark ink, or black before inversion for light ink.
+    /// Transparent RGB must not become ink when removing low-alpha scanner haze.
     pub(crate) fn from_signature(image: &SignatureImage, light_ink: bool) -> Self {
         let [w, h] = image.size();
         let mut rgb = RgbImage::new(w as u32, h as u32);
         for (pixel, &[r, g, b, a]) in rgb.pixels_mut().zip(image.rgba().as_chunks::<4>().0) {
             let composite = |c: u8| {
-                let value = ((u32::from(c) * u32::from(a) + 255 * (255 - u32::from(a)) + 127) / 255) as u8;
+                let paper = if light_ink { 0 } else { 255 };
+                let value = ((u32::from(c) * u32::from(a) + paper * (255 - u32::from(a)) + 127) / 255) as u8;
                 if light_ink { 255 - value } else { value }
             };
             *pixel = image::Rgb([composite(r), composite(g), composite(b)]);

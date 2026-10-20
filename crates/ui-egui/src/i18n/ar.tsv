@@ -2891,3 +2891,5 @@ certificate	Version	الإصدار
 	Ink	الحبر
 	Dark ink	حبر داكن
 	Light ink	حبر فاتح
+	No signature was found. Adjust the ink sensitivity or keep the original image.	لم يتم العثور على توقيع. اضبط حساسية الحبر أو احتفظ بالصورة الأصلية.
+	Signature cleanup stopped unexpectedly.	توقفت معالجة التوقيع بشكل غير متوقع.
