@@ -184,6 +184,13 @@ pub fn export_with_config(
         // group (full opacity, no mask — not a degradation), interpret, unwrap, unclip.
         let mut clip_path = crop.to_path(0.1);
         clip_path.apply_affine(initial);
+        // The clip floor the page's own clip opens from: a panic mid-interpretation
+        // can leave content clips open (each an unmatched `gsave`), and the cleanup
+        // below pops exactly one clip — without unwinding to this floor, that pop
+        // would close the innermost stray and the page clip's `gsave` would ride the
+        // page's wrapper pair onto the program's gstate stack, page after crashed
+        // page.
+        let clip_floor = device.clip_depth();
         device.push_clip_path(&ClipPath { path: clip_path, fill: FillRule::NonZero });
         device.push_transparency_group(1.0, None, BlendMode::Normal);
         // The raster renderer's last-resort guard again: a panic while interpreting a
@@ -196,6 +203,13 @@ pub fn export_with_config(
         device.pop_transparency_group();
         device.pop_clip_path();
         device.finish();
+        if crashed {
+            // After `finish` no group still withholds a buffer, so every clip's
+            // `gsave` is in the final program: close the clips the panic left open
+            // (the page clip's own included) down to the floor, each `grestore`
+            // landing after the `gsave` it balances.
+            device.unwind_clips_to(clip_floor);
+        }
         let body = std::mem::take(&mut device.emit.out);
         let notes = std::mem::take(&mut device.emit.notes);
         fonts = std::mem::take(&mut device.fonts);
