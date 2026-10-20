@@ -299,6 +299,7 @@ fn tool_input(
             preview: frame.signature_preview,
             author,
             date_text,
+            comments: pcx,
         };
         match crate::fill_sign::page_input(cx, input, free, view) {
             Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),

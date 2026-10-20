@@ -286,6 +286,15 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
+/// The quick bar's Snap to drawing switch (F3), for the tools whose points snap.
+pub(crate) fn snap_button(ui: &mut egui::Ui, prefs: &mut CommentPrefs) {
+    let key = crate::commands::command_shortcut_label(ui.ctx(), "comment.snap");
+    let tip = format!("{} ({key})", tl!(if prefs.snap { "Snap to drawing: on" } else { "Snap to drawing" }));
+    if icons::button(ui, "circle-dot", 32.0, prefs.snap, &tip).clicked() {
+        prefs.snap = !prefs.snap;
+    }
+}
+
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
     let style = prefs.style(tool);
@@ -294,11 +303,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         prefs.pinned = !prefs.pinned;
     }
     if tool.snaps() {
-        let key = crate::commands::command_shortcut_label(ui.ctx(), "comment.snap");
-        let tip = format!("{} ({key})", tl!(if prefs.snap { "Snap to drawing: on" } else { "Snap to drawing" }));
-        if icons::button(ui, "circle-dot", 32.0, prefs.snap, &tip).clicked() {
-            prefs.snap = !prefs.snap;
-        }
+        snap_button(ui, prefs);
     }
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
