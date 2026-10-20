@@ -254,6 +254,9 @@ pub enum SnapKind {
     Midpoint,
     Intersection,
     Path,
+    /// The centre of a small box drawn around the point (a check box, a table cell): where a
+    /// Fill & Sign mark goes. [`Geometry::snap`] never gives it; see [`Geometry::enclosing_box`].
+    Centre,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Snap {
@@ -372,6 +375,41 @@ impl Geometry {
             }
         }
         Ok(best)
+    }
+    /// The box drawn around `at`: the nearest horizontal segment above and below it and vertical
+    /// segment left and right of it that pass `at` on their axis, each within `reach`, as
+    /// `[left, bottom, right, top]` in user space. A check box or a table cell; `None` when a
+    /// side is missing (or the point is on a side).
+    pub fn enclosing_box(&self, at: Point, reach: f64) -> Option<[f64; 4]> {
+        if check_points(&[at]).is_err() || !reach.is_finite() || !(0.0..=10_000.0).contains(&reach) {
+            return None;
+        }
+        // Nearest side in each direction, as a distance from `at`.
+        let (mut left, mut right, mut below, mut above) = (f64::MAX, f64::MAX, f64::MAX, f64::MAX);
+        let near = self.grid().segments_near(at, reach);
+        for [a, b] in near.iter().filter_map(|i| self.segments.get(*i as usize)) {
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let length = dx.hypot(dy);
+            // Within half a degree of the axis.
+            let level = dy.abs() <= length * 0.01;
+            let upright = dx.abs() <= length * 0.01;
+            if level && at[0] >= a[0].min(b[0]) && at[0] <= a[0].max(b[0]) {
+                let d = (a[1] + b[1]) / 2.0 - at[1];
+                if d > 1e-9 {
+                    above = above.min(d);
+                } else if d < -1e-9 {
+                    below = below.min(-d);
+                }
+            } else if upright && at[1] >= a[1].min(b[1]) && at[1] <= a[1].max(b[1]) {
+                let d = (a[0] + b[0]) / 2.0 - at[0];
+                if d > 1e-9 {
+                    right = right.min(d);
+                } else if d < -1e-9 {
+                    left = left.min(-d);
+                }
+            }
+        }
+        [left, right, below, above].iter().all(|d| *d <= reach).then(|| [at[0] - left, at[1] - below, at[0] + right, at[1] + above])
     }
     /// Whether the segment was accepted (finite, non-degenerate and within the cap).
     fn segment(&mut self, a: Point, b: Point) -> bool {

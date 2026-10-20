@@ -1599,6 +1599,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 preview: frame.signature_preview,
                 author,
                 date_text,
+                comments: &pcx,
             },
             view,
         ) {
@@ -2265,9 +2266,10 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
     }
 
-    // Snap to drawing (M5): the page's paths, for the drawing tools that set points, on the
-    // page the pointer is over or a gesture runs on (extracting a plan's paths takes up to a
-    // second). `resp` covers every page, so it can't tell which one that is.
+    // Snap to drawing (M5): the page's paths, for the drawing tools that set points and the
+    // tools that place text or a Fill & Sign mark, on the page the pointer is over or a gesture
+    // runs on (extracting a plan's paths takes up to a second). `resp` covers every page, so it
+    // can't tell which one that is.
     let gesture_page = match &view.comments.gesture {
         Some(
             comments::Gesture::Draw { page, .. }
@@ -2278,16 +2280,20 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         _ => None,
     };
     let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i);
-    frame.snap = match tool {
-        QuickTool::Comment(t) if prefs.snap && t.snaps() && here => {
-            let mut notice = None;
-            let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
-            if notice.is_some() {
-                view.comments.notice = notice;
-            }
-            geometry
+    let snaps = match tool {
+        QuickTool::Comment(t) => t.snaps(),
+        QuickTool::Fill(t) => t.snaps(),
+        _ => false,
+    };
+    frame.snap = if prefs.snap && snaps && here {
+        let mut notice = None;
+        let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
+        if notice.is_some() {
+            view.comments.notice = notice;
         }
-        _ => None,
+        geometry
+    } else {
+        None
     };
     let slot = PageSlot { i, r, xf };
     // A cancelled press takes nothing until the button is up.

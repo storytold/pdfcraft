@@ -2622,3 +2622,5 @@ animation effects	Off	Ανενεργά
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	Προσκόλληση στο σχέδιο: ενεργή
 	Snap to drawing: off	Προσκόλληση στο σχέδιο: ανενεργή
+# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
+	Box centre	Κέντρο πλαισίου

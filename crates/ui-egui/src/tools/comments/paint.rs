@@ -128,6 +128,7 @@ fn paint_snap_marker(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
                 measure::snap::SnapKind::Midpoint => "Midpoint",
                 measure::snap::SnapKind::Intersection => "Intersection",
                 measure::snap::SnapKind::Path => "Path",
+                measure::snap::SnapKind::Centre => "Box centre",
             }),
             crate::theme::regular(11.0),
             green,

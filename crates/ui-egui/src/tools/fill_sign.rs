@@ -195,6 +195,12 @@ impl FillTool {
         }
     }
 
+    /// Where this tool's text or mark goes snaps to the drawing when Snap to drawing is on (not
+    /// signatures and initials, which go where they are put).
+    pub fn snaps(self) -> bool {
+        !matches!(self, FillTool::Signature | FillTool::Initials)
+    }
+
     fn mark(self) -> Option<FillMark> {
         match self {
             FillTool::Check => Some(FillMark::Check),
@@ -452,15 +458,29 @@ pub(crate) struct PageInput<'a> {
     pub(crate) preview: &'a mut Option<(SavedSig, egui::TextureHandle)>,
     pub(crate) author: &'a str,
     pub(crate) date_text: &'a Result<String, String>,
+    /// The page as the comment tools see it, for Snap to drawing.
+    pub(crate) comments: &'a crate::comments::PageCx<'a>,
 }
 
 /// Preview and clicks with a Fill & Sign tool on one page.
 pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &mut DocView) -> Option<FillAction> {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let PageInput { tool, text_size, text_color, signature, initials, preview, author, date_text } = input;
+    let PageInput { tool, text_size, text_color, signature, initials, preview, author, date_text, comments } = input;
+    if view.comments.snap_hover.is_some_and(|(p, _, _)| p == page) {
+        view.comments.snap_hover = None;
+    }
     let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
-    let at = to_user(xf, info, page, pointer);
+    // Snap to drawing: a tick, cross or dot goes to the centre of a small box drawn around the
+    // pointer (a check box, a table cell), else onto the drawing as a point does; text and the
+    // line mark go onto the drawing.
+    let (at, snapped) = match tool.mark() {
+        Some(FillMark::Line) => comments.snapped(pointer),
+        Some(_) => comments.snapped_mark(pointer, MARK_SIDE),
+        None if tool.snaps() => comments.snapped(pointer),
+        None => (to_user(xf, info, page, pointer), None),
+    };
+    view.comments.snap_hover = snapped.map(|kind| (page, at, kind));
     let saved = match tool {
         FillTool::Signature => signature,
         FillTool::Initials => initials,
@@ -517,6 +537,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &m
         }
     }
 }
+
+/// A tick, cross or dot is this many points across.
+const MARK_SIDE: f64 = 12.0;
 
 /// What a Fill & Sign click asks the app to do.
 #[derive(Clone, Debug, PartialEq)]

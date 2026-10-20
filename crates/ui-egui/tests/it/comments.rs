@@ -3138,3 +3138,70 @@ fn snap_paths_stay_cached_per_page_until_an_edit() {
     let after = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
     assert!(std::sync::Arc::ptr_eq(&before, &after), "read once for the new generation");
 }
+
+/// A page with a 10 pt check box at (100, 100), a line (20, 50)–(280, 50) and, ruled as a
+/// table, a 49 × 18 pt cell (180, 150)–(229, 168) like a protocol's "OK" column, in user space.
+const CHECK_BOX_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 125 >> stream
+100 100 10 10 re S 20 50 m 280 50 l S 150 150 m 280 150 l S 150 168 m 280 168 l S 180 140 m 180 180 l S 229 140 m 229 180 l S
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With Snap to drawing on, a Fill & Sign cross clicked inside a check box or a table cell lands
+/// in its middle, and a text box's corner lands on a line, as the drawing tools' points do; off, both stay
+/// where they were clicked.
+#[test]
+fn marks_and_text_boxes_snap_with_f3() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let centre = |a: &Annotation| ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    assert!(h.state_mut().execute("sign.fill.cross"));
+    h.run_steps(2);
+    // Off: where it is clicked (beside the box, so the next click doesn't pick this one up).
+    click_pt(&mut h, (60.0, 120.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    let (x, y) = centre(&c[0]);
+    assert!((x - 60.0).abs() < 0.5 && (y - 120.0).abs() < 0.5, "unsnapped: {:?}", c[0].rect);
+    // On: in the middle of the box, with the marker saying so.
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    h.hover_at(at(&h, 107.0, 102.0));
+    h.run_steps(2);
+    assert!(
+        matches!(h.state().views[0].comments.snap_hover, Some((0, p, pdfcraft_engine::measure::snap::SnapKind::Centre)) if (p[0] - 105.0).abs() < 0.01 && (p[1] - 105.0).abs() < 0.01),
+        "{:?}",
+        h.state().views[0].comments.snap_hover
+    );
+    click_pt(&mut h, (107.0, 102.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    let (x, y) = centre(&c[1]);
+    assert!((x - 105.0).abs() < 0.01 && (y - 105.0).abs() < 0.01, "in the middle of the box: {:?}", c[1].rect);
+    // A table cell between ruled lines: its middle too.
+    click_pt(&mut h, (215.0, 163.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 3);
+    let (x, y) = c.iter().map(centre).find(|(x, _)| *x > 150.0).expect("the third cross");
+    assert!((x - 204.5).abs() < 0.01 && (y - 159.0).abs() < 0.01, "in the middle of the cell: {x}, {y}");
+    // A text box's corner goes onto the line.
+    h.state_mut().set_option("quick", "freetext").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (60.0, 53.0));
+    let at_ = h.state().views[0].comments.composer.as_ref().map(|c| c.at).expect("the composer opened");
+    assert!((at_[1] - 50.0).abs() < 0.01 && (at_[0] - 60.0).abs() < 0.5, "on the line: {at_:?}");
+}

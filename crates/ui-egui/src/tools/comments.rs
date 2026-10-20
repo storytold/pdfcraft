@@ -220,7 +220,7 @@ impl CommentTool {
     /// Tools whose points snap to the page's drawing when snapping is on (M5): the ones that
     /// set points or corners, not freehand drawing.
     pub fn snaps(self) -> bool {
-        self.clicks_points() || matches!(self, Self::Line | Self::Arrow | Self::Rectangle | Self::Oval)
+        self.clicks_points() || matches!(self, Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Note | Self::TextBox | Self::Callout)
     }
 
     /// Whether the line-thickness control applies.

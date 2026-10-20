@@ -2566,3 +2566,5 @@ animation effects	Off	關
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	吸附至圖形：開
 	Snap to drawing: off	吸附至圖形：關
+# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
+	Box centre	框中心

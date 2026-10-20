@@ -467,6 +467,11 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             }
                         });
                     }
+                    // Snap to drawing (F3), as for the drawing tools: ticks and crosses into the
+                    // middle of a check box, text onto a line.
+                    if current_fill.is_some_and(crate::fill_sign::FillTool::snaps) {
+                        comments::snap_button(ui, &mut app.comment_prefs);
+                    }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
                         ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));

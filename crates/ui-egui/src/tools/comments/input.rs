@@ -19,7 +19,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let draw_grab = draw_grabs(cx, view);
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
-    if cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
+    // (The Fill & Sign tools set their own, before this runs.)
+    if !matches!(cx.tool, QuickTool::Fill(_)) && cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
         cv.snap_hover = None;
     }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -484,11 +485,18 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
+        // Snapping: what the callout points at goes onto the drawing.
+        if cv.gesture.is_none()
+            && let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         if resp.drag_started()
             && pressed_here
             && let Some(o) = origin
         {
-            cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.snapped(o).0] });
             cv.selected = None;
         }
         if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
@@ -569,7 +577,7 @@ impl Gestures<'_> {
                 && pressed_here
                 && let Some(o) = origin
             {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.snapped(o).0] });
                 cv.selected = None;
             }
             if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
@@ -577,7 +585,7 @@ impl Gestures<'_> {
                 && let Some(p) = pointer
             {
                 points.truncate(1);
-                points.push(cx.to_user(clamp_to(page_rect, p)));
+                points.push(cx.snapped(clamp_to(page_rect, p)).0);
             }
             if resp.drag_stopped()
                 && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
@@ -594,12 +602,19 @@ impl Gestures<'_> {
                 }
             }
         }
+        // Snapping: the note's or text box's corner goes onto the drawing, as a drawing
+        // tool's point does.
+        if let Some(p) = pointer.filter(|_| over_page)
+            && let (u, Some(kind)) = cx.snapped(p)
+        {
+            cv.snap_hover = Some((cx.page, u, kind));
+        }
         if resp.clicked()
             && over_page
             && let Some(p) = pointer
         {
             let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-            cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            cv.composer = Some(Composer { page: cx.page, at: cx.snapped(p).0, kind, text: String::new(), focus: true });
             cv.selected = None;
         }
         true

@@ -561,3 +561,22 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     assert!(g.truncated);
     assert_eq!(g.segments.len(), 1, "the parts before it still snap");
 }
+
+/// The box drawn around a point: a check box from `re`, a table cell between ruled lines (the
+/// nearest line on each side), and nothing where a side is missing or out of reach.
+#[test]
+fn the_box_around_a_point_is_found_for_check_boxes_and_cells() {
+    // A 10 pt check box, and a table of two cells 60 × 20 with its rules drawn as lines.
+    let d = fixture(
+        "100 100 10 10 re S 200 100 m 320 100 l S 200 120 m 320 120 l S 200 100 m 200 120 l S 260 100 m 260 120 l S 320 100 m 320 120 l S",
+        "",
+        &[],
+    );
+    let g = snap::geometry(&d, 0).unwrap();
+    assert_eq!(g.enclosing_box([103.0, 108.0], 30.0), Some([100.0, 100.0, 110.0, 110.0]));
+    assert_eq!(g.enclosing_box([290.0, 105.0], 40.0), Some([260.0, 100.0, 320.0, 120.0]), "the nearer rule on each side");
+    assert_eq!(g.enclosing_box([290.0, 105.0], 20.0), None, "a side farther than the reach");
+    assert_eq!(g.enclosing_box([150.0, 150.0], 30.0), None, "outside every box");
+    assert_eq!(g.enclosing_box([105.0, 100.0], 30.0), None, "on a side");
+    assert_eq!(g.enclosing_box([f64::NAN, 0.0], 30.0), None);
+}

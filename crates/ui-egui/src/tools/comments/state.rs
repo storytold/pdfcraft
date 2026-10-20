@@ -335,7 +335,7 @@ impl PageCx<'_> {
     /// A pointer position as a point in user space, moved onto the page's drawing when snapping
     /// is on and a path, endpoint, midpoint or intersection lies within reach; with what it
     /// snapped to.
-    fn snapped(&self, p: Pos2) -> ([f64; 2], Option<measure::snap::SnapKind>) {
+    pub(crate) fn snapped(&self, p: Pos2) -> ([f64; 2], Option<measure::snap::SnapKind>) {
         let u = self.to_user(p);
         let Some(geometry) = &self.snap else { return (u, None) };
         // The reach in user units: the screen distance of one user unit, at this zoom.
@@ -345,6 +345,23 @@ impl PageCx<'_> {
             Ok(Some(hit)) => (hit.point, Some(hit.kind)),
             _ => (u, None),
         }
+    }
+
+    /// Where a Fill & Sign mark `side` points across goes for the pointer at `p` when snapping is
+    /// on: the centre of the box drawn around it when that is a check box or a table cell (at
+    /// most ten marks long and three across, either way round: a protocol's "OK" column), else as
+    /// [`Self::snapped`] puts a point.
+    pub(crate) fn snapped_mark(&self, p: Pos2, side: f64) -> ([f64; 2], Option<measure::snap::SnapKind>) {
+        let u = self.to_user(p);
+        let (long, short) = (10.0 * side, 3.0 * side);
+        if let Some(geometry) = &self.snap
+            && let Some([x0, y0, x1, y1]) = geometry.enclosing_box(u, long)
+            && let (w, h) = (x1 - x0, y1 - y0)
+            && ((w <= long && h <= short) || (w <= short && h <= long))
+        {
+            return ([(x0 + x1) / 2.0, (y0 + y1) / 2.0], Some(measure::snap::SnapKind::Centre));
+        }
+        self.snapped(p)
     }
 
     pub(super) fn to_user(&self, p: Pos2) -> [f64; 2] {

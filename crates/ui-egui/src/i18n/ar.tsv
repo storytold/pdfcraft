@@ -2891,3 +2891,5 @@ certificate	Version	الإصدار
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	الالتقاط إلى الرسم: مفعّل
 	Snap to drawing: off	الالتقاط إلى الرسم: معطّل
+# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
+	Box centre	مركز المربع
