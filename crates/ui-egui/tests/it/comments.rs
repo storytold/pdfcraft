@@ -3277,3 +3277,41 @@ fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
     restored.restore(&h.state().persist());
     assert!(!restored.comment_prefs.snap_targets.centres && restored.comment_prefs.snap_targets.endpoints);
 }
+
+/// Snapping and line handles together: a line's end dragged near the check box's corner lands
+/// on it, and the whole line moved so an end comes near the long line's end lands there too.
+#[test]
+fn line_ends_snap_when_dragged_and_lines_by_their_ends_when_moved() {
+    use pdfcraft_engine::{Edit, LineEnding, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "select").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let shape = Shape::Line { from: [40.0, 80.0], to: [80.0, 80.0], start: LineEnding::None, end: LineEnding::None };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    let ends = |h: &Harness<'static, PdfCraftApp>| comments(h).into_iter().find(|a| a.subtype == "Line").expect("the line").points;
+    click_pt(&mut h, (60.0, 80.0));
+    // The right end dragged near the box's corner (100, 100): on it.
+    drag_pt(&mut h, (80.0, 80.0), (102.0, 98.0));
+    let p = ends(&h);
+    assert_eq!((p[1][0], p[1][1]), (100.0, 100.0), "{p:?}");
+    // The whole line moved so its left end (40, 80) comes near the long line's end (20, 50).
+    drag_pt(&mut h, (70.0, 90.0), (52.0, 62.0));
+    let p = ends(&h);
+    assert!((p[0][0] - 20.0).abs() < 0.01 && (p[0][1] - 50.0).abs() < 0.01, "{p:?}");
+}

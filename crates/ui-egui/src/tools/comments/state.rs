@@ -543,6 +543,10 @@ impl PageCx<'_> {
         if a.fill_sign && a.subtype == "Stamp" && (x1 - x0).abs() <= 48.0 && (y1 - y0).abs() <= 48.0 {
             return (vec![r.center()], Some(12.0));
         }
+        // A line by its ends, connected lines and polygons by their corners.
+        if reshapable(a) {
+            return (a.points.iter().map(|q| self.to_screen([f64::from(q[0]), f64::from(q[1])])).collect(), None);
+        }
         (vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], None)
     }
 }

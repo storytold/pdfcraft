@@ -234,6 +234,11 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         (Some(Gesture::Resize { page, index, handle, from, .. }), Some(p)) if *page == cx.page => {
             cx.get(*index).map(|a| cx.snap_drag(&[handle_pos(cx.screen_rect(a), *handle)], None, *from, p))
         }
+        // A line's end or a corner dragged: onto a target (Shift holds the angle instead).
+        (Some(Gesture::Reshape { page, .. }), Some(p)) if *page == cx.page && !ui.input(|i| i.modifiers.shift) => {
+            let (u, kind) = cx.snapped(p);
+            Some((cx.to_screen(u), kind.map(|k| (u, k))))
+        }
         _ => None,
     };
     if let Some((_, Some((at, kind)))) = dragged {
@@ -268,8 +273,13 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 cv.gesture = None;
                 let shift = ui.input(|i| i.modifiers.shift);
                 let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+                // The target itself when it snapped, not its round trip through the screen.
+                let to = match dragged {
+                    Some((_, Some((u, _)))) => u,
+                    _ => cx.to_user(p),
+                };
                 if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, to, shift) });
                 }
             }
             _ => {}

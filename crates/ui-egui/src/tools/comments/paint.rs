@@ -93,6 +93,11 @@ pub(super) fn changing_points(
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+    // As the release will have it: a dragged end onto a snap target, unless Shift holds the angle.
+    let pointer = match &cv.gesture {
+        Some(Gesture::Reshape { .. }) if !shift => pointer.map(|p| cx.to_screen(cx.snapped(p).0)),
+        _ => pointer,
+    };
     let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
     let changed = changing.is_some();
     let points = changing.unwrap_or(points);
@@ -108,6 +113,7 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
+    paint_snap_marker(painter, cx, view);
     paint_gesture(painter, cx, view);
 }
 
