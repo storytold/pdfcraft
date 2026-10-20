@@ -128,6 +128,16 @@ impl PdfCraftApp {
         self.close_request.as_ref().and_then(|r| self.dirty_target(r))
     }
 
+    /// Whether `req`'s anchor is still an open tab. `Others` and `RightOf` are scoped to their
+    /// anchor, and one whose anchor is gone is void, like a `close_others` whose `keep` names no
+    /// open tab. `Tab` is answered per tab by its callers, and `Quit` and `All` have no anchor.
+    fn anchor_still_open(&self, req: &CloseRequest) -> bool {
+        match req {
+            CloseRequest::Others(anchor) | CloseRequest::RightOf(anchor) => self.views.iter().any(|v| v.id == *anchor),
+            _ => true,
+        }
+    }
+
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
@@ -178,7 +188,12 @@ impl PdfCraftApp {
     }
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
+    /// A batch whose anchor closed meanwhile — a save can wait on a picker or an overwrite
+    /// prompt for frames — closes nothing, not even the tab the request was asking about.
     pub(super) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+        if !self.anchor_still_open(&req) {
+            return;
+        }
         self.close_tab(index);
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.

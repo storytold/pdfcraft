@@ -333,7 +333,7 @@ mod ui_tests {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             for name in ["first.pdf", "second.pdf", "third.pdf"] {
-                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(name, None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
             }
             app
         });
@@ -354,7 +354,7 @@ mod ui_tests {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             for name in ["first.pdf", "second.pdf", "third.pdf"] {
-                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(name, None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
             }
             // second.pdf carries an unsaved edit, as the unit tests' close prompts do.
             app.session.apply(app.views[1].id, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
@@ -395,7 +395,7 @@ mod ui_tests {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             for name in ["first.pdf", "second.pdf"] {
-                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(name, None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
             }
             app
         });
