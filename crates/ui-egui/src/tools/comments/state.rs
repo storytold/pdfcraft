@@ -65,6 +65,46 @@ pub struct Composer {
     pub focus: bool,
 }
 
+/// A text box typed into on the page itself, as Acrobat edits one: a new box whose top-left
+/// corner is `at`, or the text box at `index` on `page`. Clicking away or ⌘/Ctrl+Enter keeps the
+/// text; Escape drops the change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineText {
+    pub page: usize,
+    /// `None`: a new text box.
+    pub index: Option<usize>,
+    /// A new box's top-left corner, in user space.
+    pub at: [f64; 2],
+    /// A new box dragged out to this displayed width and height (see [`ComposerKind::TextBox`]);
+    /// `None`: the box fits its text.
+    pub size: Option<[f64; 2]>,
+    pub text: String,
+    /// The text it had (empty for a new box): nothing to do when it is unchanged.
+    pub original: String,
+    pub focus: bool,
+}
+
+/// Whether `a` is typed into on the page (an upright text box or typewriter text on a page
+/// shown unturned) rather than in the composer card: a callout's box sits inside its rectangle,
+/// and turned text runs another way than the editor.
+pub(crate) fn edits_in_place(a: &Annotation, info: &DocInfo, view_rotation: u16) -> bool {
+    a.subtype == "FreeText"
+        && a.intent.as_deref() != Some("FreeTextCallout")
+        && view_rotation.is_multiple_of(360)
+        && info.pages.get(a.page).is_some_and(|p| p.rotation.is_multiple_of(360))
+}
+
+/// Edit the text of comment `a`: on the page for a text box (see [`edits_in_place`]), else in
+/// the composer card.
+pub(crate) fn start_editing(cv: &mut CommentView, a: &Annotation, info: &DocInfo, view_rotation: u16) {
+    let text = a.contents.clone().unwrap_or_default();
+    if edits_in_place(a, info, view_rotation) {
+        cv.inline = Some(InlineText { page: a.page, index: Some(a.index), at: [0.0; 2], size: None, original: text.clone(), text, focus: true });
+    } else {
+        cv.composer = Some(Composer { page: a.page, at: edit_anchor(info, a), kind: ComposerKind::Edit(a.index), text, focus: true });
+    }
+}
+
 /// A released drawing gesture waiting for the page raster to show its annotation.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Settling {
@@ -134,6 +174,8 @@ pub struct CommentView {
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
     pub composer: Option<Composer>,
+    /// A text box being typed into on the page itself.
+    pub inline: Option<InlineText>,
     /// Reply being typed under the selected card.
     pub reply: String,
     /// Inline edit of a card's text in the Comments panel: (page, index, text).

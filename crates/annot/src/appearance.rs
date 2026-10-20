@@ -21,6 +21,19 @@ mod symbols;
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
 
+/// A text box is at most this wide when it is sized to its text: a longer line wraps.
+pub const TEXT_BOX_MAX_WIDTH: f64 = 300.0;
+
+/// The width of a text box sized to `text` at `size`, with `pad` inside each side: its longest
+/// line and a little air, so no line wraps that doesn't break by itself, at most
+/// [`TEXT_BOX_MAX_WIDTH`] and at least an em. What a new text box gets, and what one that fits
+/// its text keeps when its text or font size changes.
+pub fn text_box_width(text: &str, size: f64, pad: f64) -> f64 {
+    let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
+    let air = 2.0 * pad + 4.0;
+    (longest + air).min(TEXT_BOX_MAX_WIDTH).max(size + air)
+}
+
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
     6.0 + 3.0 * w.max(0.0)

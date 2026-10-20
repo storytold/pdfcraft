@@ -285,13 +285,7 @@ fn select_input(
         && let Some((a, _)) = owner
     {
         cv.selected = Some((cx.page, a.index));
-        cv.composer = Some(Composer {
-            page: cx.page,
-            at: edit_anchor(cx.info, a),
-            kind: ComposerKind::Edit(a.index),
-            text: a.contents.clone().unwrap_or_default(),
-            focus: true,
-        });
+        start_editing(cv, a, cx.info, cx.xf.rot);
         consumed = true;
     }
     consumed
@@ -557,9 +551,11 @@ impl Gestures<'_> {
         }
         // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
         // text wraps inside it (#2669).
+        let upright = cx.xf.rot.is_multiple_of(360) && cx.info.pages.get(cx.page).is_some_and(|pg| pg.rotation.is_multiple_of(360));
         if tool == CommentTool::TextBox {
             if resp.drag_started()
                 && pressed_here
+                && cv.inline.is_none()
                 && let Some(o) = origin
             {
                 cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
@@ -583,16 +579,29 @@ impl Gestures<'_> {
                     let drawn =
                         (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
                     let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
-                    cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                    if upright {
+                        cv.inline = Some(InlineText { page, index: None, at, size, text: String::new(), original: String::new(), focus: true });
+                    } else {
+                        cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                    }
                 }
             }
         }
+        // A click while a text box is being typed into only ends that (its editor loses the
+        // focus and keeps the text); the next click starts another.
         if self.clicked()
             && over_page
+            && cv.inline.is_none()
             && let Some(p) = pointer
         {
-            let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-            cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            if tool == CommentTool::TextBox && upright {
+                let at = cx.to_user(p);
+                cv.inline =
+                    Some(InlineText { page: cx.page, index: None, at, size: None, text: String::new(), original: String::new(), focus: true });
+            } else {
+                let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
+                cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            }
             cv.selected = None;
         }
         true

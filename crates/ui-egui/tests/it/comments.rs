@@ -27,11 +27,20 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    harness_with_bytes(TEXT_FIXTURE.to_vec(), setup)
+    harness_with(TEXT_FIXTURE.to_vec(), 0.25, setup)
 }
 
 fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    harness_with(bytes, 0.25, setup)
+}
+
+/// [`harness`] with frames `step_dt` seconds apart (1/60 lets two clicks make a double-click).
+fn harness_with_step_dt(step_dt: f32, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    harness_with(TEXT_FIXTURE.to_vec(), step_dt, setup)
+}
+
+fn harness_with(bytes: Vec<u8>, step_dt: f32, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("text.pdf", None, bytes).expect("opens");
@@ -658,11 +667,14 @@ fn sticky_note_composer_posts_and_returns_to_select() {
     assert_eq!((c[0].subtype.as_str(), c[0].contents.as_deref()), ("Text", Some("Please check")));
     assert!(h.state().views[0].comments.composer.is_none());
     assert_eq!(h.state().quick_tool, QuickTool::Select, "one-shot tools return to Select");
-    // Cancelling another one creates nothing.
+    // A text box is typed into on the page; Escape drops it, and nothing is made.
     h.state_mut().set_option("quick", "freetext").unwrap();
     click_pt(&mut h, (50.0, 60.0));
-    h.get_by_label("Cancel").click();
+    assert!(h.state().views[0].comments.inline.is_some());
+    field(&h, "Type text").type_text("never mind");
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
+    assert!(h.state().views[0].comments.inline.is_none());
     assert_eq!(comments(&h).len(), 1);
 }
 
@@ -781,11 +793,16 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, text: &str) -> [f32; 4] {
     c.iter().find(|a| a.contents.as_deref().is_some_and(|t| t.starts_with(text))).unwrap_or_else(|| panic!("no comment {text:?}: {c:?}")).rect
 }
 
-/// Post `text` in the open text box composer.
+/// Post `text` in the open text box editor: the one on the page (⌘/Ctrl+Enter keeps it), or the
+/// composer card on a turned page or view.
 fn post_text(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
     field(h, "Type text").type_text(text);
     h.run_steps(2);
-    h.get_by_label("Post").click();
+    if h.state().views[0].comments.inline.is_some() {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    } else {
+        h.get_by_label("Post").click();
+    }
     h.run_steps(3);
 }
 
@@ -884,6 +901,75 @@ fn a_dragged_text_box_wraps_inside_its_border() {
     post_text(&mut h, "word word");
     let r = rect_of(&h, "word word");
     assert!((r[3] - r[1] - (2.0 * 14.4 + 2.0 * 5.0 + 2.0)).abs() < 1.0, "two lines inside the border: {r:?}");
+}
+
+/// Double-click at a screen point (two presses and releases in quick succession), well after any
+/// click before it, so the two don't count as a triple click with that one.
+fn double_click(h: &mut Harness<'static, PdfCraftApp>, p: Pos2) {
+    h.run_steps(60);
+    h.hover_at(p);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+}
+
+/// A text box is typed into on the page itself, as in Acrobat, not in a card beside it: the Text
+/// box tool's click opens an editor where the box goes and clicking away keeps the text; a
+/// double-click on a text box edits its text there, ⌘/Ctrl+Enter keeps it, and the box follows
+/// the new text; Escape drops a change.
+#[test]
+fn text_boxes_are_typed_into_on_the_page() {
+    let mut h = harness_with_step_dt(1.0 / 60.0, |app| app.set_option("quick", "freetext").unwrap());
+    click_pt(&mut h, (40.0, 120.0));
+    {
+        let c = &h.state().views[0].comments;
+        assert!(c.inline.is_some() && c.composer.is_none(), "no composer card");
+    }
+    field(&h, "Type text").type_text("Abnahme ok");
+    h.run_steps(2);
+    click_pt(&mut h, (250.0, 20.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!((c[0].subtype.as_str(), c[0].contents.as_deref()), ("FreeText", Some("Abnahme ok")));
+    assert!(h.state().views[0].comments.inline.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "one text box, then back to Select");
+    let first = c[0].rect;
+    assert!((first[0] - 40.0).abs() < 1.0 && (first[3] - 120.0).abs() < 1.0, "hangs from the click: {first:?}");
+
+    // A double-click edits it in place; ⌘/Ctrl+Enter keeps the longer text, and the box widens.
+    let centre = at(&h, (first[0] + first[2]) / 2.0, (first[1] + first[3]) / 2.0);
+    double_click(&mut h, centre);
+    {
+        let c = &h.state().views[0].comments;
+        assert!(c.composer.is_none(), "no composer card");
+        assert_eq!(c.inline.as_ref().map(|t| (t.index, t.text.as_str())), Some((Some(0), "Abnahme ok")));
+    }
+    h.key_press(egui::Key::End);
+    h.run_steps(1);
+    h.event(egui::Event::Text(", Restpunkte siehe Liste".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c[0].contents.as_deref(), Some("Abnahme ok, Restpunkte siehe Liste"));
+    assert!(c[0].rect[2] > first[2] + 20.0 && (c[0].rect[3] - first[3]).abs() < 0.01, "wider, same top: {:?} from {first:?}", c[0].rect);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit comment"));
+
+    // Escape drops a change.
+    double_click(&mut h, centre);
+    assert!(h.state().views[0].comments.inline.is_some());
+    h.event(egui::Event::Text(" (falsch)".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.inline.is_none());
+    assert_eq!(comments(&h)[0].contents.as_deref(), Some("Abnahme ok, Restpunkte siehe Liste"));
 }
 
 #[test]

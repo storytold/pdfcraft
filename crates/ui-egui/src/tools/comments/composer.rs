@@ -166,6 +166,136 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     }
 }
 
+/// What keeping the text typed into a text box on the page does: the new box (sized to its text,
+/// or to the box dragged out, as the composer makes one), or the changed text (the engine fits
+/// the box to it). `None` when nothing changed, or a new box has no text.
+pub(crate) fn inline_edit(it: &InlineText, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+    let text = it.text.trim_end().to_string();
+    match it.index {
+        Some(index) => (text != it.original.trim_end()).then_some(Edit::SetAnnotationContents { page: it.page, index, text }),
+        None if text.trim().is_empty() => None,
+        None => {
+            let style = prefs.style(CommentTool::TextBox);
+            let rect = match (it.size, info.pages.get(it.page)) {
+                (Some(size), Some(p)) => drawn_text_box_rect(p, it.at, size, &text, 12.0, style.width),
+                _ => text_box_rect(it.at, &text, 12.0, 0),
+            };
+            Some(Edit::AddAnnotation(NewAnnotation {
+                page: it.page,
+                shape: Shape::TextBox { rect, font_size: 12.0 },
+                style,
+                contents: text,
+                author: prefs.author.clone(),
+            }))
+        }
+    }
+}
+
+/// The text box being typed into on the page (see [`InlineText`]): an editor over the box in its
+/// font size, colour and fill at the page's zoom, which grows with the text as the box will and
+/// covers the box's old drawing while it is open. Returns the edit once the text is kept.
+pub(crate) fn inline_text(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
+    prefs: &CommentPrefs,
+) -> Option<Edit> {
+    let it = view.comments.inline.clone()?;
+    // Scrolled away: the text waits until the page is back.
+    let xf = view.page_xform(it.page)?;
+    let page = info.pages.get(it.page)?;
+    let zoom = xf.rect.width() / xf.pw.max(1.0);
+    // The box's look: its own, or the text box tool's for a new one.
+    let look = match it.index {
+        Some(index) => {
+            let a = info.annotations.iter().find(|a| a.page == it.page && a.index == index && a.in_reply_to.is_none());
+            match (a, doc.comment_props(it.page, index)) {
+                (Some(a), Some(p)) => {
+                    Some((p.color.unwrap_or([0.0; 3]), p.font_size.unwrap_or(12.0), p.fill, Some(xf.user_rect(info, it.page, a.rect))))
+                }
+                _ => None,
+            }
+        }
+        None => {
+            let style = prefs.style(CommentTool::TextBox);
+            // A box dragged out shows at its drawn size, and its text wraps inside it.
+            let drawn = it.size.map(|[w, h]| {
+                let v = page.user_to_view(it.at[0] as f32, it.at[1] as f32);
+                Rect::from_min_size(xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph), vec2(w as f32 * zoom, h as f32 * zoom))
+            });
+            Some((style.color, 12.0, style.fill, drawn))
+        }
+    };
+    // The comment is gone (undone, deleted elsewhere): nothing left to type into.
+    let Some((color, size, fill, old)) = look else {
+        view.comments.inline = None;
+        return None;
+    };
+    let anchor = old.map_or_else(
+        || {
+            let v = page.user_to_view(it.at[0] as f32, it.at[1] as f32);
+            xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph)
+        },
+        |r| r.left_top(),
+    );
+    let font = egui::FontId::proportional((size as f32 * zoom).max(8.0));
+    let pad = 2.0 * zoom;
+    let text_color = color32(color);
+    let back = fill.map_or(Color32::WHITE, color32);
+    // As wide as the longest line, at least the box's own width, wrapping past the widest a box
+    // is sized to (or past the box, when it is wider).
+    let longest = ctx.fonts_mut(|f| f.layout_no_wrap(it.text.clone(), font.clone(), text_color).size().x);
+    let floor = old.map_or(size as f32 * zoom, |r| (r.width() - 2.0 * pad).max(1.0));
+    let ceiling = if it.size.is_some() { floor } else { (pdfcraft_engine::annot_text::TEXT_BOX_MAX_WIDTH as f32 * zoom - 2.0 * pad).max(floor) };
+    let width = (longest + font.size * 0.5).clamp(floor, ceiling);
+    let (mut keep, mut cancel) = (false, false);
+    egui::Area::new(egui::Id::unique(("comment-inline-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(anchor).show(ctx, |ui| {
+        let Some(t) = view.comments.inline.as_mut() else { return };
+        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(back);
+        // The area's max rect is last frame's size, which caps the editor's width; widen it so
+        // the box grows as text is typed.
+        ui.set_min_width(width + 2.0 * pad);
+        let cover = ui.painter().add(egui::Shape::Noop);
+        let r = ui.add(
+            egui::TextEdit::multiline(&mut t.text)
+                .font(font.clone())
+                .text_color(text_color)
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(pad.round().clamp(0.0, 100.0) as i8)))
+                .desired_width(width)
+                .desired_rows(1)
+                .hint_text(tl!("Type text"))
+                .id_salt(("comment-inline-edit", t.page, t.index)),
+        );
+        // The box's old drawing stays under the editor until the text is kept.
+        let area = old.map_or(r.rect, |o| o.union(r.rect));
+        ui.painter().set(cover, egui::Shape::rect_filled(area, CornerRadius::ZERO, back));
+        ui.painter().rect_stroke(area.expand(1.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Outside);
+        if t.focus {
+            r.request_focus();
+            t.focus = false;
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancel = true;
+        } else if submit_key(ui, &r, false) || r.lost_focus() {
+            keep = true;
+        }
+    });
+    if cancel {
+        view.comments.inline = None;
+        return None;
+    }
+    if !keep {
+        return None;
+    }
+    let it = view.comments.inline.take()?;
+    if it.index.is_none() {
+        // A one-shot tool, as with the composer: back to Select unless pinned.
+        view.comments.tool_done = true;
+    }
+    inline_edit(&it, info, prefs)
+}
+
 /// Submit only from the focused comment editor. Match each key event's modifiers exactly,
 /// so Shift+Enter stays a newline and another editor cannot submit this draft. Replies also
 /// keep their existing unmodified Enter-to-post behavior.

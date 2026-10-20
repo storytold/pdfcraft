@@ -42,13 +42,8 @@ pub(crate) fn context_menu(
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
             if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
-                view.comments.composer = Some(Composer {
-                    page,
-                    at: edit_anchor(info, a),
-                    kind: ComposerKind::Edit(index),
-                    text: a.contents.clone().unwrap_or_default(),
-                    focus: true,
-                });
+                let rotation = view.page_xform(page).map_or(0, |xf| xf.rot);
+                start_editing(&mut view.comments, a, info, rotation);
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Reply"))).clicked() {

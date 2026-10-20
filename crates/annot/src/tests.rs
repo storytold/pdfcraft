@@ -2274,3 +2274,46 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// A text box that fits its text keeps fitting it: shorter text narrows it and longer text widens
+/// it (up to 300 pt, past which lines wrap), and a smaller font size shrinks it in both
+/// directions. A box sized by hand keeps its width (and, for a smaller font, its height).
+#[test]
+fn a_text_box_that_fits_its_text_keeps_fitting_it() {
+    let mut doc = fixture();
+    let pad = 2.0 + 2.0; // the style's 2 pt border
+    let fitted = |text: &str, size: f64| {
+        let w = appearance::text_box_width(text, size, pad);
+        let lines = appearance::wrap(text, size, w - 2.0 * pad).len().max(1) as f64;
+        [100.0, 700.0 - lines * size * 1.2 - 2.0 * pad - 2.0, 100.0 + w, 700.0]
+    };
+    // Made the way the composer makes one: sized to its text (2 pt padding).
+    let first = "Abnahme ok";
+    let w = appearance::text_box_width(first, 12.0, 2.0);
+    let shape = Shape::TextBox { rect: [100.0, 680.0, 100.0 + w, 700.0], font_size: 12.0 };
+    let t = add_annotation(&mut doc, &NewAnnotation { contents: first.into(), ..new(0, shape) }, &meta("t")).unwrap();
+    let longer = "Abnahme ok, Restpunkte siehe Liste";
+    set_contents(&mut doc, 0, t, longer, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted(longer, 12.0), "wider for longer text, one line");
+    set_contents(&mut doc, 0, t, "OK", &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted("OK", 12.0), "narrower for shorter text");
+    let long = "the quick brown fox jumps over the lazy dog and keeps going until the line wraps";
+    set_contents(&mut doc, 0, t, long, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert_eq!((r[2] - r[0], r), (appearance::TEXT_BOX_MAX_WIDTH, fitted(long, 12.0).to_vec()), "at most 300 pt wide, wrapped");
+    set_contents(&mut doc, 0, t, "OK", &meta("")).unwrap();
+    // A smaller font: narrower and shorter.
+    set_font_size(&mut doc, 0, t, 8.0, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted("OK", 8.0));
+    set_font_size(&mut doc, 0, t, 20.0, &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[t]), fitted("OK", 20.0));
+    // Sized by hand: the width stays, whatever the text.
+    set_rect(&mut doc, 0, t, [100.0, 600.0, 260.0, 700.0], &meta("")).unwrap();
+    set_contents(&mut doc, 0, t, "OK", &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[t]);
+    assert_eq!((r[0], r[2], r[3]), (100.0, 260.0, 700.0));
+    set_font_size(&mut doc, 0, t, 10.0, &meta("")).unwrap();
+    let s = rect(&list(&doc, 0)[t]);
+    assert_eq!((s[0], s[2]), (100.0, 260.0));
+    assert!(s[1] <= r[1], "a box sized by hand never shrinks: {s:?} from {r:?}");
+}

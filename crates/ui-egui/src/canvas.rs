@@ -2561,6 +2561,9 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }
+    if let Some(e) = comments::inline_text(ui.ctx(), view, info, doc, prefs) {
+        view.pending_edit = Some(e);
+    }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
     }
