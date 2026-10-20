@@ -53,7 +53,7 @@ const PP_OCR: &[(&str, &str, &str, usize)] = &[
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1). `la` reads every letter in the Latin dictionary.
+/// The languages the models read (ISO 639-1). `la` uses the Latin dictionary; a listed letter can still be misread.
 /// The named languages use that same model and, when two letters score close together, prefer
 /// the ones that language writes (`å` for Danish, `à` for French) without forbidding the others.
 pub const LANGUAGES: &[(&str, &str)] = &[

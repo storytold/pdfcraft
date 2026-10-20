@@ -63,7 +63,8 @@ table reconstruction and rotated-line recognition remain unsupported. Reading or
 the existing detector's line analysis; complex layouts can need review. Chinese and Latin
 selection boxes cover a recognised line, with approximate character positions within it.
 The Latin recogniser reads only the characters in its dictionary: accented letters outside
-it (e.g. some East European ones) are still dropped.
+it (e.g. some East European ones) are still dropped. A letter that is in the dictionary can
+still come back as another letter in it: on Árvíztűrő tükörfúrógép the model read ű as ü.
 
 OCR does not make visible text in a scan directly editable. Existing selectable PDF text
 uses Edit PDF → Edit text and images, whose font/subset and CJK limitations are separate.

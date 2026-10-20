@@ -1268,7 +1268,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "language": { "type": "string", "enum": ["en", "zh", "la", "fr", "de", "es", "pt", "it", "nl", "da", "no", "sv", "is", "fi", "cs", "pl"], "description": "Document language (default en). zh reads Simplified Chinese and mixed English. la reads every accented Latin letter. fr, de, es, pt, it, nl, da, no, sv, is, fi, cs and pl use that Latin model and prefer that language's letters when two readings are close." },
+                    "language": { "type": "string", "enum": ["en", "zh", "la", "fr", "de", "es", "pt", "it", "nl", "da", "no", "sv", "is", "fi", "cs", "pl"], "description": "Document language (default en). zh reads Simplified Chinese and mixed English. la uses the accented Latin dictionary; a letter in that dictionary can still be read as another letter. fr, de, es, pt, it, nl, da, no, sv, is, fi, cs and pl use that Latin model and prefer that language's letters when two readings are close." },
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true). false also reads pictures on such pages, without adding their text again." },
                 }),
                 &["doc"],
@@ -1534,4 +1534,19 @@ pub(crate) fn check_args(def: &ToolDef, args: &Value) -> Result<(), ToolError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `la` covers the Latin dictionary. It does not promise that every listed letter is read correctly.
+    #[test]
+    fn latin_language_help_does_not_promise_every_accented_letter() {
+        let tool = find("ocr_recognize").expect("ocr_recognize");
+        let description = tool.input_schema["properties"]["language"]["description"].as_str().expect("language description");
+        assert!(!description.contains("every accented"), "{description}");
+        assert!(description.contains("dictionary"), "{description}");
+        assert!(description.contains("can still be read as another letter"), "{description}");
+    }
 }
