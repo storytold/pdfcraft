@@ -3133,6 +3133,23 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
 }
 
 #[test]
+fn watermark_thai_text_renders_and_survives_reopen() {
+    let mut doc = fixture();
+    let wm = Watermark { text: "ใช้สำหรับต่ออายุใบอนุญาตกับ สวพ.6 เท่านั้น".into(), ..Watermark::default() };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(wm.first_undrawable().is_some());
+        let err = add_watermark(&mut doc, &[0], &wm, false).unwrap_err().to_string();
+        assert!(err.contains("Thai") && err.contains("CRAFT_FONTS_DIR"), "{err}");
+        return;
+    }
+    assert_eq!(wm.first_undrawable(), None);
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    let reopened = reopen(&doc);
+    let streams = streams(&reopened, 0);
+    assert!(streams.iter().any(|s| s.contains("/PCMark /Watermark") && s.contains("/PCTh")));
+}
+
+#[test]
 fn group_moves_preserve_glyph_bytes_and_unselected_text_state() {
     for content in [
         "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 14 TL 1 0.2 -0.1 1 50 600 Tm (A\\101) Tj 1 0 0 rg (Neighbour) Tj T* (Next) Tj ET",

@@ -306,7 +306,7 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     Ok(lines)
 }
 
-fn is_thai(c: char) -> bool {
+pub(crate) fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
@@ -484,7 +484,7 @@ fn hebrew_error(e: GlyphError, text: &str) -> EditError {
     })
 }
 
-fn thai_error(e: GlyphError, text: &str) -> EditError {
+pub(crate) fn thai_error(e: GlyphError, text: &str) -> EditError {
     EditError::Invalid(match e {
         GlyphError::NoFont => {
             "Thai text needs a Thai font in this build; rebuild with CRAFT_FONTS_DIR pointing to craft-fonts with a Thai face".into()
@@ -637,6 +637,142 @@ fn draw_laid_shaped(
     }
     out.extend_from_slice(b"ET\n");
     Ok(())
+}
+
+pub(crate) fn draw_watermark_shaped(
+    doc: &mut Document,
+    lines: &[&str],
+    wm: &crate::Watermark,
+    page_w: f64,
+    page_h: f64,
+    opacity: f64,
+) -> Result<(Vec<u8>, Dict), EditError> {
+    let dummy = AddedText {
+        text: String::new(),
+        family: Family::Helvetica,
+        size: 1.0,
+        bold: false,
+        italic: false,
+        align: Align::Center,
+        color: wm.color,
+        rect: [0.0, 0.0, 1000.0, 1000.0],
+    };
+    let mut laid = Vec::new();
+    for line in lines {
+        let (pieces, width_at_1) = shaped_layout(&dummy, line, false)?;
+        laid.push((line.to_string(), pieces, width_at_1));
+    }
+
+    let widest = laid.iter().map(|(_, _, w)| *w).fold(0.0, f64::max).max(0.01);
+    let size = if wm.font_size > 0.0 {
+        wm.font_size
+    } else {
+        ((page_w * page_w + page_h * page_h).sqrt() * 0.5 / widest).clamp(6.0, 300.0)
+    };
+
+    let mut keys: Vec<&ShapedCluster> = Vec::new();
+    let mut index: HashMap<ClusterKey, usize> = HashMap::new();
+    for (_, pieces, _) in &laid {
+        for p in pieces {
+            if let Piece::Shaped(clusters) = p {
+                for c in clusters {
+                    index.entry(cluster_key(c)).or_insert_with(|| {
+                        keys.push(c);
+                        keys.len() - 1
+                    });
+                }
+            }
+        }
+    }
+
+    let mut outlines = HashMap::new();
+    for c in &keys {
+        for (id, _) in &c.glyphs {
+            if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((c.script, *id)) {
+                entry.insert(shaped_glyph(c.script, *id).map_err(|e| match c.script {
+                    ShapedScript::Arabic => arabic_error(e, &c.text),
+                    ShapedScript::Hebrew => hebrew_error(e, &c.text),
+                    ShapedScript::Thai => thai_error(e, &c.text),
+                })?);
+            }
+        }
+    }
+
+    let mut fonts = Dict::new();
+    let mut names = Vec::new();
+    for chunk in keys.chunks(GLYPHS_PER_FONT) {
+        let font = type3_shaped(doc, chunk, &outlines);
+        let name = format!("PCTh{}", font.num);
+        fonts.set(name.clone().into_bytes(), Object::Ref(font));
+        names.push(name);
+    }
+
+    let (s, c) = wm.rotation.to_radians().sin_cos();
+    let (cx, cy) = (page_w / 2.0 + wm.offset[0], page_h / 2.0 + wm.offset[1]);
+
+    let mut content = Vec::new();
+    content.extend(
+        format!(
+            "/PCGS{} gs\n{} {} {} {} {} {} cm\n",
+            (opacity * 100.0).round() as i64,
+            n(c),
+            n(s),
+            n(-s),
+            n(c),
+            n(cx),
+            n(cy),
+        )
+        .bytes(),
+    );
+
+    let [cr, cg, cb] = wm.color.map(|v| v.clamp(0.0, 1.0));
+    content.extend(format!("BT {} {} {} rg\n", n(cr), n(cg), n(cb)).bytes());
+
+    let line_h = size * 1.15;
+    let total = line_h * (laid.len() as f64 - 1.0);
+
+    for (li, (line, pieces, width_at_1)) in laid.iter().enumerate() {
+        let tw = width_at_1 * size;
+        let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        content.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
+
+        let mut pen = -tw / 2.0;
+        let y = total / 2.0 - li as f64 * line_h - size * 0.35;
+        let mut current: Option<&str> = None;
+
+        for piece in pieces {
+            match piece {
+                Piece::Latin(s) => {
+                    if current != Some("PCHelv") {
+                        content.extend(format!("/PCHelv {} Tf ", n(size)).bytes());
+                        current = Some("PCHelv");
+                    }
+                    content.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
+                    content.extend(literal(&win_ansi(s)));
+                    content.extend_from_slice(b" Tj\n");
+                    pen += Family::Helvetica.width(s, size, false, false);
+                }
+                Piece::Shaped(clusters) => {
+                    for cl in clusters {
+                        let Some(&k) = index.get(&cluster_key(cl)) else { continue };
+                        let Some(name) = names.get(k / GLYPHS_PER_FONT) else { continue };
+                        let code = u8::try_from(k % GLYPHS_PER_FONT + 1).unwrap_or(1);
+                        if current != Some(name.as_str()) {
+                            content.extend(format!("/{name} {} Tf ", n(size)).bytes());
+                            current = Some(name.as_str());
+                        }
+                        content.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
+                        content.extend(literal(&[code]));
+                        content.extend_from_slice(b" Tj\n");
+                        pen += cl.advance * size;
+                    }
+                }
+            }
+        }
+        content.extend_from_slice(b"EMC\n");
+    }
+    content.extend_from_slice(b"ET\n");
+    Ok((content, fonts))
 }
 
 /// What makes two clusters the same Type 3 glyph: text, glyphs, offsets and advance (bit for bit;
