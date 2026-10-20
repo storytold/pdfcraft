@@ -867,6 +867,11 @@ pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, script
     if f.read_only() {
         return Err(FormError::ReadOnly(name.into()));
     }
+    if let FieldValue::Text(s) = value
+        && s.chars().any(appearance::is_thai)
+    {
+        let _ = author::ensure_thai_font(doc);
+    }
     write_value(doc, f, value, scripts)?;
     // Fields with the same fully qualified name are one field (§12.7.3.1). Writers that repeat a
     // name as separate field dictionaries, instead of widgets under one parent, get the value
@@ -1180,6 +1185,23 @@ pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) ->
 
 /// Regenerate the normal appearance of every widget of a text or choice field.
 fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    let has_thai = values.iter().any(|v| v.chars().any(appearance::is_thai));
+    if has_thai {
+        let _ = author::ensure_thai_font(doc);
+        let da_str = doc.get(f.obj).as_dict().and_then(|d| d.get(b"DA")).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).unwrap_or_else(|| f.da.clone());
+        let parsed = appearance::parse_da(&da_str);
+        if matches!(parsed.font.as_str(), "Helv" | "TiRo" | "Cour") {
+            let new_da = format!("/Thai {} Tf {}", appearance::fmt(parsed.size), parsed.color);
+            let _ = doc.update_dict(f.obj, |d| d.set(b"DA".to_vec(), PdfString::literal(new_da.as_bytes().to_vec())));
+            for w in &f.widgets {
+                let _ = doc.update_dict(w.obj, |d| {
+                    if d.contains(b"DA") {
+                        d.set(b"DA".to_vec(), PdfString::literal(new_da.as_bytes().to_vec()));
+                    }
+                });
+            }
+        }
+    }
     let shown = match values {
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,

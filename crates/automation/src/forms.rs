@@ -88,7 +88,8 @@ fn look_arg(v: &Value) -> Result<pdfcraft_engine::FieldLookPatch> {
                 "helvetica" => Ok(FieldFont::Helvetica),
                 "times" => Ok(FieldFont::Times),
                 "courier" => Ok(FieldFont::Courier),
-                x => Err(bad(format!("unknown font {x:?} (helvetica, times, courier)"))),
+                "thai" => Ok(FieldFont::Thai),
+                x => Err(bad(format!("unknown font {x:?} (helvetica, times, courier, thai)"))),
             })
             .transpose()?,
     })

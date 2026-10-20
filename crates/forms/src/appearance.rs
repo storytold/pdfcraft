@@ -191,10 +191,28 @@ impl FontText {
 
     fn width(&self, s: &str, size: f64) -> f64 {
         match self {
-            Self::WinAnsi | Self::Simple(_) => helvetica_width(s, size),
+            Self::WinAnsi => helvetica_width(s, size),
+            Self::Simple(metrics) => {
+                if s.chars().any(is_thai)
+                    && let Ok(clusters) = pdfcraft_fonts::shape_thai(s)
+                {
+                    return clusters.iter().map(|c| c.advance * size).sum();
+                }
+                let codes = metrics.codes(&metrics.encode(&s.replace('\t', " ")).unwrap_or_default());
+                if codes.is_empty() {
+                    helvetica_width(s, size)
+                } else {
+                    codes.into_iter().map(|(c, _)| metrics.width(c) * size).sum()
+                }
+            }
             Self::Unicode(_) => cjk_width(s, size),
         }
     }
+}
+
+/// Whether a character is in the Thai Unicode block.
+pub fn is_thai(c: char) -> bool {
+    ('\u{0E01}'..='\u{0E7F}').contains(&c)
 }
 
 /// The font resource for `name` from the form's `/DR`, if it is a font we can encode for.
@@ -209,8 +227,15 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
         // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
         // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
-        // the font's own mapping, so those still fall back to Helvetica.
-        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
+        // the font's own mapping, so those fall back to metrics with ToUnicode.
+        Some(b"Type0") => {
+            if let Some(enc_name) = fd.name(b"Encoding")
+                && let Some(cmap) = UnicodeCMap::from_name(enc_name)
+            {
+                return Some((entry, FontText::Unicode(cmap)));
+            }
+            return Some((entry, FontText::Simple(Box::new(Metrics::from_dict(doc, fd)))));
+        }
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
@@ -456,7 +481,13 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
     };
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        None => {
+            if text.chars().any(is_thai) && let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc)) {
+                ("Thai".to_string(), o, enc)
+            } else {
+                ("Helv".to_string(), helvetica(), FontText::WinAnsi)
+            }
+        }
     };
     let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);

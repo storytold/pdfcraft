@@ -22,7 +22,7 @@ pub use craft::{
     set_active_thai_font_by_path, set_active_thai_font_entry, load_custom_thai_font_named, ThaiFontEntry, CRAFT_FONTS, CraftFont,
     SHIPPORI_MINCHO, document_arabic_font, document_hebrew_font, document_japanese_font, document_japanese_font_for_style,
     document_japanese_fonts_for_style, document_thai_font, load_custom_thai_font, register_custom_thai_font, ui_arabic_fonts, ui_chinese_fonts,
-    ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+    ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts, BUNDLED_SARABUN, BUNDLED_SARABUN_BYTES,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use craft::load_custom_thai_font_file;

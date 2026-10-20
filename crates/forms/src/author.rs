@@ -148,12 +148,39 @@ pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
         fonts.set(name.as_bytes().to_vec(), Object::Dict(f));
         added = true;
     }
+    if !fonts.contains(b"Thai")
+        && let Some(thai_font) = pdfcraft_fonts::document_thai_font()
+        && let Ok(res) = pdfcraft_fonts::embedding::embed(doc, &mut fonts, thai_font.bytes, thai_font.family)
+        && let Some(obj) = fonts.get(res.as_bytes()).cloned()
+    {
+        fonts.set(b"Thai".to_vec(), obj);
+        added = true;
+    }
     if added {
         dr.set(b"Font".to_vec(), Object::Dict(fonts));
         af.set(b"DR".to_vec(), Object::Dict(dr));
     }
     doc.set(r, Object::Dict(af));
     Ok(r)
+}
+
+/// Ensure that the AcroForm has a Thai font resource `/DR /Font /Thai` embedded, if a Thai font is available.
+pub fn ensure_thai_font(doc: &mut Document) -> Result<(), FormError> {
+    let af = ensure_form(doc)?;
+    let mut af_dict = doc.get(af).as_dict().cloned().unwrap_or_default();
+    let mut dr = af_dict.get(b"DR").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = dr.get(b"Font").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    if !fonts.contains(b"Thai")
+        && let Some(thai_font) = pdfcraft_fonts::document_thai_font()
+        && let Ok(res) = pdfcraft_fonts::embedding::embed(doc, &mut fonts, thai_font.bytes, thai_font.family)
+        && let Some(obj) = fonts.get(res.as_bytes()).cloned()
+    {
+        fonts.set(b"Thai".to_vec(), obj);
+        dr.set(b"Font".to_vec(), Object::Dict(fonts));
+        af_dict.set(b"DR".to_vec(), Object::Dict(dr));
+        doc.set(af, Object::Dict(af_dict));
+    }
+    Ok(())
 }
 
 /// The Appearance tab: borders, colours and text.
@@ -329,16 +356,18 @@ pub enum FieldFont {
     Helvetica,
     Times,
     Courier,
+    Thai,
 }
 
 impl FieldFont {
-    pub const ALL: [FieldFont; 3] = [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier];
+    pub const ALL: [FieldFont; 4] = [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier, FieldFont::Thai];
 
     fn resource(self) -> &'static str {
         match self {
             FieldFont::Helvetica => "Helv",
             FieldFont::Times => "TiRo",
             FieldFont::Courier => "Cour",
+            FieldFont::Thai => "Thai",
         }
     }
 
@@ -347,6 +376,7 @@ impl FieldFont {
             FieldFont::Helvetica => "Helvetica",
             FieldFont::Times => "Times Roman",
             FieldFont::Courier => "Courier",
+            FieldFont::Thai => "Thai",
         }
     }
 }
@@ -447,6 +477,7 @@ pub fn look(doc: &Document, f: &Field) -> Look {
         font: match parsed.font.as_str() {
             "TiRo" | "Times-Roman" => FieldFont::Times,
             "Cour" | "Courier" => FieldFont::Courier,
+            s if s.eq_ignore_ascii_case("thai") || s.to_lowercase().contains("thai") || s.starts_with("PCFull") => FieldFont::Thai,
             _ => FieldFont::Helvetica,
         },
     }
@@ -940,6 +971,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     };
     if props.look.is_some() || props.appearance.is_some_and(|p| p.font.is_some()) {
         ensure_form(doc)?;
+    }
+    if props.look.as_ref().is_some_and(|l| l.font == FieldFont::Thai)
+        || props.appearance.as_ref().is_some_and(|p| p.font == Some(FieldFont::Thai))
+        || props.default_value.as_ref().and_then(|d| d.as_ref()).is_some_and(|d| d.chars().any(crate::appearance::is_thai))
+    {
+        ensure_thai_font(doc)?;
     }
     let mut ff = f.flags;
     let mut set_flag = |flag: u32, on: Option<bool>| {

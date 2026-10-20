@@ -2508,3 +2508,35 @@ fn document_scripts_read_each_name_tree_node_once() {
     ]);
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }
+
+#[test]
+fn thai_text_field_appearance_and_auto_fallback() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".into(),
+    ]);
+    let name = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 530.0], &NewField::Text { multiline: false }, Some("thai_field")).unwrap();
+    assert_eq!(name, "thai_field");
+
+    let thai_text = "ทดสอบภาษาไทย";
+    set_value(&mut doc, "thai_field", &FieldValue::Text(thai_text.into())).unwrap();
+
+    let f = fields(&doc).into_iter().find(|f| f.name == "thai_field").unwrap();
+    assert_eq!(f.value, vec![thai_text.to_string()]);
+
+    let af = acroform(&doc).unwrap();
+    let dr = doc.resolve(af.get(b"DR").unwrap());
+    let fonts = doc.resolve(dr.as_dict().unwrap().get(b"Font").unwrap());
+    assert!(fonts.as_dict().unwrap().contains(b"Helv"));
+
+    assert!(fonts.as_dict().unwrap().contains(b"Thai"));
+    assert!(f.da.contains("/Thai"));
+
+    let thai_obj = doc.resolve(fonts.as_dict().unwrap().get(b"Thai").unwrap());
+    let thai_dict = thai_obj.as_dict().unwrap();
+    assert_eq!(thai_dict.get(b"Subtype").and_then(|o| o.as_name()), Some(b"Type0".as_slice()));
+    let base_font = thai_dict.get(b"BaseFont").and_then(|o| o.as_name()).unwrap();
+    assert!(String::from_utf8_lossy(base_font).contains("Sarabun"));
+}
+

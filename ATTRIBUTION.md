@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (276)
+## In this repository (277)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -284,6 +284,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/subscript.svg` | Lucide icon "subscript" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/subscript.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/pilcrow.svg` | Lucide icon "pilcrow" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pilcrow.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/move-horizontal.svg` | Lucide icon "move-horizontal" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/move-horizontal.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/fonts/Sarabun-Regular.ttf` | Sarabun Regular font | The Sarabun Project Authors (Suppakit Chalermlarp) | OFL-1.1 | https://github.com/cadsondemak/Sarabun | Thai UI and fallback font for document rendering and form authoring |
 
 ## Compiled in through dependencies (6)
 

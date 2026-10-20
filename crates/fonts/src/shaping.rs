@@ -68,10 +68,10 @@ fn face(script: ShapedScript) -> Option<std::sync::Arc<(FontRef<'static>, Shaper
             })
             .clone(),
         ShapedScript::Thai => {
-            if let Ok(lock) = THAI.read() {
-                if let Some(cached) = lock.as_ref() {
-                    return Some(cached.clone());
-                }
+            if let Ok(lock) = THAI.read()
+                && let Some(cached) = lock.as_ref()
+            {
+                return Some(cached.clone());
             }
             let font_asset = script.font()?;
             let font = (0..16)

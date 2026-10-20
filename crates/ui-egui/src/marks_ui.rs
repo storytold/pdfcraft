@@ -258,10 +258,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                                             let selected = pdfcraft_fonts::active_thai_font_entry()
                                                 .as_ref()
                                                 .is_some_and(|curr| curr.file_name.eq_ignore_ascii_case(&entry.file_name));
-                                            if ui.selectable_label(selected, &entry.name).clicked() {
-                                                if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
-                                                    ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
-                                                }
+                                            if ui.selectable_label(selected, &entry.name).clicked()
+                                                && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
+                                            {
+                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
                                             }
                                         }
                                     });

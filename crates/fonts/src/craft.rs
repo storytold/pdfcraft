@@ -29,6 +29,16 @@ impl CraftFont {
     }
 }
 
+/// Bundled Sarabun-Regular TrueType font (OFL-1.1), embedded at compile time from `assets/fonts/Sarabun-Regular.ttf`.
+pub static BUNDLED_SARABUN_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Sarabun-Regular.ttf");
+
+pub static BUNDLED_SARABUN: CraftFont = CraftFont {
+    family: "Sarabun",
+    style: "Regular",
+    scripts: &["Thai"],
+    bytes: BUNDLED_SARABUN_BYTES,
+};
+
 /// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ UDPGothic (a UI
 /// face) first, then the rest in manifest order. Empty without craft-fonts.
 pub fn ui_japanese_fonts() -> Vec<&'static CraftFont> {
@@ -139,25 +149,29 @@ pub fn font_directories() -> Vec<std::path::PathBuf> {
     }
 
     // 2. Executable-relative paths (next to executable, or in ancestor directories for target/debug builds)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            dirs.push(parent.join("fonts"));
-            if let Some(grand) = parent.parent() {
-                dirs.push(grand.join("fonts"));
-                if let Some(great) = grand.parent() {
-                    dirs.push(great.join("fonts"));
-                }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        dirs.push(parent.join("fonts"));
+        dirs.push(parent.join("assets").join("fonts"));
+        if let Some(grand) = parent.parent() {
+            dirs.push(grand.join("fonts"));
+            dirs.push(grand.join("assets").join("fonts"));
+            if let Some(great) = grand.parent() {
+                dirs.push(great.join("fonts"));
+                dirs.push(great.join("assets").join("fonts"));
             }
         }
     }
 
     // 3. Current working directory and relative paths
-    for rel in ["fonts", "../fonts", "../../fonts"] {
+    for rel in ["fonts", "../fonts", "../../fonts", "assets/fonts", "../assets/fonts"] {
         dirs.push(std::path::PathBuf::from(rel));
     }
 
     // 4. Manifest directory at compile/build time (for cargo test and local dev execution)
     let manifest = env!("CARGO_MANIFEST_DIR");
+    dirs.push(std::path::Path::new(manifest).join("../../assets/fonts"));
     dirs.push(std::path::Path::new(manifest).join("../../fonts"));
     dirs.push(std::path::Path::new(manifest).join("../fonts"));
     dirs.push(std::path::Path::new(manifest).join("fonts"));
@@ -293,11 +307,28 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
         scan_dir_recursive(&dir, 0, &mut entries);
     }
 
+    // Ensure Sarabun (bundled font) is always present as an available Thai font
+    if !entries.iter().any(|e| e.family.eq_ignore_ascii_case("Sarabun") && e.style.eq_ignore_ascii_case("Regular")) {
+        entries.push(ThaiFontEntry {
+            name: "Sarabun".to_string(),
+            family: "Sarabun".to_string(),
+            style: "Regular".to_string(),
+            file_name: "Sarabun-Regular.ttf".to_string(),
+            path: std::path::PathBuf::from("assets/fonts/Sarabun-Regular.ttf"),
+        });
+    }
+
     // Sort entries:
-    // 1. COURMT__.TTF (Courier MonoThai Regular) as the default first choice
-    // 2. Other Courier MonoThai styles
-    // 3. Alphabetical by family, then style (Regular before Bold/Italic)
+    // 1. Sarabun Regular (bundled default font)
+    // 2. COURMT__.TTF (Courier MonoThai)
+    // 3. Other Courier MonoThai styles
+    // 4. Alphabetical by family, then style (Regular before Bold/Italic)
     entries.sort_by(|a, b| {
+        let a_is_sarabun = a.family.eq_ignore_ascii_case("Sarabun") && a.style.eq_ignore_ascii_case("Regular");
+        let b_is_sarabun = b.family.eq_ignore_ascii_case("Sarabun") && b.style.eq_ignore_ascii_case("Regular");
+        if a_is_sarabun != b_is_sarabun {
+            return b_is_sarabun.cmp(&a_is_sarabun);
+        }
         let a_is_default = a.file_name.eq_ignore_ascii_case("COURMT__.TTF");
         let b_is_default = b.file_name.eq_ignore_ascii_case("COURMT__.TTF");
         if a_is_default != b_is_default {
@@ -378,13 +409,20 @@ pub fn load_custom_thai_font_named(
 
 /// Set the active Thai font using a `ThaiFontEntry`.
 pub fn set_active_thai_font_entry(entry: &ThaiFontEntry) -> Result<&'static CraftFont, crate::GlyphError> {
-    if let Some(cached) = with_loaded_thai_cache_read(|map| map.get(&entry.path).copied()) {
-        if let Some(font) = cached {
-            set_active_thai_font(Some(font));
-            set_active_thai_entry(Some(entry.clone()));
-            crate::shaping::invalidate_thai_cache();
-            return Ok(font);
-        }
+    if entry.file_name.eq_ignore_ascii_case("Sarabun-Regular.ttf")
+        || (entry.family.eq_ignore_ascii_case("Sarabun") && entry.style.eq_ignore_ascii_case("Regular"))
+    {
+        set_active_thai_font(Some(&BUNDLED_SARABUN));
+        set_active_thai_entry(Some(entry.clone()));
+        crate::shaping::invalidate_thai_cache();
+        return Ok(&BUNDLED_SARABUN);
+    }
+
+    if let Some(Some(font)) = with_loaded_thai_cache_read(|map| map.get(&entry.path).copied()) {
+        set_active_thai_font(Some(font));
+        set_active_thai_entry(Some(entry.clone()));
+        crate::shaping::invalidate_thai_cache();
+        return Ok(font);
     }
 
     let bytes = std::fs::read(&entry.path).map_err(|_| crate::GlyphError::NoFont)?;
@@ -514,28 +552,35 @@ fn auto_init_thai_font() -> Option<&'static CraftFont> {
     // 1. Check environment variable override
     if let Some(p) = std::env::var_os("PDFCRAFT_THAI_FONT").or_else(|| std::env::var_os("PDFCRAFT_CUSTOM_FONT")) {
         let path = std::path::PathBuf::from(p);
-        if path.is_file() {
-            if let Ok(font) = set_active_thai_font_by_path(&path) {
-                return Some(font);
-            }
+        if path.is_file()
+            && let Ok(font) = set_active_thai_font_by_path(&path)
+        {
+            return Some(font);
         }
     }
 
     // 2. Discover available fonts from font directories
     let list = available_thai_fonts();
 
-    // Default to COURMT__.TTF (Courier MonoThai) as required
-    if let Some(entry) = list.iter().find(|e| e.file_name.eq_ignore_ascii_case("COURMT__.TTF")) {
-        if let Ok(font) = set_active_thai_font_entry(entry) {
-            return Some(font);
-        }
+    // Default to Sarabun (OFL-1.1 bundled font)
+    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("Sarabun") && e.style.eq_ignore_ascii_case("Regular"))
+        && let Ok(font) = set_active_thai_font_entry(entry)
+    {
+        return Some(font);
+    }
+
+    // Next try COURMT__.TTF (Courier MonoThai) as required
+    if let Some(entry) = list.iter().find(|e| e.file_name.eq_ignore_ascii_case("COURMT__.TTF"))
+        && let Ok(font) = set_active_thai_font_entry(entry)
+    {
+        return Some(font);
     }
 
     // Next try any Courier MonoThai
-    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("Courier MonoThai")) {
-        if let Ok(font) = set_active_thai_font_entry(entry) {
-            return Some(font);
-        }
+    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("Courier MonoThai"))
+        && let Ok(font) = set_active_thai_font_entry(entry)
+    {
+        return Some(font);
     }
 
     // Next try each discovered Thai font until one loads successfully
@@ -545,8 +590,12 @@ fn auto_init_thai_font() -> Option<&'static CraftFont> {
         }
     }
 
-    // 3. Fallback to host system font
-    discover_host_thai_font()
+    // 3. Fallback to host system font, or bundled Sarabun
+    if let Some(font) = discover_host_thai_font() {
+        return Some(font);
+    }
+    set_active_thai_font(Some(&BUNDLED_SARABUN));
+    Some(&BUNDLED_SARABUN)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -651,6 +700,9 @@ pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
                 }
             }
         });
+        if !fonts.iter().any(|f| std::ptr::eq(*f, &BUNDLED_SARABUN)) {
+            fonts.push(&BUNDLED_SARABUN);
+        }
     }
     fonts
 }
@@ -673,7 +725,7 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
             return Some(f);
         }
     }
-    None
+    Some(&BUNDLED_SARABUN)
 }
 
 /// The `Hebr` craft-fonts faces for Hebrew interface text (file names, document titles, text
@@ -947,11 +999,9 @@ mod tests {
 
         let fonts = available_thai_fonts();
         if !fonts.is_empty() {
-            // First font should be COURMT__.TTF (Courier MonoThai) if present in fonts folder
-            if fonts.iter().any(|f| f.file_name.eq_ignore_ascii_case("COURMT__.TTF")) {
-                assert_eq!(fonts[0].file_name.to_uppercase(), "COURMT__.TTF");
-                assert_eq!(fonts[0].family, "Courier MonoThai");
-            }
+            // First font should be Sarabun-Regular.ttf (bundled OFL-1.1 font)
+            assert_eq!(fonts[0].file_name.to_ascii_uppercase(), "SARABUN-REGULAR.TTF");
+            assert_eq!(fonts[0].family, "Sarabun");
             // Auto-initialized font should be available
             let active = document_thai_font();
             assert!(active.is_some(), "document_thai_font() should auto-initialize");
