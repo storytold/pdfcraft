@@ -775,6 +775,149 @@ pub(crate) fn draw_watermark_shaped(
     Ok((content, fonts))
 }
 
+pub(crate) fn draw_header_footer_shaped(
+    doc: &mut Document,
+    hf: &crate::HeaderFooter,
+    expanded: &[(usize, Vec<String>)],
+    page_w: f64,
+    page_h: f64,
+) -> Result<(Vec<u8>, Dict), EditError> {
+    let dummy = AddedText {
+        text: String::new(),
+        family: hf.font,
+        size: hf.font_size,
+        bold: false,
+        italic: false,
+        align: Align::Left,
+        color: hf.color,
+        rect: [0.0, 0.0, page_w, page_h],
+    };
+
+    let mut laid_slots: Vec<(usize, Vec<(String, Vec<Piece>, f64)>)> = Vec::new();
+    for &(slot, ref lines) in expanded {
+        let mut slot_laid = Vec::new();
+        for line in lines {
+            let (pieces, width) = shaped_layout(&dummy, line, false)?;
+            slot_laid.push((line.clone(), pieces, width));
+        }
+        laid_slots.push((slot, slot_laid));
+    }
+
+    let mut keys: Vec<&ShapedCluster> = Vec::new();
+    let mut index: HashMap<ClusterKey, usize> = HashMap::new();
+    for (_, slot_laid) in &laid_slots {
+        for (_, pieces, _) in slot_laid {
+            for p in pieces {
+                if let Piece::Shaped(clusters) = p {
+                    for c in clusters {
+                        index.entry(cluster_key(c)).or_insert_with(|| {
+                            keys.push(c);
+                            keys.len() - 1
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let mut outlines = HashMap::new();
+    for c in &keys {
+        for (id, _) in &c.glyphs {
+            if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((c.script, *id)) {
+                entry.insert(shaped_glyph(c.script, *id).map_err(|e| match c.script {
+                    ShapedScript::Arabic => arabic_error(e, &c.text),
+                    ShapedScript::Hebrew => hebrew_error(e, &c.text),
+                    ShapedScript::Thai => thai_error(e, &c.text),
+                })?);
+            }
+        }
+    }
+
+    let mut fonts = Dict::new();
+    let mut names = Vec::new();
+    for chunk in keys.chunks(GLYPHS_PER_FONT) {
+        let font = type3_shaped(doc, chunk, &outlines);
+        let name = format!("PCTh{}", font.num);
+        fonts.set(name.clone().into_bytes(), Object::Ref(font));
+        names.push(name);
+    }
+
+    let latin = match hf.font {
+        Family::Helvetica => "PCHelv",
+        Family::Times => "PCTimes",
+        Family::Courier => "PCCour",
+    };
+    let size = hf.font_size;
+    let [top, bottom, left, right] = hf.margins;
+    let [cr, cg, cb] = hf.color.map(|v| v.clamp(0.0, 1.0));
+    let mut content = format!("BT {} {} {} rg\n", n(cr), n(cg), n(cb)).into_bytes();
+    let mut underlines = String::new();
+    let line_h = size * 1.2;
+
+    for (slot, slot_laid) in laid_slots {
+        let header = slot < 3;
+        let line_count = slot_laid.len();
+        for (li, (line, pieces, tw)) in slot_laid.into_iter().enumerate() {
+            let x = match slot % 3 {
+                0 => left,
+                1 => (page_w - tw) / 2.0,
+                _ => page_w - right - tw,
+            };
+            let y = if header {
+                page_h - top - size * 0.8 - li as f64 * line_h
+            } else {
+                bottom + (line_count.saturating_sub(1).saturating_sub(li)) as f64 * line_h
+            };
+
+            let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
+            content.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
+
+            let mut pen = x;
+            let mut current: Option<&str> = None;
+            for piece in pieces {
+                match piece {
+                    Piece::Latin(s) => {
+                        if current != Some(latin) {
+                            content.extend(format!("/{latin} {} Tf ", n(size)).bytes());
+                            current = Some(latin);
+                        }
+                        content.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
+                        content.extend(literal(&win_ansi(&s)));
+                        content.extend_from_slice(b" Tj\n");
+                        pen += hf.font.width(&s, size, false, false);
+                    }
+                    Piece::Shaped(clusters) => {
+                        for cl in clusters {
+                            let Some(&k) = index.get(&cluster_key(cl)) else { continue };
+                            let Some(name) = names.get(k / GLYPHS_PER_FONT) else { continue };
+                            let code = u8::try_from(k % GLYPHS_PER_FONT + 1).unwrap_or(1);
+                            if current != Some(name.as_str()) {
+                                content.extend(format!("/{name} {} Tf ", n(size)).bytes());
+                                current = Some(name.as_str());
+                            }
+                            content.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
+                            content.extend(literal(&[code]));
+                            content.extend_from_slice(b" Tj\n");
+                            pen += cl.advance * size;
+                        }
+                    }
+                }
+            }
+            content.extend_from_slice(b"EMC\n");
+
+            if hf.underline {
+                underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));
+            }
+        }
+    }
+
+    content.extend_from_slice(b"ET\n");
+    if !underlines.is_empty() {
+        content.extend(format!("{} {} {} rg\n{underlines}", n(cr), n(cg), n(cb)).bytes());
+    }
+    Ok((content, fonts))
+}
+
 /// What makes two clusters the same Type 3 glyph: text, glyphs, offsets and advance (bit for bit;
 /// equal clusters come from the same font units).
 type ClusterKey<'a> = (ShapedScript, &'a str, Vec<(u32, u64, u64)>, u64);

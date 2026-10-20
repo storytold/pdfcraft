@@ -1197,6 +1197,20 @@ impl Automation {
                 for (k, key) in ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"].iter().enumerate() {
                     hf.text[k] = a.opt_str(key)?.unwrap_or_default().to_string();
                 }
+                if let Some(font) = a.opt_str("font")? {
+                    if font.eq_ignore_ascii_case("times") || font.eq_ignore_ascii_case("times-roman") || font.eq_ignore_ascii_case("times roman") {
+                        hf.font = pdfcraft_engine::FontFamily::Times;
+                        hf.font_name = Some("Times".to_string());
+                    } else if font.eq_ignore_ascii_case("courier") {
+                        hf.font = pdfcraft_engine::FontFamily::Courier;
+                        hf.font_name = Some("Courier".to_string());
+                    } else if font.eq_ignore_ascii_case("helvetica") {
+                        hf.font = pdfcraft_engine::FontFamily::Helvetica;
+                        hf.font_name = Some("Helvetica".to_string());
+                    } else {
+                        hf.font_name = Some(font.to_string());
+                    }
+                }
                 if let Some(s) = a.opt_num("font_size")? {
                     hf.font_size = s;
                 }

@@ -3150,6 +3150,40 @@ fn watermark_thai_text_renders_and_survives_reopen() {
 }
 
 #[test]
+fn header_footer_thai_text_renders_and_survives_reopen() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["ภาษาไทย".into(), "".into(), "".into(), "".into(), "หน้า <<1>>".into(), "".into()],
+        ..HeaderFooter::default()
+    };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(hf.first_undrawable().is_some());
+        let err = add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap_err().to_string();
+        assert!(err.contains("Thai") && err.contains("CRAFT_FONTS_DIR"), "{err}");
+        return;
+    }
+    assert_eq!(hf.first_undrawable(), None);
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let reopened = reopen(&doc);
+    let streams = streams(&reopened, 0);
+    assert!(streams.iter().any(|s| s.contains("/PCMark /HeaderFooter") && s.contains("/PCTh")));
+}
+
+#[test]
+fn header_footer_font_selection() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["Header".into(), "".into(), "".into(), "".into(), "".into(), "".into()],
+        font: Family::Times,
+        ..HeaderFooter::default()
+    };
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let reopened = reopen(&doc);
+    let streams = streams(&reopened, 0);
+    assert!(streams.iter().any(|s| s.contains("/PCMark /HeaderFooter") && s.contains("/PCTimes")));
+}
+
+#[test]
 fn group_moves_preserve_glyph_bytes_and_unselected_text_state() {
     for content in [
         "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 14 TL 1 0.2 -0.1 1 50 600 Tm (A\\101) Tj 1 0 0 rg (Neighbour) Tj T* (Next) Tj ET",
