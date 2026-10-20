@@ -136,7 +136,11 @@ impl Automation {
     /// Hold the engine's own reads beside an opened file — the document a `.p7s` signs — to the
     /// same roots as every tool path. The engine derives that path itself, so without this a
     /// link inside the root pointing out of it would hand it a file the tools would refuse to
-    /// open (#2129, AGENTS.md §3).
+    /// open (#2129, AGENTS.md §3). The guard opens the file itself, beside its checks, and the
+    /// engine reads from the handle it gets back: the path is never resolved again after the
+    /// checks. The open still follows a link swapped in during the window between check and
+    /// open; closing that would need no-follow opens (`cap-std`), which the workspace does not
+    /// carry as a dependency.
     fn confine_sibling_reads(&mut self) {
         let (root, roots) = (self.root.clone(), self.roots.clone());
         self.session = std::mem::take(&mut self.session).with_file_read_guard(Arc::new(move |path| {

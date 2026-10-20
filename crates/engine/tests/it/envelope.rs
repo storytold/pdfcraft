@@ -373,6 +373,35 @@ fn sibling_read_is_confined_by_the_hosts_guard() {
     assert!(allowed.get(id).unwrap().envelope.as_ref().is_some_and(|e| e.detached));
 }
 
+/// The guard performs the confined open and the engine reads from the handle it gets back
+/// (#2202 review): once the guard has opened the sibling, the path can be unlinked and the
+/// pair still opens, verified over the bytes of that handle. This fails if the engine
+/// resolves the sibling's path again after the guard — the time-of-check-to-time-of-use
+/// window in which a swapped link could steer the read outside the host's root.
+#[test]
+fn detached_sibling_is_read_from_the_guards_handle() {
+    let dir = scratch("guard-handle");
+    let pdf = data("openssl-signed.pdf");
+    let sig = detached_signature_over(&pdf);
+    std::fs::write(dir.join("openssl-signed.pdf.p7s"), &sig).unwrap();
+    std::fs::write(dir.join("openssl-signed.pdf"), &pdf).unwrap();
+    let path = dir.join("openssl-signed.pdf.p7s").to_string_lossy().into_owned();
+    // The host's guarded open, after which the sibling disappears from disk: nothing that
+    // resolves the path again can reach it.
+    let mut gone = Session::new().with_file_read_guard(Arc::new(|p: &std::path::Path| {
+        let handle = std::fs::File::open(p).map_err(|_| FileReadRefusal::Unreadable)?;
+        std::fs::remove_file(p).unwrap();
+        Ok(handle)
+    }));
+    let id = gone.open("openssl-signed.pdf.p7s", Some(path), Arc::new(sig), None).unwrap();
+    let d = gone.get(id).unwrap();
+    let env = d.envelope.as_ref().expect("the pair opens from the guard's handle");
+    assert!(env.detached);
+    assert!(env.digest_ok, "verified over the bytes the guard opened, not a later re-read of the path");
+    assert_eq!(d.name, "openssl-signed.pdf");
+    assert!(!dir.join("openssl-signed.pdf").exists(), "the sibling really is gone: the engine read the handle, not the path");
+}
+
 #[test]
 fn extract_original_refuses_detached_pairs() {
     let dir = scratch("extract-detached");
