@@ -663,7 +663,8 @@ fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypt
 /// Sixteen bytes for a file identifier. Without `SaveOptions::id_entropy` the standard library's
 /// random hash keys (seeded by the operating system on native targets) and a process-wide counter
 /// make each call differ. On WebAssembly those keys are fixed, so there the counter and the written
-/// bytes are what differ. The identifier only has to be unique, not secret.
+/// bytes are what differ. The identifier only has to be unique, not secret. The whole written file
+/// is hashed, once, so the cost is one linear pass over the output.
 fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -676,14 +677,23 @@ fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
         }
         None => std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed)),
     };
-    let mut id = Vec::with_capacity(16);
-    for lane in 0u8..2 {
+    // Every written byte is hashed, in one traversal that feeds both halves of the identifier. A
+    // prefix would give two rewrites that differ only later in the file the same identifier.
+    let mut halves = [0u8, 1].map(|lane| {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         h.write_u64(salt);
         h.write_u8(lane);
         h.write_u64(opts.id_seed);
         h.write_usize(written.len());
-        h.write(written.get(..written.len().min(1 << 16)).unwrap_or_default());
+        h
+    });
+    for chunk in written.chunks(4096) {
+        for h in &mut halves {
+            h.write(chunk);
+        }
+    }
+    let mut id = Vec::with_capacity(16);
+    for h in halves {
         id.extend_from_slice(&h.finish().to_be_bytes());
     }
     id

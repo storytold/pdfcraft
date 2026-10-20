@@ -22,6 +22,20 @@ fn source(with_id: bool) -> Vec<u8> {
     if with_id { pdf.trailer_entry(ID_HEX).build() } else { pdf.build() }
 }
 
+/// A one-page file whose 70,000-byte content stream ends in `last`. Two of these built with
+/// different last bytes have the same length and differ only past the first 64 KiB.
+fn large_source(last: u8) -> Vec<u8> {
+    let mut content = vec![b' '; 70_000];
+    content.push(last);
+    Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+        .stream("", content)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .build()
+}
+
 fn reopen(bytes: Vec<u8>) -> Document {
     Document::open(Arc::new(bytes)).unwrap()
 }
@@ -122,4 +136,21 @@ fn an_encrypted_rewrite_keeps_the_first_identifier_string_its_key_depends_on() {
         assert_eq!(new.first(), old.first(), "{algorithm:?}: the key depends on the first string");
         assert_ne!(new.get(1), old.get(1), "{algorithm:?}: the second string is new");
     }
+}
+
+#[test]
+fn the_identifier_depends_on_the_whole_rewritten_file() {
+    // Same caller entropy and same length; the two rewrites differ only in one byte of a stream
+    // that lies past the first 64 KiB of the output. Their identifiers must still differ.
+    let opts = SaveOptions { id_entropy: Some([9; 16]), ..SaveOptions::default() };
+    let rewrite = |last: u8| {
+        let mut doc = reopen(large_source(last));
+        doc.require_full_save_with_new_id();
+        write_full(&doc, &opts).unwrap()
+    };
+    let (a, b) = (rewrite(b'A'), rewrite(b'B'));
+    assert_eq!(a.len(), b.len(), "the two rewrites have the same length");
+    let first_difference = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(usize::MAX);
+    assert!(first_difference > 64 * 1024, "the rewrites first differ at byte {first_difference}, inside the first 64 KiB");
+    assert_ne!(id_strings(&reopen(a)), id_strings(&reopen(b)), "content past 64 KiB must change the identifier");
 }
