@@ -50,6 +50,7 @@
 
 <p align="center">
   <a href="#highlights">Highlights</a> ·
+  <a href="#thai-edition-features">Thai Edition</a> ·
   <a href="#read-anything-beautifully">Read</a> ·
   <a href="#find-it-select-it-copy-it">Find</a> ·
   <a href="#organize-pages-like-cards-on-a-table">Organize</a> ·
@@ -101,6 +102,40 @@ No account, no telemetry, no cloud. It works offline and opens instantly. The en
 </td>
 </tr>
 </table>
+
+---
+
+## 🇹🇭 Thai Edition Features (`feat/thai-font-support`)
+
+This repository is a specialized edition of [PdfCraft](https://github.com/storytold/pdfcraft) engineered to deliver **first-class Thai language support**, advanced complex text shaping, and localized authoring tools for Thai PDF workflows.
+
+### 1. Complex Text Shaping & Typography
+- **Multi-Level Mark Positioning**: Complete syllable cluster shaping for Thai diacritics via `harfrust`. Upper vowels (ิ, ี, ึ, ื), lower vowels (ุ, ู), tone marks (่, ้, ๊, ๋), and special marks (็, ์) are aligned with zero-advance metrics.
+- **Sara Am (ำ) Decomposition**: Correctly handles decomposition into Nikhahit (ํ) and Sara Aa (า) to prevent broken layouts.
+- **Eliminates Floating Diacritics**: Solves the notorious "สระลอย / วรรณยุกต์ซ้อน" issue commonly encountered in PDF readers and editors.
+
+### 2. Comprehensive Thai Font Discovery & Bundling
+- **Out-of-the-Box Display**: Bundles `Sarabun-Regular.ttf` (SIL Open Font License 1.1) so Thai documents and UI elements render cleanly on any system without manual font configuration.
+- **Dynamic Local Fonts Directory (`./fonts/`)**: Automatically scans the `fonts/` folder located alongside `pdfcraft.exe`. Drop any `.ttf` or `.otf` font file into this folder to use it immediately in the app without installation.
+- **National Fonts of Thailand Included**: The Windows portable release comes with over 50 Thai OpenType/TrueType fonts, including:
+  - **TH Sarabun New** & **TH Sarabun** (Regular, Bold, Italic, BoldItalic)
+  - **Courier MonoThai** (`COURMT__.TTF`) for fixed-pitch Thai document formats
+  - The 13 SIPA/DIP National Fonts: *TH Baijam, TH Chakra Petch, TH Charmonman, TH Charm of AU, TH Fahkwang, TH K2D July8, TH Kodchasal, TH KoHo, TH Krub, TH Mali Grade6, TH Niramit AS, TH Srisakdi*
+- **Cross-Platform System Font Fallback**: Resolves system font locations across Windows (`%WINDIR%\Fonts`), macOS (`/Library/Fonts`, `/System/Library/Fonts`), and Linux (`/usr/share/fonts`).
+
+### 3. Page Marks: Watermarks, Headers & Footers
+- **Watermark Tool**: Stamp documents with custom text watermarks (e.g., "สำเนาถูกต้อง", "ลับเฉพาะ", "DRAFT") in Thai typography. Supports custom angles, opacity, font size, and color.
+- **Headers, Footers & Bates Numbering**: Add running headers, footers, and page numbers with customizable Thai fonts, margins, and page ranges.
+- **Font Selection UI**: Integrated font selector in the Marks panel allows picking any discovered or bundled Thai font on the fly.
+
+### 4. Interactive PDF Forms in Thai
+- **Thai Unicode Field Support**: Fill and edit AcroForm text fields, checkboxes, and radio buttons with full Thai script compatibility.
+- **Font Resource Linking**: Automatically attaches and subsets font resources so Thai input displays consistently across other PDF viewers.
+
+### 5. Windows x64 Portable Distribution
+- **Zero Installation**: Download the portable zip, unpack anywhere (including USB drives), and run `pdfcraft.exe`.
+- **Static CRT Linking**: Built with `+crt-static` so no Visual C++ Redistributable is required.
+- **Self-Contained Data**: Includes `portable.txt` so settings, logs, and cache remain inside `PdfCraftData\` next to the executable without touching `%APPDATA%`.
 
 ---
 
@@ -450,6 +485,10 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 | x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+> [!TIP]
+> **🇹🇭 Thai Portable Edition (`feat/thai-font-support`):**
+> The Thai Edition release provides `pdfcraft-<ver>-windows-x64-portable.zip` pre-packaged with 50+ Thai fonts (including TH Sarabun New, Sarabun, Courier MonoThai, and 13 National Fonts) in the `fonts/` folder and OCR models in `models/`, ready to extract and run anywhere without setup.
 
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
