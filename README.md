@@ -105,6 +105,7 @@ No account, no telemetry, no cloud. It works offline and opens instantly. The en
 
 ---
 
+<a id="thai-edition-features"></a>
 ## 🇹🇭 Thai Edition Features (`feat/thai-font-support`)
 
 This repository is a specialized edition of [PdfCraft](https://github.com/storytold/pdfcraft) engineered to deliver **first-class Thai language support**, advanced complex text shaping, and localized authoring tools for Thai PDF workflows.
