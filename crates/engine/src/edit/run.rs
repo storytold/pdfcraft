@@ -105,6 +105,9 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::DeletePaths { .. }
+        | Edit::StylePaths { .. }
+        | Edit::MovePathPoint { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
@@ -691,6 +694,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::DeletePaths { page, paths } => pdfcraft_edit::delete_paths(doc, *page, paths)?,
+        Edit::StylePaths { page, paths, style } => pdfcraft_edit::style_paths(doc, *page, paths, *style)?,
+        Edit::MovePathPoint { page, path, point, to } => pdfcraft_edit::move_path_point(doc, *page, *path, *point, *to)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }

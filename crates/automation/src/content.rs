@@ -317,7 +317,8 @@ impl Automation {
             .map(|o| {
                 let rect = crate::comments::rect_to_view(info, o.rect.map(|v| v as f32));
                 json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
-                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text})
+                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text,
+                "path":o.outline.as_ref().map(|p|json!({"points":p.points.len(),"closed":p.closed,"stroked":p.stroked,"filled":p.filled,"width":p.width,"stroke":p.stroke,"fill":p.fill}))})
             })
             .collect::<Vec<_>>();
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
@@ -341,7 +342,8 @@ impl Automation {
                 Some("added") => ObjectKind::Added,
                 Some("text") => ObjectKind::Text,
                 Some("image") => ObjectKind::Image,
-                _ => return Err(bad("object kind must be added, text or image (see object_list)")),
+                Some("path") => ObjectKind::Path,
+                _ => return Err(bad("object kind must be added, text, image or path (see object_list)")),
             };
             let index = row
                 .get("index")
