@@ -34,6 +34,9 @@ pub struct Geometry {
     pub segments: Vec<[Point; 2]>,
     pub endpoints: Vec<Point>,
     pub midpoints: Vec<Point>,
+    /// The centres of closed figures: rectangles, circles (four curves round), closed polygons
+    /// and every filled subpath, each its box's centre.
+    pub centres: Vec<Point>,
     /// A limit stopped extraction early (segments, bytes, streams, nesting).
     pub truncated: bool,
     /// Content streams that couldn't be decoded and were skipped.
@@ -55,6 +58,7 @@ impl Geometry {
             segments: Vec::new(),
             endpoints: Vec::new(),
             midpoints: Vec::new(),
+            centres: Vec::new(),
             truncated: false,
             unreadable: 0,
             cap: limits.segments,
@@ -71,7 +75,7 @@ struct Grid {
     origin: Point,
     cell: f64,
     side: usize,
-    /// Targets by index: the endpoints, then the midpoints.
+    /// Targets by index: the endpoints, then the midpoints, then the centres.
     point_offsets: Vec<u32>,
     point_items: Vec<u32>,
     segment_offsets: Vec<u32>,
@@ -82,14 +86,14 @@ struct Grid {
 impl Grid {
     fn build(g: &Geometry) -> Self {
         let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
-        for p in g.segments.iter().flatten().chain(&g.endpoints).chain(&g.midpoints) {
+        for p in g.segments.iter().flatten().chain(&g.endpoints).chain(&g.midpoints).chain(&g.centres) {
             lo = [lo[0].min(p[0]), lo[1].min(p[1])];
             hi = [hi[0].max(p[0]), hi[1].max(p[1])];
         }
         if lo[0] > hi[0] || lo[1] > hi[1] {
             (lo, hi) = ([0.0, 0.0], [0.0, 0.0]);
         }
-        let points = g.endpoints.len().saturating_add(g.midpoints.len());
+        let points = g.endpoints.len().saturating_add(g.midpoints.len()).saturating_add(g.centres.len());
         let side = ((g.segments.len().max(points) as f64).sqrt().ceil() as usize).clamp(1, GRID_SIDE);
         let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
         let cell = if extent > 0.0 && extent.is_finite() { extent / side as f64 } else { 1.0 };
@@ -104,10 +108,10 @@ impl Grid {
             long: Vec::new(),
         };
         let cells = side * side;
-        let point = |i: usize| if i < g.endpoints.len() { g.endpoints.get(i) } else { g.midpoints.get(i - g.endpoints.len()) };
+        let point = |i: usize| g.target_at(i).map(|(p, _)| p);
         (grid.point_offsets, grid.point_items) = csr(cells, points, |i, put| {
             if let Some(p) = point(i) {
-                put(grid.cell_of(*p));
+                put(grid.cell_of(p));
             }
         });
         let mut long = Vec::new();
@@ -270,12 +274,18 @@ pub struct SnapOptions {
     pub midpoints: bool,
     pub intersections: bool,
     pub paths: bool,
+    /// The centres of closed figures and of the table cell or box around the point.
+    pub centres: bool,
 }
 impl Default for SnapOptions {
     fn default() -> Self {
-        Self { endpoints: true, midpoints: true, intersections: true, paths: true }
+        Self { endpoints: true, midpoints: true, intersections: true, paths: true, centres: true }
     }
 }
+/// How far a table cell's sides may be from the point for its centre to be a snap target.
+const CELL_REACH: f64 = 60.0;
+/// At most this many candidates are offered at one point.
+const MAX_CANDIDATES: usize = 32;
 fn dot(a: Point, b: Point) -> f64 {
     a[0] * b[0] + a[1] * b[1]
 }
@@ -305,6 +315,36 @@ fn nearest(p: Point, a: Point, b: Point) -> Point {
     let t = (dot(sub(p, a), v) / length).clamp(0.0, 1.0);
     [a[0] + v[0] * t, a[1] + v[1] * t]
 }
+/// A subpath's box and corners so far, for its centre once it is known to be closed.
+#[derive(Clone, Copy, Debug)]
+struct Subpath {
+    lo: Point,
+    hi: Point,
+    start: Point,
+    end: Point,
+    /// Points that shape it (corners, curve ends).
+    points: usize,
+    closed: bool,
+}
+impl Subpath {
+    fn new(p: Point) -> Self {
+        Self { lo: p, hi: p, start: p, end: p, points: 1, closed: false }
+    }
+    fn add(&mut self, p: Point) {
+        self.lo = [self.lo[0].min(p[0]), self.lo[1].min(p[1])];
+        self.hi = [self.hi[0].max(p[0]), self.hi[1].max(p[1])];
+        self.end = p;
+        self.points = self.points.saturating_add(1);
+    }
+    /// The centre of its box when it is a closed figure (closed by `h`, a rectangle, ending where
+    /// it began, or `filled`) of three points or more with some extent.
+    fn centre(&self, filled: bool) -> Option<Point> {
+        let closed = filled || self.closed || distance(self.start, self.end) <= 1e-6;
+        let extent = (self.hi[0] - self.lo[0]).max(self.hi[1] - self.lo[1]);
+        (closed && self.points >= 3 && extent > 1e-3).then(|| [(self.lo[0] + self.hi[0]) / 2.0, (self.lo[1] + self.hi[1]) / 2.0])
+    }
+}
+
 /// Save a subpath's implicit closing edge for fill operations. An unpainted or
 /// stroke-only open path must not gain that edge.
 fn remember_close(closures: &mut Vec<[Point; 2]>, current: Option<Point>, start: Option<Point>) -> bool {
@@ -329,31 +369,44 @@ impl Geometry {
         near.iter().filter_map(|i| self.segments.get(*i as usize)).filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(257).count()
             > 256
     }
+    /// The snap for `at`: the first of [`Self::candidates`].
     pub fn snap(&self, at: Point, tolerance: f64, options: SnapOptions) -> Result<Option<Snap>> {
+        Ok(self.candidates(at, tolerance, options)?.into_iter().next())
+    }
+    /// Every target within `tolerance` of `at` that `options` allows, nearest first (at the same
+    /// distance: endpoint, centre, midpoint, intersection), each point once, at most 32; then the
+    /// nearest point on a path, which comes first only when nothing else is in reach. What a
+    /// snap marker offers, and what Tab cycles through.
+    pub fn candidates(&self, at: Point, tolerance: f64, options: SnapOptions) -> Result<Vec<Snap>> {
         check_points(&[at])?;
         if !tolerance.is_finite() || !(0.0..=10_000.0).contains(&tolerance) {
             return Err(invalid("snap tolerance must be between 0 and 10000 user units"));
         }
         let grid = self.grid();
-        let mut best: Option<Snap> = None;
-        let consider = |best: &mut Option<Snap>, p: Point, kind: SnapKind| {
+        let mut found: Vec<Snap> = Vec::new();
+        let mut consider = |p: Point, kind: SnapKind| {
             let distance = distance(at, p);
-            // Discrete targets take precedence over projections at the same distance.
-            if distance <= tolerance && best.is_none_or(|b| distance < b.distance - 1e-9) {
-                *best = Some(Snap { point: p, kind, distance });
+            if distance <= tolerance {
+                found.push(Snap { point: p, kind, distance });
             }
         };
-        // The targets near the pointer, endpoints before midpoints (ties go to the first).
-        let points = grid.points_near(at, tolerance);
-        if options.endpoints {
-            for &p in points.iter().filter_map(|i| self.endpoints.get(*i as usize)) {
-                consider(&mut best, p, SnapKind::Endpoint);
+        for i in grid.points_near(at, tolerance) {
+            if let Some((p, kind)) = self.target_at(i as usize)
+                && match kind {
+                    SnapKind::Endpoint => options.endpoints,
+                    SnapKind::Midpoint => options.midpoints,
+                    SnapKind::Centre => options.centres,
+                    _ => false,
+                }
+            {
+                consider(p, kind);
             }
         }
-        if options.midpoints {
-            for &p in points.iter().filter_map(|i| (*i as usize).checked_sub(self.endpoints.len()).and_then(|i| self.midpoints.get(i))) {
-                consider(&mut best, p, SnapKind::Midpoint);
-            }
+        // The middle of the table cell (or box drawn of separate lines) around the point.
+        if options.centres
+            && let Some([x0, y0, x1, y1]) = self.enclosing_box(at, CELL_REACH.max(tolerance))
+        {
+            consider([(x0 + x1) / 2.0, (y0 + y1) / 2.0], SnapKind::Centre);
         }
         // Only segments in the pointer's neighbourhood participate in intersection tests.
         // Cap the local quadratic work even on a malicious densely overlapping drawing.
@@ -364,17 +417,59 @@ impl Geometry {
             for (i, s) in local.iter().enumerate() {
                 for t in local.iter().skip(i + 1) {
                     if let Some(p) = intersection(s[0], s[1], t[0], t[1]) {
-                        consider(&mut best, p, SnapKind::Intersection);
+                        consider(p, SnapKind::Intersection);
                     }
                 }
             }
         }
-        if options.paths && best.is_none() {
-            for [a, b] in near.iter().filter_map(segment) {
-                consider(&mut best, nearest(at, *a, *b), SnapKind::Path);
+        let rank = |k: SnapKind| match k {
+            SnapKind::Endpoint => 0,
+            SnapKind::Centre => 1,
+            SnapKind::Midpoint => 2,
+            SnapKind::Intersection => 3,
+            SnapKind::Path => 4,
+        };
+        // Nearest first; at (nearly) the same distance the discrete kinds in their order.
+        found.sort_by(
+            |a, b| {
+                if (a.distance - b.distance).abs() <= 1e-9 { rank(a.kind).cmp(&rank(b.kind)) } else { a.distance.total_cmp(&b.distance) }
+            },
+        );
+        let mut out: Vec<Snap> = Vec::new();
+        for s in found {
+            if out.len() >= MAX_CANDIDATES {
+                break;
+            }
+            if !out.iter().any(|o| distance(o.point, s.point) <= 1e-6) {
+                out.push(s);
             }
         }
-        Ok(best)
+        if options.paths {
+            let path = near
+                .iter()
+                .filter_map(segment)
+                .map(|[a, b]| nearest(at, *a, *b))
+                .map(|p| (distance(at, p), p))
+                .filter(|(d, _)| *d <= tolerance)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((d, p)) = path
+                && !out.iter().any(|o| distance(o.point, p) <= 1e-6)
+            {
+                out.push(Snap { point: p, kind: SnapKind::Path, distance: d });
+            }
+        }
+        Ok(out)
+    }
+    /// Target `i` of the grid's numbering (endpoints, midpoints, centres) and its kind.
+    fn target_at(&self, i: usize) -> Option<(Point, SnapKind)> {
+        let (e, m) = (self.endpoints.len(), self.midpoints.len());
+        if i < e {
+            self.endpoints.get(i).map(|p| (*p, SnapKind::Endpoint))
+        } else if i < e.saturating_add(m) {
+            self.midpoints.get(i - e).map(|p| (*p, SnapKind::Midpoint))
+        } else {
+            self.centres.get(i - e - m).map(|p| (*p, SnapKind::Centre))
+        }
     }
     /// The box drawn around `at`: the nearest horizontal segment above and below it and vertical
     /// segment left and right of it that pass `at` on their axis, each within `reach`, as
@@ -528,6 +623,8 @@ impl Walker<'_> {
         // Read on the first `Do` and kept: resolving a direct dictionary copies it.
         let mut xobjects = None;
 
+        // The subpaths of the path being built (the last one still open), for their centres.
+        let mut subpaths: Vec<Subpath> = Vec::new();
         let mut path = Geometry::with_limits(self.limits);
         let point = |m: Matrix, x: f64, y: f64| {
             let (x, y) = m.apply(x, y);
@@ -565,6 +662,11 @@ impl Walker<'_> {
                         let p = point(matrix, x, y);
                         current = Some(p);
                         start = Some(p);
+                        if subpaths.len() >= MAX_SEGMENTS {
+                            self.geometry.truncated = true;
+                            break;
+                        }
+                        subpaths.push(Subpath::new(p));
                     }
                 }
                 "l" => {
@@ -572,6 +674,9 @@ impl Walker<'_> {
                         let b = point(matrix, x, y);
                         path.edge(a, b);
                         current = Some(b);
+                        if let Some(sp) = subpaths.last_mut() {
+                            sp.add(b);
+                        }
                     }
                 }
                 "c" | "v" | "y" => {
@@ -595,6 +700,12 @@ impl Walker<'_> {
                                 path.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
                             }
                             current = Some(d);
+                            // The curve's middle stands for its bulge in the box (a circle's four
+                            // quarters reach its full extent there).
+                            if let Some(sp) = subpaths.last_mut() {
+                                sp.add([(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
+                                sp.add(d);
+                            }
                         }
                     }
                 }
@@ -602,6 +713,9 @@ impl Walker<'_> {
                     if let (Some(a), Some(b)) = (current, start) {
                         path.edge(a, b);
                         current = Some(b);
+                    }
+                    if let Some(sp) = subpaths.last_mut() {
+                        sp.closed = true;
                     }
                 }
                 "re" => {
@@ -619,6 +733,16 @@ impl Walker<'_> {
                         }
                         current = Some(a);
                         start = Some(a);
+                        if subpaths.len() >= MAX_SEGMENTS {
+                            self.geometry.truncated = true;
+                            break;
+                        }
+                        let mut sp = Subpath::new(a);
+                        for p in [b, c, d] {
+                            sp.add(p);
+                        }
+                        sp.closed = true;
+                        subpaths.push(sp);
                     }
                 }
                 "S" | "s" | "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" => {
@@ -642,9 +766,19 @@ impl Walker<'_> {
                     {
                         path.edge(a, b);
                     }
+                    let filled = !matches!(paint.as_ref(), "S" | "s");
+                    let closes_last = paint == "s";
+                    let count = subpaths.len();
+                    for (i, sp) in subpaths.drain(..).enumerate() {
+                        let sp = if closes_last && i + 1 == count { Subpath { closed: true, ..sp } } else { sp };
+                        if let Some(c) = sp.centre(filled) {
+                            path.centres.push(c);
+                        }
+                    }
                     self.geometry.segments.append(&mut path.segments);
                     self.geometry.endpoints.append(&mut path.endpoints);
                     self.geometry.midpoints.append(&mut path.midpoints);
+                    self.geometry.centres.append(&mut path.centres);
                     self.geometry.truncated |= path.truncated;
                     closures.clear();
                     current = None;
@@ -654,6 +788,7 @@ impl Walker<'_> {
                     self.geometry.truncated |= path.truncated;
                     path = Geometry::with_limits(self.limits);
                     closures.clear();
+                    subpaths.clear();
                     current = None;
                     start = None;
                 }

@@ -1555,9 +1555,11 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         _ => None,
     };
     let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i);
+    // The Select tool too: a comment moved or resized snaps by its corners.
     let snaps = match tool {
         QuickTool::Comment(t) => t.snaps(),
         QuickTool::Fill(t) => t.snaps(),
+        QuickTool::Select => true,
         _ => false,
     };
     frame.snap = if prefs.snap && snaps && here {
@@ -1571,7 +1573,19 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         None
     };
     let slot = PageSlot { i, r, xf };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, snap: frame.snap.clone() };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
