@@ -166,11 +166,17 @@ pub struct SaveOptions {
     /// before adding it, with [`Document::free_unlinked_additions`]. Full saves always leave
     /// these out.
     pub drop_unlinked: bool,
+    /// Entropy for the file identifier of a rewrite that asks for a new one (see
+    /// [`Document::require_full_save_with_new_id`]). Given, the identifier depends only on this and
+    /// on the written bytes, so the same save gives the same file; tests use it to pin output.
+    /// Without it, fresh entropy from the host (the operating system on native targets, the
+    /// browser on WebAssembly) is mixed in.
+    pub id_entropy: Option<[u8; 16]>,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None }
     }
 }
 
@@ -381,6 +387,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     }
     if reader.document.output_security().0.is_none() {
         ensure_id(&mut trailer, opts, reader.document.bytes());
+    }
+    if doc.new_id_required() {
+        regenerate_id(&mut trailer, opts, &out, reader.document.output_security().0.is_some());
     }
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
@@ -630,6 +639,54 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     id.extend_from_slice(&h.rotate_left(29).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
     let s = Object::String(PdfString { bytes: id, hex: true });
     trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
+}
+
+/// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not
+/// claim to be its source. An encrypted file keeps the first string, which its key is derived from,
+/// and gets a new second one. An encrypted file without a two-string `/ID` is left alone, as an
+/// ordinary save leaves it.
+fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypted: bool) {
+    let kept = match trailer.get(b"ID") {
+        Some(Object::Array(a)) if a.len() == 2 => a.first().cloned(),
+        _ => None,
+    };
+    let fresh = Object::String(PdfString { bytes: new_id_bytes(opts, written), hex: true });
+    let pair = if encrypted {
+        let Some(first) = kept else { return };
+        vec![first, fresh]
+    } else {
+        vec![fresh.clone(), fresh]
+    };
+    trailer.set(b"ID".to_vec(), Object::Array(pair));
+}
+
+/// Sixteen bytes for a file identifier. Without `SaveOptions::id_entropy` the standard library's
+/// random hash keys (seeded by the operating system on native targets) and a process-wide counter
+/// make each call differ. On WebAssembly those keys are fixed, so there the counter and the written
+/// bytes are what differ. The identifier only has to be unique, not secret.
+fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let salt = match &opts.id_entropy {
+        Some(entropy) => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            h.write(entropy);
+            h.finish()
+        }
+        None => std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed)),
+    };
+    let mut id = Vec::with_capacity(16);
+    for lane in 0u8..2 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        h.write_u64(salt);
+        h.write_u8(lane);
+        h.write_u64(opts.id_seed);
+        h.write_usize(written.len());
+        h.write(written.get(..written.len().min(1 << 16)).unwrap_or_default());
+        id.extend_from_slice(&h.finish().to_be_bytes());
+    }
+    id
 }
 
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
