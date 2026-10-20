@@ -779,6 +779,18 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     SourceFont { metrics, reuse, space }
 }
 
+/// The `q` and `Q` around the text object starting at `bt`, when they hold only that object and
+/// the `cm`s before it (`q cm… BT … ET Q`) and the object shows nothing outside `drop`.
+fn enclosing_block(ops: &[Op], bt: usize, drop: &std::collections::HashSet<usize>) -> Option<(usize, usize)> {
+    let et = bt + ops.get(bt..)?.iter().position(|op| op.is("ET"))?;
+    let shows = |(i, op): (usize, &Op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&i);
+    if ops.get(bt..=et)?.iter().enumerate().any(|(i, op)| shows((bt + i, op))) {
+        return None;
+    }
+    let q = (0..bt).rev().find(|i| ops.get(*i).is_none_or(|op| !op.is("cm")))?;
+    (ops.get(q)?.is("q") && ops.get(et + 1)?.is("Q")).then_some((q, et + 1))
+}
+
 /// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
 pub(crate) fn rewrite_block_from(
     doc: &mut Document,
@@ -934,13 +946,26 @@ pub(crate) fn rewrite_block_from(
         BlockPlan { block: &b, lines: &lines, style, emit, after, movement, state: o_state, tm, size, underline: style.underline == Some(true) };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
     let n = pdfcraft_content::num;
-    block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
-    if split {
-        block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
-    }
-    let at = if split { start } else { emit.bt_op };
+    // A text object that shows only this paragraph, alone in its own `q [cm …] BT … ET Q` (the
+    // block an earlier edit wrote), is replaced whole: nesting the new block inside it would add
+    // one more `q` level and one more empty text object with every edit.
+    let replaced = if split { None } else { enclosing_block(&ops, emit.bt_op, &dropped) };
+    let at = if let Some((q, end)) = replaced {
+        // Its transforms stay: the paragraph's position and the move are in the space they make.
+        let cms = ops.get(q + 1..emit.bt_op).unwrap_or_default().iter().cloned();
+        block_ops.splice(1..1, cms);
+        dropped.extend(q..=end);
+        q
+    } else {
+        // A replaced block's `Q` restores the state, and the restatement after that block stays.
+        block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
+        if split {
+            block_ops.insert(0, Op::new("ET", vec![]));
+            block_ops.push(Op::new("BT", vec![]));
+            block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
+        }
+        if split { start } else { emit.bt_op }
+    };
     let new_data = splice(&pieces, &ops, |i| {
         let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
         (insert, !dropped.contains(&i))
