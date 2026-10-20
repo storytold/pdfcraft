@@ -2539,4 +2539,3 @@ fn thai_text_field_appearance_and_auto_fallback() {
     let base_font = thai_dict.get(b"BaseFont").and_then(|o| o.as_name()).unwrap();
     assert!(String::from_utf8_lossy(base_font).contains("Sarabun"));
 }
-

@@ -735,7 +735,11 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
                         _ => w - right - tw,
                     };
                     // Headers hang below the top margin; footers sit on the bottom margin.
-                    let y = if header { h - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len().saturating_sub(1 + li)) as f64 * line_h };
+                    let y = if header {
+                        h - top - size * 0.8 - li as f64 * line_h
+                    } else {
+                        bottom + (lines.len().saturating_sub(1 + li)) as f64 * line_h
+                    };
                     body.extend(text_op(x, y, line));
                     if hf.underline {
                         underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));

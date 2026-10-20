@@ -161,46 +161,42 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Font:"));
-                let current_font_name = d.hf.font_name.clone().unwrap_or_else(|| {
-                    pdfcraft_fonts::active_thai_font_entry()
-                        .map(|e| e.name)
-                        .unwrap_or_else(|| d.hf.font.label().to_string())
-                });
-                egui::ComboBox::from_id_salt("hf-font-selector")
-                    .selected_text(&current_font_name)
-                    .width(160.0)
-                    .show_ui(ui, |ui| {
-                        ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
-                        for f in [pdfcraft_engine::FontFamily::Helvetica, pdfcraft_engine::FontFamily::Times, pdfcraft_engine::FontFamily::Courier] {
-                            let selected = d.hf.font_name.as_deref() == Some(f.label()) || (d.hf.font_name.is_none() && d.hf.font == f);
-                            if ui.selectable_label(selected, f.label()).clicked() {
-                                d.hf.font = f;
-                                d.hf.font_name = Some(f.label().to_string());
-                            }
+                let current_font_name =
+                    d.hf.font_name
+                        .clone()
+                        .unwrap_or_else(|| pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| d.hf.font.label().to_string()));
+                egui::ComboBox::from_id_salt("hf-font-selector").selected_text(&current_font_name).width(160.0).show_ui(ui, |ui| {
+                    ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
+                    for f in [pdfcraft_engine::FontFamily::Helvetica, pdfcraft_engine::FontFamily::Times, pdfcraft_engine::FontFamily::Courier] {
+                        let selected = d.hf.font_name.as_deref() == Some(f.label()) || (d.hf.font_name.is_none() && d.hf.font == f);
+                        if ui.selectable_label(selected, f.label()).clicked() {
+                            d.hf.font = f;
+                            d.hf.font_name = Some(f.label().to_string());
                         }
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            let thai_fonts = pdfcraft_fonts::available_thai_fonts();
-                            if !thai_fonts.is_empty() {
-                                ui.separator();
-                                ui.label(egui::RichText::new(tl!("Thai fonts")).small().color(t.text_muted));
-                                for entry in &thai_fonts {
-                                    let selected = d.hf.font_name.as_deref() == Some(&entry.name);
-                                    if ui.selectable_label(selected, &entry.name).clicked() {
-                                        if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
-                                            ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
-                                        }
-                                        if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
-                                            d.hf.font = pdfcraft_engine::FontFamily::Courier;
-                                        } else {
-                                            d.hf.font = pdfcraft_engine::FontFamily::Helvetica;
-                                        }
-                                        d.hf.font_name = Some(entry.name.clone());
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let thai_fonts = pdfcraft_fonts::available_thai_fonts();
+                        if !thai_fonts.is_empty() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(tl!("Thai fonts")).small().color(t.text_muted));
+                            for entry in &thai_fonts {
+                                let selected = d.hf.font_name.as_deref() == Some(&entry.name);
+                                if ui.selectable_label(selected, &entry.name).clicked() {
+                                    if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
+                                        ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
                                     }
+                                    if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
+                                        d.hf.font = pdfcraft_engine::FontFamily::Courier;
+                                    } else {
+                                        d.hf.font = pdfcraft_engine::FontFamily::Helvetica;
+                                    }
+                                    d.hf.font_name = Some(entry.name.clone());
                                 }
                             }
                         }
-                    });
+                    }
+                });
                 ui.label(tl!("Size"));
                 ui.add(egui::DragValue::new(&mut d.hf.font_size).range(4.0..=72.0).speed(0.5));
                 ui.add(widgets::checkbox(&mut d.hf.underline, tl!("Underline")));
@@ -287,24 +283,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         if !thai_fonts.is_empty() {
                             ui.horizontal(|ui| {
                                 ui.label(tl!("Thai fonts"));
-                                let current_title = pdfcraft_fonts::active_thai_font_entry()
-                                    .map(|e| e.name)
-                                    .unwrap_or_else(|| "Courier MonoThai".to_string());
-                                egui::ComboBox::from_id_salt("wm-thai-font-selector")
-                                    .selected_text(current_title)
-                                    .width(180.0)
-                                    .show_ui(ui, |ui| {
-                                        for entry in &thai_fonts {
-                                            let selected = pdfcraft_fonts::active_thai_font_entry()
-                                                .as_ref()
-                                                .is_some_and(|curr| curr.file_name.eq_ignore_ascii_case(&entry.file_name));
-                                            if ui.selectable_label(selected, &entry.name).clicked()
-                                                && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
-                                            {
-                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
-                                            }
+                                let current_title =
+                                    pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "Courier MonoThai".to_string());
+                                egui::ComboBox::from_id_salt("wm-thai-font-selector").selected_text(current_title).width(180.0).show_ui(ui, |ui| {
+                                    for entry in &thai_fonts {
+                                        let selected = pdfcraft_fonts::active_thai_font_entry()
+                                            .as_ref()
+                                            .is_some_and(|curr| curr.file_name.eq_ignore_ascii_case(&entry.file_name));
+                                        if ui.selectable_label(selected, &entry.name).clicked()
+                                            && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
+                                        {
+                                            ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
                                         }
-                                    });
+                                    }
+                                });
                             });
                         }
                     }

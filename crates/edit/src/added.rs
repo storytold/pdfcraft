@@ -664,11 +664,7 @@ pub(crate) fn draw_watermark_shaped(
     }
 
     let widest = laid.iter().map(|(_, _, w)| *w).fold(0.0, f64::max).max(0.01);
-    let size = if wm.font_size > 0.0 {
-        wm.font_size
-    } else {
-        ((page_w * page_w + page_h * page_h).sqrt() * 0.5 / widest).clamp(6.0, 300.0)
-    };
+    let size = if wm.font_size > 0.0 { wm.font_size } else { ((page_w * page_w + page_h * page_h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
 
     let mut keys: Vec<&ShapedCluster> = Vec::new();
     let mut index: HashMap<ClusterKey, usize> = HashMap::new();
@@ -711,19 +707,7 @@ pub(crate) fn draw_watermark_shaped(
     let (cx, cy) = (page_w / 2.0 + wm.offset[0], page_h / 2.0 + wm.offset[1]);
 
     let mut content = Vec::new();
-    content.extend(
-        format!(
-            "/PCGS{} gs\n{} {} {} {} {} {} cm\n",
-            (opacity * 100.0).round() as i64,
-            n(c),
-            n(s),
-            n(-s),
-            n(c),
-            n(cx),
-            n(cy),
-        )
-        .bytes(),
-    );
+    content.extend(format!("/PCGS{} gs\n{} {} {} {} {} {} cm\n", (opacity * 100.0).round() as i64, n(c), n(s), n(-s), n(c), n(cx), n(cy),).bytes());
 
     let [cr, cg, cb] = wm.color.map(|v| v.clamp(0.0, 1.0));
     content.extend(format!("BT {} {} {} rg\n", n(cr), n(cg), n(cb)).bytes());
@@ -854,14 +838,14 @@ pub(crate) fn draw_header_footer_shaped(
     let mut underlines = String::new();
     let line_h = size * 1.2;
 
-    for (slot, slot_laid) in laid_slots {
-        let header = slot < 3;
+    for (slot, slot_laid) in &laid_slots {
+        let header = *slot < 3;
         let line_count = slot_laid.len();
-        for (li, (line, pieces, tw)) in slot_laid.into_iter().enumerate() {
-            let x = match slot % 3 {
+        for (li, (line, pieces, tw)) in slot_laid.iter().enumerate() {
+            let x = match *slot % 3 {
                 0 => left,
-                1 => (page_w - tw) / 2.0,
-                _ => page_w - right - tw,
+                1 => (page_w - *tw) / 2.0,
+                _ => page_w - right - *tw,
             };
             let y = if header {
                 page_h - top - size * 0.8 - li as f64 * line_h
@@ -882,9 +866,9 @@ pub(crate) fn draw_header_footer_shaped(
                             current = Some(latin);
                         }
                         content.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
-                        content.extend(literal(&win_ansi(&s)));
+                        content.extend(literal(&win_ansi(s)));
                         content.extend_from_slice(b" Tj\n");
-                        pen += hf.font.width(&s, size, false, false);
+                        pen += hf.font.width(s, size, false, false);
                     }
                     Piece::Shaped(clusters) => {
                         for cl in clusters {
@@ -906,7 +890,7 @@ pub(crate) fn draw_header_footer_shaped(
             content.extend_from_slice(b"EMC\n");
 
             if hf.underline {
-                underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));
+                underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(*tw), n((size * 0.06).max(0.4))));
             }
         }
     }

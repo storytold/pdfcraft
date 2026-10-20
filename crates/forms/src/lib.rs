@@ -1188,7 +1188,13 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
     let has_thai = values.iter().any(|v| v.chars().any(appearance::is_thai));
     if has_thai {
         let _ = author::ensure_thai_font(doc);
-        let da_str = doc.get(f.obj).as_dict().and_then(|d| d.get(b"DA")).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).unwrap_or_else(|| f.da.clone());
+        let da_str = doc
+            .get(f.obj)
+            .as_dict()
+            .and_then(|d| d.get(b"DA"))
+            .map(|o| doc.resolve(o))
+            .and_then(|o| o.as_string().map(|s| s.to_text()))
+            .unwrap_or_else(|| f.da.clone());
         let parsed = appearance::parse_da(&da_str);
         if matches!(parsed.font.as_str(), "Helv" | "TiRo" | "Cour") {
             let new_da = format!("/Thai {} Tf {}", appearance::fmt(parsed.size), parsed.color);

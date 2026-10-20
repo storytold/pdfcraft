@@ -32,12 +32,7 @@ impl CraftFont {
 /// Bundled Sarabun-Regular TrueType font (OFL-1.1), embedded at compile time from `assets/fonts/Sarabun-Regular.ttf`.
 pub static BUNDLED_SARABUN_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Sarabun-Regular.ttf");
 
-pub static BUNDLED_SARABUN: CraftFont = CraftFont {
-    family: "Sarabun",
-    style: "Regular",
-    scripts: &["Thai"],
-    bytes: BUNDLED_SARABUN_BYTES,
-};
+pub static BUNDLED_SARABUN: CraftFont = CraftFont { family: "Sarabun", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_SARABUN_BYTES };
 
 /// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ UDPGothic (a UI
 /// face) first, then the rest in manifest order. Empty without craft-fonts.
@@ -95,8 +90,7 @@ pub struct ThaiFontEntry {
 
 static ACTIVE_THAI_FONT: std::sync::RwLock<Option<&'static CraftFont>> = std::sync::RwLock::new(None);
 static ACTIVE_THAI_ENTRY: std::sync::RwLock<Option<ThaiFontEntry>> = std::sync::RwLock::new(None);
-static LOADED_THAI_CACHE: std::sync::RwLock<Option<std::collections::HashMap<std::path::PathBuf, &'static CraftFont>>> =
-    std::sync::RwLock::new(None);
+static LOADED_THAI_CACHE: std::sync::RwLock<Option<std::collections::HashMap<std::path::PathBuf, &'static CraftFont>>> = std::sync::RwLock::new(None);
 static DISCOVERED_THAI_FONTS: std::sync::RwLock<Option<Vec<ThaiFontEntry>>> = std::sync::RwLock::new(None);
 
 fn get_active_thai_font() -> Option<&'static CraftFont> {
@@ -141,9 +135,8 @@ pub fn font_directories() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
 
     // 1. Explicit environment variable overrides
-    if let Some(env_dir) = std::env::var_os("PDFCRAFT_FONTS_DIR")
-        .or_else(|| std::env::var_os("PDFCRAFT_THAI_FONTS_DIR"))
-        .or_else(|| std::env::var_os("CRAFT_FONTS_DIR"))
+    if let Some(env_dir) =
+        std::env::var_os("PDFCRAFT_FONTS_DIR").or_else(|| std::env::var_os("PDFCRAFT_THAI_FONTS_DIR")).or_else(|| std::env::var_os("CRAFT_FONTS_DIR"))
     {
         dirs.push(std::path::PathBuf::from(env_dir));
     }
@@ -265,9 +258,8 @@ fn scan_dir_recursive(dir: &std::path::Path, depth: usize, entries: &mut Vec<Tha
             }
             continue;
         }
-        let is_font_ext = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("ttf") || ext.eq_ignore_ascii_case("otf")
-        });
+        let is_font_ext =
+            path.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("ttf") || ext.eq_ignore_ascii_case("otf"));
         if !is_font_ext {
             continue;
         }
@@ -284,18 +276,8 @@ fn scan_dir_recursive(dir: &std::path::Path, depth: usize, entries: &mut Vec<Tha
         if !has_thai {
             continue;
         }
-        let name = if style.eq_ignore_ascii_case("Regular") {
-            family.clone()
-        } else {
-            format!("{family} {style}")
-        };
-        entries.push(ThaiFontEntry {
-            name,
-            family,
-            style,
-            file_name,
-            path,
-        });
+        let name = if style.eq_ignore_ascii_case("Regular") { family.clone() } else { format!("{family} {style}") };
+        entries.push(ThaiFontEntry { name, family, style, file_name, path });
     }
 }
 
@@ -373,11 +355,7 @@ pub fn rescan_thai_fonts() -> Vec<ThaiFontEntry> {
 }
 
 /// Load and leak font bytes with specific family and style names into a `'static CraftFont`.
-pub fn load_custom_thai_font_named(
-    bytes: Vec<u8>,
-    family: String,
-    style: String,
-) -> Result<&'static CraftFont, crate::GlyphError> {
+pub fn load_custom_thai_font_named(bytes: Vec<u8>, family: String, style: String) -> Result<&'static CraftFont, crate::GlyphError> {
     if bytes.len() > (64 << 20) || bytes.is_empty() {
         return Err(crate::GlyphError::NoFont);
     }
@@ -398,12 +376,7 @@ pub fn load_custom_thai_font_named(
     let family_str = Box::leak(family.into_boxed_str()) as &'static str;
     let style_str = Box::leak(style.into_boxed_str()) as &'static str;
     let leaked_bytes = Box::leak(bytes.into_boxed_slice());
-    let font = Box::leak(Box::new(CraftFont {
-        family: family_str,
-        style: style_str,
-        scripts: &["Thai"],
-        bytes: leaked_bytes,
-    }));
+    let font = Box::leak(Box::new(CraftFont { family: family_str, style: style_str, scripts: &["Thai"], bytes: leaked_bytes }));
     Ok(font)
 }
 
@@ -443,16 +416,10 @@ pub fn set_active_thai_font_by_name(name_or_file: &str) -> Result<&'static Craft
     let lower = name_or_file.to_lowercase();
     let entry = list
         .iter()
-        .find(|e| {
-            e.file_name.to_lowercase() == lower
-                || e.name.to_lowercase() == lower
-                || e.family.to_lowercase() == lower
-        })
+        .find(|e| e.file_name.to_lowercase() == lower || e.name.to_lowercase() == lower || e.family.to_lowercase() == lower)
         .or_else(|| {
             list.iter().find(|e| {
-                e.file_name.to_lowercase().contains(&lower)
-                    || e.name.to_lowercase().contains(&lower)
-                    || e.family.to_lowercase().contains(&lower)
+                e.file_name.to_lowercase().contains(&lower) || e.name.to_lowercase().contains(&lower) || e.family.to_lowercase().contains(&lower)
             })
         })
         .ok_or(crate::GlyphError::NoFont)?;
@@ -472,18 +439,8 @@ pub fn set_active_thai_font_by_path(path: impl AsRef<std::path::Path>) -> Result
         return Err(crate::GlyphError::Missing);
     }
     let file_name = path_ref.file_name().and_then(|n| n.to_str()).unwrap_or("custom.ttf").to_string();
-    let name = if style.eq_ignore_ascii_case("Regular") {
-        family.clone()
-    } else {
-        format!("{family} {style}")
-    };
-    let entry = ThaiFontEntry {
-        name,
-        family,
-        style,
-        file_name,
-        path: path_ref.to_path_buf(),
-    };
+    let name = if style.eq_ignore_ascii_case("Regular") { family.clone() } else { format!("{family} {style}") };
+    let entry = ThaiFontEntry { name, family, style, file_name, path: path_ref.to_path_buf() };
     set_active_thai_font_entry(&entry)
 }
 
@@ -503,12 +460,7 @@ pub fn active_thai_font() -> Option<&'static CraftFont> {
 
 /// Register a custom Thai font from static slices.
 pub fn register_custom_thai_font(family: &'static str, style: &'static str, bytes: &'static [u8]) -> Result<(), crate::GlyphError> {
-    let font = Box::leak(Box::new(CraftFont {
-        family,
-        style,
-        scripts: &["Thai"],
-        bytes,
-    }));
+    let font = Box::leak(Box::new(CraftFont { family, style, scripts: &["Thai"], bytes }));
     set_active_thai_font(Some(font));
     set_active_thai_entry(Some(ThaiFontEntry {
         name: format!("{family} {style}"),

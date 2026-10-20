@@ -3135,7 +3135,9 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
 #[test]
 fn watermark_thai_text_renders_and_survives_reopen() {
     let mut doc = fixture();
-    let wm = Watermark { text: "ใช้สำหรับต่ออายุใบอนุญาตกับ สวพ.6 เท่านั้น".into(), ..Watermark::default() };
+    let wm = Watermark {
+        text: "ใช้สำหรับต่ออายุใบอนุญาตกับ สวพ.6 เท่านั้น".into(), ..Watermark::default()
+    };
     if pdfcraft_fonts::document_thai_font().is_none() {
         assert!(wm.first_undrawable().is_some());
         let err = add_watermark(&mut doc, &[0], &wm, false).unwrap_err().to_string();
@@ -3153,8 +3155,7 @@ fn watermark_thai_text_renders_and_survives_reopen() {
 fn header_footer_thai_text_renders_and_survives_reopen() {
     let mut doc = fixture();
     let hf = HeaderFooter {
-        text: ["ภาษาไทย".into(), "".into(), "".into(), "".into(), "หน้า <<1>>".into(), "".into()],
-        ..HeaderFooter::default()
+        text: ["ภาษาไทย".into(), "".into(), "".into(), "".into(), "หน้า <<1>>".into(), "".into()], ..HeaderFooter::default()
     };
     if pdfcraft_fonts::document_thai_font().is_none() {
         assert!(hf.first_undrawable().is_some());

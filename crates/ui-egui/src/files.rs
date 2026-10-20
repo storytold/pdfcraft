@@ -776,13 +776,7 @@ impl PdfCraftApp {
         };
         let safe = |t: &str| {
             t.chars()
-                .map(|c| {
-                    if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
+                .map(|c| if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') { c } else { '_' })
                 .collect::<String>()
         };
         let mut used = std::collections::HashSet::new();

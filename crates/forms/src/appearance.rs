@@ -199,11 +199,7 @@ impl FontText {
                     return clusters.iter().map(|c| c.advance * size).sum();
                 }
                 let codes = metrics.codes(&metrics.encode(&s.replace('\t', " ")).unwrap_or_default());
-                if codes.is_empty() {
-                    helvetica_width(s, size)
-                } else {
-                    codes.into_iter().map(|(c, _)| metrics.width(c) * size).sum()
-                }
+                if codes.is_empty() { helvetica_width(s, size) } else { codes.into_iter().map(|(c, _)| metrics.width(c) * size).sum() }
             }
             Self::Unicode(_) => cjk_width(s, size),
         }
@@ -482,7 +478,9 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => {
-            if text.chars().any(is_thai) && let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc)) {
+            if text.chars().any(is_thai)
+                && let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc))
+            {
                 ("Thai".to_string(), o, enc)
             } else {
                 ("Helv".to_string(), helvetica(), FontText::WinAnsi)
