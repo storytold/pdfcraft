@@ -263,6 +263,24 @@ fn shortcuts_run_registered_commands() {
 }
 
 #[test]
+fn ctrl_m_opens_the_comments_panel_and_keeps_it_open() {
+    let mut h = harness();
+    h.state_mut().right = None;
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::M);
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Comments));
+    // Pressed again it opens, not toggles (#3741).
+    h.key_press_modifiers(Modifiers::COMMAND, Key::M);
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Comments));
+    h.ctx.set_os(OperatingSystem::Nix);
+    h.state_mut().execute("help.shortcuts");
+    h.run_steps(3);
+    h.get_by_label("Ctrl+M");
+}
+
+#[test]
 fn the_palette_lists_commands_with_shortcuts_and_runs_them() {
     let mut h = harness();
     h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();

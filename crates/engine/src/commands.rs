@@ -252,7 +252,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
-    c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
+    c("comment.list", "Comments panel", VIEW, Some(Shortcut::cmd("M")), Document, "message-square-text"),
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),
@@ -491,6 +491,7 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(command("comment.list").unwrap().shortcut.unwrap().label(false), "Ctrl+M");
         assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
         assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
         assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
