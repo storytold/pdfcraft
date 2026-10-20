@@ -2883,5 +2883,8 @@ key	Space	Space
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	Bắt dính vào bản vẽ: bật
 	Snap to drawing: off	Bắt dính vào bản vẽ: tắt
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	Tâm ô
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Điểm bắt dính
+	Centre points	Các tâm
+	Centre point	Tâm
+	Tab: the next target under the pointer	Tab: điểm tiếp theo dưới con trỏ

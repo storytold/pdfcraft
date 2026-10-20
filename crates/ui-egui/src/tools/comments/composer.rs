@@ -27,6 +27,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         allowed: true,
         hidden: false,
         snap: None,
+        snap_cycle: None,
         redact_mark: ([0.89, 0.13, 0.13], 1.0),
     };
     let anchor = cx.to_screen(c.at);

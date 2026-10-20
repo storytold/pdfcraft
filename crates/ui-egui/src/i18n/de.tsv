@@ -2617,5 +2617,8 @@ animation effects	Off	Aus
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	An Zeichnung einrasten: an
 	Snap to drawing: off	An Zeichnung einrasten: aus
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	Kastenmitte
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Fangpunkte
+	Centre points	Zentren
+	Centre point	Zentrum
+	Tab: the next target under the pointer	Tab: nächster Fangpunkt unter dem Mauszeiger

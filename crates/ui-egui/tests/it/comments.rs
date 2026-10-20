@@ -3205,3 +3205,75 @@ fn marks_and_text_boxes_snap_with_f3() {
     let at_ = h.state().views[0].comments.composer.as_ref().map(|c| c.at).expect("the composer opened");
     assert!((at_[1] - 50.0).abs() < 0.01 && (at_[0] - 60.0).abs() < 0.5, "on the line: {at_:?}");
 }
+
+/// With Snap to drawing on, the Select tool snaps comments that are moved: a Fill & Sign cross by
+/// its centre (into the middle of a table cell), a rectangle by its corner nearest a target (onto
+/// a line's end). Tab moves on to the next target under the pointer; the snap targets are the
+/// user's choice (centres off: no middle of a cell), and they are remembered.
+#[test]
+fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    // A cross beside the table and a rectangle below the line's left end.
+    assert!(h.state_mut().execute("sign.fill.cross"));
+    h.run_steps(2);
+    click_pt(&mut h, (60.0, 120.0));
+    let rect = Shape::Rectangle { rect: [30.0, 10.0, 60.0, 30.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&rect),
+        shape: rect,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    let cross = |h: &Harness<'static, PdfCraftApp>| comments(h).into_iter().find(|a| a.subtype == "Stamp").expect("the cross");
+    let centre = |a: &Annotation| ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    // The cross dragged into the cell lands in its middle.
+    drag_pt(&mut h, (60.0, 120.0), (214.0, 163.0));
+    let (x, y) = centre(&cross(&h));
+    assert!((x - 204.5).abs() < 0.01 && (y - 159.0).abs() < 0.01, "in the middle of the cell: {x}, {y}");
+    // The rectangle dragged so its top-left corner (30, 30) comes near the line's left end
+    // (20, 50): it lands there exactly, though its top-right corner is nearer the line itself.
+    drag_pt(&mut h, (45.0, 20.0), (37.0, 41.0));
+    let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    assert!((r[0] - 20.0).abs() < 0.01 && (r[3] - 50.0).abs() < 0.01, "its corner on the line's end: {r:?}");
+    // Tab over a marker moves on to the next target under the pointer.
+    h.hover_at(at(&h, 101.0, 101.0));
+    h.run_steps(2);
+    let first = h.state().views[0].comments.snap_first.expect("a target under the pointer");
+    assert_eq!(first.1, [100.0, 100.0], "the box's corner first");
+    assert!(h.state_mut().views[0].comments.cycle_snap(1));
+    // (With the Select tool the marker shows only while dragging; a drawing tool shows it.)
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.run_steps(2);
+    h.hover_at(at(&h, 101.0, 101.0));
+    h.run_steps(2);
+    let shown = h.state().views[0].comments.snap_hover.map(|(_, p, _)| p);
+    assert!(shown.is_some_and(|p| p != [100.0, 100.0]), "the next one: {shown:?}");
+    // Centres off: the cross keeps its place inside the cell.
+    h.state_mut().comment_prefs.snap_targets.centres = false;
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    let before = centre(&cross(&h));
+    drag_pt(&mut h, (before.0, before.1), (before.0 + 6.0, before.1 + 2.0));
+    let (x, y) = centre(&cross(&h));
+    assert!((x - before.0 - 6.0).abs() < 0.5 && (y - before.1 - 2.0).abs() < 0.5, "moved as dragged: {x}, {y}");
+    // Remembered across starts.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(!restored.comment_prefs.snap_targets.centres && restored.comment_prefs.snap_targets.endpoints);
+}

@@ -474,6 +474,30 @@ fn drawn_shapes_ignore_slips() {
 }
 
 #[test]
+fn tab_presses_are_taken_for_cycling_snap_targets() {
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    let mut events = vec![
+        key(egui::Key::Tab, true, egui::Modifiers::NONE),
+        key(egui::Key::Tab, false, egui::Modifiers::NONE),
+        key(egui::Key::A, true, egui::Modifiers::NONE),
+        key(egui::Key::Tab, true, egui::Modifiers::NONE),
+        key(egui::Key::Tab, true, egui::Modifiers::SHIFT),
+        key(egui::Key::Tab, true, egui::Modifiers::COMMAND),
+    ];
+    assert_eq!(take_snap_tabs(&mut events), 1, "two forward, one back");
+    assert_eq!(events.len(), 2, "the A and the ⌘Tab stay: {events:?}");
+    let mut cv = CommentView::default();
+    assert!(!cv.cycle_snap(1), "no marker: nothing to cycle");
+    cv.snap_first = Some((0, [1.0, 2.0]));
+    assert!(cv.cycle_snap(1) && cv.cycle_snap(1));
+    assert_eq!(cv.snap_cycle, Some(([1.0, 2.0], 2)));
+    // Elsewhere, another set of targets: counting starts again.
+    cv.snap_first = Some((0, [5.0, 5.0]));
+    cv.cycle_snap(-1);
+    assert_eq!(cv.snap_cycle, Some(([5.0, 5.0], -1)));
+}
+
+#[test]
 fn text_boxes_fit_their_text() {
     let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
     assert_eq!((r[0], r[3]), (100.0, 500.0));

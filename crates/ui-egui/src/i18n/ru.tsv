@@ -2529,5 +2529,8 @@ animation effects	Off	Выкл
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	Привязка к чертежу: вкл.
 	Snap to drawing: off	Привязка к чертежу: выкл.
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	Центр рамки
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Точки привязки
+	Centre points	Центры
+	Centre point	Центр
+	Tab: the next target under the pointer	Tab: следующая точка под указателем

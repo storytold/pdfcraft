@@ -2616,5 +2616,8 @@ animation effects	Off	オフ
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	図面にスナップ: オン
 	Snap to drawing: off	図面にスナップ: オフ
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	枠の中心
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	スナップ対象
+	Centre points	中心点
+	Centre point	中心
+	Tab: the next target under the pointer	Tab: ポインター下の次の対象

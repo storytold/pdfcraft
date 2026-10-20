@@ -2525,5 +2525,8 @@ animation effects	Off	ఆఫ్
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	డ్రాయింగ్‌కు స్నాప్: ఆన్
 	Snap to drawing: off	డ్రాయింగ్‌కు స్నాప్: ఆఫ్
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	పెట్టె మధ్యభాగం
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	స్నాప్ లక్ష్యాలు
+	Centre points	కేంద్ర బిందువులు
+	Centre point	కేంద్రం
+	Tab: the next target under the pointer	Tab: పాయింటర్ కింద తదుపరి లక్ష్యం

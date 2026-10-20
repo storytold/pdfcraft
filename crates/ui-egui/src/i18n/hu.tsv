@@ -2615,5 +2615,8 @@ animation effects	Off	Ki
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	Igazítás a rajzhoz: be
 	Snap to drawing: off	Igazítás a rajzhoz: ki
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	Keret közepe
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Illesztési pontok
+	Centre points	Középpontok
+	Centre point	Középpont
+	Tab: the next target under the pointer	Tab: a következő pont a mutató alatt

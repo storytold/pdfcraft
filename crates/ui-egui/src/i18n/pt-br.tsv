@@ -2901,5 +2901,8 @@ theme	Appearance	Aparência
 # Snap to drawing for the drawing tools (M5).
 	Snap to drawing: on	Ajustar ao desenho: ligado
 	Snap to drawing: off	Ajustar ao desenho: desligado
-# Snap to drawing places Fill & Sign marks in the middle of a check box (M5).
-	Box centre	Centro da caixa
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Pontos de encaixe
+	Centre points	Centros
+	Centre point	Centro
+	Tab: the next target under the pointer	Tab: o próximo ponto sob o ponteiro

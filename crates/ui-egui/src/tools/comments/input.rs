@@ -23,6 +23,12 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     if !matches!(cx.tool, QuickTool::Fill(_)) && cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
         cv.snap_hover = None;
     }
+    // The nearest target under the pointer, which Tab cycles from.
+    match pointer.filter(|_| over_page && cx.snap.is_some()) {
+        Some(p) => cv.snap_first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point)),
+        None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
+        None => {}
+    }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
         cv.cancelled_drag = true;
@@ -218,9 +224,25 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
+    // Snapping while a comment is moved or resized: its corner (a mark's centre, a resize
+    // handle) nearest a target lands on it, and the marker shows where.
+    let dragged = match (&cv.gesture, pointer) {
+        (Some(Gesture::Move { page, index, from }), Some(p)) if *page == cx.page => cx.get(*index).map(|a| {
+            let (anchors, mark) = cx.move_anchors(a);
+            cx.snap_drag(&anchors, mark, *from, p)
+        }),
+        (Some(Gesture::Resize { page, index, handle, from, .. }), Some(p)) if *page == cx.page => {
+            cx.get(*index).map(|a| cx.snap_drag(&[handle_pos(cx.screen_rect(a), *handle)], None, *from, p))
+        }
+        _ => None,
+    };
+    if let Some((_, Some((at, kind)))) = dragged {
+        cv.snap_hover = Some((cx.page, at, kind));
+    }
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
+        let p = dragged.map_or(p, |(p, _)| p);
         match cv.gesture.clone() {
             Some(Gesture::Move { page, index, from }) if page == cx.page => {
                 cv.gesture = None;

@@ -179,6 +179,12 @@ pub struct CommentView {
     /// Where the pointer would snap to right now: (page, point in user space, what it is), for
     /// the marker on the page.
     pub snap_hover: Option<(usize, [f64; 2], measure::snap::SnapKind)>,
+    /// The nearest snap target under the pointer (its first candidate) and its page, while there
+    /// is one: Tab cycles from it.
+    pub snap_first: Option<(usize, [f64; 2])>,
+    /// Tab's place among the candidates under the pointer: (their first one, presses forward).
+    /// Another set of candidates starts again from its first.
+    pub snap_cycle: Option<([f64; 2], isize)>,
 }
 
 /// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor
@@ -193,6 +199,17 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Tab (`step` 1) or Shift+Tab (-1) over a snap marker: the next or previous candidate under
+    /// the pointer. Returns whether there was a marker to cycle.
+    pub fn cycle_snap(&mut self, step: isize) -> bool {
+        let Some((_, first)) = self.snap_first else { return false };
+        self.snap_cycle = Some(match self.snap_cycle {
+            Some((f, n)) if measure::distance(f, first) <= 1e-6 => (f, n.saturating_add(step)),
+            _ => (first, step),
+        });
+        true
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -329,6 +346,8 @@ pub(crate) struct PageCx<'a> {
     /// The page's paths, when the tool's points snap to the drawing (Snap to drawing is on and
     /// the tool sets points or corners).
     pub snap: Option<std::sync::Arc<measure::snap::Geometry>>,
+    /// Tab's place among the snap candidates (see [`CommentView::snap_cycle`]).
+    pub snap_cycle: Option<([f64; 2], isize)>,
 }
 
 impl PageCx<'_> {
@@ -337,13 +356,55 @@ impl PageCx<'_> {
     /// snapped to.
     pub(crate) fn snapped(&self, p: Pos2) -> ([f64; 2], Option<measure::snap::SnapKind>) {
         let u = self.to_user(p);
-        let Some(geometry) = &self.snap else { return (u, None) };
+        let all = self.snap_candidates(u);
+        let Some(first) = all.first() else { return (u, None) };
+        // Tab moves through the candidates; another set starts again from its first.
+        let step = match self.snap_cycle {
+            Some((f, n)) if measure::distance(f, first.point) <= 1e-6 => n,
+            _ => 0,
+        };
+        let i = usize::try_from(step.rem_euclid(all.len().max(1) as isize)).unwrap_or(0);
+        all.get(i).map_or((u, None), |hit| (hit.point, Some(hit.kind)))
+    }
+
+    /// The snap targets the user's choice allows within the reach (6 screen points at this zoom)
+    /// of user point `u`, nearest first; none without snapping.
+    pub(crate) fn snap_candidates(&self, u: [f64; 2]) -> Vec<measure::snap::Snap> {
+        let Some(geometry) = &self.snap else { return Vec::new() };
         // The reach in user units: the screen distance of one user unit, at this zoom.
         let pixels_per_unit = self.to_screen([u[0] + 1.0, u[1]]).distance(self.to_screen(u)).max(1e-6);
         let tolerance = (SNAP_SENSITIVITY / f64::from(pixels_per_unit)).min(10_000.0);
-        match geometry.snap(u, tolerance, measure::snap::SnapOptions::default()) {
-            Ok(Some(hit)) => (hit.point, Some(hit.kind)),
-            _ => (u, None),
+        geometry.candidates(u, tolerance, self.prefs.snap_targets).unwrap_or_default()
+    }
+
+    /// The pointer `p` of a drag that started at `from`, moved so the first of `anchors` (screen
+    /// points that travel with the drag: a comment's corners, a handle) that comes within reach
+    /// of a snap target lands on it (a Fill & Sign mark `side` points across goes by its centre,
+    /// as when it is placed); with that target. Unchanged without snapping or a target in reach.
+    pub(crate) fn snap_drag(&self, anchors: &[Pos2], mark: Option<f64>, from: Pos2, p: Pos2) -> (Pos2, Option<SnapHit>) {
+        if self.snap.is_none() {
+            return (p, None);
+        }
+        let travel = p - from;
+        // A corner on a target point (an end, a centre…) beats one merely on a path, then the
+        // nearer one.
+        let mut best: Option<((bool, f32), egui::Vec2, SnapHit)> = None;
+        for anchor in anchors {
+            let moved = *anchor + travel;
+            let (u, kind) = match mark {
+                Some(side) => self.snapped_mark(moved, side),
+                None => self.snapped(moved),
+            };
+            let Some(kind) = kind else { continue };
+            let shift = self.to_screen(u) - moved;
+            let rank = (kind == measure::snap::SnapKind::Path, shift.length());
+            if best.is_none_or(|b| rank < b.0) {
+                best = Some((rank, shift, (u, kind)));
+            }
+        }
+        match best {
+            Some((_, shift, hit)) => (p + shift, Some(hit)),
+            None => (p, None),
         }
     }
 
@@ -355,6 +416,7 @@ impl PageCx<'_> {
         let u = self.to_user(p);
         let (long, short) = (10.0 * side, 3.0 * side);
         if let Some(geometry) = &self.snap
+            && self.prefs.snap_targets.centres
             && let Some([x0, y0, x1, y1]) = geometry.enclosing_box(u, long)
             && let (w, h) = (x1 - x0, y1 - y0)
             && ((w <= long && h <= short) || (w <= short && h <= long))
@@ -461,11 +523,26 @@ impl PageCx<'_> {
             return self.xf.user_rect(self.info, self.page, [r[0] + *dx as f32, r[1] + *dy as f32, r[2] + *dx as f32, r[3] + *dy as f32]);
         }
         match (gesture, pointer) {
-            (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
+            (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => {
+                let (anchors, mark) = self.move_anchors(a);
+                r.translate(self.snap_drag(&anchors, mark, *from, p).0 - *from)
+            }
             (Some(Gesture::Resize { page, index, handle, from, aspect_ratio }), Some(p)) if (*page, *index) == (self.page, a.index) => {
+                let p = self.snap_drag(&[handle_pos(r, *handle)], None, *from, p).0;
                 resized(r, *handle, p - *from, corner_ratio(r, *aspect_ratio, shift))
             }
             _ => r,
         }
+    }
+
+    /// What snaps when comment `a` is dragged: its corners on screen, or, for a Fill & Sign mark
+    /// (a tick, cross, dot or line), its centre, which goes where a new mark would.
+    pub(crate) fn move_anchors(&self, a: &Annotation) -> (Vec<Pos2>, Option<f64>) {
+        let r = self.screen_rect(a);
+        let [x0, y0, x1, y1] = a.rect;
+        if a.fill_sign && a.subtype == "Stamp" && (x1 - x0).abs() <= 48.0 && (y1 - y0).abs() <= 48.0 {
+            return (vec![r.center()], Some(12.0));
+        }
+        (vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], None)
     }
 }

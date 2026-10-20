@@ -151,6 +151,10 @@ impl PdfCraftApp {
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
         v["comment_snap"] = serde_json::Value::Bool(self.comment_prefs.snap);
+        let t = self.comment_prefs.snap_targets;
+        v["snap_targets"] = serde_json::json!({
+            "endpoints": t.endpoints, "midpoints": t.midpoints, "centres": t.centres, "intersections": t.intersections, "paths": t.paths,
+        });
         v.to_string()
     }
 
@@ -314,6 +318,18 @@ impl PdfCraftApp {
         }
         if let Some(snap) = v["comment_snap"].as_bool() {
             self.comment_prefs.snap = snap;
+        }
+        let targets = &mut self.comment_prefs.snap_targets;
+        for (key, on) in [
+            ("endpoints", &mut targets.endpoints),
+            ("midpoints", &mut targets.midpoints),
+            ("centres", &mut targets.centres),
+            ("intersections", &mut targets.intersections),
+            ("paths", &mut targets.paths),
+        ] {
+            if let Some(b) = v["snap_targets"][key].as_bool() {
+                *on = b;
+            }
         }
         if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
             self.comment_prefs.hide_empty_highlight_hover = hide;

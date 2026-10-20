@@ -298,6 +298,8 @@ pub struct CommentPrefs {
     /// (endpoints, midpoints, intersections, paths), as the measuring tools do and as CAD's
     /// object snap does.
     pub snap: bool,
+    /// Which targets snapping offers (CAD's object snap modes), for commenting and measuring.
+    pub snap_targets: measure::snap::SnapOptions,
 }
 
 impl Default for CommentPrefs {
@@ -309,9 +311,13 @@ impl Default for CommentPrefs {
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
             snap: false,
+            snap_targets: measure::snap::SnapOptions::default(),
         }
     }
 }
+
+/// Where something snapped to: the point in user space and what it is.
+pub(crate) type SnapHit = ([f64; 2], measure::snap::SnapKind);
 
 /// How close (screen points) the pointer must be to a path for a drawing tool's point to snap.
 pub const SNAP_SENSITIVITY: f64 = 6.0;

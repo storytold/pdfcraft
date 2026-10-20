@@ -286,6 +286,22 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
+/// Takes Tab presses out of `events`, for cycling snap targets: +1 for each Tab, -1 for each
+/// Shift+Tab (their releases go too). Tabs with other modifiers stay.
+pub(crate) fn take_snap_tabs(events: &mut Vec<egui::Event>) -> isize {
+    let mut step = 0isize;
+    events.retain(|e| match e {
+        egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if modifiers.is_none() || modifiers.shift_only() => {
+            if *pressed {
+                step += if modifiers.shift { -1 } else { 1 };
+            }
+            false
+        }
+        _ => true,
+    });
+    step
+}
+
 /// The quick bar's Snap to drawing switch (F3), for the tools whose points snap.
 pub(crate) fn snap_button(ui: &mut egui::Ui, prefs: &mut CommentPrefs) {
     let key = crate::commands::command_shortcut_label(ui.ctx(), "comment.snap");
@@ -293,6 +309,21 @@ pub(crate) fn snap_button(ui: &mut egui::Ui, prefs: &mut CommentPrefs) {
     if icons::button(ui, "circle-dot", 32.0, prefs.snap, &tip).clicked() {
         prefs.snap = !prefs.snap;
     }
+    // What snaps (CAD's object snap modes), for commenting and measuring alike.
+    let resp = icons::button(ui, "chevron-down", 32.0, false, tl!("Snap targets"));
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        snap_target_boxes(ui, &mut prefs.snap_targets);
+    });
+}
+
+/// The snap targets as check boxes (the quick bar's menu, the measuring panel).
+pub(crate) fn snap_target_boxes(ui: &mut egui::Ui, targets: &mut measure::snap::SnapOptions) {
+    ui.add(crate::widgets::checkbox(&mut targets.endpoints, tl!("Endpoints")));
+    ui.add(crate::widgets::checkbox(&mut targets.midpoints, tl!("Midpoints")));
+    ui.add(crate::widgets::checkbox(&mut targets.centres, tl!("Centre points")));
+    ui.add(crate::widgets::checkbox(&mut targets.intersections, tl!("Intersections")));
+    ui.add(crate::widgets::checkbox(&mut targets.paths, tl!("Paths")));
+    ui.label(egui::RichText::new(tl!("Tab: the next target under the pointer")).small());
 }
 
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.

@@ -46,7 +46,6 @@ pub struct MeasureView {
     pub reading: Option<Reading>,
     pub scale: Option<Scale>,
     pub error: Option<String>,
-    pub snaps: measure::snap::SnapOptions,
     pub snap_enabled: bool,
     pub sensitivity: f64,
     /// The page side of the drawing scale, in its page unit ([`page_unit_of`]).
@@ -80,7 +79,6 @@ impl Default for MeasureView {
             reading: None,
             scale: None,
             error: None,
-            snaps: Default::default(),
             snap_enabled: true,
             sensitivity: 6.0,
             drawing_points: 1.0,
@@ -192,10 +190,12 @@ fn snap_to_content(
             .measurement_to_user(page, [f64::from(view_xy[0]) + state.sensitivity / f64::from(pixels_per_unit), f64::from(view_xy[1])])
             .map(|p| measure::distance(point, p))
             .unwrap_or(state.sensitivity / f64::from(pixels_per_unit));
-        if state.snaps.intersections && paths.intersection_limited(point, tolerance) {
+        // The snap targets are the user's choice for commenting and measuring alike.
+        let targets = cx.prefs.snap_targets;
+        if targets.intersections && paths.intersection_limited(point, tolerance) {
             state.error = Some(tl!("This area has too many overlapping paths; intersection snapping is limited.").into());
         }
-        if let Ok(Some(hit)) = paths.snap(point, tolerance, state.snaps) {
+        if let Ok(Some(hit)) = paths.snap(point, tolerance, targets) {
             return Some((hit.point, hit.kind));
         }
     }
@@ -327,7 +327,7 @@ pub(crate) fn page_input(
                     measure::snap::SnapKind::Midpoint => "Midpoint",
                     measure::snap::SnapKind::Intersection => "Intersection",
                     measure::snap::SnapKind::Path => "Path",
-                    measure::snap::SnapKind::Centre => "Box centre",
+                    measure::snap::SnapKind::Centre => "Centre point",
                 }),
                 crate::theme::regular(11.0),
                 stroke.color,
@@ -431,14 +431,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     ui.separator();
     ui.add(widgets::checkbox(&mut state.snap_enabled, tl!("Snap to drawing")));
     if state.snap_enabled {
-        ui.horizontal(|ui| {
-            ui.add(widgets::checkbox(&mut state.snaps.endpoints, tl!("Endpoints")));
-            ui.add(widgets::checkbox(&mut state.snaps.midpoints, tl!("Midpoints")));
-        });
-        ui.horizontal(|ui| {
-            ui.add(widgets::checkbox(&mut state.snaps.intersections, tl!("Intersections")));
-            ui.add(widgets::checkbox(&mut state.snaps.paths, tl!("Paths")));
-        });
+        crate::comments::snap_target_boxes(ui, &mut app.comment_prefs.snap_targets);
         ui.add(egui::Slider::new(&mut state.sensitivity, 1.0..=20.0).text(tl!("Sensitivity")));
     }
     ui.separator();
