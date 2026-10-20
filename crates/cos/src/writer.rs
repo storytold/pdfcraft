@@ -643,16 +643,19 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
 
 /// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not
 /// claim to be its source. An encrypted file keeps the first string, which its key is derived from,
-/// and gets a new second one. An encrypted file without a two-string `/ID` is left alone, as an
-/// ordinary save leaves it.
+/// and gets a new second one. When there is no such string (no `/ID`, one entry, or a first entry
+/// that is not a string) the reader takes the empty string as the key input (`Document::first_id`),
+/// so the empty string is written first and the key stays valid.
 fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypted: bool) {
-    let kept = match trailer.get(b"ID") {
-        Some(Object::Array(a)) if a.len() == 2 => a.first().cloned(),
-        _ => None,
-    };
     let fresh = Object::String(PdfString { bytes: new_id_bytes(opts, written), hex: true });
     let pair = if encrypted {
-        let Some(first) = kept else { return };
+        let first = match trailer.get(b"ID") {
+            Some(Object::Array(a)) => match a.first() {
+                Some(Object::String(s)) => Object::String(s.clone()),
+                _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+            },
+            _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+        };
         vec![first, fresh]
     } else {
         vec![fresh.clone(), fresh]

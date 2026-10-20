@@ -5,21 +5,29 @@
 
 use std::sync::Arc;
 
-use pdfcraft_cos::{Algorithm, Document, NewEncryption, Object, SaveOptions, write_full, write_incremental};
+use pdfcraft_cos::{Algorithm, Document, NewEncryption, Object, PdfString, SaveOptions, write_full, write_incremental};
 use pdfcraft_testkit::Pdf;
 
 const ID_HEX: &str = "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]";
 const ID_BYTES: [u8; 16] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
-/// One page whose content holds a secret, with `/ID` in the trailer when `with_id` is set.
-fn source(with_id: bool) -> Vec<u8> {
+/// One page whose content holds a secret, with `entry` added to the trailer (for example an `/ID`).
+fn source_with(entry: Option<&str>) -> Vec<u8> {
     let pdf = Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
         .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
         .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
         .stream("", "BT /F1 12 Tf 20 100 Td (TOPSECRET) Tj ET")
         .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-    if with_id { pdf.trailer_entry(ID_HEX).build() } else { pdf.build() }
+    match entry {
+        Some(entry) => pdf.trailer_entry(entry).build(),
+        None => pdf.build(),
+    }
+}
+
+/// [`source_with`] with the standard identifier, or none.
+fn source(with_id: bool) -> Vec<u8> {
+    source_with(with_id.then_some(ID_HEX))
 }
 
 /// A one-page file whose 70,000-byte content stream ends in `last`. Two of these built with
@@ -135,6 +143,60 @@ fn an_encrypted_rewrite_keeps_the_first_identifier_string_its_key_depends_on() {
         assert_eq!(new.len(), 2, "{algorithm:?}");
         assert_eq!(new.first(), old.first(), "{algorithm:?}: the key depends on the first string");
         assert_ne!(new.get(1), old.get(1), "{algorithm:?}: the second string is new");
+    }
+}
+
+/// The `/ID` shapes whose key the reader takes as the empty string: none at all, one entry, and a
+/// first entry that is not a string.
+fn unusable_ids() -> Vec<(&'static str, Option<Object>)> {
+    let empty = Object::String(PdfString::literal(Vec::new()));
+    vec![
+        ("absent", None),
+        ("one entry", Some(Object::Array(vec![empty.clone()]))),
+        ("first entry not a string", Some(Object::Array(vec![Object::Int(7), empty]))),
+    ]
+}
+
+/// An encrypted file whose key is derived from the empty string, with its trailer `/ID` replaced by `id`.
+fn protected_with_id(algorithm: Algorithm, id: Option<Object>) -> Vec<u8> {
+    let mut doc = reopen(source_with(Some("/ID [<> <>]")));
+    doc.set_encryption(&NewEncryption {
+        algorithm,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    match id {
+        Some(id) => doc.trailer_mut().set(b"ID".to_vec(), id),
+        None => {
+            doc.trailer_mut().remove(b"ID");
+        }
+    }
+    write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+#[test]
+fn an_encrypted_rewrite_without_a_usable_identifier_still_gets_a_new_one() {
+    // The key is derived from the first string of /ID, and a missing /ID, a one-entry /ID and a
+    // first entry that is not a string all count as the empty string. The rewrite keeps that
+    // (empty) first string, so the file still opens with its password, and writes a new second one.
+    for algorithm in [Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256] {
+        for (shape, id) in unusable_ids() {
+            let before = Document::open_with_password(Arc::new(protected_with_id(algorithm, id)), Some("user")).unwrap();
+            let mut doc = before.clone();
+            doc.require_full_save_with_new_id();
+            let out = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            let back = Document::open_with_password(Arc::new(out), Some("user")).unwrap();
+            let ids = id_strings(&back);
+            let previous = id_strings(&before);
+            assert_eq!(ids.len(), 2, "{algorithm:?}, {shape}: the rewrite writes a pair");
+            assert!(ids.first().is_some_and(|s| s.is_empty()), "{algorithm:?}, {shape}: the first string is the one the key uses");
+            assert_eq!(ids.get(1).map(Vec::len), Some(16), "{algorithm:?}, {shape}");
+            assert_ne!(ids.get(1), previous.get(1), "{algorithm:?}, {shape}: the second string is new");
+        }
     }
 }
 
