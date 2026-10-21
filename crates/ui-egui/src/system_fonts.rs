@@ -249,35 +249,29 @@ fn thai_candidates() -> Vec<PathBuf> {
         }
     }
     for dir in pdfcraft_fonts::font_directories() {
-        paths.push(dir.join("COURMT__.TTF"));
+        paths.push(dir.join("Sarabun-Regular.ttf"));
+        paths.push(dir.join("TlwgMono.ttf"));
         paths.push(dir.join("THSarabunNew.ttf"));
         paths.push(dir.join("THSarabun.ttf"));
-        paths.push(dir.join("Sarabun-Regular.ttf"));
     }
-    for base in [PathBuf::from("fonts"), PathBuf::from("../fonts")] {
-        paths.push(base.join("COURMT__.TTF"));
+    for base in [PathBuf::from("assets/fonts"), PathBuf::from("../assets/fonts")] {
+        paths.push(base.join("Sarabun-Regular.ttf"));
+        paths.push(base.join("TlwgMono.ttf"));
         paths.push(base.join("THSarabunNew.ttf"));
         paths.push(base.join("THSarabun.ttf"));
-        paths.push(base.join("Sarabun-Regular.ttf"));
     }
     if cfg!(windows) {
-        if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-            paths.push(home.join(r"OneDrive\Documents\fonts\Sarabun-Regular.ttf"));
-            paths.push(home.join(r"OneDrive\Documents\fonts\THSarabunNew.ttf"));
-            paths.push(home.join(r"Documents\fonts\Sarabun-Regular.ttf"));
-            paths.push(home.join(r"Documents\fonts\THSarabunNew.ttf"));
-            paths.push(home.join(r"fonts\Sarabun-Regular.ttf"));
-        }
         if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
             paths.push(local.join(r"Microsoft\Windows\Fonts\THSarabunNew.ttf"));
             paths.push(local.join(r"Microsoft\Windows\Fonts\Sarabun-Regular.ttf"));
+            paths.push(local.join(r"Microsoft\Windows\Fonts\TlwgMono.ttf"));
         }
         let win = windows_fonts();
         for file in [
             "THSarabunNew.ttf",
             "THSarabun.ttf",
             "Sarabun-Regular.ttf",
-            "COURMT__.TTF",
+            "TlwgMono.ttf",
             "LeelawUI.ttf",
             "LeelaUIb.ttf",
             "leelawad.ttf",
@@ -507,7 +501,7 @@ mod tests {
     fn script_candidates_are_absolute_font_files() {
         for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), thai_candidates()] {
             assert!(!list.is_empty());
-            assert!(list.iter().all(|p| p.is_absolute() || p.starts_with("fonts") || p.starts_with("../fonts") || cfg!(windows)), "{list:?}");
+            assert!(list.iter().all(|p| p.is_absolute() || p.starts_with("assets") || p.starts_with("../assets") || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc"))), "{list:?}");
         }
     }

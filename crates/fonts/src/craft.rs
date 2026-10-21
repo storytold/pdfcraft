@@ -34,6 +34,16 @@ pub static BUNDLED_SARABUN_BYTES: &[u8] = include_bytes!("../../../assets/fonts/
 
 pub static BUNDLED_SARABUN: CraftFont = CraftFont { family: "Sarabun", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_SARABUN_BYTES };
 
+/// Bundled TlwgMono TrueType font (GPL-2.0 with font exception), embedded at compile time from `assets/fonts/TlwgMono.ttf`.
+pub static BUNDLED_TLWG_MONO_BYTES: &[u8] = include_bytes!("../../../assets/fonts/TlwgMono.ttf");
+
+pub static BUNDLED_TLWG_MONO: CraftFont = CraftFont { family: "TlwgMono", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_TLWG_MONO_BYTES };
+
+/// Returns the bundled TlwgMono font for fixed-pitch / monospace Thai rendering.
+pub fn bundled_tlwg_mono_font() -> &'static CraftFont {
+    &BUNDLED_TLWG_MONO
+}
+
 /// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ UDPGothic (a UI
 /// face) first, then the rest in manifest order. Empty without craft-fonts.
 pub fn ui_japanese_fonts() -> Vec<&'static CraftFont> {
@@ -76,13 +86,13 @@ pub fn ui_telugu_fonts() -> Vec<&'static CraftFont> {
 /// An entry representing a discovered or loaded Thai font file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThaiFontEntry {
-    /// Full display name (e.g. "Courier MonoThai", "TH Sarabun New Bold").
+    /// Full display name (e.g. "TlwgMono", "TH Sarabun New Bold").
     pub name: String,
-    /// Family name from font metadata (e.g. "Courier MonoThai", "TH Sarabun New").
+    /// Family name from font metadata (e.g. "TlwgMono", "TH Sarabun New").
     pub family: String,
     /// Subfamily / style from font metadata (e.g. "Regular", "Bold", "Italic").
     pub style: String,
-    /// File name on disk (e.g. "COURMT__.TTF", "THSarabunNew.ttf").
+    /// File name on disk (e.g. "TlwgMono.ttf", "THSarabunNew.ttf").
     pub file_name: String,
     /// Path to the font file.
     pub path: std::path::PathBuf,
@@ -145,29 +155,24 @@ pub fn font_directories() -> Vec<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
-        dirs.push(parent.join("fonts"));
         dirs.push(parent.join("assets").join("fonts"));
         if let Some(grand) = parent.parent() {
-            dirs.push(grand.join("fonts"));
             dirs.push(grand.join("assets").join("fonts"));
             if let Some(great) = grand.parent() {
-                dirs.push(great.join("fonts"));
                 dirs.push(great.join("assets").join("fonts"));
             }
         }
     }
 
     // 3. Current working directory and relative paths
-    for rel in ["fonts", "../fonts", "../../fonts", "assets/fonts", "../assets/fonts"] {
+    for rel in ["assets/fonts", "../assets/fonts"] {
         dirs.push(std::path::PathBuf::from(rel));
     }
 
     // 4. Manifest directory at compile/build time (for cargo test and local dev execution)
     let manifest = env!("CARGO_MANIFEST_DIR");
     dirs.push(std::path::Path::new(manifest).join("../../assets/fonts"));
-    dirs.push(std::path::Path::new(manifest).join("../../fonts"));
-    dirs.push(std::path::Path::new(manifest).join("../fonts"));
-    dirs.push(std::path::Path::new(manifest).join("fonts"));
+    dirs.push(std::path::Path::new(manifest).join("../assets/fonts"));
 
     // 5. System font directories across platforms
     #[cfg(windows)]
@@ -300,10 +305,21 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
         });
     }
 
+    // Ensure TlwgMono (bundled font) is always present as an available Thai font
+    if !entries.iter().any(|e| e.family.eq_ignore_ascii_case("TlwgMono") && e.style.eq_ignore_ascii_case("Regular")) {
+        entries.push(ThaiFontEntry {
+            name: "TlwgMono".to_string(),
+            family: "TlwgMono".to_string(),
+            style: "Regular".to_string(),
+            file_name: "TlwgMono.ttf".to_string(),
+            path: std::path::PathBuf::from("assets/fonts/TlwgMono.ttf"),
+        });
+    }
+
     // Sort entries:
     // 1. Sarabun Regular (bundled default font)
-    // 2. COURMT__.TTF (Courier MonoThai)
-    // 3. Other Courier MonoThai styles
+    // 2. TlwgMono.ttf (TLWG Mono monospace)
+    // 3. Other TlwgMono styles
     // 4. Alphabetical by family, then style (Regular before Bold/Italic)
     entries.sort_by(|a, b| {
         let a_is_sarabun = a.family.eq_ignore_ascii_case("Sarabun") && a.style.eq_ignore_ascii_case("Regular");
@@ -311,15 +327,15 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
         if a_is_sarabun != b_is_sarabun {
             return b_is_sarabun.cmp(&a_is_sarabun);
         }
-        let a_is_default = a.file_name.eq_ignore_ascii_case("COURMT__.TTF");
-        let b_is_default = b.file_name.eq_ignore_ascii_case("COURMT__.TTF");
+        let a_is_default = a.file_name.eq_ignore_ascii_case("TlwgMono.ttf");
+        let b_is_default = b.file_name.eq_ignore_ascii_case("TlwgMono.ttf");
         if a_is_default != b_is_default {
             return b_is_default.cmp(&a_is_default);
         }
-        let a_is_courier = a.family.eq_ignore_ascii_case("Courier MonoThai");
-        let b_is_courier = b.family.eq_ignore_ascii_case("Courier MonoThai");
-        if a_is_courier != b_is_courier {
-            return b_is_courier.cmp(&a_is_courier);
+        let a_is_mono = a.family.eq_ignore_ascii_case("TlwgMono") || a.family.eq_ignore_ascii_case("TLWG Typewriter");
+        let b_is_mono = b.family.eq_ignore_ascii_case("TlwgMono") || b.family.eq_ignore_ascii_case("TLWG Typewriter");
+        if a_is_mono != b_is_mono {
+            return b_is_mono.cmp(&a_is_mono);
         }
         let fam_cmp = a.family.to_lowercase().cmp(&b.family.to_lowercase());
         if fam_cmp != std::cmp::Ordering::Equal {
@@ -337,7 +353,7 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
 }
 
 /// Scan all font directories for Thai `.ttf` and `.otf` fonts and return a list of available entries.
-/// Results are sorted with `COURMT__.TTF` (Courier MonoThai Regular) as the default first option.
+/// Results are sorted with `Sarabun-Regular.ttf` as the default first option, followed by `TlwgMono.ttf`.
 pub fn available_thai_fonts() -> Vec<ThaiFontEntry> {
     if let Some(cached) = get_discovered_thai_fonts() {
         return cached;
@@ -521,15 +537,15 @@ fn auto_init_thai_font() -> Option<&'static CraftFont> {
         return Some(font);
     }
 
-    // Next try COURMT__.TTF (Courier MonoThai) as required
-    if let Some(entry) = list.iter().find(|e| e.file_name.eq_ignore_ascii_case("COURMT__.TTF"))
+    // Next try TlwgMono.ttf as monospace option
+    if let Some(entry) = list.iter().find(|e| e.file_name.eq_ignore_ascii_case("TlwgMono.ttf"))
         && let Ok(font) = set_active_thai_font_entry(entry)
     {
         return Some(font);
     }
 
-    // Next try any Courier MonoThai
-    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("Courier MonoThai"))
+    // Next try any TlwgMono
+    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("TlwgMono"))
         && let Ok(font) = set_active_thai_font_entry(entry)
     {
         return Some(font);
@@ -557,11 +573,11 @@ fn discover_host_thai_font() -> Option<&'static CraftFont> {
         candidates.push(std::path::PathBuf::from(p));
     }
     // Local workspace or app fonts directory:
-    for base in [std::path::PathBuf::from("fonts"), std::path::PathBuf::from("../fonts")] {
-        candidates.push(base.join("COURMT__.TTF"));
+    for base in [std::path::PathBuf::from("assets/fonts"), std::path::PathBuf::from("../assets/fonts")] {
+        candidates.push(base.join("Sarabun-Regular.ttf"));
+        candidates.push(base.join("TlwgMono.ttf"));
         candidates.push(base.join("THSarabunNew.ttf"));
         candidates.push(base.join("THSarabun.ttf"));
-        candidates.push(base.join("Sarabun-Regular.ttf"));
     }
     #[cfg(windows)]
     {
@@ -569,22 +585,16 @@ fn discover_host_thai_font() -> Option<&'static CraftFont> {
             .or_else(|| std::env::var_os("SystemRoot"))
             .map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from)
             .join("Fonts");
-        if let Some(user) = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from) {
-            candidates.push(user.join(r"OneDrive\Documents\fonts\Sarabun-Regular.ttf"));
-            candidates.push(user.join(r"OneDrive\Documents\fonts\THSarabunNew.ttf"));
-            candidates.push(user.join(r"Documents\fonts\Sarabun-Regular.ttf"));
-            candidates.push(user.join(r"Documents\fonts\THSarabunNew.ttf"));
-            candidates.push(user.join(r"fonts\Sarabun-Regular.ttf"));
-        }
         if let Some(local) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
             candidates.push(local.join(r"Microsoft\Windows\Fonts\THSarabunNew.ttf"));
             candidates.push(local.join(r"Microsoft\Windows\Fonts\Sarabun-Regular.ttf"));
+            candidates.push(local.join(r"Microsoft\Windows\Fonts\TlwgMono.ttf"));
         }
         for file in [
-            "COURMT__.TTF",
             "THSarabunNew.ttf",
             "THSarabun.ttf",
             "Sarabun-Regular.ttf",
+            "TlwgMono.ttf",
             "LeelawUI.ttf",
             "LeelaUIb.ttf",
             "leelawad.ttf",
@@ -959,7 +969,7 @@ mod tests {
             assert!(active.is_some(), "document_thai_font() should auto-initialize");
 
             // Test switching font if multiple are available
-            if let Some(other) = fonts.iter().find(|f| !f.file_name.eq_ignore_ascii_case("COURMT__.TTF")) {
+            if let Some(other) = fonts.iter().find(|f| !f.file_name.eq_ignore_ascii_case("Sarabun-Regular.ttf")) {
                 let switched = set_active_thai_font_by_name(&other.file_name);
                 assert!(switched.is_ok(), "switching Thai font to {} should succeed", other.file_name);
                 let current = active_thai_font_entry();

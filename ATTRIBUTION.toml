@@ -3432,3 +3432,13 @@ kind = "font"
 usage = "Thai UI and fallback font for document rendering and form authoring"
 sha256 = "226d4f368fbc0457990ddef2692679badfd2c1a4e89e5ac4d43c10ba7743b2f1"
 
+[[asset]]
+path = "assets/fonts/TlwgMono.ttf"
+title = "TlwgMono Thai TrueType font"
+author = "Poonlap Veerathanabutr and TLWG"
+source = "https://github.com/tlwg/fonts-tlwg"
+licence = "GPL-2.0-with-font-exception"
+licence_file = "assets/fonts/GPL-TlwgMono.txt"
+kind = "font"
+usage = "Thai fixed-width/monospace UI and fallback font"
+sha256 = "ff97af3da8f8e7a6f628ed297eb5f473b04223e0b8fe4ae51772b2041bdf4618"
