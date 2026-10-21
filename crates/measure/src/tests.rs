@@ -615,3 +615,41 @@ fn centres_of_closed_figures_and_cells_are_snap_targets() {
         assert!(all.get(i + 1).is_none_or(|b| b.kind == snap::SnapKind::Path || b.distance >= a.distance - 1e-9), "nearest first: {all:?}");
     }
 }
+
+#[test]
+fn candidate_order_is_total_at_nearly_the_same_distance() {
+    use snap::{Snap, SnapKind, candidate_order};
+    let s = |kind, distance| Snap { point: [0.0, 0.0], kind, distance };
+    // "Within 1e-9 counts as the same distance", compared pair by pair, made these three a cycle
+    // (b before a, c before b, a before c); since Rust 1.81 a sort may panic on such an order.
+    let all = [s(SnapKind::Intersection, 0.0), s(SnapKind::Midpoint, 0.6e-9), s(SnapKind::Centre, 1.2e-9)];
+    for x in &all {
+        for y in &all {
+            for z in &all {
+                if candidate_order(x, y).is_lt() && candidate_order(y, z).is_lt() {
+                    assert!(candidate_order(x, z).is_lt(), "{x:?} < {y:?} < {z:?} but not {x:?} < {z:?}");
+                }
+            }
+        }
+    }
+    // Many near-coincident targets of every kind (a crafted drawing) sort in that order.
+    let kinds = [SnapKind::Path, SnapKind::Intersection, SnapKind::Midpoint, SnapKind::Centre, SnapKind::Endpoint];
+    let mut many: Vec<Snap> = (0..500).map(|i| s(kinds[i % kinds.len()], (i % 7) as f64 * 0.4e-9 + (i / 7) as f64 * 1e-3)).collect();
+    many.sort_by(candidate_order);
+    assert!(many.windows(2).all(|w| candidate_order(&w[0], &w[1]).is_le()));
+    // At one distance the discrete kinds come first.
+    assert!(candidate_order(&s(SnapKind::Endpoint, 1.0), &s(SnapKind::Path, 1.0)).is_lt());
+    assert!(candidate_order(&s(SnapKind::Path, 1.0), &s(SnapKind::Endpoint, 1.1)).is_lt(), "nearer wins");
+}
+
+#[test]
+fn a_centre_out_of_range_is_no_snap_target() {
+    // A rectangle far beyond the coordinate range (its corners are no targets): its centre isn't
+    // one either, or it would spread the snap grid over everything. Only the first one counts.
+    let big = format!("1{}.0", "0".repeat(300));
+    let content = format!("0 0 10 10 re S 0 0 {big} {big} re S");
+    let d = fixture(&content, "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert!(g.centres.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1e9), "{:?}", g.centres);
+    assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
+}
