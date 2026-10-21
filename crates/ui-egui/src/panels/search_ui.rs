@@ -26,14 +26,16 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         r.request_focus();
         find.focus = false;
     }
-    ui.horizontal(|ui| {
+    // Wrapped: three options don't fit one row of a narrow panel.
+    ui.horizontal_wrapped(|ui| {
         // Outlined boxes (the panel and the check-box fill are alike), as in dialogs.
         let w = &mut ui.visuals_mut().widgets;
         w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
         w.inactive.bg_fill = t.hover;
         let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
         let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-        if a || b {
+        let c = ui.add(widgets::checkbox(&mut find.accent_sensitive, tl!("Accent-sensitive"))).changed();
+        if a || b || c {
             find.case_query.clear();
         }
     });

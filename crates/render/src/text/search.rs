@@ -12,7 +12,7 @@
 //! first is kept (the longer on a tie). A soft hyphen needs no second reading: it draws nothing,
 //! and a line that ends in one always runs on.
 use super::device::ligature_letters;
-use super::{PageText, fold_case};
+use super::{FindOptions, PageText, fold_accents_from, fold_case};
 use std::ops::Range;
 
 /// How a line ending in a hyphen between two letters is read.
@@ -37,12 +37,15 @@ fn breaks_before(page: &PageText, i: usize) -> bool {
     i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b)
 }
 
-pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+pub(super) fn find(page: &PageText, query: &str, options: FindOptions, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
+    let FindOptions { case_sensitive: sensitive, whole_words, accent_sensitive } = options;
     let fold = |s: &str| if sensitive { ligature_letters(s.to_owned()) } else { fold_case(&ligature_letters(s.to_owned())) };
-    let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
+    let query = fold(query);
+    let query = if accent_sensitive { query } else { fold_accents_from(&query, false) };
+    let query: String = query.chars().filter(|&c| !is_invisible(c)).collect();
     let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
         return Vec::new();
@@ -53,8 +56,8 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     let prefix = prefix_table(&needle);
     let mut hits: Vec<(Range<usize>, usize)> = Vec::new();
     for (r, &reading) in readings.iter().enumerate() {
-        let (chars, zero_width_space) = characters(page, &texts, &divided, reading);
-        let found = search(&chars, &zero_width_space, &needle, &prefix, whole_words, limit);
+        let (chars, zero_width_space, reach) = characters(page, &texts, &divided, reading, accent_sensitive);
+        let found = search(&chars, &zero_width_space, Some(&reach), &needle, &prefix, whole_words, limit);
         hits.extend(found.into_iter().map(|hit| (hit, r)));
     }
     if readings.len() == 1 {
@@ -115,7 +118,7 @@ pub(super) fn find_in_text(text: &str, query: &str, sensitive: bool, whole_words
         }
     }
     let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).collect();
-    search(&chars, &zero_width_space, &needle, &prefix_table(&needle), whole_words, limit)
+    search(&chars, &zero_width_space, None, &needle, &prefix_table(&needle), whole_words, limit)
         .into_iter()
         .filter_map(|hit| Some(*starts.get(hit.start)?..*starts.get(hit.end)?))
         .collect()
@@ -162,7 +165,15 @@ fn divides(page: &PageText, texts: &[String], i: usize) -> bool {
 /// skipped ZERO WIDTH SPACE came right before each one: it draws nothing, but it is a word
 /// boundary (UAX #29 breaks on both sides of it), which Thai and Khmer write between words with
 /// no visible gap, so whole-word search still sees two words there.
-fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyphen) -> (Vec<(char, usize)>, Vec<bool>) {
+fn characters(
+    page: &PageText,
+    texts: &[String],
+    divided: &[bool],
+    reading: Hyphen,
+    accent_sensitive: bool,
+) -> (Vec<(char, usize)>, Vec<bool>, Vec<usize>) {
+    // A match ending on a letter includes subsequent glyphs containing only its accents.
+    let mut reach: Vec<usize> = (1..=page.glyphs.len()).collect();
     let mut chars: Vec<(char, usize)> = Vec::new();
     let mut zero_width_space: Vec<bool> = Vec::new();
     let mut pending_zero_width_space = false;
@@ -187,6 +198,24 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
             last_base = Some(' ');
             zero_width_space.push(false);
             pending_zero_width_space = false;
+        }
+        // Fold after inserting the reading's gap: marks never attach across a word boundary.
+        let attached = chars.last().is_some_and(|c| c.0.is_ascii_alphabetic());
+        let folded;
+        let original = text;
+        let text = if accent_sensitive {
+            text.as_str()
+        } else {
+            folded = fold_accents_from(text, attached);
+            &folded
+        };
+        if attached
+            && text.is_empty()
+            && !original.is_empty()
+            && let Some(&(_, owner)) = chars.last()
+            && let Some(end) = reach.get_mut(owner)
+        {
+            *end = i.saturating_add(1);
         }
         // The divided glyph's hyphen is its last visible character, left out of the joined reading.
         let dropped = if reading == Hyphen::Joined && divided.get(i).copied().unwrap_or(false) {
@@ -213,7 +242,7 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
             }
         }
     }
-    (chars, zero_width_space)
+    (chars, zero_width_space, reach)
 }
 
 /// Non-overlapping hits of `needle` (with its KMP `prefix` table) in `chars`, as glyph ranges.
@@ -221,6 +250,7 @@ fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyph
 fn search(
     chars: &[(char, usize)],
     zero_width_space: &[bool],
+    reach: Option<&[usize]>,
     needle: &[char],
     prefix: &[usize],
     whole_words: bool,
@@ -248,7 +278,7 @@ fn search(
         let bounded = !whole_words || ((after_break(start) || !word(start.checked_sub(1))) && (after_break(end) || !word(Some(end))));
         if bounded {
             if let Some((_, first)) = chars.get(start)
-                && let Some(last) = owner.checked_add(1)
+                && let Some(last) = reach.and_then(|r| r.get(owner).copied()).or_else(|| owner.checked_add(1))
             {
                 hits.push(*first..last);
                 if hits.len() == limit {

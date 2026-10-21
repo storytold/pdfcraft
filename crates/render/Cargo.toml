@@ -31,6 +31,9 @@ url = "2.5"
 # Tells combining marks (bidi class NSM: general categories Mn and Me) in extracted text; the
 # version pdfcraft-fonts already uses.
 unicode-bidi = "0.3"
+# Accent-insensitive Find splits an accented letter into its base and marks; already in the tree
+# (through the text shaping stack), so this adds no new crate to the build.
+unicode-normalization = { version = "0.1" }
 
 # lopdf (bootstrap) draws random bytes for encryption; on the web they come from the browser.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
