@@ -1969,6 +1969,10 @@
 	Fill & Sign: change signature	Kitöltés és aláírás: aláírás módosítása
 	Fill & Sign: change initials	Kitöltés és aláírás: monogram módosítása
 	Fill & Sign: remove saved signature	Kitöltés és aláírás: mentett aláírás eltávolítása
+	Fill & Sign: add another saved signature	Kitöltés és aláírás: újabb mentett aláírás hozzáadása
+	Signature {n}	Aláírás {n}
+	Work, Personal, a name…	Munka, Személyes, egy név…
+	You can keep up to {n} signatures. Remove one to add another.	Legfeljebb {n} aláírást tárolhatsz. Újabb hozzáadásához távolíts el egyet.
 	Fill & Sign: remove saved initials	Kitöltés és aláírás: mentett monogram eltávolítása
 	Change signature	Aláírás módosítása
 	Change initials	Monogram módosítása

@@ -2049,6 +2049,10 @@
 	Fill & Sign: change signature	Попълни и подпиши: промяна на подписа
 	Fill & Sign: remove saved initials	Попълни и подпиши: премахване на запазените инициали
 	Fill & Sign: remove saved signature	Попълни и подпиши: премахване на запазения подпис
+	Fill & Sign: add another saved signature	Попълни и подпиши: добавяне на още един запазен подпис
+	Signature {n}	Подпис {n}
+	Work, Personal, a name…	Работа, Лично, име…
+	You can keep up to {n} signatures. Remove one to add another.	Можете да запазите до {n} подписа. Премахнете един, за да добавите друг.
 	Fill in {name}	Попълни {name}
 	Flatten	Сплескай
 	Flip image	Обърни изображението

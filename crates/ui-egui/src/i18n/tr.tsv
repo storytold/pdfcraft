@@ -1942,6 +1942,10 @@
 	Fill & Sign: change signature	Doldur ve İmzala: imzayı değiştir
 	Fill & Sign: change initials	Doldur ve İmzala: parafı değiştir
 	Fill & Sign: remove saved signature	Doldur ve İmzala: kayıtlı imzayı kaldır
+	Fill & Sign: add another saved signature	Doldur ve İmzala: başka bir kayıtlı imza ekle
+	Signature {n}	İmza {n}
+	Work, Personal, a name…	İş, Kişisel, bir ad…
+	You can keep up to {n} signatures. Remove one to add another.	En fazla {n} imza saklayabilirsiniz. Başka bir imza eklemek için birini kaldırın.
 	Fill & Sign: remove saved initials	Doldur ve İmzala: kayıtlı parafı kaldır
 	Change signature	İmzayı değiştir
 	Change initials	Parafı değiştir

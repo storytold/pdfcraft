@@ -2098,6 +2098,10 @@ key	Space	Mezerník
 	Fill & Sign: change signature	Vyplnit a podepsat: změnit podpis
 	Fill & Sign: change initials	Vyplnit a podepsat: změnit iniciály
 	Fill & Sign: remove saved signature	Vyplnit a podepsat: odebrat uložený podpis
+	Fill & Sign: add another saved signature	Vyplnit a podepsat: přidat další uložený podpis
+	Signature {n}	Podpis {n}
+	Work, Personal, a name…	Práce, Osobní, jméno…
+	You can keep up to {n} signatures. Remove one to add another.	Uložit lze nejvýše {n} podpisů. Chcete-li přidat další, některý odeberte.
 	Fill & Sign: remove saved initials	Vyplnit a podepsat: odebrat uložené iniciály
 	Change signature	Změnit podpis
 	Change initials	Změnit iniciály

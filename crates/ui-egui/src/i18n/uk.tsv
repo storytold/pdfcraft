@@ -2046,6 +2046,10 @@
 	Fill & Sign: change signature	Заповнення й підпис: змінити підпис
 	Fill & Sign: change initials	Заповнення й підпис: змінити ініціали
 	Fill & Sign: remove saved signature	Заповнення й підпис: видалити збережений підпис
+	Fill & Sign: add another saved signature	Заповнення й підпис: додати ще один збережений підпис
+	Signature {n}	Підпис {n}
+	Work, Personal, a name…	Робота, Особистий, ім’я…
+	You can keep up to {n} signatures. Remove one to add another.	Можна зберігати не більше {n} підписів. Видаліть один, щоб додати інший.
 	Fill & Sign: remove saved initials	Заповнення й підпис: видалити збережені ініціали
 	Change signature	Змінити підпис
 	Change initials	Змінити ініціали

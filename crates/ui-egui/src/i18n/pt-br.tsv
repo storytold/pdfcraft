@@ -1922,6 +1922,10 @@
 	Fill & Sign: change signature	Preencher e assinar: alterar assinatura
 	Fill & Sign: remove saved initials	Preencher e assinar: remover rubrica salva
 	Fill & Sign: remove saved signature	Preencher e assinar: remover assinatura salva
+	Fill & Sign: add another saved signature	Preencher e assinar: adicionar outra assinatura salva
+	Signature {n}	Assinatura {n}
+	Work, Personal, a name…	Trabalho, Pessoal, um nome…
+	You can keep up to {n} signatures. Remove one to add another.	Você pode manter até {n} assinaturas. Remova uma para adicionar outra.
 	Fill in {name}	Preencher {name}
 	Flatten	Nivelar
 	Flip image	Espelhar imagem

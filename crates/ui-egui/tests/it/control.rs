@@ -1332,7 +1332,7 @@ fn organize_overview_is_reachable_through_the_control_channel() {
 #[test]
 fn saved_signature_can_be_changed_through_the_control_channel() {
     let (mut h, c) = harness();
-    h.state_mut().signature = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().signatures.set_active(Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into())));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.change" }));
     h.run_steps(3);
     assert_eq!(h.state().signature_draft.text, "Ada Lovelace");
@@ -1344,13 +1344,40 @@ fn saved_signature_can_be_changed_through_the_control_channel() {
     ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
     ok(&mut h, &c, "ui.type", json!({ "text": "Grace Hopper" }));
     ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
-    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(h.state().signature().cloned(), Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "fill-signature");
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.remove" }));
-    assert_eq!(h.state().signature, None);
+    assert_eq!(h.state().signature().cloned(), None);
     h.state_mut().initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into()));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.remove" }));
     assert_eq!(h.state().initials, None);
+}
+
+#[test]
+fn saved_signatures_are_listed_and_chosen_through_the_control_channel() {
+    use pdfcraft_ui_egui::fill_sign::SavedSig;
+    let (mut h, c) = harness();
+    let none = call(&mut h, &c, "ui.set", json!({ "key": "signature", "value": "1" })).unwrap_err();
+    assert!(none.contains("no signature is saved"), "{none}");
+    h.state_mut().signatures.add("Work", SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().signatures.add("Home", SavedSig::Typed("Ada".into()));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["signatures"], json!(["Work", "Home"]));
+    assert_eq!(state["active_signature"], 2);
+    ok(&mut h, &c, "ui.set", json!({ "key": "signature", "value": "1" }));
+    assert_eq!(h.state().signature().cloned(), Some(SavedSig::Typed("Ada Lovelace".into())));
+    ok(&mut h, &c, "ui.set", json!({ "key": "signature", "value": " home " }));
+    assert_eq!(h.state().signatures.active_index(), Some(1));
+    for bad in ["0", "3", "Office"] {
+        let e = call(&mut h, &c, "ui.set", json!({ "key": "signature", "value": bad })).unwrap_err();
+        assert!(e.contains("from 1 to 2") && e.contains("Work, Home"), "{bad}: {e}");
+    }
+    assert_eq!(h.state().signatures.active_index(), Some(1), "a refused choice changes nothing");
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.add" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Signature));
+    assert_eq!(h.state().signature_draft.label, "Signature 1");
+    assert!(!h.state().signature_draft.editing);
 }
 
 #[test]

@@ -1968,6 +1968,10 @@ action wizard	Start	ప్రారంభించు
 	Fill & Sign: change signature	నింపడం & సంతకం: సంతకాన్ని మార్చు
 	Fill & Sign: change initials	నింపడం & సంతకం: పొడి అక్షరాలను మార్చు
 	Fill & Sign: remove saved signature	నింపడం & సంతకం: సేవ్ చేసిన సంతకాన్ని తీసివేయి
+	Fill & Sign: add another saved signature	నింపడం & సంతకం: మరో సేవ్ చేసిన సంతకాన్ని జోడించు
+	Signature {n}	సంతకం {n}
+	Work, Personal, a name…	పని, వ్యక్తిగతం, ఒక పేరు…
+	You can keep up to {n} signatures. Remove one to add another.	మీరు గరిష్ఠంగా {n} సంతకాలను ఉంచుకోవచ్చు. మరొకటి జోడించడానికి ఒకదాన్ని తీసివేయండి.
 	Fill & Sign: remove saved initials	నింపడం & సంతకం: సేవ్ చేసిన పొడి అక్షరాలను తీసివేయి
 	Change signature	సంతకాన్ని మార్చు
 	Change initials	పొడి అక్షరాలను మార్చు

@@ -682,23 +682,37 @@ impl PdfCraftApp {
                     &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
                 );
             }
-            "sign.fill.signature.remove" => self.signature = None,
+            "sign.fill.signature.remove" => self.signatures.remove_active(),
             "sign.fill.initials.remove" => self.initials = None,
             "sign.fill.signature.change" | "sign.fill.initials.change" => {
                 let initials = id == "sign.fill.initials.change";
-                let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
-                self.signature_draft = saved.map_or_else(
-                    || crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author),
-                    |s| crate::fill_sign::SigDraft::from_saved(initials, s),
-                );
+                let saved = if initials { self.initials.as_ref() } else { self.signatures.active() };
+                self.signature_draft = match saved {
+                    Some(s) => crate::fill_sign::SigDraft {
+                        label: if initials { String::new() } else { self.signatures.active_entry().map(|e| e.label.clone()).unwrap_or_default() },
+                        ..crate::fill_sign::SigDraft::from_saved(initials, s)
+                    },
+                    None => self.new_signature_draft(initials),
+                };
                 self.dialog = Some(Dialog::Signature);
+            }
+            "sign.fill.signature.add" => {
+                if self.signatures.is_full() {
+                    self.notify_fmt(
+                        "You can keep up to {n} signatures. Remove one to add another.",
+                        &[("n", &crate::fill_sign::MAX_SAVED_SIGNATURES.to_string())],
+                    );
+                } else {
+                    self.signature_draft = self.new_signature_draft(false);
+                    self.dialog = Some(Dialog::Signature);
+                }
             }
             fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
                 let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return Some(false) };
                 self.quick_tool = crate::QuickTool::Fill(tool);
                 let initials = tool == crate::fill_sign::FillTool::Initials;
-                if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
-                    self.signature_draft = crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author);
+                if (tool == crate::fill_sign::FillTool::Signature && self.signature().is_none()) || (initials && self.initials.is_none()) {
+                    self.signature_draft = self.new_signature_draft(initials);
                     self.dialog = Some(Dialog::Signature);
                 }
             }

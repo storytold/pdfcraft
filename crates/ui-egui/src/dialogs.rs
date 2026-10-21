@@ -1336,7 +1336,16 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
             app.initials = d.saved();
             crate::fill_sign::FillTool::Initials
         } else {
-            app.signature = d.saved();
+            if let Some(sig) = d.saved() {
+                if d.editing {
+                    app.signatures.replace_active(&d.label, sig);
+                } else if !app.signatures.add(&d.label, sig) {
+                    app.notify_fmt(
+                        "You can keep up to {n} signatures. Remove one to add another.",
+                        &[("n", &crate::fill_sign::MAX_SAVED_SIGNATURES.to_string())],
+                    );
+                }
+            }
             crate::fill_sign::FillTool::Signature
         };
         app.quick_tool = crate::QuickTool::Fill(tool);

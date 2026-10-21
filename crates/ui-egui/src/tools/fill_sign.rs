@@ -55,6 +55,151 @@ impl SavedSig {
     }
 }
 
+/// How many signatures Fill & Sign keeps (initials are one more, kept apart).
+pub const MAX_SAVED_SIGNATURES: usize = 20;
+/// The longest signature label, in characters.
+pub const MAX_SIGNATURE_LABEL_CHARS: usize = 60;
+
+/// A saved signature and the label it is listed under ("Work", "Ada Lovelace", "Signature 2").
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LabelledSig {
+    pub label: String,
+    pub sig: SavedSig,
+}
+
+/// The saved Fill & Sign signatures, at most [`MAX_SAVED_SIGNATURES`], and the active one: the
+/// one Sign places, Change edits and Remove deletes, and a visible digital signature shows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SignatureLibrary {
+    entries: Vec<LabelledSig>,
+    active: usize,
+}
+
+impl SignatureLibrary {
+    /// Up to [`MAX_SAVED_SIGNATURES`] of `entries`, labels cleaned and `active` clamped into range.
+    pub fn new(mut entries: Vec<LabelledSig>, active: usize) -> Self {
+        entries.truncate(MAX_SAVED_SIGNATURES);
+        let mut library = Self { entries: Vec::with_capacity(entries.len()), active: 0 };
+        for e in entries {
+            library.add(&e.label, e.sig);
+        }
+        library.active = active.min(library.entries.len().saturating_sub(1));
+        library
+    }
+
+    pub fn entries(&self) -> &[LabelledSig] {
+        &self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.entries.len() >= MAX_SAVED_SIGNATURES
+    }
+
+    /// The active entry's index, `None` when nothing is saved.
+    pub fn active_index(&self) -> Option<usize> {
+        (self.active < self.entries.len()).then_some(self.active)
+    }
+
+    pub fn active_entry(&self) -> Option<&LabelledSig> {
+        self.entries.get(self.active)
+    }
+
+    /// The signature Fill & Sign places.
+    pub fn active(&self) -> Option<&SavedSig> {
+        self.active_entry().map(|e| &e.sig)
+    }
+
+    /// Make entry `i` the active one. False (and nothing changes) when there is no entry `i`.
+    pub fn select(&mut self, i: usize) -> bool {
+        let ok = i < self.entries.len();
+        if ok {
+            self.active = i;
+        }
+        ok
+    }
+
+    /// Select the first entry labelled `label`, ignoring case and surrounding spaces.
+    pub fn select_label(&mut self, label: &str) -> bool {
+        let want = label.trim().to_lowercase();
+        match self.entries.iter().position(|e| e.label.to_lowercase() == want) {
+            Some(i) => self.select(i),
+            None => false,
+        }
+    }
+
+    /// Add a signature and make it active; a blank label becomes [`Self::next_label`]. False
+    /// (and nothing changes) when the library is full.
+    pub fn add(&mut self, label: &str, sig: SavedSig) -> bool {
+        if self.is_full() {
+            return false;
+        }
+        let label = self.label_or_next(label);
+        self.entries.push(LabelledSig { label, sig });
+        self.active = self.entries.len().saturating_sub(1);
+        true
+    }
+
+    /// Replace the active entry's signature and label, or add the first one when none is saved.
+    pub fn replace_active(&mut self, label: &str, sig: SavedSig) {
+        let label = self.label_or_next(label);
+        match self.entries.get_mut(self.active) {
+            Some(e) => *e = LabelledSig { label, sig },
+            None => {
+                self.entries.push(LabelledSig { label, sig });
+                self.active = self.entries.len().saturating_sub(1);
+            }
+        }
+    }
+
+    /// Set the active signature, keeping its label: `Some` replaces it (adding one when none is
+    /// saved), `None` removes it.
+    pub fn set_active(&mut self, sig: Option<SavedSig>) {
+        match sig {
+            Some(sig) => {
+                let label = self.active_entry().map(|e| e.label.clone()).unwrap_or_default();
+                self.replace_active(&label, sig);
+            }
+            None => self.remove_active(),
+        }
+    }
+
+    /// Remove the active entry; the one before it (or the new first one) becomes active.
+    pub fn remove_active(&mut self) {
+        if self.active < self.entries.len() {
+            self.entries.remove(self.active);
+            self.active = self.active.saturating_sub(1).min(self.entries.len().saturating_sub(1));
+        }
+    }
+
+    /// "Signature N" for the lowest N no entry is labelled with yet.
+    pub fn next_label(&self) -> String {
+        let template = tl!("Signature {n}");
+        (1..=self.entries.len().saturating_add(1))
+            .map(|n| crate::i18n::fmt(template, &[("n", &n.to_string())]))
+            .find(|l| !self.entries.iter().any(|e| e.label == *l))
+            .unwrap_or_else(|| tl!("Signature").to_string())
+    }
+
+    fn label_or_next(&self, label: &str) -> String {
+        let label = clean_label(label);
+        if label.is_empty() { self.next_label() } else { label }
+    }
+}
+
+/// A label on one line, trimmed, and at most [`MAX_SIGNATURE_LABEL_CHARS`] characters.
+fn clean_label(label: &str) -> String {
+    let one_line: String = label.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    one_line.trim().chars().take(MAX_SIGNATURE_LABEL_CHARS).collect::<String>().trim_end().to_string()
+}
+
 pub(crate) mod image_data {
     use base64::Engine as _;
     use pdfcraft_engine::{SignatureImage, signature_image::MAX_SIGNATURE_IMAGE_BYTES};
@@ -92,6 +237,8 @@ pub struct SigDraft {
     pub initials: bool,
     /// Replacing an existing saved value.
     pub editing: bool,
+    /// The signature's label in the saved list (initials have none).
+    pub label: String,
 }
 
 impl SigDraft {
@@ -355,50 +502,115 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
     img
 }
 
-/// Saved previews and add/remove controls, shared by the left panel and quick-tool picker.
+/// Saved previews and add/remove controls, shared by the left panel and quick-tool picker: every
+/// saved signature under its label (the active one highlighted), then the initials.
 pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp, t: &Tokens) -> Option<&'static str> {
     ui.set_width(ui.available_width().clamp(240.0, 248.0));
+    let label = |template: &str, what: &str| crate::i18n::fmt(tl!(template), &[("what", what)]);
     let mut command = None;
-    for (i, (saved, what, use_id, change_id, remove_id)) in [
-        (app.signature.as_ref(), "signature", "sign.fill.signature", "sign.fill.signature.change", "sign.fill.signature.remove"),
-        (app.initials.as_ref(), "initials", "sign.fill.initials", "sign.fill.initials.change", "sign.fill.initials.remove"),
-    ]
-    .into_iter()
-    .enumerate()
+    // Initials' preview is slot 0, signature `i`'s is slot `i + 1`.
+    let slots = app.signatures.len().saturating_add(1);
+    if app.saved_signature_previews.len() < slots {
+        app.saved_signature_previews.resize_with(slots, || None);
+    }
+    let what = tl!("signature");
+    let active = app.signatures.active_index();
+    let mut clicked = None;
+    egui::ScrollArea::vertical().id_salt("saved-signatures").max_height(330.0).auto_shrink([false, true]).show(ui, |ui| {
+        for (i, e) in app.signatures.entries().iter().enumerate() {
+            let on = active == Some(i);
+            ui.label(egui::RichText::new(&e.label).size(12.0).color(if on { t.accent } else { t.text_muted }));
+            // Several cards are listed, so each button names its signature.
+            let name = |template: &str| format!("{}: {}", label(template, what), e.label);
+            let names = [name("Use {what}"), name("Change {what}"), name("Remove saved {what}"), name("Place saved {what}")];
+            let Some(cache) = app.saved_signature_previews.get_mut(i.saturating_add(1)) else { continue };
+            if let Some(c) = saved_card(ui, t, &e.sig, on, &names, cache, &format!("saved-signature-{i}")) {
+                clicked = Some((i, c));
+            }
+            ui.add_space(4.0);
+        }
+    });
+    if let Some((i, c)) = clicked
+        && app.signatures.select(i)
     {
-        let label = |template: &str| crate::i18n::fmt(tl!(template), &[("what", tl!(what))]);
-        let Some(saved) = saved else {
-            if crate::widgets::ghost_button(ui, "plus", &label("Add {what}")).clicked() {
-                command = Some(use_id);
-            }
-            continue;
-        };
-        ui.horizontal(|ui| {
-            let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
-            let use_label = label("Use {what}");
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
-            let painter = ui.painter_at(rect);
-            painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(4),
-                Stroke::new(1.0, if response.hovered() { t.accent } else { t.border }),
-                egui::StrokeKind::Inside,
-            );
-            paint_saved(ui, rect.shrink(8.0), saved, &mut app.saved_signature_previews[i], &format!("saved-{what}"));
-            if response.on_hover_text(label("Place saved {what}")).clicked() {
-                command = Some(use_id);
-            }
-            if crate::icons::button(ui, "pencil", 26.0, false, &label("Change {what}")).clicked() {
-                command = Some(change_id);
-            }
-            if crate::icons::button(ui, "x", 26.0, false, &label("Remove saved {what}")).clicked() {
-                command = Some(remove_id);
-            }
+        command = Some(match c {
+            CardClick::Use => "sign.fill.signature",
+            CardClick::Change => "sign.fill.signature.change",
+            CardClick::Remove => "sign.fill.signature.remove",
         });
-        ui.add_space(4.0);
+    }
+    if app.signatures.is_full() {
+        let full =
+            crate::i18n::fmt(tl!("You can keep up to {n} signatures. Remove one to add another."), &[("n", &MAX_SAVED_SIGNATURES.to_string())]);
+        ui.label(egui::RichText::new(full).size(12.0).color(t.text_muted));
+    } else if crate::widgets::ghost_button(ui, "plus", &label("Add {what}", what)).clicked() {
+        command = Some("sign.fill.signature.add");
+    }
+    ui.add_space(4.0);
+    let what = tl!("initials");
+    match app.initials.as_ref() {
+        None => {
+            if crate::widgets::ghost_button(ui, "plus", &label("Add {what}", what)).clicked() {
+                command = Some("sign.fill.initials");
+            }
+        }
+        Some(saved) => {
+            let names = ["Use {what}", "Change {what}", "Remove saved {what}", "Place saved {what}"].map(|l| label(l, what));
+            if let Some(cache) = app.saved_signature_previews.get_mut(0)
+                && let Some(c) = saved_card(ui, t, saved, false, &names, cache, "saved-initials")
+            {
+                command = Some(match c {
+                    CardClick::Use => "sign.fill.initials",
+                    CardClick::Change => "sign.fill.initials.change",
+                    CardClick::Remove => "sign.fill.initials.remove",
+                });
+            }
+            ui.add_space(4.0);
+        }
     }
     command
+}
+
+/// What a saved signature or initials card was clicked for.
+#[derive(Clone, Copy)]
+enum CardClick {
+    Use,
+    Change,
+    Remove,
+}
+
+/// One saved signature or initials: its preview (click to place it), then Change and Remove.
+/// `names` are the Use, Change and Remove buttons' accessible names and the preview's tooltip.
+fn saved_card(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    saved: &SavedSig,
+    active: bool,
+    names: &[String; 4],
+    cache: &mut Option<(SavedSig, egui::TextureHandle)>,
+    key: &str,
+) -> Option<CardClick> {
+    let [use_name, change_name, remove_name, hover] = names;
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_name.clone()));
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
+        let (width, color) = if active { (2.0, t.accent) } else { (1.0, if response.hovered() { t.accent } else { t.border }) };
+        painter.rect_stroke(rect, CornerRadius::same(4), Stroke::new(width, color), egui::StrokeKind::Inside);
+        paint_saved(ui, rect.shrink(8.0), saved, cache, key);
+        if response.on_hover_text(hover.as_str()).clicked() {
+            clicked = Some(CardClick::Use);
+        }
+        if crate::icons::button(ui, "pencil", 26.0, false, change_name).clicked() {
+            clicked = Some(CardClick::Change);
+        }
+        if crate::icons::button(ui, "x", 26.0, false, remove_name).clicked() {
+            clicked = Some(CardClick::Remove);
+        }
+    });
+    clicked
 }
 
 /// Draw a saved signature as large as fits in `rect`, centred: typed text and images through
@@ -629,6 +841,18 @@ pub(crate) fn signature_pad(
             }
         }
     });
+    if !d.initials {
+        ui.horizontal(|ui| {
+            let l = ui.label(tl!("Label"));
+            ui.add(
+                egui::TextEdit::singleline(&mut d.label)
+                    .char_limit(MAX_SIGNATURE_LABEL_CHARS)
+                    .desired_width(400.0)
+                    .hint_text(tl!("Work, Personal, a name…")),
+            )
+            .labelled_by(l.id);
+        });
+    }
     ui.add_space(6.0);
     if d.scan_mode {
         let browse = scan_tab(ui, t, d, preview, photo_texture);
@@ -921,6 +1145,92 @@ impl crate::PdfCraftApp {
 
 #[cfg(test)]
 mod tests {
+    use super::{LabelledSig, MAX_SAVED_SIGNATURES, MAX_SIGNATURE_LABEL_CHARS, SavedSig, SignatureLibrary};
+
+    fn typed(s: &str) -> SavedSig {
+        SavedSig::Typed(s.into())
+    }
+
+    fn labels(l: &SignatureLibrary) -> Vec<&str> {
+        l.entries().iter().map(|e| e.label.as_str()).collect()
+    }
+
+    #[test]
+    fn the_signature_library_holds_twenty_labelled_signatures() {
+        let mut l = SignatureLibrary::default();
+        assert_eq!(l.active(), None);
+        assert_eq!(l.active_index(), None);
+        assert!(l.add("Work", typed("Ada Lovelace")));
+        assert!(l.add("  ", typed("A. Lovelace")), "a blank label is given the next free one");
+        assert!(l.add("Home", typed("Ada")));
+        assert_eq!(labels(&l), ["Work", "Signature 1", "Home"]);
+        assert_eq!(l.active(), Some(&typed("Ada")), "a new signature becomes the active one");
+        for n in l.len()..MAX_SAVED_SIGNATURES {
+            assert!(l.add("", typed(&format!("Signer {n}"))));
+        }
+        assert!(l.is_full());
+        let before = l.clone();
+        assert!(!l.add("One too many", typed("Grace Hopper")));
+        assert_eq!(l, before, "a full library is left as it was");
+        assert_eq!(labels(&l).iter().filter(|x| x.starts_with("Signature ")).count(), MAX_SAVED_SIGNATURES - 2);
+    }
+
+    #[test]
+    fn selecting_changing_and_removing_follow_the_active_signature() {
+        let mut l = SignatureLibrary::default();
+        for (label, name) in [("Work", "Ada Lovelace"), ("Home", "Ada"), ("Initialled", "A. L.")] {
+            l.add(label, typed(name));
+        }
+        assert!(l.select(0));
+        assert!(!l.select(3), "there is no fourth signature");
+        assert_eq!(l.active_index(), Some(0));
+        assert!(l.select_label(" home "), "labels match ignoring case and spaces");
+        assert_eq!(l.active(), Some(&typed("Ada")));
+        assert!(!l.select_label("Office"));
+        l.replace_active("House", typed("Ada L."));
+        assert_eq!(labels(&l), ["Work", "House", "Initialled"]);
+        l.set_active(Some(typed("Ada K.")));
+        assert_eq!(l.active_entry(), Some(&LabelledSig { label: "House".into(), sig: typed("Ada K.") }), "set_active keeps the label");
+        l.remove_active();
+        assert_eq!(labels(&l), ["Work", "Initialled"]);
+        assert_eq!(l.active_index(), Some(0), "the one before the removed signature becomes active");
+        l.remove_active();
+        l.remove_active();
+        assert!(l.is_empty());
+        assert_eq!(l.active_index(), None);
+        l.remove_active();
+        l.set_active(Some(typed("Grace Hopper")));
+        assert_eq!(labels(&l), ["Signature 1"], "replacing with nothing saved adds the first signature");
+    }
+
+    #[test]
+    fn labels_are_one_trimmed_line_and_fill_the_lowest_free_number() {
+        let mut l = SignatureLibrary::default();
+        l.add("  Work\nphone\t ", typed("Ada"));
+        assert_eq!(labels(&l), ["Work phone"]);
+        l.add(&"x".repeat(MAX_SIGNATURE_LABEL_CHARS * 3), typed("Ada"));
+        assert_eq!(l.entries()[1].label.chars().count(), MAX_SIGNATURE_LABEL_CHARS);
+        l.add(&"é".repeat(MAX_SIGNATURE_LABEL_CHARS + 1), typed("Ada"));
+        assert_eq!(l.entries()[2].label, "é".repeat(MAX_SIGNATURE_LABEL_CHARS), "cut on a character, not a byte");
+        l.add("Signature 1", typed("Ada"));
+        assert_eq!(l.next_label(), "Signature 2");
+        l.add("", typed("Ada"));
+        l.add("Signature 4", typed("Ada"));
+        assert_eq!(l.next_label(), "Signature 3");
+    }
+
+    #[test]
+    fn a_library_from_settings_is_capped_and_its_active_index_clamped() {
+        let many: Vec<LabelledSig> = (0..50).map(|i| LabelledSig { label: format!(" {i} "), sig: typed("Ada") }).collect();
+        let l = SignatureLibrary::new(many, 999);
+        assert_eq!(l.len(), MAX_SAVED_SIGNATURES);
+        assert_eq!(l.entries()[0].label, "0");
+        assert_eq!(l.active_index(), Some(MAX_SAVED_SIGNATURES - 1));
+        let blank = SignatureLibrary::new(vec![LabelledSig { label: "\n".into(), sig: typed("Ada") }], 0);
+        assert_eq!(labels(&blank), ["Signature 1"]);
+        assert_eq!(SignatureLibrary::new(Vec::new(), 5).active_index(), None);
+    }
+
     #[test]
     fn undo_removes_the_last_stroke_and_skips_empty_ones() {
         let mut d = super::SigDraft { drawing: true, ..Default::default() };

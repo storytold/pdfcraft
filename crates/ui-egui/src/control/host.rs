@@ -109,6 +109,9 @@ impl Host for crate::PdfCraftApp {
                 "expanded": self.combine_expanded().iter().filter_map(|i| self.combine_draft.get(*i).map(|f| f.name.clone())).collect::<Vec<_>>(),
                 "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
             },
+            // Saved Fill & Sign signatures by label, and the active one's number (from 1).
+            "signatures": self.signatures.entries().iter().map(|e| e.label.clone()).collect::<Vec<_>>(),
+            "active_signature": self.signatures.active_index().map(|i| i.saturating_add(1)),
             "quick_tool": match self.quick_tool {
                 crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
                 crate::QuickTool::Select => "select".to_string(),

@@ -16,6 +16,11 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
+/// Every point of a drawn signature is a finite number.
+fn strokes_finite(strokes: &[Vec<[f32; 2]>]) -> bool {
+    strokes.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
+}
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
 /// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
 /// number) is refused whole, so the caller keeps its default.
@@ -119,10 +124,11 @@ impl PdfCraftApp {
                     "fill": s.fill,
                 }))
                 .collect::<Vec<_>>(),
-            // Drawn signatures keep their original form (older settings read the same).
-            "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
-            "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
-            "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
+            // The active signature (the list is added below) in the single-signature keys, so older
+            // versions still find it. Drawn signatures keep their original form (older settings read the same).
+            "signature": match self.signature() { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
+            "signature_text": match self.signature() { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
+            "signature_image": match self.signature() { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
@@ -150,6 +156,8 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["signatures"] = serde_json::json!(self.signatures.entries());
+        v["active_signature"] = serde_json::json!(self.signatures.active_index());
         v.to_string()
     }
 
@@ -353,16 +361,48 @@ impl PdfCraftApp {
 
     /// Saved signatures, stamps, actions and trusted certificates.
     fn restore_signature_prefs(&mut self, v: &serde_json::Value) {
-        if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
-            && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
-        {
-            self.signature = Some(fill_sign::SavedSig::Drawn(s));
-        }
-        if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
-            self.signature = Some(fill_sign::SavedSig::Typed(t.to_string()));
-        }
-        if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
-            self.signature = Some(s);
+        if let Some(list) = v["signatures"].as_array() {
+            // One damaged entry (a bad image, a non-finite stroke) is dropped, not the whole list.
+            // The active one stays active, or the nearest kept one before it if it was dropped.
+            let saved_active = v["active_signature"].as_u64().and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
+            let mut active = 0;
+            let mut entries = Vec::new();
+            for (i, e) in list.iter().enumerate() {
+                if entries.len() >= fill_sign::MAX_SAVED_SIGNATURES {
+                    break;
+                }
+                let Ok(e) = serde_json::from_value::<fill_sign::LabelledSig>(e.clone()) else { continue };
+                let usable = match &e.sig {
+                    fill_sign::SavedSig::Drawn(s) => strokes_finite(s),
+                    fill_sign::SavedSig::Typed(t) => !t.trim().is_empty(),
+                    fill_sign::SavedSig::Image(_) => true,
+                };
+                if usable {
+                    if i <= saved_active {
+                        active = entries.len();
+                    }
+                    entries.push(e);
+                }
+            }
+            self.signatures = fill_sign::SignatureLibrary::new(entries, active);
+        } else {
+            // Settings from before the signature list: one signature, which becomes the first entry.
+            let mut legacy = None;
+            if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
+                && strokes_finite(&s)
+            {
+                legacy = Some(fill_sign::SavedSig::Drawn(s));
+            }
+            if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
+                legacy = Some(fill_sign::SavedSig::Typed(t.to_string()));
+            }
+            if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
+                legacy = Some(s);
+            }
+            if let Some(s) = legacy {
+                self.signatures = fill_sign::SignatureLibrary::default();
+                self.signatures.add("", s);
+            }
         }
         if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
             self.initials = Some(i);

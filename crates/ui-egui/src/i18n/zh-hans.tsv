@@ -2059,6 +2059,10 @@
 	Fill & Sign: change signature	填写与签名：更改签名
 	Fill & Sign: remove saved initials	填写与签名：移除已保存的姓名首字母
 	Fill & Sign: remove saved signature	填写与签名：移除已保存的签名
+	Fill & Sign: add another saved signature	填写与签名：再添加一个已保存的签名
+	Signature {n}	签名 {n}
+	Work, Personal, a name…	工作、个人、姓名…
+	You can keep up to {n} signatures. Remove one to add another.	最多可保存 {n} 个签名。请先移除一个，再添加新的。
 	Fill in {name}	填写 {name}
 	Flatten	拼合
 	Flip image	翻转图像

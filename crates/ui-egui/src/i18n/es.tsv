@@ -2071,6 +2071,10 @@ action wizard	Start	Iniciar
 	Fill & Sign: change signature	Rellenar y firmar: cambiar firma
 	Fill & Sign: change initials	Rellenar y firmar: cambiar iniciales
 	Fill & Sign: remove saved signature	Rellenar y firmar: quitar la firma guardada
+	Fill & Sign: add another saved signature	Rellenar y firmar: añadir otra firma guardada
+	Signature {n}	Firma {n}
+	Work, Personal, a name…	Trabajo, Personal, un nombre…
+	You can keep up to {n} signatures. Remove one to add another.	Puedes guardar hasta {n} firmas. Quita una para añadir otra.
 	Fill & Sign: remove saved initials	Rellenar y firmar: quitar las iniciales guardadas
 	Change signature	Cambiar firma
 	Change initials	Cambiar iniciales
