@@ -4405,6 +4405,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-xfa",
  "png 0.18.1",
+ "rustix 1.1.5",
  "thiserror 2.0.21",
  "tiff",
  "zune-jpeg",

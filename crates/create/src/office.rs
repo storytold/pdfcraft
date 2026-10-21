@@ -70,7 +70,7 @@ mod native {
     use super::{CreateError, MAX_PDF, office_extension};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, ExitStatus, Stdio};
+    use std::process::{Child, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
@@ -186,8 +186,16 @@ mod native {
         TimedOut,
     }
 
-    /// Run `command` to completion, killing it once `timeout` passes.
+    /// Run `command` to completion, killing it and every process it started once `timeout`
+    /// passes. `soffice` hands the conversion to its own child, `soffice.bin`, which would
+    /// otherwise outlive the kill, holding the profile folder and its memory.
     pub(super) fn run_with_timeout(mut command: Command, timeout: Duration) -> std::io::Result<Run> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Its own process group, so the whole group can be stopped together.
+            command.process_group(0);
+        }
         let mut child = command.spawn()?;
         let start = Instant::now();
         loop {
@@ -195,18 +203,47 @@ mod native {
                 Ok(Some(status)) => return Ok(Run::Exited(status)),
                 Ok(None) => {}
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_tree(&mut child);
                     return Err(error);
                 }
             }
             if start.elapsed() >= timeout {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 return Ok(Run::TimedOut);
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Kill `child` and every process it started, then reap it.
+    fn kill_tree(child: &mut Child) {
+        #[cfg(unix)]
+        {
+            use rustix::process::{Pid, Signal, kill_process_group};
+            // The group `process_group(0)` made has the child's id.
+            if let Some(group) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
+                let _ = kill_process_group(group, Signal::KILL);
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // `/T` walks the tree from the child's id, so it runs while the child is still alive.
+            // Windows' own copy, not whatever `taskkill` the PATH finds first.
+            let taskkill = std::env::var_os("SystemRoot")
+                .map_or_else(|| PathBuf::from("taskkill.exe"), |root| PathBuf::from(root).join("System32").join("taskkill.exe"));
+            let _ = Command::new(taskkill)
+                .args(["/T", "/F", "/PID", &child.id().to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                // CREATE_NO_WINDOW, as for LibreOffice itself.
+                .creation_flags(0x0800_0000)
+                .status();
+        }
+        // The child itself, if the tree kill couldn't reach it.
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     /// Convert with the LibreOffice at `program`, giving up after `timeout`.
@@ -356,6 +393,59 @@ mod tests {
         #[ignore]
         fn sleeps_for_a_minute() {
             std::thread::sleep(Duration::from_secs(60));
+        }
+
+        /// Where the stand-ins below write their heartbeat.
+        const HEARTBEAT: &str = "PDFCRAFT_TEST_OFFICE_HEARTBEAT";
+
+        /// This test binary run as one of its own ignored tests, with the heartbeat file set.
+        fn stand_in(test: &str, heartbeat: &Path) -> std::process::Command {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--ignored", "--exact", test, "--nocapture"]).env(HEARTBEAT, heartbeat);
+            command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            command
+        }
+
+        /// `soffice` starts `soffice.bin` as its own child: a timeout must stop both, or the
+        /// child keeps running, holding the profile folder.
+        #[test]
+        fn a_timeout_stops_the_processes_the_converter_started() {
+            let work = WorkDir::new().unwrap();
+            let heartbeat = work.0.join("heartbeat");
+            let parent = stand_in("office::tests::native::starts_a_child_that_keeps_beating", &heartbeat);
+            assert!(matches!(run_with_timeout(parent, Duration::from_secs(5)), Ok(Run::TimedOut)));
+            let beats = || std::fs::metadata(&heartbeat).map_or(0, |m| m.len());
+            // A killed process may take a moment to go.
+            std::thread::sleep(Duration::from_millis(300));
+            let after_kill = beats();
+            assert!(after_kill > 0, "the grandchild started and was beating before the timeout");
+            std::thread::sleep(Duration::from_secs(1));
+            assert_eq!(beats(), after_kill, "the grandchild was stopped with its parent");
+        }
+
+        /// The stand-in for `soffice`: starts [`beats_until_stopped`] and waits (run only by the
+        /// test above).
+        #[test]
+        #[ignore]
+        fn starts_a_child_that_keeps_beating() {
+            let Some(heartbeat) = std::env::var_os(HEARTBEAT) else { return };
+            let mut child = stand_in("office::tests::native::beats_until_stopped", Path::new(&heartbeat)).spawn().unwrap();
+            std::thread::sleep(Duration::from_secs(60));
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+
+        /// The stand-in for `soffice.bin`: appends to the heartbeat file every 50 ms for a minute.
+        #[test]
+        #[ignore]
+        fn beats_until_stopped() {
+            use std::io::Write;
+            let Some(heartbeat) = std::env::var_os(HEARTBEAT) else { return };
+            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(heartbeat).unwrap();
+            for _ in 0..1200 {
+                file.write_all(b".").unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
 
         #[test]
