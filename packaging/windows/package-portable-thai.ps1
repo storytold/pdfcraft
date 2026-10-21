@@ -19,14 +19,21 @@ New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
 # Setup PATH for cargo, wix, and rc.exe
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:USERPROFILE\.dotnet\tools;C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64;$env:Path"
 
-# Read base version from Cargo.toml or use 0.10.0
-$BaseVersion = '0.10.0'
+# Read base version from Cargo.toml
+$BaseVersion = '0.10.1'
+$cargoToml = Join-Path $Root 'Cargo.toml'
+if (Test-Path $cargoToml) {
+  $content = Get-Content $cargoToml -Raw
+  if ($content -match 'version\s*=\s*"([^"]+)"') {
+    $BaseVersion = $Matches[1]
+  }
+}
 
 if ($CustomVersion) {
   $Version = $CustomVersion
 } else {
-  # Scan existing packages in target\ to determine next thai.N
-  $existing = Get-ChildItem -Path $TargetDir -Filter 'pdfcraft-*-thai.*-windows-x86_64-portable.zip' -ErrorAction SilentlyContinue
+  # Scan existing packages in target\ to determine next thai.N for this base version
+  $existing = Get-ChildItem -Path $TargetDir -Filter "pdfcraft-$BaseVersion-thai.*-windows-x86_64-portable.zip" -ErrorAction SilentlyContinue
   $maxNum = 0
   foreach ($f in $existing) {
     if ($f.Name -match 'thai\.(\d+)') {
