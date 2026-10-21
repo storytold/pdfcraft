@@ -202,8 +202,15 @@ pub(crate) fn inline_text(
     prefs: &CommentPrefs,
 ) -> Option<Edit> {
     let it = view.comments.inline.clone()?;
-    // Scrolled away: the text waits until the page is back.
-    let xf = view.page_xform(it.page)?;
+    // Scrolled away: the text waits until the page is back. egui drops the focus of a widget
+    // that isn't drawn, so the editor asks for the keyboard again when it is drawn again (or a
+    // click away could never keep the text, and new text boxes would wait for it).
+    let Some(xf) = view.page_xform(it.page) else {
+        if let Some(t) = view.comments.inline.as_mut() {
+            t.focus = true;
+        }
+        return None;
+    };
     let page = info.pages.get(it.page)?;
     let zoom = xf.rect.width() / xf.pw.max(1.0);
     // The box's look: its own, or the text box tool's for a new one.

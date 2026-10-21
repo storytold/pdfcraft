@@ -922,6 +922,45 @@ fn double_click(h: &mut Harness<'static, PdfCraftApp>, p: Pos2) {
 /// box tool's click opens an editor where the box goes and clicking away keeps the text; a
 /// double-click on a text box edits its text there, ⌘/Ctrl+Enter keeps it, and the box follows
 /// the new text; Escape drops a change.
+/// The page of a text box being typed into scrolls away and back: the editor has the keyboard
+/// again, so typing goes on and a click away keeps the text.
+#[test]
+fn a_text_box_being_typed_has_the_keyboard_again_when_its_page_scrolls_back() {
+    let mut h = harness_with_step_dt(1.0 / 60.0, |app| app.set_option("quick", "freetext").unwrap());
+    click_pt(&mut h, (40.0, 120.0));
+    field(&h, "Type text").type_text("Abnahme");
+    h.run_steps(2);
+    h.state_mut().set_option("zoom", "400").unwrap();
+    h.state_mut().set_option("page", "2").unwrap();
+    settle(&mut h);
+    // On down into page 2, until page 1 isn't drawn at all.
+    let centre = h.state().views[0].viewport_rect().center();
+    h.hover_at(centre);
+    h.run_steps(1);
+    for _ in 0..3 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(2);
+    }
+    settle(&mut h);
+    assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 scrolled away");
+    h.state_mut().set_option("zoom", "100").unwrap();
+    h.state_mut().set_option("page", "1").unwrap();
+    settle(&mut h);
+    h.event(egui::Event::Text(" ok".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.inline.as_ref().map(|t| t.text.as_str()), Some("Abnahme ok"), "typing goes on");
+    click_pt(&mut h, (250.0, 20.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "a click away keeps the text: {c:?}");
+    assert_eq!(c[0].contents.as_deref(), Some("Abnahme ok"));
+}
+
 #[test]
 fn text_boxes_are_typed_into_on_the_page() {
     let mut h = harness_with_step_dt(1.0 / 60.0, |app| app.set_option("quick", "freetext").unwrap());
