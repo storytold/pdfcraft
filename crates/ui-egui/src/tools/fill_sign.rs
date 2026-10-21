@@ -87,18 +87,22 @@ impl SignatureLibrary {
         library
     }
 
+    /// The saved signatures, in the order they are listed.
     pub fn entries(&self) -> &[LabelledSig] {
         &self.entries
     }
 
+    /// How many signatures are saved.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// No signature is saved.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// [`MAX_SAVED_SIGNATURES`] are saved: [`Self::add`] refuses another.
     pub fn is_full(&self) -> bool {
         self.entries.len() >= MAX_SAVED_SIGNATURES
     }
@@ -108,6 +112,7 @@ impl SignatureLibrary {
         (self.active < self.entries.len()).then_some(self.active)
     }
 
+    /// The active signature with its label.
     pub fn active_entry(&self) -> Option<&LabelledSig> {
         self.entries.get(self.active)
     }
@@ -188,6 +193,7 @@ impl SignatureLibrary {
             .unwrap_or_else(|| tl!("Signature").to_string())
     }
 
+    /// `label` cleaned, or [`Self::next_label`] when nothing is left of it.
     fn label_or_next(&self, label: &str) -> String {
         let label = clean_label(label);
         if label.is_empty() { self.next_label() } else { label }

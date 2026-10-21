@@ -1381,6 +1381,26 @@ fn saved_signatures_are_listed_and_chosen_through_the_control_channel() {
 }
 
 #[test]
+fn a_full_signature_list_says_why_a_new_signature_was_not_kept() {
+    use pdfcraft_ui_egui::fill_sign::{MAX_SAVED_SIGNATURES, SavedSig};
+    let (mut h, c) = harness();
+    for n in 0..MAX_SAVED_SIGNATURES {
+        assert!(h.state_mut().signatures.add("", SavedSig::Typed(format!("Signer {n}"))));
+    }
+    // The pad opened directly, not through Add signature, which a full list hides.
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "signature" }));
+    h.run_steps(3);
+    h.state_mut().signature_draft.text = "Grace Hopper".into();
+    h.run_steps(2);
+    ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(h.state().signatures.len(), MAX_SAVED_SIGNATURES);
+    let toast = h.state().toast.as_ref().map(|(t, _)| t.clone());
+    assert_eq!(toast.as_deref(), Some("You can keep up to 20 signatures. Remove one to add another."));
+}
+
+#[test]
 fn drawing_a_comment_by_drag_and_its_context_menu() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.command", json!({ "id": "comment.square" }));
