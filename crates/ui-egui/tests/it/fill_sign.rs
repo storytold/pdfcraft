@@ -1117,6 +1117,12 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     again.restore(r#"{"signature_text":"Ada","signature_image":{"Image":"bm90IGFuIGltYWdl"},"initials":{"Image":"%%%"}}"#);
     assert_eq!(again.signature().cloned(), Some(SavedSig::Typed("Ada".into())));
     assert!(again.initials.is_none());
+    // A legacy drawn signature with nothing visible (no stroke of two points) is not kept.
+    let mut dots = PdfCraftApp::new();
+    dots.restore(r#"{"signature":[[[0.1,0.1]],[]]}"#);
+    assert!(dots.signature().is_none());
+    dots.restore(r#"{"signature":[[[0.1,0.1],[0.4,0.2]]]}"#);
+    assert!(matches!(dots.signature(), Some(SavedSig::Drawn(_))));
     std::fs::remove_file(path).unwrap();
 }
 
@@ -1926,6 +1932,8 @@ fn signatures_saved_before_the_list_and_damaged_entries_still_load() {
                 { "label": "Endless stroke", "sig": { "Drawn": [[[0.1, 0.1], [1e39, 0.2]]] } },
                 { "label": "Blank", "sig": { "Typed": "  " } },
                 { "label": "Home", "sig": { "Drawn": [[[0.1, 0.1], [0.5, 0.2]]] } },
+                { "label": "No strokes", "sig": { "Drawn": [] } },
+                { "label": "Only dots", "sig": { "Drawn": [[[0.1, 0.1]], []] } },
                 { "label": "No signature" },
                 "nonsense",
             ],

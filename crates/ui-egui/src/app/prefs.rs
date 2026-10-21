@@ -16,9 +16,10 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
-/// Every point of a drawn signature is a finite number.
-fn strokes_finite(strokes: &[Vec<[f32; 2]>]) -> bool {
-    strokes.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
+/// A drawn signature the pad would keep: every point a finite number, and at least one stroke
+/// long enough to show (two points), as the pad requires before saving.
+fn strokes_drawn(strokes: &[Vec<[f32; 2]>]) -> bool {
+    strokes.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite()))) && strokes.iter().any(|st| st.len() > 1)
 }
 
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
@@ -373,7 +374,7 @@ impl PdfCraftApp {
                 }
                 let Ok(e) = serde_json::from_value::<fill_sign::LabelledSig>(e.clone()) else { continue };
                 let usable = match &e.sig {
-                    fill_sign::SavedSig::Drawn(s) => strokes_finite(s),
+                    fill_sign::SavedSig::Drawn(s) => strokes_drawn(s),
                     fill_sign::SavedSig::Typed(t) => !t.trim().is_empty(),
                     fill_sign::SavedSig::Image(_) => true,
                 };
@@ -389,7 +390,7 @@ impl PdfCraftApp {
             // Settings from before the signature list: one signature, which becomes the first entry.
             let mut legacy = None;
             if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
-                && strokes_finite(&s)
+                && strokes_drawn(&s)
             {
                 legacy = Some(fill_sign::SavedSig::Drawn(s));
             }
