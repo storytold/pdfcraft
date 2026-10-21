@@ -3880,15 +3880,13 @@ fn natural_image_stamps_through_tools_on_rotated_pages() {
         let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut pixels).unwrap();
-        assert_eq!(info.color_type, png::ColorType::Rgba);
-        for ((x, y), colour) in [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([
-            [240, 20, 20, 255],
-            [20, 180, 20, 255],
-            [20, 20, 240, 255],
-            [230, 180, 20, 255],
-        ]) {
-            let offset = ((y * info.width + x) * 4) as usize;
-            assert_eq!(&pixels[offset..offset + 4], &colour, "page rotation {degrees}");
+        // A rendered page is opaque, so it comes as RGB.
+        assert_eq!(info.color_type, png::ColorType::Rgb);
+        for ((x, y), colour) in
+            [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]])
+        {
+            let offset = ((y * info.width + x) * 3) as usize;
+            assert_eq!(&pixels[offset..offset + 3], &colour, "page rotation {degrees}");
         }
     }
 }
@@ -6515,7 +6513,8 @@ fn reading_colors_workdir() -> PathBuf {
     dir
 }
 
-/// Decodes a `page_render` PNG (pages here are 200×300 pt) into RGBA pixels.
+/// Decodes a `page_render` PNG (pages here are 200×300 pt) into RGBA pixels. Opaque pages
+/// come as RGB; their alpha is 255.
 fn png_pixels(content: &Content) -> Vec<u8> {
     let Content::Png { data, width, height } = content else { panic!("expected a PNG") };
     assert_eq!((*width, *height), (200, 300));
@@ -6523,7 +6522,11 @@ fn png_pixels(content: &Content) -> Vec<u8> {
     let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut pixels).unwrap();
     assert_eq!((info.width, info.height), (200, 300));
-    pixels
+    match info.color_type {
+        png::ColorType::Rgba => pixels,
+        png::ColorType::Rgb => pixels.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        other => panic!("unexpected colour type {other:?}"),
+    }
 }
 
 /// The RGBA pixel at (`x`, `y`), top-left origin, of a 200-wide image.

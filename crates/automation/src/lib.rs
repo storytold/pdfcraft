@@ -2506,24 +2506,9 @@ fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
     Value::Array(items.iter().map(|o| json!({ "title": o.title, "page": o.page.map(|p| p + 1), "children": outline(&o.children) })).collect())
 }
 
+/// A rendered raster as PNG, through the engine's encoder (Export ▸ Image writes the same).
 fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {
-    let mut rgba = premultiplied.to_vec();
-    for px in rgba.as_chunks_mut::<4>().0 {
-        let a = u32::from(px[3]);
-        if a != 0 && a != 255 {
-            for c in &mut px[..3] {
-                *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
-            }
-        }
-    }
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, width, height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    let mut w = enc.write_header().map_err(failed)?;
-    w.write_image_data(&rgba).map_err(failed)?;
-    w.finish().map_err(failed)?;
-    Ok(out)
+    pdfcraft_engine::export::encode_png(width, height, premultiplied).map_err(failed)
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.

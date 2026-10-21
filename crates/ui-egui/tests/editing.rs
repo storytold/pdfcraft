@@ -3256,11 +3256,17 @@ fn paragraph_drag_points(h: &Harness<'static, PdfCraftApp>, text: &str, offset: 
 
 fn drag_paragraph(h: &mut Harness<'static, PdfCraftApp>, text: &str, offset: [f64; 2]) {
     let (from, to) = paragraph_drag_points(h, text, offset);
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
     assert!(h.state().views[0].line_editor.is_none());
     drag(h, from, to);
     assert!(h.state().views[0].line_editor.is_none(), "a body drag must not open the typing editor");
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
 }
 
 fn assert_dragged_paragraphs(actual: &[pdfcraft_engine::TextBlock], expected: &[pdfcraft_engine::TextBlock]) {

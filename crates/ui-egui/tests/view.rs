@@ -1594,7 +1594,7 @@ fn switching_modes_keeps_the_current_page_at_fixed_zoom() {
     h.event(wheel(MouseWheelUnit::Point, -35.0, TouchPhase::Move));
     h.run_steps(8);
     let before = rect(&h, 17).unwrap().top() - h.state().views[0].viewport_rect().top();
-    h.get_by_label("Read").click();
+    h.state_mut().run_command("view.read_mode");
     h.run_steps(8);
     assert_eq!(h.state().views[0].current, 17, "switching to Read should keep the current page");
     let after = rect(&h, 17).unwrap().top() - h.state().views[0].viewport_rect().top();

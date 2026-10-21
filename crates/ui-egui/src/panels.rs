@@ -2,7 +2,7 @@
 //! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup};
+use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
 use pdfcraft_render::{DocInfo, FieldKind, OutlineItem};
 
 use crate::theme::{self, Tokens};
@@ -144,6 +144,10 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
 }
 
 fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+    if g.id == "edit" {
+        edit_panel(app, ui, t, g);
+        return;
+    }
     let (back, close) = panel_header(ui, t, g.label, true);
     if back {
         app.left = LeftPanel::AllTools;
@@ -185,20 +189,6 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         });
         ui.add_space(6.0);
     }
-    // Edit a PDF shows Format text at the top while text is selected or being added.
-    if g.id == "edit" {
-        if app.quick_tool == crate::QuickTool::EditText {
-            let count = app.active_ids().map_or(0, |(i, _)| app.views[i].objects.count());
-            if count > 0 {
-                ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
-                ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
-            } else {
-                ui.label(tl!("Shift-click to select several objects. Drag empty space to select an area."));
-            }
-            ui.add_space(6.0);
-        }
-        format_section(app, ui, t);
-    }
     let mut run = None;
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
@@ -238,31 +228,13 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 ui.painter().rect_filled(r, CornerRadius::same(4), fill);
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
                 let resp = theme::hand(resp).on_hover_text(format!("{} — {}", tl!(item.label), item.command));
+                // An entry with further commands opens a menu; its caret goes before the chip.
                 if item.actions.is_empty() {
                     if resp.clicked() {
                         run = Some(item.command);
                     }
-                } else {
-                    // A caret before the chip says the entry opens a menu (Add / Update / Remove).
-                    let c = r.left_center() - vec2(10.0, 0.0);
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        vec![c + vec2(-3.5, -2.0), c + vec2(3.5, -2.0), c + vec2(0.0, 2.5)],
-                        fg,
-                        egui::Stroke::NONE,
-                    ));
-                    egui::Popup::menu(&resp).show(|ui| {
-                        ui.set_min_width(180.0);
-                        for (n, id) in item.actions.iter().enumerate() {
-                            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
-                            // Add stays usable with no document open: it asks for a file first.
-                            let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
-                            let label = crate::i18n::menu_label(spec.id, spec.label);
-                            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                                run = Some(spec.id);
-                                ui.close();
-                            }
-                        }
-                    });
+                } else if let Some(cmd) = actions_menu(app, ui, &resp, item, r.left_center() - vec2(10.0, 0.0), fg) {
+                    run = Some(cmd);
                 }
             }
         }
@@ -298,6 +270,172 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     }
     if let Some(cmd) = run {
         app.run_command(cmd);
+    }
+}
+
+/// The page operations Edit shows as a row of icon buttons, as Acrobat's Edit panel does.
+const EDIT_PAGE_BUTTONS: [&str; 4] = ["page.rotate", "page.insert", "page.delete", "page.extract"];
+/// Add content items shown before More.
+const EDIT_CONTENT_SHOWN: usize = 5;
+/// Other options: the tools Acrobat's Edit panel links to.
+const EDIT_OTHER_TOOLS: [&str; 3] = ["combine", "redact", "form"];
+
+/// Edit a PDF, laid out as Acrobat's Edit panel: the title with Preferences and Close; Format text
+/// while text is being edited or added; Modify page as a row of icon buttons and Organize pages;
+/// Add content with the rarer items under More; and Other options, the neighbouring tools.
+/// Edit text & images itself is on the floating toolbar, and on from the moment Edit opens.
+/// Every item comes from the catalogue, so its label, icon and availability have one source.
+fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+    let items = || g.sections.iter().flat_map(|s| s.items.iter());
+    let item = |command: &str| items().find(|i| i.command == command);
+    let mut run = None;
+    let mut tool = None;
+    // Back to All tools only when Edit was opened from there; the Edit tab is its own way back.
+    let from_all_tools = app.mode != crate::Mode::Edit;
+    ui.horizontal(|ui| {
+        if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
+            app.left = LeftPanel::AllTools;
+            app.mode = crate::Mode::AllTools;
+        }
+        // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
+        let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
+        let title_width = (ui.available_width() - 2.0 * (26.0 + ui.spacing().item_spacing.x)).max(1.0);
+        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(title).font(theme::semibold(15.5)).color(t.text)).truncate())
+            .on_hover_text(title);
+        if icons::button(ui, "settings", 26.0, false, tl!("Preferences")).clicked() {
+            run = Some("app.preferences");
+        }
+        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
+            app.left_open = false;
+        }
+    });
+    ui.add_space(2.0);
+    ui.separator();
+    ui.add_space(4.0);
+    // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
+    let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
+    if count > 0 {
+        ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
+        ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
+        ui.add_space(6.0);
+    }
+    // Format text at the top while text is selected or being added.
+    format_section(app, ui, t);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        widgets::section_title(ui, tl!("Modify page"));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for i in EDIT_PAGE_BUTTONS.iter().filter_map(|c| item(c)) {
+                // Enabled as the command itself is: a document that forbids page assembly refuses these.
+                let enabled = pdfcraft_engine::commands::command(i.command).is_some_and(|spec| app.command_enabled(spec));
+                let resp = ui.add_enabled_ui(enabled, |ui| icons::button(ui, i.icon, 34.0, false, tl!(i.label))).inner;
+                if resp.clicked() {
+                    run = Some(i.command);
+                }
+            }
+        });
+        ui.add_space(2.0);
+        // Organize pages is a workspace of its own: its panel replaces this one, with the grid.
+        if let Some(i) = item("page.organize")
+            && edit_row(ui, t, i.icon, tl!(i.label), i.availability).clicked()
+        {
+            // With no document there is no grid to open: the command asks for a file first.
+            if app.active.is_some() {
+                tool = Some("organize");
+            } else {
+                run = Some("page.organize");
+            }
+        }
+
+        widgets::section_title(ui, tl!("Add content"));
+        let content: Vec<_> =
+            g.sections.iter().filter(|s| s.title == "Add content").flat_map(|s| s.items.iter()).filter(|i| i.command != "edit.edit_text").collect();
+        let more_id = egui::Id::new("edit_panel_more");
+        let more = ui.data(|d| d.get_temp::<bool>(more_id)).unwrap_or(false);
+        let shown = if more { content.len() } else { EDIT_CONTENT_SHOWN.min(content.len()) };
+        for i in content.iter().take(shown) {
+            let resp = edit_row(ui, t, i.icon, tl!(i.label), i.availability);
+            // Header and footer, Watermark and Background open their Add / Update / Remove menu.
+            if i.actions.is_empty() {
+                if resp.clicked() {
+                    run = Some(i.command);
+                }
+            } else if let Some(cmd) = actions_menu(app, ui, &resp, i, resp.rect.right_center() - vec2(14.0, 0.0), t.text) {
+                run = Some(cmd);
+            }
+        }
+        if content.len() > EDIT_CONTENT_SHOWN {
+            ui.add_space(4.0);
+            let label = if more { tl!("Less") } else { tl!("More") };
+            let resp = ui
+                .add(
+                    egui::Label::new(egui::RichText::new(label).color(t.accent_text).font(theme::medium(13.0)))
+                        .selectable(false)
+                        .sense(Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if resp.clicked() {
+                ui.data_mut(|d| d.insert_temp(more_id, !more));
+            }
+        }
+
+        widgets::section_title(ui, tl!("Other options"));
+        for other in EDIT_OTHER_TOOLS.iter().filter_map(|id| catalog::group(id)) {
+            if edit_row(ui, t, other.icon, tl!(other.label), other.availability).clicked() {
+                tool = Some(other.id);
+            }
+        }
+    });
+    if let Some(id) = tool {
+        app.select_tool(id);
+    }
+    if let Some(cmd) = run {
+        app.run_command(cmd);
+    }
+}
+
+/// A tool entry with further commands (Add / Update / Remove): a caret at `caret` says it opens a
+/// menu, and each command is enabled by its own needs. Returns the command chosen.
+fn actions_menu(app: &PdfCraftApp, ui: &egui::Ui, resp: &egui::Response, item: &ToolItem, caret: egui::Pos2, color: Color32) -> Option<&'static str> {
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![caret + vec2(-3.5, -2.0), caret + vec2(3.5, -2.0), caret + vec2(0.0, 2.5)],
+        color,
+        egui::Stroke::NONE,
+    ));
+    let mut run = None;
+    egui::Popup::menu(resp).show(|ui| {
+        ui.set_min_width(180.0);
+        for (n, id) in item.actions.iter().enumerate() {
+            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+            // Add stays usable with no document open: it asks for a file first.
+            let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
+            let label = crate::i18n::menu_label(spec.id, spec.label);
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                run = Some(spec.id);
+                ui.close();
+            }
+        }
+    });
+    run
+}
+
+/// One row of the Edit panel: a monochrome icon and the label, as Acrobat draws them. A planned
+/// item is muted and says when it ships when hovered.
+fn edit_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let press = theme::Press::track(ui, &resp);
+    press.wash(ui, rect, 6, false);
+    let body = rect.translate(press.offset());
+    let ready = availability == Availability::Ready;
+    let fg = if ready { t.text } else { t.text_muted };
+    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)), icon, 17.0, if ready { t.text } else { t.text_faint });
+    row_label(ui, label, theme::regular(13.5), fg, body.left_center() + vec2(34.0, 0.0), rect.width() - 42.0);
+    let resp = theme::hand(resp);
+    match availability {
+        Availability::Ready => resp,
+        Availability::Planned(m) => resp.on_hover_text(format!("{} {m}", tl!("Planned for milestone"))),
+        Availability::Provider => resp.on_hover_text(tl!("Optional: needs an AI provider you configure")),
     }
 }
 

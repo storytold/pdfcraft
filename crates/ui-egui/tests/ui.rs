@@ -192,6 +192,21 @@ fn read_mode_rail_buttons_open_their_panels() {
     h.get_by_label("Alpha section");
 }
 
+/// The mode bar matches Acrobat's: All tools, Edit, Convert and E-Sign, with no Read tab. Read
+/// mode is still a View command.
+#[test]
+fn the_mode_bar_has_no_read_tab() {
+    use pdfcraft_ui_egui::Mode;
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    for label in ["All tools", "Edit", "Convert", "E-Sign"] {
+        assert!(h.query_all_by_label(label).next().is_some(), "the {label} tab is there");
+    }
+    assert!(h.query_all_by_label("Read").next().is_none(), "no Read tab");
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(2);
+    assert_eq!(h.state().mode, Mode::Read);
+}
+
 /// A document that asks to open in Full Screen mode (`/PageMode /FullScreen`) is asked about
 /// first, as in Acrobat: "Not now" leaves the window as it is, "Full Screen" enters it.
 #[test]
@@ -227,7 +242,7 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().right, Some(RightPanel::Comments));
-    h.get_by_label("Read").click();
+    h.state_mut().run_command("view.read_mode");
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read);
     assert_eq!(h.state().right, None);
@@ -254,7 +269,7 @@ fn read_mode_hides_the_quick_toolbar() {
     h.get_by_label("Hand (H)").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
-    h.get_by_label("Read").click();
+    h.state_mut().run_command("view.read_mode");
     h.run_steps(3);
     assert!(h.query_by_label("Select (V)").is_none(), "no quick toolbar in Read mode");
     assert_eq!(h.state().quick_tool, QuickTool::Select);
@@ -286,7 +301,7 @@ fn a_pane_closed_in_read_mode_stays_closed_when_leaving_it() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().right, Some(RightPanel::Comments));
-    h.get_by_label("Read").click();
+    h.state_mut().run_command("view.read_mode");
     h.run_steps(3);
     assert_eq!(h.state().right, None);
     // Open Comments from the rail, then close it again.
@@ -1424,4 +1439,39 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
     h.get_by_label("Convert").click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
+}
+
+/// Organize pages in the Edit panel opens the Organize workspace: its own panel and the page grid,
+/// not the grid behind the Edit panel.
+#[test]
+fn organize_pages_from_the_edit_panel_opens_its_panel() {
+    use pdfcraft_ui_egui::LeftPanel;
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::Tool("edit"));
+    assert!(
+        h.query_by_label("Shift-click to select several objects. Drag empty space to select an area.").is_none(),
+        "no idle hint above Format text, as in Acrobat"
+    );
+    h.get_by_label("Organize pages").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::Tool("organize"));
+    assert!(h.state().views[0].organize, "the page grid is showing");
+}
+
+/// Header and footer, Watermark and Background keep their Add / Update / Remove menu in the Edit
+/// panel, as under All tools: Update and Remove wait for the document to have that kind of mark.
+#[test]
+fn the_edit_panel_keeps_the_add_update_remove_menu() {
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    h.get_by_label("Watermark").click();
+    h.run_steps(3);
+    assert_eq!(enabled(&h, "Add watermark…"), Some(true));
+    assert_eq!(enabled(&h, "Remove watermark"), Some(false), "nothing to remove yet");
+    h.get_by_label("Add watermark…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)));
 }
