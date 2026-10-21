@@ -258,8 +258,9 @@ pub enum SnapKind {
     Midpoint,
     Intersection,
     Path,
-    /// The centre of a small box drawn around the point (a check box, a table cell): where a
-    /// Fill & Sign mark goes. [`Geometry::snap`] never gives it; see [`Geometry::enclosing_box`].
+    /// The centre of a closed figure (a rectangle, a circle, a closed or filled polygon) or of the
+    /// small box drawn around the point (a check box, a table cell, [`Geometry::enclosing_box`]):
+    /// where a Fill & Sign mark goes.
     Centre,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -315,6 +316,23 @@ fn nearest(p: Point, a: Point, b: Point) -> Point {
     let t = (dot(sub(p, a), v) / length).clamp(0.0, 1.0);
     [a[0] + v[0] * t, a[1] + v[1] * t]
 }
+/// The order [`Geometry::candidates`] offers its targets in: nearest first and, at the same
+/// distance to a billionth of a unit, the discrete kinds before the others (endpoint, centre,
+/// midpoint, intersection, path). A total order, as `sort_by` requires: "nearly the same"
+/// compared pairwise is not transitive, and since Rust 1.81 a sort may panic on such an order.
+pub(crate) fn candidate_order(a: &Snap, b: &Snap) -> std::cmp::Ordering {
+    let rank = |k: SnapKind| match k {
+        SnapKind::Endpoint => 0,
+        SnapKind::Centre => 1,
+        SnapKind::Midpoint => 2,
+        SnapKind::Intersection => 3,
+        SnapKind::Path => 4,
+    };
+    // Candidates are within the tolerance (at most 10,000 units), so the steps fit an i64.
+    let key = |s: &Snap| ((s.distance * 1e9).round() as i64, rank(s.kind));
+    key(a).cmp(&key(b)).then(a.distance.total_cmp(&b.distance))
+}
+
 /// A subpath's box and corners so far, for its centre once it is known to be closed.
 #[derive(Clone, Copy, Debug)]
 struct Subpath {
@@ -341,7 +359,10 @@ impl Subpath {
     fn centre(&self, filled: bool) -> Option<Point> {
         let closed = filled || self.closed || distance(self.start, self.end) <= 1e-6;
         let extent = (self.hi[0] - self.lo[0]).max(self.hi[1] - self.lo[1]);
-        (closed && self.points >= 3 && extent > 1e-3).then(|| [(self.lo[0] + self.hi[0]) / 2.0, (self.lo[1] + self.hi[1]) / 2.0])
+        let c = [(self.lo[0] + self.hi[0]) / 2.0, (self.lo[1] + self.hi[1]) / 2.0];
+        // As every other target: finite and within the coordinate range (a huge `cm` can make a
+        // corner infinite, and one infinite centre would spread the grid over the whole page).
+        (closed && self.points >= 3 && extent > 1e-3 && check_points(&[c]).is_ok()).then_some(c)
     }
 }
 
@@ -422,19 +443,7 @@ impl Geometry {
                 }
             }
         }
-        let rank = |k: SnapKind| match k {
-            SnapKind::Endpoint => 0,
-            SnapKind::Centre => 1,
-            SnapKind::Midpoint => 2,
-            SnapKind::Intersection => 3,
-            SnapKind::Path => 4,
-        };
-        // Nearest first; at (nearly) the same distance the discrete kinds in their order.
-        found.sort_by(
-            |a, b| {
-                if (a.distance - b.distance).abs() <= 1e-9 { rank(a.kind).cmp(&rank(b.kind)) } else { a.distance.total_cmp(&b.distance) }
-            },
-        );
+        found.sort_by(candidate_order);
         let mut out: Vec<Snap> = Vec::new();
         for s in found {
             if out.len() >= MAX_CANDIDATES {
