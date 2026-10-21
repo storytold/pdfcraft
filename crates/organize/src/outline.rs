@@ -70,6 +70,8 @@ pub enum OutlineError {
     BadPosition,
     #[error("a bookmark's colour must be three numbers from 0 to 1")]
     BadColor,
+    #[error("no bookmarks were given to delete")]
+    NoneSelected,
     #[error("this document has no tagged headings to make bookmarks from")]
     NoEntries,
     #[error("{0}")]
@@ -680,6 +682,31 @@ pub fn delete_bookmark(doc: &mut Document, path: &[usize]) -> Result<()> {
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     kids.retain(|k| *k != r);
     relink(doc, parent, &kids)?;
+    recount(doc)
+}
+
+/// Remove several bookmarks, each with everything under it, in one step.
+///
+/// Every path is read against the outline as it is now, so the order of `paths` doesn't matter and
+/// a path whose parent is also listed is already gone with it. A path that names no bookmark
+/// fails the whole call before anything changes, as does an empty list.
+pub fn delete_bookmarks(doc: &mut Document, paths: &[Vec<usize>]) -> Result<()> {
+    if paths.is_empty() {
+        return Err(OutlineError::NoneSelected);
+    }
+    let mut doomed: HashSet<ObjRef> = HashSet::new();
+    let mut parents: Vec<ObjRef> = Vec::new();
+    for path in paths {
+        let (r, parent) = resolve_path(doc, path)?;
+        if doomed.insert(r) && !parents.contains(&parent) {
+            parents.push(parent);
+        }
+    }
+    for parent in parents {
+        let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
+        kids.retain(|k| !doomed.contains(k));
+        relink(doc, parent, &kids)?;
+    }
     recount(doc)
 }
 

@@ -5,5 +5,5 @@ Button "New bookmark (Ctrl+B)" [off]
 Label = "Search"
 TextInput "Search"
 Button "Clear" [off]
-Button "Introduction"
-Button "Details"
+Button "Introduction" [off]
+Button "Details" [off]
