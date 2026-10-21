@@ -1553,13 +1553,24 @@ mod tests {
         ]);
         shared_bad.entered.wait();
         shared_healthy.entered.wait();
-        assert!(pool.try_recv().is_none(), "shared timeouts retry instead of answering yet");
+        // This watchdog pass retries both pages privately. Page 1's retry has no gate, so on a
+        // loaded machine it can finish before this same call reads the results: that early
+        // answer is the healthy page, never a timeout error.
+        let early = pool.try_recv();
+        assert!(
+            early.as_ref().is_none_or(|page| page.request.page == 1 && page.error.is_none()),
+            "shared timeouts retry instead of answering with an error: {:?}",
+            early.as_ref().map(|page| (page.request.page, &page.error))
+        );
         shared_bad.release.wait();
         shared_healthy.release.wait();
         shared_bad.finished.wait();
         shared_healthy.finished.wait();
         private_bad.entered.wait();
-        let healthy = pool.results.recv_timeout(Duration::from_secs(30)).expect("healthy private retry");
+        let healthy = match early {
+            Some(page) => page,
+            None => pool.results.recv_timeout(Duration::from_secs(30)).expect("healthy private retry"),
+        };
         assert!(healthy.error.is_none(), "{:?}", healthy.error);
         assert_eq!((healthy.request.page, healthy.width, healthy.height, healthy.request.tag), (1, 100, 50, 41));
         pool.watchdog();
