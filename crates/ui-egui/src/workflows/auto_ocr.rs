@@ -8,6 +8,7 @@
 //! read at a time, and a page's words become its text layer as soon as that page is done. It needs
 //! the recognition models, and can be turned off in Preferences.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use pdfcraft_engine::ocr::{OcrPage, OcrSettings};
@@ -25,24 +26,43 @@ pub(crate) struct AutoOcr {
     run: Option<Run>,
 }
 
-/// A recognition in progress. Dropping it (the view closes, its pages change, Cancel) asks the
-/// worker to stop before its next page.
+/// Pages looked at for pictures in one frame. Finding them parses each page's content, so a long
+/// document is looked through a few pages at a time, never all at once on the UI thread.
+const PAGES_PER_FRAME: usize = 8;
+/// Pages with pictures handed to the worker at a time (capturing a job inspects their images).
+const PAGES_PER_CHUNK: usize = 4;
+
+/// A recognition in progress over the document's pages.
 struct Run {
+    /// Pages still to look at, from the current page on.
+    queue: VecDeque<usize>,
+    /// Pages with pictures found and not yet handed to a worker.
+    pending: Vec<usize>,
+    /// Pages in the document, and how many have been looked at and read (or passed over).
+    total: usize,
+    handled: usize,
+    /// The worker reading the pages handed out last.
+    chunk: Option<Chunk>,
+}
+
+/// One worker's pages. Dropping it (the view closes, its pages change, Cancel) asks the worker
+/// to stop before its next page.
+struct Chunk {
     shared: Arc<Mutex<Shared>>,
+    pages: usize,
 }
 
 #[derive(Default)]
 struct Shared {
-    /// Pages finished and the pages to read.
+    /// Pages of this chunk finished.
     done: usize,
-    total: usize,
     /// Pages read and not yet taken by the view.
     found: Vec<OcrPage>,
     finished: bool,
     cancel: bool,
 }
 
-impl Drop for Run {
+impl Drop for Chunk {
     fn drop(&mut self) {
         if let Ok(mut s) = self.shared.lock() {
             s.cancel = true;
@@ -60,11 +80,12 @@ impl AutoOcr {
         self.run.is_some()
     }
 
-    /// The page being read (1-based) and the pages to read, while recognition runs.
+    /// The page being read (1-based) and the pages in the document, while recognition runs.
     pub(crate) fn progress(&self) -> Option<(usize, usize)> {
-        let s = self.run.as_ref()?.shared.lock().ok()?;
-        let total = s.total.max(1);
-        Some(((s.done + 1).min(total), total))
+        let run = self.run.as_ref()?;
+        let reading = run.chunk.as_ref().and_then(|c| c.shared.lock().ok().map(|s| s.done)).unwrap_or(0);
+        let total = run.total.max(1);
+        Some((run.handled.saturating_add(reading).saturating_add(1).min(total), total))
     }
 
     /// Stop, and don't start again for these pages.
@@ -77,8 +98,8 @@ impl AutoOcr {
 impl DocView {
     /// Pages read in the background, as text layers of the pages they were read on.
     fn take_recognised(&mut self, pages: &[pdfcraft_render::PageInfo]) {
-        let Some(run) = self.auto_ocr.run.as_ref() else { return };
-        let (found, finished) = match run.shared.lock() {
+        let Some(chunk) = self.auto_ocr.run.as_ref().and_then(|r| r.chunk.as_ref()) else { return };
+        let (found, finished) = match chunk.shared.lock() {
             Ok(mut s) => (std::mem::take(&mut s.found), s.finished),
             // A worker that panicked holding the lock has nothing more to give.
             Err(_) => (Vec::new(), true),
@@ -96,22 +117,20 @@ impl DocView {
                 self.refresh_find_page(page.page);
             }
         }
-        if finished {
-            self.auto_ocr.run = None;
-            self.auto_ocr.done = true;
+        if finished && let Some(run) = self.auto_ocr.run.as_mut() {
+            run.handled = run.handled.saturating_add(run.chunk.take().map_or(0, |c| c.pages));
         }
     }
 }
 
 impl PdfCraftApp {
-    /// Hand finished pages to their views and start recognising a document that needs it.
+    /// Hand finished pages to their views, keep a recognition going, and start one for a
+    /// document that needs it.
     pub(crate) fn poll_auto_ocr(&mut self) {
         let mut running = false;
-        for view in &mut self.views {
-            if let Some(doc) = self.session.get(view.id) {
-                view.take_recognised(&doc.info.pages);
-            }
-            running |= view.auto_ocr.running();
+        for index in 0..self.views.len() {
+            self.step_auto_ocr(index);
+            running |= self.views.get(index).is_some_and(|v| v.auto_ocr.running());
         }
         if running {
             if let Some(ctx) = &self.ctx {
@@ -129,28 +148,66 @@ impl PdfCraftApp {
 
     fn start_auto_ocr(&mut self, index: usize) {
         let Some(view) = self.views.get_mut(index) else { return };
+        // The web build has no threads to read in; it reads nothing on its own.
+        if cfg!(target_arch = "wasm32") {
+            view.auto_ocr.stop();
+            return;
+        }
         // Models are looked for once per document; without them the bar offers Recognize text.
         if !pdfcraft_engine::ocr::available() {
             view.auto_ocr.done = true;
             return;
         }
         let Some(doc) = self.session.get(view.id) else { return };
-        // Pages with pictures, from the current page on: those the reader is looking at first.
-        let count = doc.info.pages.len();
-        let pages: Vec<usize> = (0..count).map(|k| (view.current + k) % count.max(1)).filter(|&p| !doc.page_images(p).is_empty()).collect();
+        // From the current page on: the pages the reader is looking at first.
+        let total = doc.info.pages.len();
+        let queue = (0..total).map(|k| (view.current + k) % total.max(1)).collect();
+        view.auto_ocr.run = Some(Run { queue, pending: Vec::new(), total, handled: 0, chunk: None });
+        self.step_auto_ocr(index);
+    }
+
+    /// One frame of a view's recognition: take what its worker has read, look through a few more
+    /// pages for pictures, and hand the next ones to a worker when it is free.
+    fn step_auto_ocr(&mut self, index: usize) {
+        let Some(view) = self.views.get_mut(index) else { return };
+        let Some(doc) = self.session.get(view.id) else { return };
+        view.take_recognised(&doc.info.pages);
+        let Some(run) = view.auto_ocr.run.as_mut() else { return };
+        if run.chunk.is_some() {
+            return;
+        }
+        for _ in 0..PAGES_PER_FRAME {
+            if run.pending.len() >= PAGES_PER_CHUNK {
+                break;
+            }
+            let Some(page) = run.queue.pop_front() else { break };
+            if doc.page_images(page).is_empty() {
+                run.handled = run.handled.saturating_add(1);
+            } else {
+                run.pending.push(page);
+            }
+        }
+        let ready = run.pending.len() >= PAGES_PER_CHUNK || (run.queue.is_empty() && !run.pending.is_empty());
+        if !ready {
+            if run.queue.is_empty() {
+                view.auto_ocr.run = None;
+                view.auto_ocr.done = true;
+            }
+            return;
+        }
+        let pages = std::mem::take(&mut run.pending);
         let settings = OcrSettings { language: self.ocr_draft.language.clone(), skip_text_pages: true, ..OcrSettings::default() };
-        let job = if pages.is_empty() { None } else { self.session.ocr_job(view.id, &pages, settings) };
-        let Some(job) = job else {
-            view.auto_ocr.done = true;
+        let Some(job) = self.session.ocr_job(view.id, &pages, settings) else {
+            view.auto_ocr.stop();
             return;
         };
-        let shared = Arc::new(Mutex::new(Shared { total: job.pages.len(), ..Default::default() }));
+        let shared = Arc::new(Mutex::new(Shared::default()));
         let worker = shared.clone();
         let work = move || {
             if let Ok(ocr) = pdfcraft_engine::ocr::engine() {
-                let progress = |done: usize, total: usize| {
+                let progress = |done: usize, _total: usize| {
                     let Ok(mut s) = worker.lock() else { return false };
-                    (s.done, s.total) = (done, total);
+                    s.done = done;
                     !s.cancel
                 };
                 job.run_each(&ocr, progress, |page| {
@@ -163,17 +220,10 @@ impl PdfCraftApp {
                 s.finished = true;
             }
         };
-        view.auto_ocr.run = Some(Run { shared });
-        #[cfg(not(target_arch = "wasm32"))]
+        run.chunk = Some(Chunk { shared, pages: pages.len() });
         if self.run_inline {
             work();
         } else if std::thread::Builder::new().name("pdfcraft-auto-ocr".into()).spawn(work).is_err() {
-            view.auto_ocr.stop();
-        }
-        // The web build has no threads to read in; it reads nothing on its own.
-        #[cfg(target_arch = "wasm32")]
-        {
-            drop(work);
             view.auto_ocr.stop();
         }
     }
