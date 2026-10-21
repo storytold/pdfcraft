@@ -82,7 +82,6 @@
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="PdfCraft">
         <Directory Id="ModelsFolder" Name="models" />
-        <Directory Id="PdfcraftFontsFolder" Name="fonts" />
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
@@ -91,7 +90,6 @@
     <Feature Id="Main" Title="PdfCraft" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
       <ComponentGroupRef Id="PdfcraftModels" />
-      <ComponentGroupRef Id="PdfcraftFonts" />
     </Feature>
   </Package>
 
@@ -225,11 +223,6 @@
          component each, so new models ship without naming them here. -->
     <ComponentGroup Id="PdfcraftModels" Directory="ModelsFolder">
       <Files Include="$(var.ModelsDir)\*" />
-    </ComponentGroup>
-
-    <!-- Bundled fonts folder (including Thai TrueType fonts and Courier MonoThai) -->
-    <ComponentGroup Id="PdfcraftFonts" Directory="PdfcraftFontsFolder">
-      <Files Include="$(var.FontsDir)\*" />
     </ComponentGroup>
   </Fragment>
 </Wix>
