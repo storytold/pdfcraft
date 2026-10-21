@@ -3813,3 +3813,70 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     ctrl_names.sort();
     assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }
+
+/// Intro, Results[Table, Chart[Legend]], Notes, Index: the outline the multi-delete tests share.
+fn outline_for_multi_delete() -> Document {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 9, "Intro", 0).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Results", 1).unwrap();
+    crate::add_bookmark(&mut d, &[1], 9, "Table", 1).unwrap();
+    crate::add_bookmark(&mut d, &[1], 9, "Chart", 2).unwrap();
+    crate::add_bookmark(&mut d, &[1, 1], 9, "Legend", 2).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Notes", 2).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Index", 2).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Chart[Legend]]", "Notes", "Index"]);
+    d
+}
+
+#[test]
+fn delete_bookmarks_removes_separate_entries_in_one_step() {
+    let mut d = outline_for_multi_delete();
+    // Siblings, a nested one and a top-level one, in no particular order.
+    crate::delete_bookmarks(&mut d, &[vec![3], vec![1, 0], vec![0]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Results[Chart[Legend]]", "Notes"]);
+    // The survivors keep their destinations.
+    let notes = crate::bookmarks(&d).into_iter().find(|b| b.title == "Notes").unwrap();
+    assert_eq!(notes.page, Some(2));
+    // Counts are right for what is left, and the outline survives a save and reopen.
+    let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    assert_eq!(count_of(&d, root), Some(4));
+    let back = full_roundtrip(&d);
+    assert_eq!(titles(&crate::bookmarks(&back)), ["Results[Chart[Legend]]", "Notes"]);
+}
+
+#[test]
+fn delete_bookmarks_takes_a_selected_parent_with_its_selected_descendants() {
+    let mut d = outline_for_multi_delete();
+    // The child is listed before and after its parent; the order and the overlap change nothing.
+    crate::delete_bookmarks(&mut d, &[vec![1, 1, 0], vec![1], vec![1, 0], vec![1]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Notes", "Index"]);
+    // Only the parent selected: its children go with it.
+    let mut d = outline_for_multi_delete();
+    crate::delete_bookmarks(&mut d, &[vec![1]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Notes", "Index"]);
+}
+
+#[test]
+fn delete_bookmarks_can_empty_the_outline_and_one_child_leaves_its_parent() {
+    let mut d = outline_for_multi_delete();
+    crate::delete_bookmarks(&mut d, &[vec![1, 1, 0]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Chart]", "Notes", "Index"]);
+    crate::delete_bookmarks(&mut d, &[vec![0], vec![1], vec![2], vec![3]]).unwrap();
+    assert!(crate::bookmarks(&d).is_empty());
+    let back = full_roundtrip(&d);
+    assert!(crate::bookmarks(&back).is_empty());
+}
+
+#[test]
+fn delete_bookmarks_changes_nothing_when_any_path_is_wrong() {
+    let mut d = outline_for_multi_delete();
+    let before = titles(&crate::bookmarks(&d));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[vec![0], vec![9]]), Err(crate::OutlineError::NoSuchBookmark(vec![9])));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[vec![0], vec![]]), Err(crate::OutlineError::NoSuchBookmark(vec![])));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[vec![2, 0]]), Err(crate::OutlineError::NoSuchBookmark(vec![2, 0])));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[]), Err(crate::OutlineError::NoneSelected));
+    assert_eq!(titles(&crate::bookmarks(&d)), before);
+    // A document with no outline at all is an error too, not a panic.
+    let mut bare = doc_a();
+    assert_eq!(crate::delete_bookmarks(&mut bare, &[vec![0]]), Err(crate::OutlineError::NoSuchBookmark(vec![0])));
+}
