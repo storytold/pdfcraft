@@ -34,14 +34,15 @@ pub static BUNDLED_SARABUN_BYTES: &[u8] = include_bytes!("../../../assets/fonts/
 
 pub static BUNDLED_SARABUN: CraftFont = CraftFont { family: "Sarabun", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_SARABUN_BYTES };
 
-/// Bundled TlwgMono TrueType font (GPL-2.0 with font exception), embedded at compile time from `assets/fonts/TlwgMono.ttf`.
-pub static BUNDLED_TLWG_MONO_BYTES: &[u8] = include_bytes!("../../../assets/fonts/TlwgMono.ttf");
+/// Bundled TlwgTypewriter TrueType font (GPL-2.0 with font exception), embedded at compile time from `assets/fonts/TlwgTypewriter.ttf`.
+pub static BUNDLED_TLWG_TYPEWRITER_BYTES: &[u8] = include_bytes!("../../../assets/fonts/TlwgTypewriter.ttf");
 
-pub static BUNDLED_TLWG_MONO: CraftFont = CraftFont { family: "TlwgMono", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_TLWG_MONO_BYTES };
+pub static BUNDLED_TLWG_TYPEWRITER: CraftFont =
+    CraftFont { family: "TlwgTypewriter", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_TLWG_TYPEWRITER_BYTES };
 
-/// Returns the bundled TlwgMono font for fixed-pitch / monospace Thai rendering.
-pub fn bundled_tlwg_mono_font() -> &'static CraftFont {
-    &BUNDLED_TLWG_MONO
+/// Returns the bundled TlwgTypewriter font for fixed-pitch / monospace Thai rendering.
+pub fn bundled_tlwg_typewriter_font() -> &'static CraftFont {
+    &BUNDLED_TLWG_TYPEWRITER
 }
 
 /// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ UDPGothic (a UI
@@ -86,13 +87,13 @@ pub fn ui_telugu_fonts() -> Vec<&'static CraftFont> {
 /// An entry representing a discovered or loaded Thai font file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThaiFontEntry {
-    /// Full display name (e.g. "TlwgMono", "TH Sarabun New Bold").
+    /// Full display name (e.g. "TlwgTypewriter", "TH Sarabun New Bold").
     pub name: String,
-    /// Family name from font metadata (e.g. "TlwgMono", "TH Sarabun New").
+    /// Family name from font metadata (e.g. "TlwgTypewriter", "TH Sarabun New").
     pub family: String,
     /// Subfamily / style from font metadata (e.g. "Regular", "Bold", "Italic").
     pub style: String,
-    /// File name on disk (e.g. "TlwgMono.ttf", "THSarabunNew.ttf").
+    /// File name on disk (e.g. "TlwgTypewriter.ttf", "THSarabunNew.ttf").
     pub file_name: String,
     /// Path to the font file.
     pub path: std::path::PathBuf,
@@ -305,21 +306,24 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
         });
     }
 
-    // Ensure TlwgMono (bundled font) is always present as an available Thai font
-    if !entries.iter().any(|e| e.family.eq_ignore_ascii_case("TlwgMono") && e.style.eq_ignore_ascii_case("Regular")) {
+    // Ensure TlwgTypewriter (bundled font) is always present as an available Thai font
+    if !entries.iter().any(|e| {
+        (e.family.eq_ignore_ascii_case("TlwgTypewriter") || e.family.eq_ignore_ascii_case("Tlwg Typewriter"))
+            && e.style.eq_ignore_ascii_case("Regular")
+    }) {
         entries.push(ThaiFontEntry {
-            name: "TlwgMono".to_string(),
-            family: "TlwgMono".to_string(),
+            name: "TlwgTypewriter".to_string(),
+            family: "TlwgTypewriter".to_string(),
             style: "Regular".to_string(),
-            file_name: "TlwgMono.ttf".to_string(),
-            path: std::path::PathBuf::from("assets/fonts/TlwgMono.ttf"),
+            file_name: "TlwgTypewriter.ttf".to_string(),
+            path: std::path::PathBuf::from("assets/fonts/TlwgTypewriter.ttf"),
         });
     }
 
     // Sort entries:
     // 1. Sarabun Regular (bundled default font)
-    // 2. TlwgMono.ttf (TLWG Mono monospace)
-    // 3. Other TlwgMono styles
+    // 2. TlwgTypewriter.ttf (TLWG Typewriter monospace)
+    // 3. Other monospace styles
     // 4. Alphabetical by family, then style (Regular before Bold/Italic)
     entries.sort_by(|a, b| {
         let a_is_sarabun = a.family.eq_ignore_ascii_case("Sarabun") && a.style.eq_ignore_ascii_case("Regular");
@@ -327,13 +331,19 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
         if a_is_sarabun != b_is_sarabun {
             return b_is_sarabun.cmp(&a_is_sarabun);
         }
-        let a_is_default = a.file_name.eq_ignore_ascii_case("TlwgMono.ttf");
-        let b_is_default = b.file_name.eq_ignore_ascii_case("TlwgMono.ttf");
+        let a_is_default = a.file_name.eq_ignore_ascii_case("TlwgTypewriter.ttf");
+        let b_is_default = b.file_name.eq_ignore_ascii_case("TlwgTypewriter.ttf");
         if a_is_default != b_is_default {
             return b_is_default.cmp(&a_is_default);
         }
-        let a_is_mono = a.family.eq_ignore_ascii_case("TlwgMono") || a.family.eq_ignore_ascii_case("TLWG Typewriter");
-        let b_is_mono = b.family.eq_ignore_ascii_case("TlwgMono") || b.family.eq_ignore_ascii_case("TLWG Typewriter");
+        let a_is_mono = a.family.eq_ignore_ascii_case("TlwgTypewriter")
+            || a.family.eq_ignore_ascii_case("Tlwg Typewriter")
+            || a.family.contains("Mono")
+            || a.family.contains("Typewriter");
+        let b_is_mono = b.family.eq_ignore_ascii_case("TlwgTypewriter")
+            || b.family.eq_ignore_ascii_case("Tlwg Typewriter")
+            || b.family.contains("Mono")
+            || b.family.contains("Typewriter");
         if a_is_mono != b_is_mono {
             return b_is_mono.cmp(&a_is_mono);
         }
@@ -353,7 +363,7 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
 }
 
 /// Scan all font directories for Thai `.ttf` and `.otf` fonts and return a list of available entries.
-/// Results are sorted with `Sarabun-Regular.ttf` as the default first option, followed by `TlwgMono.ttf`.
+/// Results are sorted with `Sarabun-Regular.ttf` as the default first option, followed by `TlwgTypewriter.ttf`.
 pub fn available_thai_fonts() -> Vec<ThaiFontEntry> {
     if let Some(cached) = get_discovered_thai_fonts() {
         return cached;
@@ -537,15 +547,15 @@ fn auto_init_thai_font() -> Option<&'static CraftFont> {
         return Some(font);
     }
 
-    // Next try TlwgMono.ttf as monospace option
-    if let Some(entry) = list.iter().find(|e| e.file_name.eq_ignore_ascii_case("TlwgMono.ttf"))
+    // Next try TlwgTypewriter.ttf as monospace option
+    if let Some(entry) = list.iter().find(|e| e.file_name.eq_ignore_ascii_case("TlwgTypewriter.ttf"))
         && let Ok(font) = set_active_thai_font_entry(entry)
     {
         return Some(font);
     }
 
-    // Next try any TlwgMono
-    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("TlwgMono"))
+    // Next try any TlwgTypewriter
+    if let Some(entry) = list.iter().find(|e| e.family.eq_ignore_ascii_case("TlwgTypewriter") || e.family.eq_ignore_ascii_case("Tlwg Typewriter"))
         && let Ok(font) = set_active_thai_font_entry(entry)
     {
         return Some(font);
@@ -575,7 +585,7 @@ fn discover_host_thai_font() -> Option<&'static CraftFont> {
     // Local workspace or app fonts directory:
     for base in [std::path::PathBuf::from("assets/fonts"), std::path::PathBuf::from("../assets/fonts")] {
         candidates.push(base.join("Sarabun-Regular.ttf"));
-        candidates.push(base.join("TlwgMono.ttf"));
+        candidates.push(base.join("TlwgTypewriter.ttf"));
         candidates.push(base.join("THSarabunNew.ttf"));
         candidates.push(base.join("THSarabun.ttf"));
     }
@@ -588,13 +598,13 @@ fn discover_host_thai_font() -> Option<&'static CraftFont> {
         if let Some(local) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
             candidates.push(local.join(r"Microsoft\Windows\Fonts\THSarabunNew.ttf"));
             candidates.push(local.join(r"Microsoft\Windows\Fonts\Sarabun-Regular.ttf"));
-            candidates.push(local.join(r"Microsoft\Windows\Fonts\TlwgMono.ttf"));
+            candidates.push(local.join(r"Microsoft\Windows\Fonts\TlwgTypewriter.ttf"));
         }
         for file in [
             "THSarabunNew.ttf",
             "THSarabun.ttf",
             "Sarabun-Regular.ttf",
-            "TlwgMono.ttf",
+            "TlwgTypewriter.ttf",
             "LeelawUI.ttf",
             "LeelaUIb.ttf",
             "leelawad.ttf",

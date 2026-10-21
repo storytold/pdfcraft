@@ -20,10 +20,10 @@ mod std14_metrics;
 #[cfg(not(target_arch = "wasm32"))]
 pub use craft::load_custom_thai_font_file;
 pub use craft::{
-    BUNDLED_SARABUN, BUNDLED_SARABUN_BYTES, BUNDLED_TLWG_MONO, BUNDLED_TLWG_MONO_BYTES, CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, ThaiFontEntry,
-    active_thai_font, active_thai_font_entry, available_thai_fonts, bundled_tlwg_mono_font, document_arabic_font, document_hebrew_font,
-    document_japanese_font, document_japanese_font_for_style, document_japanese_fonts_for_style, document_thai_font, font_directories,
-    load_custom_thai_font, load_custom_thai_font_named, register_custom_thai_font, rescan_thai_fonts, set_active_thai_font_by_name,
+    BUNDLED_SARABUN, BUNDLED_SARABUN_BYTES, BUNDLED_TLWG_TYPEWRITER, BUNDLED_TLWG_TYPEWRITER_BYTES, CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO,
+    ThaiFontEntry, active_thai_font, active_thai_font_entry, available_thai_fonts, bundled_tlwg_typewriter_font, document_arabic_font,
+    document_hebrew_font, document_japanese_font, document_japanese_font_for_style, document_japanese_fonts_for_style, document_thai_font,
+    font_directories, load_custom_thai_font, load_custom_thai_font_named, register_custom_thai_font, rescan_thai_fonts, set_active_thai_font_by_name,
     set_active_thai_font_by_path, set_active_thai_font_entry, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts,
     ui_telugu_fonts, ui_thai_fonts,
 };

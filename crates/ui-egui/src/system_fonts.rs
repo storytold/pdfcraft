@@ -250,13 +250,13 @@ fn thai_candidates() -> Vec<PathBuf> {
     }
     for dir in pdfcraft_fonts::font_directories() {
         paths.push(dir.join("Sarabun-Regular.ttf"));
-        paths.push(dir.join("TlwgMono.ttf"));
+        paths.push(dir.join("TlwgTypewriter.ttf"));
         paths.push(dir.join("THSarabunNew.ttf"));
         paths.push(dir.join("THSarabun.ttf"));
     }
     for base in [PathBuf::from("assets/fonts"), PathBuf::from("../assets/fonts")] {
         paths.push(base.join("Sarabun-Regular.ttf"));
-        paths.push(base.join("TlwgMono.ttf"));
+        paths.push(base.join("TlwgTypewriter.ttf"));
         paths.push(base.join("THSarabunNew.ttf"));
         paths.push(base.join("THSarabun.ttf"));
     }
@@ -264,14 +264,14 @@ fn thai_candidates() -> Vec<PathBuf> {
         if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
             paths.push(local.join(r"Microsoft\Windows\Fonts\THSarabunNew.ttf"));
             paths.push(local.join(r"Microsoft\Windows\Fonts\Sarabun-Regular.ttf"));
-            paths.push(local.join(r"Microsoft\Windows\Fonts\TlwgMono.ttf"));
+            paths.push(local.join(r"Microsoft\Windows\Fonts\TlwgTypewriter.ttf"));
         }
         let win = windows_fonts();
         for file in [
             "THSarabunNew.ttf",
             "THSarabun.ttf",
             "Sarabun-Regular.ttf",
-            "TlwgMono.ttf",
+            "TlwgTypewriter.ttf",
             "LeelawUI.ttf",
             "LeelaUIb.ttf",
             "leelawad.ttf",

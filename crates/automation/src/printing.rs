@@ -127,7 +127,7 @@ impl Automation {
         };
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
-        let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
+        let mut raster = if a.opt_bool("as_image")?.unwrap_or(false) {
             let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
             if !(72.0..=600.0).contains(&dpi) {
                 return Err(bad("dpi must be between 72 and 600"));
@@ -136,6 +136,15 @@ impl Automation {
         } else {
             None
         };
+        #[cfg(target_os = "windows")]
+        if a.opt_str("printer")?.is_some() && raster.is_none() {
+            // Direct2D's XPS print control (`d2d1.dll`) on Windows crashes with access violation
+            // (0xC0000005) when attempting font subsetting on complex OpenType/TrueType fonts
+            // (including Thai fonts) rendered via WinRT `Windows.Data.Pdf`. Printing via raster
+            // at 600 DPI renders faithfully through Hayro with crisp text and spools safely without crashes.
+            let dpi = a.opt_num("dpi")?.unwrap_or(600.0).clamp(72.0, 600.0);
+            raster = Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false) });
+        }
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();

@@ -285,7 +285,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/pilcrow.svg` | Lucide icon "pilcrow" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pilcrow.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/move-horizontal.svg` | Lucide icon "move-horizontal" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/move-horizontal.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/fonts/Sarabun-Regular.ttf` | Sarabun Regular font | The Sarabun Project Authors (Suppakit Chalermlarp) | OFL-1.1 | https://github.com/cadsondemak/Sarabun | Thai UI and fallback font for document rendering and form authoring |
-| `assets/fonts/TlwgMono.ttf` | TlwgMono Thai TrueType font | Poonlap Veerathanabutr and TLWG | GPL-2.0-with-font-exception | https://github.com/tlwg/fonts-tlwg | Thai fixed-width/monospace UI and fallback font |
+| `assets/fonts/TlwgTypewriter.ttf` | TlwgTypewriter Thai TrueType font | Poonlap Veerathanabutr and TLWG | GPL-2.0-with-font-exception | https://github.com/tlwg/fonts-tlwg | Thai fixed-width/monospace UI and fallback font |
 
 ## Compiled in through dependencies (6)
 

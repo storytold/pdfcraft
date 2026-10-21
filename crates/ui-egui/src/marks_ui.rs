@@ -186,7 +186,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                                     if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
                                         ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
                                     }
-                                    if entry.family.eq_ignore_ascii_case("TlwgMono") || entry.family.contains("Mono") {
+                                    if entry.family.eq_ignore_ascii_case("TlwgTypewriter")
+                                        || entry.family.eq_ignore_ascii_case("Tlwg Typewriter")
+                                        || entry.family.contains("Mono")
+                                        || entry.family.contains("Typewriter")
+                                    {
                                         d.hf.font = pdfcraft_engine::FontFamily::Courier;
                                     } else {
                                         d.hf.font = pdfcraft_engine::FontFamily::Helvetica;
@@ -284,7 +288,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                             ui.horizontal(|ui| {
                                 ui.label(tl!("Thai fonts"));
                                 let current_title =
-                                    pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "TlwgMono".to_string());
+                                    pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "TlwgTypewriter".to_string());
                                 egui::ComboBox::from_id_salt("wm-thai-font-selector").selected_text(current_title).width(180.0).show_ui(ui, |ui| {
                                     for entry in &thai_fonts {
                                         let selected = pdfcraft_fonts::active_thai_font_entry()

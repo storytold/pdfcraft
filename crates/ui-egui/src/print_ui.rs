@@ -491,7 +491,7 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {
+        let mut settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {
             Ok(s) => s,
             Err(e) => {
                 self.notify_tr(&e);
@@ -499,6 +499,14 @@ impl PdfCraftApp {
             }
         };
         let name = doc.name.clone();
+        #[cfg(target_os = "windows")]
+        if self.print_draft.printer.is_some() && settings.raster.is_none() {
+            // Direct2D's XPS print control (`d2d1.dll`) on Windows crashes with access violation
+            // (0xC0000005) when attempting font subsetting on complex OpenType/TrueType fonts
+            // (including Thai fonts) rendered via WinRT `Windows.Data.Pdf`. Printing via raster
+            // at 600 DPI renders faithfully through Hayro with crisp text and spools safely without crashes.
+            settings.raster = Some(print::Raster { dpi: self.print_draft.dpi.max(600.0), grayscale: self.print_draft.grayscale });
+        }
         let bytes = match self.session.print_pdf(id, &settings) {
             Ok(b) => b,
             Err(e) => {
@@ -537,12 +545,18 @@ impl PdfCraftApp {
                     ctx.request_repaint();
                 }
             };
-            // The receiver may be gone (the app quit): nothing to report to then.
-            let result = spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
-                let _ = tx.send(JobNews::Sent(sent, sheets));
-                repaint();
-            });
-            let _ = tx.send(JobNews::Done(result.map_err(|e| e.to_string())));
+            // Guard against any panic in spooling taking down the app (AGENTS.md §4).
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
+                    let _ = tx.send(JobNews::Sent(sent, sheets));
+                    repaint();
+                })
+            }));
+            let result = match caught {
+                Ok(r) => r.map_err(|e| e.to_string()),
+                Err(_) => Err("the print spooler encountered an internal error".into()),
+            };
+            let _ = tx.send(JobNews::Done(result));
             repaint();
         });
         self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });
