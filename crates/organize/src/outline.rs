@@ -397,6 +397,46 @@ fn resolve_path(doc: &Document, path: &[usize]) -> Result<(ObjRef, ObjRef)> {
     Err(OutlineError::NoSuchBookmark(path.to_vec()))
 }
 
+/// Resolves many bookmark paths against one outline, listing each parent's children once however
+/// many paths go through it (`resolve_path` lists the whole sibling chain at every step, so
+/// thousands of paths into a very long outline would walk it thousands of times).
+///
+/// One `seen` set serves every path, as one path's walk shares it between its steps in
+/// `resolve_path`: a node that two lists claim is listed under the first only, which can differ
+/// from resolving each path alone only in an outline that shares a node between parents.
+struct Resolver<'a> {
+    doc: &'a Document,
+    root: Option<ObjRef>,
+    lists: HashMap<ObjRef, Vec<ObjRef>>,
+    seen: HashSet<ObjRef>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(doc: &'a Document) -> Self {
+        let root = outline_root(doc);
+        Self { doc, root, lists: HashMap::new(), seen: root.into_iter().collect() }
+    }
+
+    /// The object of the bookmark at `path` and its parent object, as [`resolve_path`] gives them.
+    fn resolve(&mut self, path: &[usize]) -> Result<(ObjRef, ObjRef)> {
+        let missing = || OutlineError::NoSuchBookmark(path.to_vec());
+        let mut parent = self.root.ok_or_else(missing)?;
+        if path.is_empty() {
+            return Err(OutlineError::NoSuchBookmark(Vec::new()));
+        }
+        for (depth, i) in path.iter().enumerate() {
+            let Self { doc, lists, seen, .. } = self;
+            let kids = lists.entry(parent).or_insert_with(|| children_of(doc, parent, seen));
+            let r = *kids.get(*i).ok_or_else(missing)?;
+            if depth + 1 == path.len() {
+                return Ok((r, parent));
+            }
+            parent = r;
+        }
+        Err(missing())
+    }
+}
+
 /// The object that holds children at `parent_path` (`[]` = the outline root, created if needed).
 pub(crate) fn container(doc: &mut Document, parent_path: &[usize]) -> Result<ObjRef> {
     if parent_path.is_empty() {
@@ -695,10 +735,11 @@ pub fn delete_bookmarks(doc: &mut Document, paths: &[Vec<usize>]) -> Result<()> 
         return Err(OutlineError::NoneSelected);
     }
     let mut doomed: HashSet<ObjRef> = HashSet::new();
-    let mut parents: Vec<ObjRef> = Vec::new();
+    let (mut parents, mut listed): (Vec<ObjRef>, HashSet<ObjRef>) = (Vec::new(), HashSet::new());
+    let mut resolver = Resolver::new(doc);
     for path in paths {
-        let (r, parent) = resolve_path(doc, path)?;
-        if doomed.insert(r) && !parents.contains(&parent) {
+        let (r, parent) = resolver.resolve(path)?;
+        if doomed.insert(r) && listed.insert(parent) {
             parents.push(parent);
         }
     }
