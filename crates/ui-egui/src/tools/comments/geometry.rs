@@ -11,6 +11,69 @@ pub(super) fn resizable(a: &Annotation) -> bool {
     matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
 }
 
+/// What turns by the rotate handle (see `pdfcraft_annot::rotate_annotation`): rectangles,
+/// ovals, text boxes and typewriter text, lines, connected lines, polygons, clouds and drawings.
+/// Not callouts or measurements, and not a locked comment.
+pub(super) fn turnable(a: &Annotation) -> bool {
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Line" | "PolyLine" | "Polygon" | "Ink")
+        && a.intent.as_deref() != Some("FreeTextCallout")
+        && !a.intent.as_deref().is_some_and(|i| i.ends_with("Dimension"))
+        && !a.locked
+}
+
+/// The rotate handle above a selected comment's frame `r` (on screen).
+pub(super) fn turn_handle(r: Rect) -> Pos2 {
+    pos2(r.center().x, r.top() - 22.0)
+}
+
+/// How far a drag of the rotate handle turns, in degrees counterclockwise as displayed: from the
+/// press `from` to `to` about `centre`, between -180 and 180, in 15° steps with Shift. After Tab,
+/// `quarter` quarter turns instead.
+pub(crate) fn turn_degrees(centre: Pos2, from: Pos2, to: Pos2, shift: bool, quarter: Option<i32>) -> f64 {
+    if let Some(k) = quarter {
+        return f64::from(k) * 90.0;
+    }
+    let angle = |p: Pos2| f64::from((p.y - centre.y).atan2(p.x - centre.x)).to_degrees();
+    // Screen y grows downwards: a counterclockwise turn lowers the angle.
+    let d = (angle(from) - angle(to) + 180.0).rem_euclid(360.0) - 180.0;
+    if shift { (d / 15.0).round() * 15.0 } else { d }
+}
+
+/// Whether `p` is inside the closed `outline` or within `margin` of it.
+pub(super) fn inside(outline: &[Pos2], p: Pos2, margin: f32) -> bool {
+    let n = outline.len();
+    let mut odd = false;
+    for i in 0..n {
+        let (a, b) = (outline[i], outline[(i + 1) % n]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            odd = !odd;
+        }
+        let ab = b - a;
+        let t = if ab.length_sq() > 0.0 { ((p - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0) } else { 0.0 };
+        if (a + ab * t).distance(p) <= margin {
+            return true;
+        }
+    }
+    odd
+}
+
+/// Takes Tab presses out of `events` while a comment is turned by its handle: +1 quarter turn
+/// counterclockwise for each Tab, -1 for each Shift+Tab (their releases go too). Tabs with other
+/// modifiers stay.
+pub(crate) fn take_turn_tabs(events: &mut Vec<egui::Event>) -> i32 {
+    let mut step = 0i32;
+    events.retain(|e| match e {
+        egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if modifiers.is_none() || modifiers.shift_only() => {
+            if *pressed {
+                step += if modifiers.shift { -1 } else { 1 };
+            }
+            false
+        }
+        _ => true,
+    });
+    step
+}
+
 /// Lines, connected lines, polygons and clouds: their ends and corners have handles of their own
 /// (measurements keep the points they measured, and a locked comment its shape).
 pub(super) fn reshapable(a: &Annotation) -> bool {
