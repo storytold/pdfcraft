@@ -101,8 +101,8 @@ config works across the suite) keep the agent to the folders you give it:
   `automation path rejected: outside the write root /work/project/out: /etc/x.pdf` or
   `automation filesystem access is not granted: write authority is absent: /work/project/out/x.pdf`.
   Tools that handle several files report a refused one in its own entry.
-- The roots must be existing folders; a missing one stops the server with an error. Each flag is
-  given once (`--flag <dir>` or `--flag=<dir>`).
+- The roots must be existing folders; a missing one stops the server with an error. Each folder is
+  given as `--flag <dir>` or `--flag=<dir>`.
 - `--root DIR` still works and can be combined with these flags. Both then apply: a path must be
   inside `--root` and inside the matching automation root.
 
