@@ -431,7 +431,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     ui.separator();
     ui.add(widgets::checkbox(&mut state.snap_enabled, tl!("Snap to drawing")));
     if state.snap_enabled {
-        crate::comments::snap_target_boxes(ui, &mut app.comment_prefs.snap_targets);
+        crate::comments::snap_target_boxes(ui, &mut app.comment_prefs.snap_targets, true);
         ui.add(egui::Slider::new(&mut state.sensitivity, 1.0..=20.0).text(tl!("Sensitivity")));
     }
     ui.separator();
