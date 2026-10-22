@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
-    resized, snapped_caret, turn_degrees, turn_handle, turnable,
+    CARET_SIZE, HANDLES, TURN_HANDLE_REACH, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable,
+    reshaped, resizable, resized, snapped_caret, turn_degrees, turn_handle, turnable,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -74,7 +74,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
     if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
         // The rotate handle above the frame.
-        if turnable(a) && turn_handle(cx.screen_rect(a).expand(2.0)).distance(p) <= 8.0 {
+        if turnable(a) && turn_handle(cx.screen_rect(a).expand(2.0)).distance(p) <= TURN_HANDLE_REACH {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Turn }, Layer::Handle, egui::CursorIcon::Grab));
         }
         if grabs_points(cx.tool)

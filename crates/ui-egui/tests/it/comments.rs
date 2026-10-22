@@ -3037,7 +3037,7 @@ fn add_shape(h: &mut Harness<'static, PdfCraftApp>, shape: pdfcraft_engine::Shap
 /// The rotate handle above the selected comment's frame (see `comments::turn_handle`).
 fn turn_knob(h: &Harness<'static, PdfCraftApp>, a: &Annotation) -> Pos2 {
     let (tl, br) = (at(h, a.rect[0], a.rect[3]), at(h, a.rect[2], a.rect[1]));
-    pos2((tl.x + br.x) / 2.0, tl.y - 2.0 - 22.0)
+    pos2((tl.x + br.x) / 2.0, tl.y - 2.0 - 30.0)
 }
 
 /// The rotate handle turns a selected rectangle about its middle: dragged a quarter round
@@ -3050,6 +3050,7 @@ fn the_rotate_handle_turns_a_rectangle_and_tab_turns_it_by_quarters() {
     let a = comments(&h)[0].clone();
     h.state_mut().views[0].comments.selected = Some((0, a.index));
     h.run_steps(2);
+    h.get_by_label("Rotate");
     let knob = turn_knob(&h, &a);
     let centre = at(&h, 150.0, 100.0);
     // A quarter round counterclockwise: from above the middle to its left.

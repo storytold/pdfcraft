@@ -61,10 +61,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         if cx.allowed && turnable(a) && cv.gesture.is_none() {
-            let r = cx.screen_rect(a).expand(2.0);
-            let knob = turn_handle(r);
-            painter.line_segment([r.center_top(), knob], Stroke::new(1.0, SELECT_BLUE));
-            painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
+            paint_turn_handle(ui, painter, cx.screen_rect(a).expand(2.0), (page, index), pointer);
         }
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
@@ -89,6 +86,27 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         }
     }
     paint_gesture(painter, cx, view);
+}
+
+/// The rotate handle above frame `r`: a stem, and a round button with a turning arrow that
+/// lights up under the pointer. It names itself to screen readers and says how it works.
+fn paint_turn_handle(ui: &egui::Ui, painter: &egui::Painter, r: Rect, (page, index): (usize, usize), pointer: Option<Pos2>) {
+    let knob = turn_handle(r);
+    let radius = 10.0;
+    painter.line_segment([r.center_top(), knob + vec2(0.0, radius)], Stroke::new(1.0, SELECT_BLUE));
+    let over = pointer.is_some_and(|p| p.distance(knob) <= TURN_HANDLE_REACH);
+    let fill = if over { SELECT_BLUE } else { Color32::WHITE };
+    painter.circle(knob, radius, fill, Stroke::new(1.5, SELECT_BLUE));
+    let tint = if over { Color32::WHITE } else { SELECT_BLUE };
+    icons::paint(ui, Rect::from_center_size(knob, vec2(13.0, 13.0)), "rotate-cw", 13.0, tint);
+    // Hover only: the page below still takes the press and the drag.
+    let tip = tl!("Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns");
+    let resp =
+        ui.interact(Rect::from_center_size(knob, vec2(2.0 * radius, 2.0 * radius)), egui::Id::unique(("turn-handle", page, index)), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Rotate")));
+    if over {
+        resp.on_hover_text(tip);
+    }
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
