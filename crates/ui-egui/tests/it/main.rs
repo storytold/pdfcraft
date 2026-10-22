@@ -84,4 +84,5 @@ mod ui;
 mod updates;
 mod view;
 mod viewer;
+mod windows;
 mod xfa;

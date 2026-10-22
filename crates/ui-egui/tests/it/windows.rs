@@ -8,7 +8,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{CloseRequest, PdfCraftApp, WindowId, WindowOp};
 
-const PDF: &[u8] = include_bytes!("data/form.pdf");
+const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
 fn harness(names: &[&str]) -> Harness<'static, PdfCraftApp> {
     let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
