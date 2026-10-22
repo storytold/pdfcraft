@@ -2872,3 +2872,11 @@ theme	Appearance	Aspect
 	No image on clipboard to paste	Nicio imagine în clipboard de lipit
 	Pinned {tool} to Home	{tool} fixat pe pagina principală
 	Unpinned {tool} from Home	{tool} desprins de pe pagina principală
+# Several windows (M14).
+	Window	Fereastră
+	Move tab to new window	Mutare filă în fereastră nouă
+	Merge all windows	Combinare toate ferestrele
+	Close window	Închidere fereastră
+	Move to new window	Mutare în fereastră nouă
+	Move to window	Mutare în fereastră
+	Too many windows are open	Sunt deschise prea multe ferestre

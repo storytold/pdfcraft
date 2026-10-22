@@ -2841,3 +2841,11 @@ theme	Appearance	모양
 	No image on clipboard to paste	클립보드에 붙여넣을 이미지가 없습니다
 	Pinned {tool} to Home	{tool}을 홈에 고정했습니다
 	Unpinned {tool} from Home	{tool}의 홈 고정을 해제했습니다
+# Several windows (M14).
+	Window	창
+	Move tab to new window	탭을 새 창으로 이동
+	Merge all windows	모든 창 병합
+	Close window	창 닫기
+	Move to new window	새 창으로 이동
+	Move to window	창으로 이동
+	Too many windows are open	열린 창이 너무 많습니다
