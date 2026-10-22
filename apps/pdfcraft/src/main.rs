@@ -239,8 +239,14 @@ fn main() -> eframe::Result {
     }
     let files = rejoin_split_paths(files, |p| std::path::Path::new(p).is_file());
     let integrated = cfg!(target_os = "macos");
+    // Linux with a pen on Wayland: the window opens through Xwayland (src/pen_display.rs). Decided
+    // once, so the title bar below and a retry with OpenGL follow the same display server.
+    #[cfg(target_os = "linux")]
+    let through_xwayland = pen_display::choose_for_launch() == pen_display::Choice::Xwayland;
+    #[cfg(not(target_os = "linux"))]
+    let through_xwayland = false;
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
-    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
+    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn(through_xwayland) };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
@@ -276,11 +282,6 @@ fn main() -> eframe::Result {
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
-    // Decided once, so a retry with OpenGL opens on the same display server.
-    #[cfg(target_os = "linux")]
-    let through_xwayland = pen_display::choose_for_launch() == pen_display::Choice::Xwayland;
-    #[cfg(not(target_os = "linux"))]
-    let through_xwayland = false;
     let result = eframe::run_native(
         "PdfCraft",
         on_display(native_options(launch.integrated, launch.window_controls.is_some(), first), through_xwayland),
