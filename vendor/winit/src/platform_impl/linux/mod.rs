@@ -25,6 +25,7 @@ use crate::event_loop::{
 use crate::icon::Icon;
 use crate::keyboard::Key;
 use crate::platform::pump_events::PumpStatus;
+use crate::platform::startup_notify;
 #[cfg(x11_platform)]
 use crate::platform::x11::{WindowType as XWindowType, XlibErrorHook};
 use crate::window::{
@@ -38,6 +39,7 @@ pub(crate) use crate::icon::RgbaIcon as PlatformIcon;
 pub(crate) use crate::platform_impl::Fullscreen;
 
 pub(crate) mod common;
+mod startup_token;
 #[cfg(wayland_platform)]
 pub(crate) mod wayland;
 #[cfg(x11_platform)]
@@ -290,15 +292,20 @@ impl Window {
     #[inline]
     pub(crate) fn new(
         window_target: &ActiveEventLoop,
-        attribs: WindowAttributes,
+        mut attribs: WindowAttributes,
     ) -> Result<Self, RootOsError> {
+        let given = attribs.platform_specific.activation_token.take();
         match *window_target {
             #[cfg(wayland_platform)]
             ActiveEventLoop::Wayland(ref window_target) => {
+                attribs.platform_specific.activation_token =
+                    startup_token::for_new_window(given, startup_notify::WAYLAND_VAR);
                 wayland::Window::new(window_target, attribs).map(Window::Wayland)
             },
             #[cfg(x11_platform)]
             ActiveEventLoop::X(ref window_target) => {
+                attribs.platform_specific.activation_token =
+                    startup_token::for_new_window(given, startup_notify::X11_VAR);
                 x11::Window::new(window_target, attribs).map(Window::X)
             },
         }
