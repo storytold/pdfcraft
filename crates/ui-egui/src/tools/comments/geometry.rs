@@ -150,14 +150,14 @@ pub(crate) fn caret_snap(text: &PageText, vx: f32, vy: f32) -> Option<([f32; 2],
 }
 
 /// A text box sized to its text (at most 300 pt wide), hanging from its top-left corner.
-/// The box for `text` at `size` with its displayed top-left corner at `at`, on a page turned by
-/// `rotation` (its `/Rotate`): on a quarter-turned page it is taller than wide in user space.
-pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64; 4] {
-    use pdfcraft_engine::annot_text::{text_box_width, wrap};
-    let pad = 2.0;
+/// The box for `text` at `size` inside a border `border` wide, with its displayed top-left
+/// corner at `at`, on a page turned by `rotation` (its `/Rotate`): on a quarter-turned page it is
+/// taller than wide in user space. The text sits 2 pt inside the border on every side.
+pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, border: f64, rotation: i64) -> [f64; 4] {
+    use pdfcraft_engine::annot_text::{text_box_height, text_box_width, wrap};
+    let pad = 2.0 + border.max(0.0);
     let w = text_box_width(text, size, pad);
-    let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
-    let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
+    let h = text_box_height(wrap(text, size, w - 2.0 * pad).len(), size, pad);
     pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
 }
 

@@ -249,7 +249,7 @@ pub fn typed(page: usize, at: [f64; 2], text: &str, size: f64, rotation: i64, au
 
 /// Typed text/date colour applies to its annotation appearance and survives saving.
 pub fn typed_with_color(page: usize, at: [f64; 2], text: &str, size: f64, rotation: i64, author: &str, color: [f64; 3]) -> Edit {
-    let rect = crate::comments::text_box_rect(at, text, size, rotation);
+    let rect = crate::comments::text_box_rect(at, text, size, 0.0, rotation);
     let shape = Shape::Typewriter { rect, font_size: size };
     let mut style = Style::default_for(&shape);
     style.color = valid_text_color(color).unwrap_or([0.0; 3]);

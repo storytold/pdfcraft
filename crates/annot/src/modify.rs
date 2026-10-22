@@ -190,13 +190,14 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
 }
 
 /// Whether a text box `w` wide (inside padding `pad`) fits `text` at `size`: it is as wide as
-/// [`appearance::text_box_width`] makes it, with this padding or the 2 pt a new box is measured
-/// with, or it is a short text's box at the 40 pt boxes were once made at least. A box sized by
-/// hand doesn't fit.
+/// [`appearance::text_box_width`] makes it, or as boxes were once made (the longest line and
+/// 8 pt, at least 40 pt). A box sized by hand doesn't fit.
 fn fits_text(w: f64, text: &str, size: f64, pad: f64) -> bool {
-    let fits = |p: f64| (w - appearance::text_box_width(text, size, p)).abs() <= 1.5;
+    let fits = |want: f64| (w - want).abs() <= 1.5;
     let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    fits(pad) || fits(2.0) || ((w - 40.0).abs() <= 0.5 && longest + 2.0 * pad + 4.0 <= 40.0)
+    fits(appearance::text_box_width(text, size, pad))
+        || fits((longest + 8.0).min(appearance::TEXT_BOX_MAX_WIDTH).max(size + 8.0))
+        || ((w - 40.0).abs() <= 0.5 && longest + 8.0 <= 40.0)
 }
 
 /// The rectangle a FreeText annotation's text box needs for `text`: the top edge stays and the
@@ -229,8 +230,8 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str, was: Option<(&str, f64)>) -
         // Sized to the text, as a new box (also when there is no usable old width).
         appearance::text_box_width(text, size, pad)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some(([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top], hug))
+    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len();
+    Some(([x0, top - appearance::text_box_height(lines, size, pad), x0 + w, top], hug))
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.

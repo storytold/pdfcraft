@@ -423,12 +423,12 @@ fn text_box_text_and_colour_changes_are_drawn() {
     assert!(rc.starts_with("<?xml") && rc.contains("<p dir=\"ltr\">Caf\u{e9} (draft) \u{2014} 100%</p>") && rc.contains("color:#FF0000"), "{rc}");
 }
 
-/// The rectangle a text box needs for `text` (the appearance's padding plus the 2 pt slack):
-/// the wrap width and top edge stay, the height fits the wrapped lines.
+/// The rectangle a text box needs for `text` (inside the appearance's padding): the wrap width
+/// and top edge stay, the height fits the wrapped lines.
 fn expected_box(top: f64, w: f64, text: &str, size: f64, border: f64) -> [f64; 4] {
     let pad = 2.0 + border;
-    let lines = appearance::wrap(text, size, w - 2.0 * pad).len().max(1) as f64;
-    [0.0, top - lines * size * 1.2 - 2.0 * pad - 2.0, w, 0.0]
+    let lines = appearance::wrap(text, size, w - 2.0 * pad).len();
+    [0.0, top - appearance::text_box_height(lines, size, pad), w, 0.0]
 }
 
 #[test]
@@ -2275,6 +2275,38 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&reopen(&doc));
 }
 
+/// A text box sized to its text has its padding on every side: 2 pt inside the border from the
+/// first line's accented capitals, from the last line's descenders, and from either end of the
+/// longest line.
+#[test]
+fn a_text_box_sized_to_its_text_is_padded_alike_on_every_side() {
+    let mut doc = fixture();
+    let (size, pad) = (12.0, 2.0 + 2.0); // the style's 2 pt border
+    for text in ["Ägypten gibt", "Abnahme ok\nRestpunkte: gering"] {
+        let shape = Shape::TextBox { rect: [100.0, 680.0, 140.0, 700.0], font_size: size };
+        let t = add_annotation(&mut doc, &NewAnnotation { contents: "x".into(), ..new(0, shape) }, &meta("t")).unwrap();
+        set_contents(&mut doc, 0, t, text, &meta("")).unwrap();
+        let d = &list(&doc, 0)[t];
+        let r = rect(d);
+        let ap = ap_content(&doc, d);
+        let at: Vec<[f64; 2]> = ap
+            .lines()
+            .filter_map(|l| l.strip_prefix("1 0 0 1 ")?.split(" Tm").next().map(str::to_owned))
+            .map(|xy| {
+                let v: Vec<f64> = xy.split(' ').map(|n| n.parse().unwrap()).collect();
+                [v[0], v[1]]
+            })
+            .collect();
+        let (first, last) = (at[0], at[at.len() - 1]);
+        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+        let close = |a: f64, b: f64| (a - b).abs() < 0.3;
+        assert!(close(first[0] - r[0], pad), "left: {r:?} {at:?}");
+        assert!(close(r[2] - first[0] - longest, pad + 0.5), "right: {r:?} {at:?}");
+        assert!(close(r[3] - first[1] - 0.9 * size, pad), "top: {r:?} {at:?}");
+        assert!(close(last[1] - 0.21 * size - r[1], pad), "bottom: {r:?} {at:?}");
+    }
+}
+
 /// A text box that fits its text keeps fitting it: shorter text narrows it and longer text widens
 /// it (up to 300 pt, past which lines wrap), and a smaller font size shrinks it in both
 /// directions. A box sized by hand keeps its width (and, for a smaller font, its height).
@@ -2284,12 +2316,12 @@ fn a_text_box_that_fits_its_text_keeps_fitting_it() {
     let pad = 2.0 + 2.0; // the style's 2 pt border
     let fitted = |text: &str, size: f64| {
         let w = appearance::text_box_width(text, size, pad);
-        let lines = appearance::wrap(text, size, w - 2.0 * pad).len().max(1) as f64;
-        [100.0, 700.0 - lines * size * 1.2 - 2.0 * pad - 2.0, 100.0 + w, 700.0]
+        let lines = appearance::wrap(text, size, w - 2.0 * pad).len();
+        [100.0, 700.0 - appearance::text_box_height(lines, size, pad), 100.0 + w, 700.0]
     };
-    // Made the way the composer makes one: sized to its text (2 pt padding).
+    // Made the way the composer makes one: sized to its text, 2 pt inside the border.
     let first = "Abnahme ok";
-    let w = appearance::text_box_width(first, 12.0, 2.0);
+    let w = appearance::text_box_width(first, 12.0, pad);
     let shape = Shape::TextBox { rect: [100.0, 680.0, 100.0 + w, 700.0], font_size: 12.0 };
     let t = add_annotation(&mut doc, &NewAnnotation { contents: first.into(), ..new(0, shape) }, &meta("t")).unwrap();
     let longer = "Abnahme ok, Restpunkte siehe Liste";

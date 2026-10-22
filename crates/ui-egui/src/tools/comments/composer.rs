@@ -127,14 +127,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             let border = prefs.style(CommentTool::TextBox).width;
             let rect = match (size, info.pages.get(page)) {
                 (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
-                _ => text_box_rect(c.at, &text, 12.0, rotation),
+                _ => text_box_rect(c.at, &text, 12.0, border, rotation),
             };
             Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
-            let rect = text_box_rect(c.at, &text, 10.0, 0);
+            let rect = text_box_rect(c.at, &text, 10.0, prefs.style(CommentTool::Callout).width, 0);
             let side = if point[0] < rect[0] {
                 rect[0]
             } else if point[0] > rect[2] {
@@ -178,7 +178,7 @@ pub(crate) fn inline_edit(it: &InlineText, info: &DocInfo, prefs: &CommentPrefs)
             let style = prefs.style(CommentTool::TextBox);
             let rect = match (it.size, info.pages.get(it.page)) {
                 (Some(size), Some(p)) => drawn_text_box_rect(p, it.at, size, &text, 12.0, style.width),
-                _ => text_box_rect(it.at, &text, 12.0, 0),
+                _ => text_box_rect(it.at, &text, 12.0, style.width, 0),
             };
             Some(Edit::AddAnnotation(NewAnnotation {
                 page: it.page,

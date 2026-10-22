@@ -848,14 +848,14 @@ fn a_text_box_is_sized_by_dragging() {
     assert!(near(r, [150.0, 180.0, 250.0, 190.0]), "{r:?}");
 
     // Drags of two and four pixels are clicks: the box fits its text.
-    let fitted = pdfcraft_ui_egui::comments::text_box_rect([0.0, 0.0], "Hi", 12.0, 0);
+    let fitted = pdfcraft_ui_egui::comments::text_box_rect([0.0, 0.0], "Hi", 12.0, 0.0, 0);
     for (text, x, d) in [("Hi", 200.0, 2.0), ("Hi again", 270.0, 4.0)] {
         h.state_mut().set_option("quick", "freetext").unwrap();
         let p = at(&h, x, 40.0);
         drag(&mut h, p, p + egui::vec2(d, d));
         post_text(&mut h, text);
         let r = rect_of(&h, text).map(f64::from);
-        let fitted = if text == "Hi" { fitted } else { pdfcraft_ui_egui::comments::text_box_rect([0.0, 0.0], text, 12.0, 0) };
+        let fitted = if text == "Hi" { fitted } else { pdfcraft_ui_egui::comments::text_box_rect([0.0, 0.0], text, 12.0, 0.0, 0) };
         assert!((r[2] - r[0] - (fitted[2] - fitted[0])).abs() < 1.0 && (r[3] - r[1] - (fitted[3] - fitted[1])).abs() < 1.0, "{text}: {r:?}");
     }
 }

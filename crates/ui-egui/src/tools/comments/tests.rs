@@ -492,10 +492,10 @@ fn drawn_shapes_ignore_slips() {
 
 #[test]
 fn text_boxes_fit_their_text() {
-    let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
+    let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0.0, 0);
     assert_eq!((r[0], r[3]), (100.0, 500.0));
     assert!(r[2] - r[0] < 60.0);
-    let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
+    let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0.0, 0);
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
 }

@@ -24,14 +24,23 @@ use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, not
 /// A text box is at most this wide when it is sized to its text: a longer line wraps.
 pub const TEXT_BOX_MAX_WIDTH: f64 = 300.0;
 
-/// The width of a text box sized to `text` at `size`, with `pad` inside each side: its longest
-/// line and a little air, so no line wraps that doesn't break by itself, at most
+/// The width of a text box sized to `text` at `size`, with `pad` between the text and each side
+/// (the appearance's 2 pt inside the border): its longest line and the padding, at most
 /// [`TEXT_BOX_MAX_WIDTH`] and at least an em. What a new text box gets, and what one that fits
 /// its text keeps when its text or font size changes.
 pub fn text_box_width(text: &str, size: f64, pad: f64) -> f64 {
     let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
-    let air = 2.0 * pad + 4.0;
-    (longest + air).min(TEXT_BOX_MAX_WIDTH).max(size + air)
+    // Half a point over, so the longest line doesn't wrap by rounding.
+    let sides = 2.0 * pad + 0.5;
+    (longest + sides).min(TEXT_BOX_MAX_WIDTH).max(size + sides)
+}
+
+/// The height of a text box holding `lines` lines at `size`, with `pad` above the first line's
+/// tallest letters (an accented capital reaches 0.9 em over the baseline, where the appearance
+/// sets the first line) and below the last line's descenders (0.21 em under it), lines 1.2 em
+/// apart. With [`text_box_width`] the text sits the same distance from all four sides.
+pub fn text_box_height(lines: usize, size: f64, pad: f64) -> f64 {
+    (lines.max(1) as f64 - 1.0) * size * 1.2 + size * (0.9 + 0.21) + 2.0 * pad
 }
 
 /// Length of an arrowhead for a line of width `w`.
