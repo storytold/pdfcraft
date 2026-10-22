@@ -75,6 +75,8 @@ impl std::fmt::Debug for Picked {
 
 /// A request that came while another picker was showing (#2150).
 struct Waiting {
+    /// The window that asked: its choice is delivered there.
+    window: WindowId,
     ask: Ask,
     target: Option<PickTarget>,
     then: Then,
@@ -213,15 +215,15 @@ impl PdfCraftApp {
         let then: Then = Box::new(then);
         if self.pickers.showing.swap(true, Ordering::SeqCst) {
             // Refusing would drop what asked, such as a finished Reduce File Size copy.
-            self.pickers.waiting.push_back(Waiting { ask, target, then });
+            self.pickers.waiting.push_back(Waiting { window, ask, target, then });
             self.notify_tr("Another file dialog is still open. This one will open when it closes.");
             return true;
         }
-        self.show_picker(ask, target, then)
+        self.show_picker(window, ask, target, then)
     }
 
     /// [`Self::ask`] once `showing` is claimed for it.
-    fn show_picker(&mut self, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
+    fn show_picker(&mut self, window: WindowId, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
         if let Some(paths) = self.pick_override.clone() {
             self.pickers.deliver(window, target, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;
@@ -301,9 +303,9 @@ impl PdfCraftApp {
         // After the closures, so a picker one of them asked for comes before the waiting ones.
         if !self.pickers.waiting.is_empty()
             && !self.pickers.showing.swap(true, Ordering::SeqCst)
-            && let Some(Waiting { ask, target, then }) = self.pickers.waiting.pop_front()
+            && let Some(Waiting { window, ask, target, then }) = self.pickers.waiting.pop_front()
         {
-            self.show_picker(ask, target, then);
+            self.show_picker(window, ask, target, then);
         }
     }
 }
@@ -438,7 +440,7 @@ mod tests {
         assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
         app.process_picked();
         assert!(got.lock().unwrap().is_empty(), "the showing picker still owns the flag");
-        app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
+        app.pickers.deliver(WindowId::ROOT, None, vec![], Box::new(|_, _| {}));
         app.process_picked();
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("c.pdf")]);
@@ -488,7 +490,7 @@ mod tests {
         // Save As is still open on another tab when the optimizer finishes.
         app.pickers.showing.store(true, Ordering::SeqCst);
         app.save_optimized(doc, crate::optimize_ui::OptimizeKind::Reduce, Ok((reduced.clone(), String::new())));
-        app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
+        app.pickers.deliver(WindowId::ROOT, None, vec![], Box::new(|_, _| {}));
         app.process_picked();
         app.process_picked();
         let written = std::fs::read(&out).unwrap_or_default();
