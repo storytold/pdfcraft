@@ -2518,3 +2518,5 @@ animation effects	Off	ປິດ
 	Export this PDF	ສົ່ງອອກ PDF ນີ້
 	Find text or tools	ຊອກຫາຂໍ້ຄວາມ ຫຼື ເຄື່ອງມື
 	Crop image	ຕັດຂອບຮູບພາບ
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	ໝູນຄວາມເຫັນ

@@ -2888,3 +2888,5 @@ certificate	Version	الإصدار
 	No image on clipboard to paste	لا توجد صورة في الحافظة للصقها
 	Pinned {tool} to Home	تم تثبيت {tool} في الرئيسية
 	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	تدوير التعليق

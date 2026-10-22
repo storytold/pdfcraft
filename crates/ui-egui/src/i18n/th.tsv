@@ -2772,3 +2772,5 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Export this PDF	ส่งออก PDF นี้
 	Find text or tools	ค้นหาข้อความหรือเครื่องมือ
 	Crop image	ครอบตัดรูปภาพ
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	หมุนความคิดเห็น

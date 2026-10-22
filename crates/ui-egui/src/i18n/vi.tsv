@@ -2880,3 +2880,5 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Xoay bình luận

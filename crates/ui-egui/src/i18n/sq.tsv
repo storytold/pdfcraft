@@ -2597,3 +2597,5 @@ animation effects	Off	Joaktiv
 	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
 	Pinned {tool} to Home	{tool} u fiksua te Kreu
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Rrotullo komentin

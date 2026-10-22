@@ -2614,3 +2614,5 @@ animation effects	Off	Aus
 	No image on clipboard to paste	Kein Bild in der Zwischenablage zum Einfügen
 	Pinned {tool} to Home	{tool} an Start angeheftet
 	Unpinned {tool} from Home	{tool} von Start gelöst
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Kommentar drehen

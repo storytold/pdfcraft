@@ -2577,3 +2577,5 @@ animation effects	Off	关
 	No image on clipboard to paste	剪贴板中没有可粘贴的图像
 	Pinned {tool} to Home	已将 {tool} 固定到主页
 	Unpinned {tool} from Home	已从主页取消固定 {tool}
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	旋转注释

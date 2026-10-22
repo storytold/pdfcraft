@@ -2522,3 +2522,5 @@ animation effects	Off	ఆఫ్
 	No image on clipboard to paste	అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు
 	Pinned {tool} to Home	{tool} హోమ్‌కు పిన్ చేయబడింది
 	Unpinned {tool} from Home	{tool} హోమ్ నుండి అన్‌పిన్ చేయబడింది
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	వ్యాఖ్యను తిప్పు

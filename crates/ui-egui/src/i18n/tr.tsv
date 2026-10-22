@@ -2609,3 +2609,5 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Yorumu döndür

@@ -2611,3 +2611,5 @@ animation effects	Off	Өшірулі
 	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
 	Pinned {tool} to Home	{tool} басты бетке бекітілді
 	Unpinned {tool} from Home	{tool} басты беттен ажыратылды
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Түсініктемені бұру

@@ -2576,3 +2576,5 @@ animation effects	Off	Изключени
 	No image on clipboard to paste	Няма изображение в клипборда за поставяне
 	Pinned {tool} to Home	{tool} е закачен в Начало
 	Unpinned {tool} from Home	{tool} е откачен от Начало
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Завърти коментара
