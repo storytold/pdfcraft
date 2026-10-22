@@ -20,6 +20,7 @@ thread_local! {
     static MENU: RefCell<Option<Menu>> = const { RefCell::new(None) };
 }
 
+/// Convert an engine shortcut specification into a `muda` keyboard accelerator.
 fn to_accelerator(s: Shortcut) -> Option<Accelerator> {
     let mut mods = Modifiers::empty();
     if s.command {
@@ -81,10 +82,11 @@ fn to_accelerator(s: Shortcut) -> Option<Accelerator> {
     Some(Accelerator::new(mods, code))
 }
 
+/// Build a native menu item for a registered engine command.
 fn cmd_item(id: &'static str) -> MenuItem {
     if let Some(spec) = pdfcraft_engine::commands::command(id) {
         let label = pdfcraft_ui_egui::i18n::menu_label(id, spec.label);
-        let shortcut = spec.shortcut.and_then(to_accelerator);
+        let shortcut = spec.shortcut.filter(|_| spec.in_text).and_then(to_accelerator);
         MenuItem::with_id(id, label, true, shortcut)
     } else {
         log::error!("command id {id:?} not registered in COMMANDS");
@@ -92,10 +94,12 @@ fn cmd_item(id: &'static str) -> MenuItem {
     }
 }
 
+/// Build a native submenu whose title is translated via `pdfcraft_ui_egui::i18n::t`.
 fn sub_menu(title: &'static str) -> Submenu {
     Submenu::new(pdfcraft_ui_egui::i18n::t(title), true)
 }
 
+/// Install the native macOS system menu bar with standard application menus.
 pub fn install(ctx: &Context, apple_events: &AppleEvents, app_name: &str) -> muda::Result<()> {
     if MENU.with_borrow(Option::is_some) {
         return Ok(());

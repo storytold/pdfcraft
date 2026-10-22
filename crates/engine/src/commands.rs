@@ -130,6 +130,7 @@ pub struct CommandSpec {
     pub icon: &'static str,
 }
 
+/// Short constructor for a [`CommandSpec`].
 const fn c(
     id: &'static str,
     label: &'static str,
@@ -212,14 +213,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
     // View menu (where it would show twice). The palette and ⌘3 still run it.
     c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
-    c("view.actual_size", "Actual size", None, Some(Shortcut::cmd("1")), Document, "maximize-2"),
-    c("view.page_level", "Zoom to page level", None, Some(Shortcut::cmd("0")), Document, "file-text"),
-    c("view.fit_width", "Fit to width", None, Some(Shortcut::cmd("2")), Document, "arrow-left-right"),
+    c("view.actual_size", "Actual size", None, None, Document, "maximize-2"),
+    c("view.page_level", "Zoom to page level", None, None, Document, "file-text"),
+    c("view.fit_width", "Fit to width", None, None, Document, "arrow-left-right"),
     c("view.fit_height", "Fit to height", None, None, Document, "arrow-up-down"),
-    c("view.zoom.in", "Zoom in", None, Some(Shortcut::cmd("+")), Document, "zoom-in"),
-    c("view.zoom.out", "Zoom out", None, Some(Shortcut::cmd("−")), Document, "zoom-out"),
-    c("view.rotate_cw", "Rotate view clockwise", None, Some(Shortcut::cmd_shift("+")), Document, "rotate-cw"),
-    c("view.rotate_ccw", "Rotate view counterclockwise", None, Some(Shortcut::cmd_shift("−")), Document, "rotate-ccw"),
+    c("view.zoom.in", "Zoom in", None, None, Document, "zoom-in"),
+    c("view.zoom.out", "Zoom out", None, None, Document, "zoom-out"),
+    c("view.rotate_cw", "Rotate view clockwise", None, None, Document, "rotate-cw"),
+    c("view.rotate_ccw", "Rotate view counterclockwise", None, None, Document, "rotate-ccw"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
     // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
     // drag with the Select tool does the same; this is the way in where the desktop takes
@@ -404,6 +405,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("help.about", "About PdfCraft", HELP, None, Nothing, "info"),
 ];
 
+/// Find a registered command specification by its ID.
 pub fn command(id: &str) -> Option<&'static CommandSpec> {
     COMMANDS.iter().find(|c| c.id == id)
 }
