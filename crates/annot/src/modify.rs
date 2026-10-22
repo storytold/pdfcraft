@@ -194,8 +194,14 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
     let (_, size) = appearance::parse_da(&d);
     let pad = 2.0 + border_width_of(&d);
-    let rect = nums(b"Rect").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
-    let rect = [rect[0], rect[1], rect[2], rect[3]];
+    // A turned text box fits its own box, as it reads; see `apply_text_box`.
+    let rect = match appearance::turned_box(&d) {
+        Some((_, own)) => own,
+        None => {
+            let rect = nums(b"Rect").filter(|v| v.len() == 4 && v.iter().all(|x| x.is_finite()))?;
+            [rect[0], rect[1], rect[2], rect[3]]
+        }
+    };
     // A callout re-fits its text box (`/Rect` inset by `/RD`); the leader line keeps its place.
     let tb = if d.contains(b"CL") {
         let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| *x >= 0.0))?;
@@ -340,7 +346,7 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     };
     let popup = annot_dict(doc, r).reference(b"Popup");
     doc.update_dict(r, |d| {
-        for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true)] {
+        for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true), (b"PCBox", true)] {
             if let Some(v) = d.get(k).and_then(|o| shift(o, every)) {
                 d.set(k.to_vec(), v);
             }
@@ -389,6 +395,99 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
         return Err(AnnotError::Invalid(format!("{subtype} comments can't be resized")));
     }
     apply_text_box(doc, r, rect, meta, false)
+}
+
+/// Where a turned box's own box goes when it becomes `b`, measured in the frame of its old box
+/// `old` (a text box grown at the bottom keeps its top edge there): so that what stays put in
+/// that frame stays put on the page, although the box now turns about `b`'s centre.
+fn turned_box_moved(old: [f64; 4], b: [f64; 4], angle: f64) -> [f64; 4] {
+    let (c, c2) = (appearance::centre(old), appearance::centre(b));
+    let delta = [c2[0] - c[0], c2[1] - c[1]];
+    let turned = appearance::transform(appearance::turn_matrix(angle, [0.0, 0.0]), delta);
+    let s = [turned[0] - delta[0], turned[1] - delta[1]];
+    [b[0] + s[0], b[1] + s[1], b[2] + s[0], b[3] + s[1]]
+}
+
+/// An angle in degrees as -180 < a <= 180.
+fn half_turn(a: f64) -> f64 {
+    let a = a.rem_euclid(360.0);
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
+/// Turn a comment by `degrees` counterclockwise about its middle, as it is displayed (a page's
+/// `/Rotate` turns everything alike). Lines, connected lines, polygons, clouds and drawings turn
+/// their points. Rectangles, ovals, text boxes and typewriter text keep their own box and an
+/// angle (see `appearance::turned_box`), which their appearance turns; turned back upright they
+/// lose both. Other comments, callouts and measurements can't be turned.
+pub fn rotate_annotation(doc: &mut Document, page: usize, index: usize, degrees: f64, meta: &Meta) -> Result<(), AnnotError> {
+    if !degrees.is_finite() {
+        return Err(AnnotError::Invalid("invalid angle".into()));
+    }
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.contains(b"Measure") {
+        return Err(AnnotError::Invalid("a measurement's points are where it measured".into()));
+    }
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    let read = |o: &Object| -> Vec<[f64; 2]> {
+        let v: Vec<f64> = doc.resolve(o).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
+        v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
+    };
+    let turn = |points: &[[f64; 2]], c: [f64; 2]| -> Vec<[f64; 2]> {
+        let m = appearance::turn_matrix(degrees, c);
+        points.iter().map(|p| appearance::transform(m, *p)).collect()
+    };
+    match subtype.as_str() {
+        "Line" | "PolyLine" | "Polygon" => {
+            let points = d.get(if subtype == "Line" { &b"L"[..] } else { b"Vertices" }).map(read).unwrap_or_default();
+            let c = bounds(points.iter().copied()).map(appearance::centre).ok_or_else(|| AnnotError::Invalid("the comment has no points".into()))?;
+            set_points(doc, page, index, &turn(&points, c), meta)
+        }
+        "Ink" => {
+            let strokes: Vec<Vec<[f64; 2]>> =
+                d.get(b"InkList").map(|l| doc.resolve(l)).and_then(|l| l.as_array().cloned()).unwrap_or_default().iter().map(read).collect();
+            let c = bounds(strokes.iter().flatten().copied())
+                .map(appearance::centre)
+                .ok_or_else(|| AnnotError::Invalid("the drawing has no strokes".into()))?;
+            let turned: Vec<Vec<[f64; 2]>> = strokes.iter().map(|s| turn(s, c)).collect();
+            let rect = rect_for(&Shape::Ink { strokes: turned.clone() }, &Style { width: border_width_of(&d), ..Style::default() })?;
+            let before = d;
+            doc.update_dict(r, |d| {
+                d.set(b"InkList".to_vec(), Object::Array(turned.iter().map(|s| num_array(&s.concat())).collect()));
+                d.set(b"Rect".to_vec(), num_array(&rect));
+                touch(d, meta);
+            })?;
+            redraw_or_restore(doc, r, before)
+        }
+        "Square" | "Circle" | "FreeText" if !d.contains(b"CL") => {
+            if subtype == "FreeText" {
+                refuse_foreign_text(doc, &d)?;
+            }
+            let rect: Vec<f64> = d.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+            let (old, own) = match appearance::turned_box(&d) {
+                Some(t) => t,
+                None => (0.0, four(&rect).map(normalize).filter(|b| finite(b)).ok_or_else(|| AnnotError::Invalid("invalid rectangle".into()))?),
+            };
+            let angle = half_turn(old + degrees);
+            let before = d;
+            doc.update_dict(r, |d| {
+                if angle.abs() < 1e-9 {
+                    d.remove(b"PCAngle");
+                    d.remove(b"PCBox");
+                    d.set(b"Rect".to_vec(), num_array(&own));
+                } else {
+                    d.set(b"PCAngle".to_vec(), Object::Real(angle));
+                    d.set(b"PCBox".to_vec(), num_array(&own));
+                    d.set(b"Rect".to_vec(), num_array(&appearance::turned_hull(own, angle)));
+                }
+                touch(d, meta);
+            })?;
+            redraw_or_restore(doc, r, before)
+        }
+        "FreeText" => Err(AnnotError::Invalid("callouts can't be turned".into())),
+        other => Err(AnnotError::Invalid(format!("{other} comments can't be turned"))),
+    }
 }
 
 /// At most this many points reshape a comment (a drawn polygon has a handful).
@@ -491,6 +590,11 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
     if !new_text {
         refuse_foreign_text(doc, &d)?;
     }
+    // A turned box gets `rect` as its own box, measured as it reads, and `/Rect` its turned hull.
+    let turned = appearance::turned_box(&d).map(|(angle, old)| {
+        let own = turned_box_moved(old, rect, angle);
+        (own, appearance::turned_hull(own, angle))
+    });
     // A callout's rectangle is its text box: the leader line re-attaches and `/Rect` grows to hold it.
     let callout = d.get(b"CL").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).filter(|l| l.len() == 6);
     let (outer, cl) = match callout {
@@ -505,6 +609,10 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
     };
     doc.update_dict(r, |d| {
         d.set(b"Rect".to_vec(), num_array(&outer));
+        if let Some((own, hull)) = turned {
+            d.set(b"PCBox".to_vec(), num_array(&own));
+            d.set(b"Rect".to_vec(), num_array(&hull));
+        }
         match &cl {
             Some(l) => {
                 d.set(b"CL".to_vec(), num_array(l));
@@ -623,8 +731,9 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
             let cur = annot_dict(doc, r);
             let nums: Vec<f64> =
                 cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+            let own = appearance::turned_box(&cur).map(|(_, own)| own).or_else(|| four(&nums).map(normalize));
             // Keep the top and sides; only the bottom edge moves, and only downwards.
-            match four(&nums).map(normalize) {
+            match own {
                 Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
                 _ => apply_text_box(doc, r, fit, meta, false),
             }

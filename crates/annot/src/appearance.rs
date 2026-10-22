@@ -166,6 +166,65 @@ fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
 }
 
+/// A rectangle, oval, text box or typewriter text the user turned: PdfCraft's `/PCAngle` (degrees
+/// counterclockwise) and `/PCBox`, its own box before turning, about whose centre it turned.
+/// `/Rect` is the upright rectangle around the turned box. `None` when it isn't turned.
+pub(crate) fn turned_box(d: &Dict) -> Option<(f64, [f64; 4])> {
+    let angle = d.get(b"PCAngle")?.as_f64()?;
+    let b = nums(d, b"PCBox").filter(|b| b.len() == 4 && b.iter().all(|x| x.is_finite()))?;
+    (angle.is_finite() && angle != 0.0 && matches!(d.name(b"Subtype"), Some(b"Square" | b"Circle" | b"FreeText")) && !d.contains(b"CL"))
+        .then_some((angle, [b[0].min(b[2]), b[1].min(b[3]), b[0].max(b[2]), b[1].max(b[3])]))
+}
+
+/// The matrix that turns by `degrees` counterclockwise about `c` (PDF order: a point times it).
+/// Quarter turns are exact.
+pub(crate) fn turn_matrix(degrees: f64, c: [f64; 2]) -> [f64; 6] {
+    let (s, k) = match degrees.rem_euclid(360.0) {
+        0.0 => (0.0, 1.0),
+        90.0 => (1.0, 0.0),
+        180.0 => (0.0, -1.0),
+        270.0 => (-1.0, 0.0),
+        _ => degrees.to_radians().sin_cos(),
+    };
+    [k, s, -s, k, c[0] - c[0] * k + c[1] * s, c[1] - c[0] * s - c[1] * k]
+}
+
+/// `p` mapped by `m`.
+pub(crate) fn transform(m: [f64; 6], p: [f64; 2]) -> [f64; 2] {
+    [p[0] * m[0] + p[1] * m[2] + m[4], p[0] * m[1] + p[1] * m[3] + m[5]]
+}
+
+/// `a`, then `b`.
+fn concat(a: [f64; 6], b: [f64; 6]) -> [f64; 6] {
+    [
+        a[0] * b[0] + a[1] * b[2],
+        a[0] * b[1] + a[1] * b[3],
+        a[2] * b[0] + a[3] * b[2],
+        a[2] * b[1] + a[3] * b[3],
+        a[4] * b[0] + a[5] * b[2] + b[4],
+        a[4] * b[1] + a[5] * b[3] + b[5],
+    ]
+}
+
+/// The centre of a box.
+pub(crate) fn centre(b: [f64; 4]) -> [f64; 2] {
+    [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]
+}
+
+/// The upright rectangle around box `b` turned by `degrees` about its centre: a turned comment's
+/// `/Rect`, onto which viewers map its appearance.
+pub fn turned_hull(b: [f64; 4], degrees: f64) -> [f64; 4] {
+    let m = turn_matrix(degrees, centre(b));
+    let corners = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(|p| transform(m, p));
+    let (xs, ys) = (corners.map(|p| p[0]), corners.map(|p| p[1]));
+    [
+        xs.iter().copied().fold(f64::INFINITY, f64::min),
+        ys.iter().copied().fold(f64::INFINITY, f64::min),
+        xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        ys.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    ]
+}
+
 /// `/C`-style colour arrays: none (transparent), gray, RGB or CMYK.
 fn color(d: &Dict, key: &[u8]) -> Option<Option<Rgb>> {
     let c = match d.get(key) {
@@ -406,6 +465,27 @@ impl AppearanceDrawing {
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(d: &Dict) -> Option<Stream> {
+    // As in `appearance_context`, imported measurements first: a turned one isn't drawn either.
+    if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
+        return None;
+    }
+    // A turned box is drawn upright in its own box, and its `/Matrix` turns it about the box's
+    // centre: viewers map the turned `/BBox` (the turned box's upright hull) onto `/Rect`, which
+    // is that hull, so the drawing stays the size it was.
+    if let Some((angle, own)) = turned_box(d) {
+        let mut upright = d.clone();
+        upright.set(b"Rect".to_vec(), Object::Array(own.iter().map(|x| Object::Real(*x)).collect()));
+        upright.remove(b"PCAngle");
+        upright.remove(b"PCBox");
+        let mut stream = build(&upright)?;
+        let inner = match stream.dict.get(b"Matrix").and_then(|m| m.as_array()).map(|m| m.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>()) {
+            Some(m) if m.len() == 6 => [m[0], m[1], m[2], m[3], m[4], m[5]],
+            _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        };
+        let m = concat(inner, turn_matrix(angle, centre(own)));
+        stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().map(|x| Object::Real(*x)).collect()));
+        return Some(stream);
+    }
     let context = appearance_context(d)?;
     let drawing = AppearanceDrawing::new(&context);
     match context.subtype {
