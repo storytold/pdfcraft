@@ -1871,11 +1871,12 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
 /// reply's answer is kept, so a long history is walked once.
 fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, model: &str) -> Option<ObjRef> {
     use std::collections::{HashMap, HashSet};
-    // As the readers see it: a `/State`, or a known `/StateModel` whose default state applies.
+    // As the readers see it: a readable `/State` (not null, empty or another type), or a known
+    // `/StateModel` whose default state applies.
     let is_state = |r: ObjRef| {
-        doc.get(r)
-            .as_dict()
-            .is_some_and(|d| d.contains(b"State") || matches!(text_value(doc, d, b"StateModel").as_deref(), Some("Marked" | "Review")))
+        doc.get(r).as_dict().is_some_and(|d| {
+            text_value(doc, d, b"State").is_some() || matches!(text_value(doc, d, b"StateModel").as_deref(), Some("Marked" | "Review"))
+        })
     };
     let irt = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref));
     let mut reaches: HashMap<ObjRef, Option<ObjRef>> = HashMap::new();

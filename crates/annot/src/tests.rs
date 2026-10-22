@@ -296,7 +296,12 @@ fn a_state_model_without_a_state_is_the_default_state() {
     let other = add_reply(&mut doc, 0, 0, "", "Ann", &meta("other")).unwrap();
     let p = page_refs(&doc).unwrap()[0];
     let o = annots(&doc, p)[other].as_ref().unwrap();
-    doc.update_dict(o, |d| d.set(b"StateModel".to_vec(), PdfString::text("Other"))).unwrap();
+    // Nor is a `/State` the readers can't read, such as a number (review on #4126).
+    doc.update_dict(o, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Other"));
+        d.set(b"State".to_vec(), Object::Int(5));
+    })
+    .unwrap();
     assert_eq!(summaries(&doc).into_iter().find(|s| s.index == other).unwrap().state, None);
     set_review_state(&mut doc, 0, other, ReviewState::Rejected, "Bob", &meta("on-other")).unwrap();
     let fresh = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("fresh")).unwrap();
