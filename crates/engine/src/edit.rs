@@ -228,6 +228,14 @@ pub enum Edit {
         index: usize,
         rect: [f64; 4],
     },
+    /// Turn a comment by `degrees` counterclockwise about its middle, as displayed: lines,
+    /// connected lines, polygons, clouds and drawings turn their points; rectangles, ovals, text
+    /// boxes and typewriter text keep their box and an angle.
+    RotateAnnotation {
+        page: usize,
+        index: usize,
+        degrees: f64,
+    },
     StyleAnnotation {
         page: usize,
         index: usize,

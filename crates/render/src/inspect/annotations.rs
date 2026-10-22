@@ -158,6 +158,19 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            // Keep in step with `pdfcraft_annot::appearance::turned_box`.
+            let angle = d.get(b"PCAngle").ok().and_then(|a| self.resolve(a).as_float().ok()).filter(|a| a.is_finite() && *a != 0.0);
+            let own = match d.get(b"PCBox").map(|o| self.resolve(o)) {
+                Ok(Object::Array(v)) if v.len() == 4 => {
+                    let v: Vec<f32> = v.iter().filter_map(|o| o.as_float().ok()).filter(|x| x.is_finite()).collect();
+                    (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+                }
+                _ => None,
+            };
+            let turn = match (angle, own) {
+                (Some(a), Some(b)) if matches!(subtype.as_str(), "Square" | "Circle" | "FreeText") && d.get(b"CL").is_err() => Some((a, b)),
+                _ => None,
+            };
             let annotation = Annotation {
                 page,
                 subtype,
@@ -180,6 +193,7 @@ impl<'a> Inspector<'a> {
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,
+                turn,
             };
             kept = kept.saturating_add(retained(&annotation));
             if kept > MAX_ANNOTATION_BYTES {
