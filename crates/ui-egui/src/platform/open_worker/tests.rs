@@ -1036,7 +1036,7 @@ fn file_open_converts_an_office_document_on_the_worker() {
         assert!(doc.path.is_none(), "the converted PDF is new and unsaved, not the .docx on disk");
     } else {
         let message = app.toast.as_ref().map(|(message, _)| message.clone()).unwrap_or_default();
-        assert!(message.contains("LibreOffice"), "the failure names what is missing: {message}");
+        assert!(message.contains("LibreOffice, which isn't installed"), "the failure names the missing dependency: {message}");
     }
 }
 

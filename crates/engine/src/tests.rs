@@ -13871,10 +13871,14 @@ fn office_documents_convert_through_libreoffice_or_explain_why_not() {
             let converted = s.open_new("Report.pdf", pdf).unwrap();
             assert!(page_texts(&s, converted).concat().contains("Quarterly report"));
         }
-        Err(e) => assert!(e.to_string().contains("LibreOffice"), "{e}"),
+        // Only "not installed" is an acceptable failure: a conversion that fails, times out or
+        // makes no PDF must fail this test.
+        Err(e) => assert!(e.to_string().contains("LibreOffice, which isn't installed"), "{e}"),
     }
     // Combine treats it as a file to convert, not as a PDF to pass through.
-    assert!(s.as_pdf("Report.docx", &docx).map_or_else(|e| e.to_string().contains("LibreOffice"), |pdf| pdf.starts_with(b"%PDF-")));
+    assert!(
+        s.as_pdf("Report.docx", &docx).map_or_else(|e| e.to_string().contains("LibreOffice, which isn't installed"), |pdf| pdf.starts_with(b"%PDF-"))
+    );
 }
 
 /// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple refuse an

@@ -126,7 +126,6 @@ mod native {
             "/usr/local/bin/libreoffice",
             "/usr/lib/libreoffice/program/soffice",
             "/opt/libreoffice/program/soffice",
-            "/snap/bin/libreoffice",
         ]
         .iter()
         .map(PathBuf::from)

@@ -32,11 +32,15 @@ Office documents (`office.rs`) are the exception: PdfCraft doesn't read Word, Ex
 OpenDocument or RTF itself. `is_office(name, bytes)` recognises them (an `OFFICE_EXTENSIONS`
 name and an OLE, ZIP or RTF signature; `source_kind` reports `SourceKind::Office`), and
 `office_to_pdf(name, bytes)` returns PDF bytes made by an installed LibreOffice, run headless as
-a separate process: a private temporary folder (the document is always `document.<ext>` there,
-never its own name), a fresh profile with macros disabled and untrusted links blocked, no console
-window on Windows, and a stop after `TIMEOUT` (120 s). LibreOffice is found through
-`PDFCRAFT_SOFFICE`, the `PATH`, then the usual install folders (`libreoffice()`). It takes
-seconds, so callers keep it off the frame thread. On the web it returns an error.
+a separate process: a private temporary folder (owner-only on Unix; the document is always
+`document.<ext>` there, never its own name), a fresh profile with macros disabled and untrusted
+links blocked, no console window on Windows, and a stop after `TIMEOUT` (120 s) or as soon as the
+output grows past 512 MB (the whole process tree is stopped, not only `soffice`). LibreOffice is
+found through `PDFCRAFT_SOFFICE`, the `PATH`, then the usual install folders (`libreoffice()`).
+A snap-installed LibreOffice is not among those folders: its private `/tmp` cannot see the work
+folder. Where `/snap/bin` is on the `PATH` it can still be found there, so point
+`PDFCRAFT_SOFFICE` at a non-snap install if conversions fail. It takes seconds, so callers keep it
+off the frame thread. On the web it returns an error.
 
 `IMAGE_EXTENSIONS`, `TEXT_EXTENSIONS` and `OFFICE_EXTENSIONS` are what the app's file pickers
 offer, so detection and pickers agree.
