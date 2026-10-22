@@ -32,6 +32,9 @@ pub fn installed_directories() -> Vec<PathBuf> {
     }
 }
 
+/// The most files and folders one scan looks at, the roots it is given included.
+const MAX_ENTRIES: usize = 4096;
+
 /// Bounded scan with resolved roots and no descendant symlinks.
 /// Only standalone, openly licensed, embeddable faces are listed.
 /// The caller controls roots (automation resolves confinement before calling this).
@@ -47,14 +50,14 @@ pub fn discover_budgeted(roots: &[PathBuf], mut budget: u64) -> Vec<FontFile> {
     use std::io::Read;
     // User font directories themselves are often links. Resolve only the explicitly
     // supplied roots; links found below them must not escape an automation read root.
-    let mut pending: Vec<_> = roots.iter().take(16).filter_map(|r| r.canonicalize().ok()).map(|r| (r, 0usize)).collect();
+    let mut pending: Vec<_> = roots.iter().take(MAX_ENTRIES).filter_map(|r| r.canonicalize().ok()).map(|r| (r, 0usize)).collect();
     let mut files = Vec::new();
     let mut entries = 0usize;
     let mut read_allowance = budget.saturating_mul(4);
     let mut seen = std::collections::HashSet::new();
     let mut seen_face_content = std::collections::HashSet::new();
     while let Some((path, depth)) = pending.pop() {
-        if entries >= 4096 || budget == 0 || read_allowance == 0 {
+        if entries >= MAX_ENTRIES || budget == 0 || read_allowance == 0 {
             break;
         }
         entries += 1;
@@ -64,7 +67,7 @@ pub fn discover_budgeted(roots: &[PathBuf], mut budget: u64) -> Vec<FontFile> {
         }
         if meta.is_dir() && depth < 4 {
             if let Ok(children) = std::fs::read_dir(&path) {
-                let remaining = 4096usize.saturating_sub(entries.saturating_add(pending.len()));
+                let remaining = MAX_ENTRIES.saturating_sub(entries.saturating_add(pending.len()));
                 // Best effort: unreadable entries are skipped and do not count against the entry allowance.
                 let mut sorted_children: Vec<_> = children.filter_map(Result::ok).take(remaining).map(|p| p.path()).collect();
                 sorted_children.sort();

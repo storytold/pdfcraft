@@ -1,6 +1,6 @@
 # MCP conventions
 
-Start explicitly with `pdfcraft-cli mcp [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]`. The server uses JSON lines on
+Start explicitly with `pdfcraft-cli mcp [--root DIR] [--compact] [--automation-read-root DIR]... [--automation-write-root DIR]...`. The server uses JSON lines on
 stdin/stdout, opens no port, and stops on EOF. `--root` confines all reads and writes, including
 commands invoked through the common tools. Logs stay on stderr.
 
@@ -69,13 +69,16 @@ pdfcraft-cli mcp --automation-read-root /work/project --automation-write-root /w
 The two flags (VectorCraft, PhotoCraft and the other Craft apps take the same ones, so one client
 config works across the suite) keep the agent to the folders you give it:
 
+- Each flag may be given more than once (`--automation-read-root /work/project --automation-read-root
+  /work/assets`): a path is allowed when it lies inside any root of its kind, and nothing else is.
+  The rest of this section says "the root" for the one that applies.
 - Every file a tool reads must lie inside the **read root**: `doc_open`, `page_insert_file`,
   `page_replace`, `doc_combine` and `doc_create_multiple` inputs, `doc_create` images, stamp,
   picture, attachment, signature and form-image files, `doc_watermark` and `doc_background` files,
   `doc_import_data`, `form_merge_data`, the files `action_run` and `ocr_recognize_files` process,
   digital ID, graphic and certificate files for signing and `sign_trust`, `text_font_import`, and
   the folders `text_font_files` searches. Without `directories`, `text_font_files` searches the read
-  root instead of the installed fonts.
+  roots instead of the installed fonts.
 - Every file a tool writes must lie inside the **write root**: `doc_save` (also saving in place),
   `page_extract`, `doc_combine`, `doc_create_multiple`, `doc_split`, `doc_reduce`, `doc_optimize`,
   `doc_print` to a file, the `doc_export_*` tools, `image_save`, `measure_export`,

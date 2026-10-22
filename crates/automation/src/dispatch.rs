@@ -512,11 +512,12 @@ impl Automation {
                         .map(|p| self.resolve(p.as_str().ok_or_else(|| ToolError::InvalidArgs("directory must be a path".into()))?, false))
                         .collect::<Result<Vec<_>>>()?
                 } else if let Some(roots) = &self.roots {
-                    // The installed fonts are outside the roots: look in the read root instead.
-                    let read = roots
-                        .read_root()
-                        .ok_or_else(|| failed("automation filesystem access is not granted: read authority is absent: installed fonts"))?;
-                    vec![self.resolve(&read.to_string_lossy(), false)?]
+                    // The installed fonts are outside the roots: look in the read roots instead.
+                    let read = roots.read_roots().map(|r| self.resolve(&r.to_string_lossy(), false)).collect::<Result<Vec<_>>>()?;
+                    if read.is_empty() {
+                        return Err(failed("automation filesystem access is not granted: read authority is absent: installed fonts"));
+                    }
+                    read
                 } else if let Some(root) = &self.root {
                     vec![root.clone()]
                 } else {
