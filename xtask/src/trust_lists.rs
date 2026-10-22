@@ -105,11 +105,22 @@ fn curl_once(url: &str) -> Result<Vec<u8>, Failure> {
         stderr.read_to_string(&mut message).ok();
     }
     let status = child.wait().map_err(|e| other("waiting for curl", &e))?;
+    judge(body, status.code(), &message)
+}
+
+/// curl's exit code for an answer over `--max-filesize` (CURLE_FILESIZE_EXCEEDED), which it gives
+/// before writing anything when the server states the size.
+const CURL_FILESIZE_EXCEEDED: i32 = 63;
+
+/// What one try came to, from the bounded read of curl's output, curl's exit code (`None` if a
+/// signal ended it) and what it said on stderr.
+fn judge(body: std::io::Result<Option<Vec<u8>>>, code: Option<i32>, message: &str) -> Result<Vec<u8>, Failure> {
     match body {
         Ok(None) => Err(Failure::TooBig),
-        Ok(Some(body)) if status.success() => Ok(body),
+        Ok(Some(_)) if code == Some(CURL_FILESIZE_EXCEEDED) => Err(Failure::TooBig),
+        Ok(Some(body)) if code == Some(0) => Ok(body),
         Ok(Some(_)) => Err(Failure::Other(message.trim().to_string())),
-        Err(e) => Err(other("reading curl's output", &e)),
+        Err(e) => Err(Failure::Other(format!("reading curl's output: {e}"))),
     }
 }
 
@@ -318,6 +329,21 @@ mod tests {
             .is_err()
         );
         assert_eq!(calls, 1, "a list that is too big stays too big");
+    }
+
+    #[test]
+    fn curl_saying_the_answer_is_too_big_is_not_retried_and_only_a_clean_exit_is_an_answer() {
+        let is_too_big = |r: Result<Vec<u8>, Failure>| matches!(r, Err(Failure::TooBig));
+        // Over the limit while reading, or curl's own refusal before any byte was written.
+        assert!(is_too_big(judge(Ok(None), None, "")));
+        assert!(is_too_big(judge(Ok(Some(Vec::new())), Some(CURL_FILESIZE_EXCEEDED), "")));
+        // A clean exit is the answer; any other exit, or a signal, is a failure worth another try.
+        assert!(matches!(judge(Ok(Some(b"<x/>".to_vec())), Some(0), ""), Ok(body) if body == b"<x/>"));
+        assert!(
+            matches!(judge(Ok(Some(Vec::new())), Some(6), " Could not resolve host \n"), Err(Failure::Other(m)) if m == "Could not resolve host")
+        );
+        assert!(matches!(judge(Ok(Some(b"partial".to_vec())), None, ""), Err(Failure::Other(_))));
+        assert!(matches!(judge(Err(std::io::Error::other("boom")), Some(0), ""), Err(Failure::Other(m)) if m.contains("boom")));
     }
 
     #[test]
