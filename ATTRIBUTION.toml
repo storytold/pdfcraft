@@ -270,7 +270,6 @@ licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Romanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 
-
 [[asset]]
 path = "crates/ui-egui/src/i18n/fi.tsv"
 title = "Finnish interface translation catalog"
@@ -3310,49 +3309,7 @@ kind = "font"
 usage = "Fill & Sign typed signatures and initials: the typed name's glyph outlines, drawn as filled paths (the font file itself is not embedded in PDFs)"
 sha256 = "21808625578fe8d8cd10cb684be546dca077b27cd03a53a2f1ec11dc743c924c"
 
-[[asset]]
-path = "assets/fonts/Tinos-Regular.ttf"
-title = "Tinos Regular"
-author = "The Tinos Project Authors (Steve Matteson)"
-source = "https://github.com/google/fonts/blob/45e3d5269e4a17d823f6d84470bc084dc5ae46f6/ofl/tinos/Tinos-Regular.ttf"
-licence = "OFL-1.1"
-licence_file = "assets/fonts/OFL-Tinos.txt"
-kind = "font"
-usage = "the serif face the paragraph editor, font picker and Header & Footer preview show for Times"
-sha256 = "60a0e8ef0c04dd5dd69ffe91025fa2ae5836cbd35600a82ba031977557e2cb61"
 
-[[asset]]
-path = "assets/fonts/Tinos-Bold.ttf"
-title = "Tinos Bold"
-author = "The Tinos Project Authors (Steve Matteson)"
-source = "https://github.com/google/fonts/blob/45e3d5269e4a17d823f6d84470bc084dc5ae46f6/ofl/tinos/Tinos-Bold.ttf"
-licence = "OFL-1.1"
-licence_file = "assets/fonts/OFL-Tinos.txt"
-kind = "font"
-usage = "the serif face the paragraph editor, font picker and Header & Footer preview show for Times"
-sha256 = "393269dbab8899f938db19783eca5eac92eb431f7ae0ab45b8349ca895f1a06b"
-
-[[asset]]
-path = "assets/fonts/Tinos-Italic.ttf"
-title = "Tinos Italic"
-author = "The Tinos Project Authors (Steve Matteson)"
-source = "https://github.com/google/fonts/blob/45e3d5269e4a17d823f6d84470bc084dc5ae46f6/ofl/tinos/Tinos-Italic.ttf"
-licence = "OFL-1.1"
-licence_file = "assets/fonts/OFL-Tinos.txt"
-kind = "font"
-usage = "the serif face the paragraph editor, font picker and Header & Footer preview show for Times"
-sha256 = "5942266ed398b155d7dc23e36833e7ec6be988f2439bdbeb8ef1bede808eaa91"
-
-[[asset]]
-path = "assets/fonts/Tinos-BoldItalic.ttf"
-title = "Tinos Bold Italic"
-author = "The Tinos Project Authors (Steve Matteson)"
-source = "https://github.com/google/fonts/blob/45e3d5269e4a17d823f6d84470bc084dc5ae46f6/ofl/tinos/Tinos-BoldItalic.ttf"
-licence = "OFL-1.1"
-licence_file = "assets/fonts/OFL-Tinos.txt"
-kind = "font"
-usage = "the serif face the paragraph editor, font picker and Header & Footer preview show for Times"
-sha256 = "a5de79f0fe863ea0954757acb3d47b3ccd0a930ce3dd5b97230cd3866790a06e"
 
 [[asset]]
 path = "packaging/macos/dmg/background.svg"
@@ -3364,7 +3321,6 @@ licence_file = "assets/app-icon/LICENSE.txt"
 kind = "image"
 usage = "Finder window of the macOS DMG; rendered to background.tiff by packaging/macos/dmg/generate.py"
 sha256 = "e8b9ea9d5e64b7b741c977543c1693825e77d5c4c579eeb674bf5dcd3764cd8a"
-
 
 [[asset]]
 path = "packaging/macos/dmg/background.tiff"

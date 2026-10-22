@@ -28,7 +28,11 @@ list (author, source, license) is in ATTRIBUTION.md.
   packages carry each font's licence as OFL-<family>.txt. Builds made with the craft-fonts revision
   pinned in .github/workflows/ also include Noto Sans Thai (in the web build too), Copyright 2022
   The Noto Project Authors (https://github.com/notofonts/thai), under SIL OFL 1.1; its licence is
-  fonts/noto-sans-thai/OFL.txt in the craft-fonts build input.
+  fonts/noto-sans-thai/OFL.txt in the craft-fonts build input. A checkout that carries
+  fonts/tinos/ additionally ships Tinos Regular, Bold, Italic and BoldItalic, Copyright 2026
+  The Tinos Project Authors (https://github.com/googlefonts/tinos), under SIL OFL 1.1
+  (fonts/tinos/OFL.txt): the serif the paragraph editor, font picker and Header & Footer preview
+  show for Times. Builds without it preview Times in Inter.
 - hayro (rendering, via crates.io) — Apache-2.0 OR MIT. Its `embed-fonts` feature bundles the Foxit
   standard-14 Type 1 fonts under BSD-3-Clause ("Copyright 2014 PDFium Authors"), and hayro-cmap bundles
   Adobe CMap resources under BSD-3-Clause.

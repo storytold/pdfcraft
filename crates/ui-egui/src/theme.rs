@@ -375,11 +375,16 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
     // Tinos stands in for Times in the paragraph editor, the font picker and the Header & Footer
     // preview: it is metric-compatible with Times New Roman, so the preview's line breaks and
-    // widths match the standard-14 Times the engine commits to the PDF.
-    add(&mut fonts, "Tinos", include_bytes!("../../../assets/fonts/Tinos-Regular.ttf"));
-    add(&mut fonts, "Tinos-Bold", include_bytes!("../../../assets/fonts/Tinos-Bold.ttf"));
-    add(&mut fonts, "Tinos-Italic", include_bytes!("../../../assets/fonts/Tinos-Italic.ttf"));
-    add(&mut fonts, "Tinos-BoldItalic", include_bytes!("../../../assets/fonts/Tinos-BoldItalic.ttf"));
+    // widths match the standard-14 Times the engine commits to the PDF. Font files live in
+    // craft-fonts (AGENTS.md §1.4), so these bytes come from the build input; a build without it
+    // (or without these faces) previews Times in Inter, as before the serif existed.
+    let tinos = |style: &str| {
+        pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.family == "Tinos" && f.style == style).map_or(pdfcraft_fonts::INTER_REGULAR, |f| f.bytes)
+    };
+    add(&mut fonts, "Tinos", tinos("Regular"));
+    add(&mut fonts, "Tinos-Bold", tinos("Bold"));
+    add(&mut fonts, "Tinos-Italic", tinos("Italic"));
+    add(&mut fonts, "Tinos-BoldItalic", tinos("BoldItalic"));
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
     // Keep missing Latin/Cyrillic letters in the app's own faces (for example Bulgarian ѝ,
@@ -689,17 +694,20 @@ mod tests {
     }
 
     /// The serif families the paragraph editor, font picker and Header & Footer preview use are
-    /// registered with the Tinos bytes and resolve to glyphs.
+    /// registered with the Tinos bytes when the craft-fonts input ships them and with the bundled
+    /// Inter when it does not: the preview never loses the family, only the face.
     #[test]
     fn the_serif_families_are_registered_and_resolve() {
+        let tinos = |style: &str| pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.family == "Tinos" && f.style == style).map(|f| f.bytes);
         let defs = font_definitions_for(false);
-        for (family, name, bytes) in [
-            ("serif", "Tinos", include_bytes!("../../../assets/fonts/Tinos-Regular.ttf").as_slice()),
-            ("serif-bold", "Tinos-Bold", include_bytes!("../../../assets/fonts/Tinos-Bold.ttf").as_slice()),
-            ("serif-italic", "Tinos-Italic", include_bytes!("../../../assets/fonts/Tinos-Italic.ttf").as_slice()),
-            ("serif-bold-italic", "Tinos-BoldItalic", include_bytes!("../../../assets/fonts/Tinos-BoldItalic.ttf").as_slice()),
+        for (family, name, style) in [
+            ("serif", "Tinos", "Regular"),
+            ("serif-bold", "Tinos-Bold", "Bold"),
+            ("serif-italic", "Tinos-Italic", "Italic"),
+            ("serif-bold-italic", "Tinos-BoldItalic", "BoldItalic"),
         ] {
-            assert_eq!(defs.font_data[name].font, bytes, "{family}");
+            let want = tinos(style).unwrap_or(pdfcraft_fonts::INTER_REGULAR);
+            assert_eq!(defs.font_data[name].font, want, "{family}");
             assert_eq!(defs.families[&FontFamily::Name(family.into())][0], name, "{family}");
         }
         let mut fonts = hinting_test_fonts(FontPolicyPlatform::Other);
