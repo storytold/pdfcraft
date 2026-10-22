@@ -2882,3 +2882,6 @@ key	Space	Space
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Xoay bình luận
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Kéo để xoay · Shift: bước 15° · Tab khi kéo: từng 90°

@@ -2890,3 +2890,6 @@ certificate	Version	الإصدار
 	Unpinned {tool} from Home	تم إلغاء تثبيت {tool} من الرئيسية
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	تدوير التعليق
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	اسحب للتدوير · Shift: خطوات 15° · Tab أثناء السحب: أرباع دورة

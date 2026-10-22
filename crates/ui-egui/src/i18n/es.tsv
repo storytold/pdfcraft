@@ -2938,3 +2938,6 @@ theme	Appearance	Aspecto
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Girar comentario
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Arrastre para girar · Shift: pasos de 15° · Tab al arrastrar: cuartos de vuelta

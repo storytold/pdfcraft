@@ -2843,3 +2843,6 @@ theme	Appearance	모양
 	Unpinned {tool} from Home	{tool}의 홈 고정을 해제했습니다
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	주석 회전
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	끌어서 회전 · Shift: 15° 단위 · 끄는 동안 Tab: 90° 단위

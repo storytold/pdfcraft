@@ -2774,3 +2774,6 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Crop image	ครอบตัดรูปภาพ
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	หมุนความคิดเห็น
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ลากเพื่อหมุน · Shift: ทีละ 15° · Tab ระหว่างลาก: ทีละ 90°

@@ -2844,3 +2844,6 @@ theme	Appearance	Tampilan
 	Unpinned {tool} from Home	{tool} dilepas dari Beranda
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Putar komentar
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Seret untuk memutar · Shift: langkah 15° · Tab saat menyeret: seperempat putaran

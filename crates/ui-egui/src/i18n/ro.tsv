@@ -2874,3 +2874,6 @@ theme	Appearance	Aspect
 	Unpinned {tool} from Home	{tool} desprins de pe pagina principală
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Rotire comentariu
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Trageți pentru a roti · Shift: pași de 15° · Tab în timpul tragerii: sferturi de rotație

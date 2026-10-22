@@ -2599,3 +2599,6 @@ animation effects	Off	Joaktiv
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Rrotullo komentin
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Tërhiqni për të rrotulluar · Shift: hapa 15° · Tab gjatë tërheqjes: çerekë rrotullimi

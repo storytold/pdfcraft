@@ -2922,3 +2922,6 @@ certificate	Version	Verze
 	Unpinned {tool} from Home	{tool} odepnuto z úvodní stránky
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Otočit komentář
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Přetažením otočíte · Shift: kroky po 15° · Tab při tažení: čtvrtotáčky

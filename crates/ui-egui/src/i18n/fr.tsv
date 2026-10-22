@@ -2880,3 +2880,6 @@ certificate	Version	Version
 	Unpinned {tool} from Home	{tool} désépinglé de l’Accueil
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Faire pivoter le commentaire
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Faites glisser pour pivoter · Shift : pas de 15° · Tab en glissant : quarts de tour

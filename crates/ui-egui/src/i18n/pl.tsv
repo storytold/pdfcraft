@@ -2711,3 +2711,6 @@ animation effects	Off	Wyłączone
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Obróć komentarz
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Przeciągnij, aby obrócić · Shift: co 15° · Tab podczas przeciągania: co ćwierć obrotu

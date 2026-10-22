@@ -2615,3 +2615,6 @@ animation effects	Off	オフ
 	Unpinned {tool} from Home	{tool} のホームへのピン留めを解除しました
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	注釈を回転
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ドラッグで回転 · Shift: 15°刻み · ドラッグ中に Tab: 90°ずつ

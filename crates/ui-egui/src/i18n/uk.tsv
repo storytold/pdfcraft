@@ -2637,3 +2637,6 @@ animation effects	Off	Вимкнено
 	Unpinned {tool} from Home	{tool} відкріплено від головної
 # Turning a comment by its rotate handle: the undo label (M5).
 	Rotate comment	Повернути коментар
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Перетягніть, щоб повернути · Shift: крок 15° · Tab під час перетягування: на чверть оберту
