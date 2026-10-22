@@ -423,6 +423,76 @@ fn text_box_text_and_colour_changes_are_drawn() {
     assert!(rc.starts_with("<?xml") && rc.contains("<p dir=\"ltr\">Caf\u{e9} (draft) \u{2014} 100%</p>") && rc.contains("color:#FF0000"), "{rc}");
 }
 
+/// The x at which `needle` is drawn: of the last `… x y Tm` or `… x y cm` before it.
+fn drawn_x(ap: &str, needle: &str) -> f64 {
+    let at = ap.find(needle).unwrap_or_else(|| panic!("{needle} in {ap}"));
+    let before = &ap[..at];
+    let op = before.rfind(" Tm ").max(before.rfind(" cm\n")).unwrap();
+    let nums: Vec<f64> = before[..op].rsplit(' ').take(2).map(|v| v.parse().unwrap()).collect();
+    nums[1]
+}
+
+/// Hebrew in Fill & Sign text and text boxes is laid out right to left and drawn with the
+/// craft-fonts Hebrew face (#4085, #506): no `?`, nothing marked, copy and search keep the typed
+/// text. A build without the face writes `?` and marks the comment, as before.
+#[test]
+fn hebrew_fill_sign_text_and_text_boxes_are_drawn_with_the_hebrew_face() {
+    let mut doc = fixture();
+    let typed = "שלום World";
+    let t = add_annotation(&mut doc, &new(0, Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 }), &meta("t")).unwrap();
+    set_contents(&mut doc, 0, t, typed, &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"Contents"), typed);
+    let ap = ap_content(&doc, d);
+    // Arabic goes the same way (its face is in craft-fonts main, so CI draws it).
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        let mut doc = reopen(&doc);
+        let a = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [0.0, 0.0, 300.0, 100.0], font_size: 12.0 }), &meta("a")).unwrap();
+        set_contents(&mut doc, 0, a, "مرحبا World", &meta("")).unwrap();
+        let d = &list(&doc, 0)[a];
+        assert_eq!(pdfcraft_fonts::undrawn_mark(d), None);
+        let ap = ap_content(&doc, d);
+        assert!(ap.contains("/ActualText <FEFF06450631062D0628062700200057006F0072006C0064>") && ap.contains("f Q\n"), "{ap}");
+        assert!(drawn_x(&ap, "(World) Tj") < drawn_x(&ap, " cm\n"), "{ap}");
+        assert!(text(d, b"RC").contains("<p dir=\"rtl\">"));
+    }
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        assert!(ap.contains("(???? World) Tj"), "{ap}");
+        assert_eq!(pdfcraft_fonts::undrawn_mark(d), Some('ש'));
+        assert_eq!(appearance::undrawable_text(d), Some(("the comment's text", 'ש')));
+        eprintln!("built without a craft-fonts Hebr face: the drawing is checked with CRAFT_FONTS_DIR");
+        return;
+    }
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), None);
+    assert_eq!(appearance::undrawable_text(d), None);
+    // The typed line for extraction, Helvetica for the Latin, outlines for the Hebrew, and the
+    // only `?` are the invisible carrier glyphs under the outlines.
+    assert!(ap.contains("/Span <</ActualText <FEFF05E905DC05D505DD00200057006F0072006C0064>>> BDC"), "{ap}");
+    assert!(ap.contains("(World) Tj ET") && ap.contains("f Q\n"), "{ap}");
+    assert_eq!(ap.matches('?').count(), ap.matches("3 Tr").count() * 5, "{ap}");
+    // A right-to-left paragraph: "World" is drawn left of the Hebrew.
+    assert!(drawn_x(&ap, "(World) Tj") < drawn_x(&ap, " cm\n"), "{ap}");
+    assert!(text(d, b"RC").contains("<p dir=\"rtl\">"), "{}", text(d, b"RC"));
+    // A restyle redraws it the same way; a character no face draws is still reported.
+    let mut doc = doc;
+    set_font_size(&mut doc, 0, t, 14.0, &meta("")).unwrap();
+    let ap = ap_content(&doc, &list(&doc, 0)[t]);
+    assert!(ap.contains("/Helv 14 Tf") && ap.contains("f Q\n"), "{ap}");
+    let b = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [0.0, 0.0, 300.0, 100.0], font_size: 12.0 }), &meta("b")).unwrap();
+    set_contents(&mut doc, 0, b, "שלום ไทย", &meta("")).unwrap();
+    let d = &list(&doc, 0)[b];
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), Some('ไ'));
+    assert!(ap_content(&doc, d).contains("f Q\n"), "the Hebrew is still drawn");
+    // Measuring agrees with the drawing: a Hebrew line is as wide as its glyphs, not Helvetica's
+    // guess, so a Fill & Sign box sized to its text fits it.
+    assert!(
+        (appearance::text_width("שלום", 11.0) - 11.0 * pdfcraft_fonts::shape_hebrew("שלום", true).unwrap().iter().map(|c| c.advance).sum::<f64>())
+            .abs()
+            < 1e-9
+    );
+}
+
 /// The rectangle a text box needs for `text` (the appearance's padding plus the 2 pt slack):
 /// the wrap width and top edge stay, the height fits the wrapped lines.
 fn expected_box(top: f64, w: f64, text: &str, size: f64, border: f64) -> [f64; 4] {

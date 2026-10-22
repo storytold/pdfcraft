@@ -3703,8 +3703,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/it/automation.rs::fill_sign_text_font_size_is_saved_and_validated"]
-notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches. fill_sign_add accepts font_size for text and dates."
+evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/it/automation.rs::fill_sign_text_font_size_is_saved_and_validated", "crates/annot/src/tests.rs::hebrew_fill_sign_text_and_text_boxes_are_drawn_with_the_hebrew_face", "crates/automation/tests/it/automation.rs::hebrew_fill_and_sign_text_through_tools_is_drawn_and_stays_searchable"]
+notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches. fill_sign_add accepts font_size for text and dates. Hebrew and Arabic are laid out right to left and drawn with the craft-fonts face when the build has it (outlines in the appearance, /ActualText per line, so the text copies, searches and extracts, flattened too); without the face they are written as ? and reported, as other scripts the standard fonts lack still are."
 
 [[feature]]
 id = "comment.text-box"
@@ -3715,8 +3715,8 @@ milestone = "M5"
 status = "partial"
 commands = ["comment.freetext"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn"]
-notes = "Helvetica text with colour, size and alignment; /RC (XHTML) and /DS are written and kept in step with edits; per-run formatting (bold/italic spans) is not yet"
+evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::hebrew_fill_sign_text_and_text_boxes_are_drawn_with_the_hebrew_face"]
+notes = "Helvetica text with colour, size and alignment; /RC (XHTML) and /DS are written and kept in step with edits; per-run formatting (bold/italic spans) is not yet. Hebrew and Arabic are laid out right to left and drawn with the craft-fonts face when the build has it (outlines in the appearance, /ActualText per line, so the text copies, searches and extracts, flattened too); without the face they are written as ? and reported, as other scripts the standard fonts lack still are. A right-to-left paragraph with /Q 0 starts at the right edge, and its /RC paragraph says dir=rtl."
 
 [[feature]]
 id = "comment.callout"
@@ -5368,8 +5368,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/automation/tests/it/automation.rs::fill_and_sign_through_tools", "crates/engine/src/tests.rs::typed_text_reads_across_as_displayed_on_rotated_pages", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_colour_survives_preview_commit_settings_and_save", "crates/automation/tests/it/automation.rs::fill_sign_text_and_date_colours_are_saved_and_validated"]
-notes = "typewriter FreeText, 10 pt Helvetica. Reads across as displayed on pages with /Rotate (sideways-stored scans): the box follows the displayed axes and the appearance is turned back (PdfCraft key /PCTextRotate); other apps that regenerate the appearance from /DA draw it unturned. A later page rotation does not re-turn it. Field detection does not work on scanned (image-only) forms yet; typed fractional font sizes commit once; Fill & Sign text/date colour is remembered and preserved in preview and saved appearances (#2444)"
+evidence = ["crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/automation/tests/it/automation.rs::fill_and_sign_through_tools", "crates/engine/src/tests.rs::typed_text_reads_across_as_displayed_on_rotated_pages", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_colour_survives_preview_commit_settings_and_save", "crates/automation/tests/it/automation.rs::fill_sign_text_and_date_colours_are_saved_and_validated", "crates/automation/tests/it/automation.rs::hebrew_fill_and_sign_text_through_tools_is_drawn_and_stays_searchable"]
+notes = "typewriter FreeText, 10 pt Helvetica. Reads across as displayed on pages with /Rotate (sideways-stored scans): the box follows the displayed axes and the appearance is turned back (PdfCraft key /PCTextRotate); other apps that regenerate the appearance from /DA draw it unturned. A later page rotation does not re-turn it. Field detection does not work on scanned (image-only) forms yet; typed fractional font sizes commit once; Fill & Sign text/date colour is remembered and preserved in preview and saved appearances (#2444). Hebrew and Arabic are laid out right to left and drawn with the craft-fonts face when the build has it (outlines in the appearance, /ActualText per line, so the text copies, searches and extracts, flattened too); without the face they are written as ? and reported, as other scripts the standard fonts lack still are."
 
 [[feature]]
 id = "form.fill-sign-marks"

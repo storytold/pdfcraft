@@ -8565,6 +8565,31 @@ fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     assert!(page_text(&mut a, reopened)[0].contains("מיכאל"));
 }
 
+/// Hebrew typed with Fill & Sign is drawn with the craft-fonts face, and the flattened page keeps
+/// the typed text for copy and search (#4085).
+#[test]
+fn hebrew_fill_and_sign_text_through_tools_is_drawn_and_stays_searchable() {
+    let dir = workdir("hebrew-fill-sign");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "שם: שרה כהן";
+    ok(&mut a, "fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": text}));
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": doc}))["comments"][0]["contents"], text);
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("built without a craft-fonts Hebr face: the drawing is checked with CRAFT_FONTS_DIR");
+        return;
+    }
+    assert!(page_text(&mut a, doc)[0].contains(text), "{:?}", page_text(&mut a, doc));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "flat.pdf", "flatten_fill_sign": true}));
+    let flat = ok(&mut a, "doc_open", json!({"path": "flat.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": flat}))["count"], 0);
+    assert!(page_text(&mut a, flat)[0].contains(text), "{:?}", page_text(&mut a, flat));
+    let found = ok(&mut a, "text_find", json!({"doc": flat, "query": "כהן"}));
+    assert_eq!(found["matches"].as_array().map(Vec::len), Some(1), "{found}");
+    let rendered = a.call("page_render", &json!({"doc": flat, "page": 1, "dpi": 144})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
+}
+
 #[test]
 fn mixed_objects_move_through_tools_with_generation_and_one_undo() {
     let dir = workdir("mixed-object-move");
