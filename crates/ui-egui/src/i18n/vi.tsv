@@ -2888,3 +2888,12 @@ key	Space	Space
 	Centre points	Các tâm
 	Centre point	Tâm
 	Tab: the next target under the pointer	Tab: điểm tiếp theo dưới con trỏ
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Dưới bên trái
+	Top left	Trên bên trái
+	Top right	Trên bên phải
+	Bottom right	Dưới bên phải
+	Middle	Giữa
+	Vertex	Đỉnh
+	Reference point: {point} (Tab: next)	Điểm tham chiếu: {point} (Tab: tiếp theo)

@@ -2530,3 +2530,12 @@ animation effects	Off	ఆఫ్
 	Centre points	కేంద్ర బిందువులు
 	Centre point	కేంద్రం
 	Tab: the next target under the pointer	Tab: పాయింటర్ కింద తదుపరి లక్ష్యం
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	దిగువ ఎడమ
+	Top left	ఎగువ ఎడమ
+	Top right	ఎగువ కుడి
+	Bottom right	దిగువ కుడి
+	Middle	మధ్య
+	Vertex	శీర్షం
+	Reference point: {point} (Tab: next)	సూచన బిందువు: {point} (Tab: తదుపరి)

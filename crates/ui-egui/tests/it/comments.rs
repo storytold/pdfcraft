@@ -3278,6 +3278,69 @@ fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
     assert!(!restored.comment_prefs.snap_targets.centres && restored.comment_prefs.snap_targets.endpoints);
 }
 
+/// Moving a comment with snapping on, Tab picks which of its points goes onto the target: the
+/// next one (clockwise from the bottom left, the centre last) goes where the one on the target
+/// is, so the target stays and the comment moves about it; Shift+Tab goes back. The point in use
+/// is named on the page.
+#[test]
+fn tab_picks_the_point_of_a_moved_comment_that_goes_onto_the_target() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "select").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let rect = Shape::Rectangle { rect: [30.0, 10.0, 60.0, 30.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&rect),
+        shape: rect,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    let shown = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].comments.anchor_shown.map(|(_, p, name)| (p, name));
+    let on_the_end = |h: &Harness<'static, PdfCraftApp>, want: &str| {
+        let (p, name) = shown(h).expect("a point named");
+        assert!((p[0] - 20.0).abs() < 0.01 && (p[1] - 50.0).abs() < 0.01 && name == want, "{want}: {p:?} {name}");
+    };
+    // Grabbed in its middle and brought so its top-left corner nears the line's left end (20, 50).
+    let (a, b) = (at(&h, 45.0, 20.0), at(&h, 37.0, 41.0));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    on_the_end(&h, "Top left");
+    // Tab: the middle of its top side goes onto the end instead, then its top-right corner.
+    h.state_mut().views[0].comments.anchor_steps = 1;
+    h.run_steps(2);
+    on_the_end(&h, "Top");
+    h.state_mut().views[0].comments.anchor_steps = 1;
+    h.run_steps(2);
+    on_the_end(&h, "Top right");
+    // Shift+Tab: back to the middle of the top side, where it is dropped.
+    h.state_mut().views[0].comments.anchor_steps = -1;
+    h.run_steps(2);
+    on_the_end(&h, "Top");
+    h.drop_at(b);
+    h.run_steps(3);
+    let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    assert!((r[0] - 5.0).abs() < 0.01 && (r[2] - 35.0).abs() < 0.01 && (r[1] - 30.0).abs() < 0.01 && (r[3] - 50.0).abs() < 0.01, "{r:?}");
+    assert_eq!(shown(&h), None, "nothing named once it is dropped");
+    assert_eq!(h.state().views[0].comments.move_anchor, None, "the next move starts afresh");
+}
+
 /// Snapping and line handles together: a line's end dragged near the check box's corner lands
 /// on it, and the whole line moved so an end comes near the long line's end lands there too.
 #[test]

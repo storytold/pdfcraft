@@ -2621,3 +2621,12 @@ animation effects	Off	オフ
 	Centre points	中心点
 	Centre point	中心
 	Tab: the next target under the pointer	Tab: ポインター下の次の対象
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	左下
+	Top left	左上
+	Top right	右上
+	Bottom right	右下
+	Middle	中央
+	Vertex	頂点
+	Reference point: {point} (Tab: next)	基準点: {point}（Tab: 次へ）

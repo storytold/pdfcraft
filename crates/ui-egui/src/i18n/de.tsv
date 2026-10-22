@@ -2622,3 +2622,12 @@ animation effects	Off	Aus
 	Centre points	Zentren
 	Centre point	Zentrum
 	Tab: the next target under the pointer	Tab: nächster Fangpunkt unter dem Mauszeiger
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Unten links
+	Top left	Oben links
+	Top right	Oben rechts
+	Bottom right	Unten rechts
+	Middle	Mitte
+	Vertex	Eckpunkt
+	Reference point: {point} (Tab: next)	Bezugspunkt: {point} (Tab: nächster)

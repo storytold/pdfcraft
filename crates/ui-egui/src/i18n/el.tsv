@@ -2627,3 +2627,12 @@ animation effects	Off	Ανενεργά
 	Centre points	Κέντρα
 	Centre point	Κέντρο
 	Tab: the next target under the pointer	Tab: ο επόμενος στόχος κάτω από τον δείκτη
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Κάτω αριστερά
+	Top left	Πάνω αριστερά
+	Top right	Πάνω δεξιά
+	Bottom right	Κάτω δεξιά
+	Middle	Μέση
+	Vertex	Κορυφή
+	Reference point: {point} (Tab: next)	Σημείο αναφοράς: {point} (Tab: επόμενο)

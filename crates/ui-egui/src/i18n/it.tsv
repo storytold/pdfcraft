@@ -2853,3 +2853,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Centre points	Centri
 	Centre point	Centro
 	Tab: the next target under the pointer	Tab: il punto successivo sotto il puntatore
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	In basso a sinistra
+	Top left	In alto a sinistra
+	Top right	In alto a destra
+	Bottom right	In basso a destra
+	Middle	Centro
+	Vertex	Vertice
+	Reference point: {point} (Tab: next)	Punto di riferimento: {point} (Tab: successivo)

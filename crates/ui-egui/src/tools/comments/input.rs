@@ -3,7 +3,7 @@ use super::geometry::{
     resized, snapped_caret,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
-use super::state::{Composer, ComposerKind, Gesture, PageCx};
+use super::state::{Composer, ComposerKind, Gesture, PageCx, nearest_corner};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
@@ -215,6 +215,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 cv.reveal = true;
                 if cx.allowed {
                     cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
+                    cv.move_anchor = None;
                 }
                 consumed = true;
             }
@@ -224,12 +225,35 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
-    // Snapping while a comment is moved or resized: its corner (a mark's centre, a resize
-    // handle) nearest a target lands on it, and the marker shows where.
+    // Tab while a comment is moved: its next anchor goes where this one is now (on its target,
+    // when it has one), so the target stays and the comment turns about it.
+    if cv.anchor_steps != 0
+        && cx.snap.is_some()
+        && let Some(Gesture::Move { page, index, from }) = cv.gesture.as_mut()
+        && *page == cx.page
+        && let (Some(a), Some(p)) = (cx.get(*index), pointer)
+    {
+        // The anchor in use: Tab's, else the corner on a target, else the one nearest the grab.
+        let (moved, _, used) = cx.snap_move(a, *from, p, cv.move_anchor);
+        let (anchors, _) = cx.move_anchors(a);
+        let i = used.unwrap_or_else(|| nearest_corner(&anchors, *from));
+        if let Some(now) = anchors.get(i) {
+            let spot = now.at + (moved - *from);
+            let j = usize::try_from((i as isize).saturating_add(cv.anchor_steps).rem_euclid(anchors.len() as isize)).unwrap_or(0);
+            *from = anchors[j].at + (p - spot);
+            cv.move_anchor = Some(j);
+        }
+    }
+    if cv.gesture.as_ref().is_none_or(|g| matches!(g, Gesture::Move { page, .. } if *page == cx.page)) {
+        cv.anchor_steps = 0;
+    }
+    // Snapping while a comment is moved or resized: a corner (the anchor Tab chose, see
+    // [`PageCx::snap_move`]) or the resize handle lands on a target in reach, and the marker
+    // shows where.
     let dragged = match (&cv.gesture, pointer) {
         (Some(Gesture::Move { page, index, from }), Some(p)) if *page == cx.page => cx.get(*index).map(|a| {
-            let (anchors, mark) = cx.move_anchors(a);
-            cx.snap_drag(&anchors, mark, *from, p)
+            let (p, hit, _) = cx.snap_move(a, *from, p, cv.move_anchor);
+            (p, hit)
         }),
         (Some(Gesture::Resize { page, index, handle, from, .. }), Some(p)) if *page == cx.page => {
             cx.get(*index).map(|a| cx.snap_drag(&[handle_pos(cx.screen_rect(a), *handle)], None, *from, p))
@@ -244,6 +268,19 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if let Some((_, Some((at, kind)))) = dragged {
         cv.snap_hover = Some((cx.page, at, kind));
     }
+    // The moved comment's anchor, named: the one on a target, or the one Tab chose.
+    if cv.anchor_shown.is_some_and(|(page, ..)| page == cx.page) {
+        cv.anchor_shown = None;
+    }
+    if let (Some(Gesture::Move { page, index, from }), Some(p)) = (&cv.gesture, pointer)
+        && *page == cx.page
+        && cx.snap.is_some()
+        && let Some(a) = cx.get(*index)
+        && let (moved, _, Some(i)) = cx.snap_move(a, *from, p, cv.move_anchor)
+        && let Some(anchor) = cx.move_anchors(a).0.get(i)
+    {
+        cv.anchor_shown = Some((cx.page, cx.to_user(anchor.at + (moved - *from)), anchor.name));
+    }
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
@@ -251,6 +288,8 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         match cv.gesture.clone() {
             Some(Gesture::Move { page, index, from }) if page == cx.page => {
                 cv.gesture = None;
+                cv.move_anchor = None;
+                cv.anchor_shown = None;
                 let (a, b) = (cx.to_user(from), cx.to_user(p));
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 if from.distance(p) >= 2.0 {

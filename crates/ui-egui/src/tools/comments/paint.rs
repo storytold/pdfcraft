@@ -48,7 +48,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
-        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
+        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), cv.move_anchor, pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
             for h in HANDLES {
@@ -96,6 +96,7 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     // As the release will have it: a dragged end onto a snap target, unless Shift holds the angle.
     let pointer = match &cv.gesture {
         Some(Gesture::Reshape { .. }) if !shift => pointer.map(|p| cx.to_screen(cx.snapped(p).0)),
+        Some(Gesture::Move { from, .. }) => pointer.map(|p| cx.snap_move(a, *from, p, cv.move_anchor).0),
         _ => pointer,
     };
     let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
@@ -120,6 +121,20 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
 /// Where a drawing tool's next point would snap to: a ring and the kind of target, as the
 /// measuring tools show it.
 fn paint_snap_marker(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+    // The anchor of a comment being moved: a square, named below it (Tab moves on).
+    if let Some((page, point, name)) = view.comments.anchor_shown
+        && page == cx.page
+    {
+        let at = cx.to_screen(point);
+        painter.rect_filled(Rect::from_center_size(at, vec2(7.0, 7.0)), CornerRadius::ZERO, SELECT_BLUE);
+        painter.text(
+            at + vec2(10.0, 10.0),
+            egui::Align2::LEFT_TOP,
+            crate::i18n::fmt(tl!("Reference point: {point} (Tab: next)"), &[("point", anchor_label(name))]),
+            crate::theme::regular(11.0),
+            SELECT_BLUE,
+        );
+    }
     if let Some((page, point, kind)) = view.comments.snap_hover
         && page == cx.page
     {

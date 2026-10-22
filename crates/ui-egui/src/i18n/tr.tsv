@@ -2617,3 +2617,12 @@ animation effects	Off	Kapalı
 	Centre points	Merkezler
 	Centre point	Merkez
 	Tab: the next target under the pointer	Tab: işaretçinin altındaki sonraki nokta
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Sol alt
+	Top left	Sol üst
+	Top right	Sağ üst
+	Bottom right	Sağ alt
+	Middle	Orta
+	Vertex	Köşe
+	Reference point: {point} (Tab: next)	Referans noktası: {point} (Tab: sonraki)

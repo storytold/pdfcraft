@@ -2886,3 +2886,12 @@ certificate	Version	Version
 	Centre points	Centres
 	Centre point	Centre
 	Tab: the next target under the pointer	Tab : la cible suivante sous le pointeur
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	En bas à gauche
+	Top left	En haut à gauche
+	Top right	En haut à droite
+	Bottom right	En bas à droite
+	Middle	Milieu
+	Vertex	Sommet
+	Reference point: {point} (Tab: next)	Point de référence : {point} (Tab : suivant)

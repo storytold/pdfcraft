@@ -2643,3 +2643,12 @@ animation effects	Off	Вимкнено
 	Centre points	Центри
 	Centre point	Центр
 	Tab: the next target under the pointer	Tab: наступна точка під вказівником
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Внизу ліворуч
+	Top left	Угорі ліворуч
+	Top right	Угорі праворуч
+	Bottom right	Внизу праворуч
+	Middle	Середина
+	Vertex	Вершина
+	Reference point: {point} (Tab: next)	Опорна точка: {point} (Tab: наступна)

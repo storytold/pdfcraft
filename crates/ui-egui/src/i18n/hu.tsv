@@ -2620,3 +2620,12 @@ animation effects	Off	Ki
 	Centre points	Középpontok
 	Centre point	Középpont
 	Tab: the next target under the pointer	Tab: a következő pont a mutató alatt
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Bal alsó
+	Top left	Bal felső
+	Top right	Jobb felső
+	Bottom right	Jobb alsó
+	Middle	Közép
+	Vertex	Csúcs
+	Reference point: {point} (Tab: next)	Referenciapont: {point} (Tab: következő)

@@ -2619,3 +2619,12 @@ animation effects	Off	Өшірулі
 	Centre points	Орталықтар
 	Centre point	Орталық
 	Tab: the next target under the pointer	Tab: меңзер астындағы келесі нүкте
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Төменгі сол жақ
+	Top left	Жоғарғы сол жақ
+	Top right	Жоғарғы оң жақ
+	Bottom right	Төменгі оң жақ
+	Middle	Ортасы
+	Vertex	Төбе
+	Reference point: {point} (Tab: next)	Тірек нүкте: {point} (Tab: келесі)

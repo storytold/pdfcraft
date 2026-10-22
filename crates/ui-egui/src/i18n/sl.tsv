@@ -2626,3 +2626,12 @@ animation effects	Off	Izklopljeni
 	Centre points	Središča
 	Centre point	Središče
 	Tab: the next target under the pointer	Tab: naslednja točka pod kazalcem
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Spodaj levo
+	Top left	Zgoraj levo
+	Top right	Zgoraj desno
+	Bottom right	Spodaj desno
+	Middle	Sredina
+	Vertex	Oglišče
+	Reference point: {point} (Tab: next)	Referenčna točka: {point} (Tab: naslednja)

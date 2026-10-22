@@ -2896,3 +2896,12 @@ certificate	Version	الإصدار
 	Centre points	نقاط المركز
 	Centre point	نقطة المركز
 	Tab: the next target under the pointer	Tab: الهدف التالي تحت المؤشر
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	أسفل اليسار
+	Top left	أعلى اليسار
+	Top right	أعلى اليمين
+	Bottom right	أسفل اليمين
+	Middle	المنتصف
+	Vertex	رأس
+	Reference point: {point} (Tab: next)	النقطة المرجعية: {point} (Tab: التالية)

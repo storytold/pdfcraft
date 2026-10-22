@@ -2944,3 +2944,12 @@ theme	Appearance	Aspecto
 	Centre points	Centros
 	Centre point	Centro
 	Tab: the next target under the pointer	Tab: el siguiente punto bajo el puntero
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Abajo a la izquierda
+	Top left	Arriba a la izquierda
+	Top right	Arriba a la derecha
+	Bottom right	Abajo a la derecha
+	Middle	Centro
+	Vertex	Vértice
+	Reference point: {point} (Tab: next)	Punto de referencia: {point} (Tab: siguiente)

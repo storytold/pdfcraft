@@ -2928,3 +2928,12 @@ certificate	Version	Verze
 	Centre points	Středy
 	Centre point	Střed
 	Tab: the next target under the pointer	Tab: další cíl pod ukazatelem
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Vlevo dole
+	Top left	Vlevo nahoře
+	Top right	Vpravo nahoře
+	Bottom right	Vpravo dole
+	Middle	Střed
+	Vertex	Vrchol
+	Reference point: {point} (Tab: next)	Referenční bod: {point} (Tab: další)
