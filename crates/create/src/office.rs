@@ -184,12 +184,29 @@ mod native {
     pub(super) enum Run {
         Exited(ExitStatus),
         TimedOut,
+        /// The watched folder grew past its limit while the command ran.
+        TooLarge,
+    }
+
+    /// The bytes in the files directly inside `dir` (LibreOffice writes its one output there).
+    /// Anything unreadable counts as nothing, and the sum saturates. Each size is read from the
+    /// file itself: on Windows a directory listing keeps the old size while a process still
+    /// has the file open for writing.
+    pub(super) fn folder_size(dir: &Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+        entries
+            .flatten()
+            .filter_map(|entry| std::fs::symlink_metadata(entry.path()).ok())
+            .filter(|meta| meta.is_file())
+            .fold(0u64, |sum, meta| sum.saturating_add(meta.len()))
     }
 
     /// Run `command` to completion, killing it and every process it started once `timeout`
-    /// passes. `soffice` hands the conversion to its own child, `soffice.bin`, which would
+    /// passes, or once the files in `watch`'s folder add up to more than its limit (so a
+    /// document that converts to an enormous PDF can't fill the disk before it is checked).
+    /// `soffice` hands the conversion to its own child, `soffice.bin`, which would
     /// otherwise outlive the kill, holding the profile folder and its memory.
-    pub(super) fn run_with_timeout(mut command: Command, timeout: Duration) -> std::io::Result<Run> {
+    pub(super) fn run_limited(mut command: Command, timeout: Duration, watch: Option<(&Path, u64)>) -> std::io::Result<Run> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -206,6 +223,10 @@ mod native {
                     kill_tree(&mut child);
                     return Err(error);
                 }
+            }
+            if watch.is_some_and(|(dir, limit)| folder_size(dir) > limit) {
+                kill_tree(&mut child);
+                return Ok(Run::TooLarge);
             }
             if start.elapsed() >= timeout {
                 kill_tree(&mut child);
@@ -248,6 +269,13 @@ mod native {
 
     /// Convert with the LibreOffice at `program`, giving up after `timeout`.
     pub(super) fn convert_with(program: &Path, name: &str, bytes: &[u8], timeout: Duration) -> Result<Vec<u8>, CreateError> {
+        convert_capped(program, name, bytes, timeout, MAX_PDF)
+    }
+
+    /// [`convert_with`] with the converted PDF's size limit given: the output folder is watched
+    /// while LibreOffice runs, and the finished file is checked again.
+    pub(super) fn convert_capped(program: &Path, name: &str, bytes: &[u8], timeout: Duration, max_pdf: u64) -> Result<Vec<u8>, CreateError> {
+        let too_large = || format!("the converted PDF is larger than {} MB", max_pdf / (1024 * 1024));
         let failed = |why: String| CreateError::Office(format!("{name}: {why}"));
         let ext = office_extension(name).ok_or_else(|| failed("this isn't a Word, Excel or PowerPoint file".into()))?;
         let work = WorkDir::new().map_err(|e| failed(format!("couldn't make a temporary folder: {e}")))?;
@@ -276,8 +304,9 @@ mod native {
             // CREATE_NO_WINDOW: no console window flashes up during the conversion.
             command.creation_flags(0x0800_0000);
         }
-        let status = match run_with_timeout(command, timeout) {
+        let status = match run_limited(command, timeout, Some((&out, max_pdf))) {
             Ok(Run::Exited(status)) => status,
+            Ok(Run::TooLarge) => return Err(failed(format!("{}; LibreOffice was stopped", too_large()))),
             Ok(Run::TimedOut) => return Err(failed(format!("LibreOffice took longer than {} seconds and was stopped", timeout.as_secs()))),
             Err(e) => return Err(failed(format!("couldn't start LibreOffice ({}): {e}", program.display()))),
         };
@@ -287,8 +316,8 @@ mod native {
             Err(_) if !status.success() => return Err(failed(format!("LibreOffice couldn't convert it ({status})"))),
             Err(_) => return Err(failed("LibreOffice didn't produce a PDF; the file may be damaged or password-protected".into())),
         };
-        if size > MAX_PDF {
-            return Err(failed(format!("the converted PDF is larger than {} MB", MAX_PDF / (1024 * 1024))));
+        if size > max_pdf {
+            return Err(failed(too_large()));
         }
         let bytes = std::fs::read(&pdf).map_err(|e| failed(format!("couldn't read the converted PDF: {e}")))?;
         if !bytes.starts_with(b"%PDF-") {
@@ -384,7 +413,7 @@ mod tests {
             command.args(["--ignored", "--exact", "office::tests::native::sleeps_for_a_minute", "--nocapture"]);
             command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
             let started = std::time::Instant::now();
-            assert!(matches!(run_with_timeout(command, Duration::from_millis(500)), Ok(Run::TimedOut)));
+            assert!(matches!(run_limited(command, Duration::from_millis(500), None), Ok(Run::TimedOut)));
             assert!(started.elapsed() < Duration::from_secs(30));
         }
 
@@ -413,7 +442,7 @@ mod tests {
             let work = WorkDir::new().unwrap();
             let heartbeat = work.0.join("heartbeat");
             let parent = stand_in("office::tests::native::starts_a_child_that_keeps_beating", &heartbeat);
-            assert!(matches!(run_with_timeout(parent, Duration::from_secs(5)), Ok(Run::TimedOut)));
+            assert!(matches!(run_limited(parent, Duration::from_secs(5), None), Ok(Run::TimedOut)));
             let beats = || std::fs::metadata(&heartbeat).map_or(0, |m| m.len());
             // A killed process may take a moment to go.
             std::thread::sleep(Duration::from_millis(300));
@@ -446,6 +475,50 @@ mod tests {
                 file.write_all(b".").unwrap();
                 std::thread::sleep(Duration::from_millis(50));
             }
+        }
+
+        /// Where the stand-in below writes.
+        const FILL_DIR: &str = "PDFCRAFT_TEST_OFFICE_FILL_DIR";
+
+        /// A converter that writes without end is stopped as soon as its output passes the
+        /// limit, not after it has run out its time.
+        #[test]
+        fn a_converter_whose_output_grows_past_the_limit_is_stopped() {
+            let work = WorkDir::new().unwrap();
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--ignored", "--exact", "office::tests::native::writes_without_end", "--nocapture"]).env(FILL_DIR, &work.0);
+            command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            let limit = 256 * 1024;
+            let started = std::time::Instant::now();
+            let run = run_limited(command, Duration::from_secs(60), Some((&work.0, limit)));
+            assert!(matches!(run, Ok(Run::TooLarge)), "stopped for size, not for time");
+            assert!(started.elapsed() < Duration::from_secs(30), "stopped long before the timeout");
+            // A killed process may take a moment to go; after that nothing is written.
+            std::thread::sleep(Duration::from_millis(300));
+            let after_kill = folder_size(&work.0);
+            assert!(after_kill > limit, "the stand-in had written past the limit");
+            std::thread::sleep(Duration::from_secs(1));
+            assert_eq!(folder_size(&work.0), after_kill, "the converter was stopped");
+        }
+
+        /// The stand-in for a LibreOffice that fills the disk: 64 KiB every 10 ms for a minute
+        /// (run only by the test above).
+        #[test]
+        #[ignore]
+        fn writes_without_end() {
+            use std::io::Write;
+            let Some(dir) = std::env::var_os(FILL_DIR) else { return };
+            let mut file = std::fs::File::create(Path::new(&dir).join("document.pdf")).unwrap();
+            let chunk = vec![0u8; 64 * 1024];
+            for _ in 0..6000 {
+                file.write_all(&chunk).unwrap();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        #[test]
+        fn a_folder_that_cannot_be_read_counts_as_empty() {
+            assert_eq!(folder_size(&std::env::temp_dir().join("pdfcraft-no-such-folder")), 0);
         }
 
         #[test]
