@@ -21,7 +21,7 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
             .chars()
             .all(|c| matches!(c, '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' | '€' | '‚' | '„' | '…' | '‘' | '’' | '“' | '”' | '•' | '–' | '—' | '™'))
     }) {
-        return pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words));
+        return pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words)).map(|_| ());
     }
     let p = pdfcraft_model::pages(doc).get(page).cloned().ok_or_else(|| EditError::Invalid("OCR page does not exist".into()))?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -121,5 +121,5 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
         }
     }
     content.push_str("ET\nQ\nEMC\n");
-    pdfcraft_edit::stamp(doc, page, "OCR", content.into_bytes())
+    pdfcraft_edit::stamp(doc, page, "OCR", content.into_bytes()).map(|_| ())
 }
