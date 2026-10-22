@@ -441,6 +441,14 @@ pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontI
     FontId::new(size, preview_family(look.family, look.bold, look.italic))
 }
 
+/// Whether the preview draws `look` with an already-slanted Tinos design. epaint leans
+/// `TextFormat.italics` text with a synthetic shear, and on the real italic families that
+/// would slant the glyphs twice; where no oblique UI face exists (Inter, JetBrains Mono) the
+/// synthetic lean stays the only slant on offer.
+pub(crate) fn real_italic(look: &pdfcraft_engine::AddedText) -> bool {
+    matches!(preview_family(look.family, look.bold, look.italic), FontFamily::Name(n) if n.as_ref() == "serif-italic" || n.as_ref() == "serif-bold-italic")
+}
+
 fn color32(color: [f64; 3]) -> Color32 {
     Color32::from_rgb(
         (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -1484,7 +1492,7 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
             egui::TextFormat {
                 font_id: editor_font(&ed.look, ed.size),
                 color: color32(ed.look.color),
-                italics: ed.look.italic,
+                italics: ed.look.italic && !real_italic(&ed.look),
                 ..Default::default()
             },
         );
@@ -1790,6 +1798,19 @@ mod tests {
         assert_eq!(f(F::Helvetica, true, false), FontFamily::Name("semibold".into()));
         assert_eq!(f(F::Helvetica, false, true), FontFamily::Proportional);
         assert_eq!(f(F::Helvetica, true, true), FontFamily::Name("semibold".into()));
+    }
+
+    #[test]
+    fn the_synthetic_slant_stays_off_for_the_real_italic_faces() {
+        let look =
+            |family: pdfcraft_engine::FontFamily, bold: bool, italic: bool| pdfcraft_engine::AddedText { family, bold, italic, ..Default::default() };
+        use pdfcraft_engine::FontFamily as F;
+        assert!(real_italic(&look(F::Times, false, true)), "Tinos Italic is already slanted");
+        assert!(real_italic(&look(F::Times, true, true)), "Tinos Bold Italic is already slanted");
+        assert!(!real_italic(&look(F::Times, false, false)));
+        assert!(!real_italic(&look(F::Times, true, false)));
+        assert!(!real_italic(&look(F::Helvetica, false, true)), "Inter has no oblique: keep the synthetic lean");
+        assert!(!real_italic(&look(F::Courier, false, true)), "JetBrains Mono has no oblique: keep the synthetic lean");
     }
 
     #[test]
