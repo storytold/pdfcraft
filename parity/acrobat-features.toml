@@ -1646,7 +1646,7 @@ milestone = "M12"
 status = "shipped"
 commands = ["view.line_weights"]
 tools = ["view_line_weights"]
-evidence = ["crates/render/src/raster.rs::hairline_strokes_draw_line_art_one_pixel_wide_except_for_print", "crates/engine/src/tests.rs::line_weights_off_draws_hairlines_for_the_view_only", "crates/ui-egui/tests/commands.rs::line_weights_toggle_by_shortcut_menu_and_command", "crates/automation/tests/automation.rs::line_weights_through_tools"]
+evidence = ["crates/render/src/raster.rs::hairline_strokes_draw_line_art_one_pixel_wide_except_for_print", "crates/engine/src/tests.rs::line_weights_off_draws_hairlines_for_the_view_only", "crates/ui-egui/tests/it/commands.rs::line_weights_toggle_by_shortcut_menu_and_command", "crates/automation/tests/it/automation.rs::line_weights_through_tools"]
 notes = "View ▸ Show line weights (⌘5 / Ctrl+5, Acrobat's Line Weights): off, every stroke that isn't text is one device pixel wide; stroked text, prints and exports keep the document's widths; per document, not remembered between launches"
 
 [[feature]]
