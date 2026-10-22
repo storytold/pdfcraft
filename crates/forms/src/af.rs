@@ -197,6 +197,18 @@ impl Parser<'_> {
                         b'n' => out.push(b'\n'),
                         b'r' => out.push(b'\r'),
                         b't' => out.push(b'\t'),
+                        b'b' => out.push(0x08),
+                        b'f' => out.push(0x0C),
+                        b'v' => out.push(0x0B),
+                        b'0' => out.push(0),
+                        b'x' => {
+                            let digits = self.s.get(self.i..self.i.checked_add(2)?)?;
+                            let code = hex4(&[b'0', b'0', digits[0], digits[1]])?;
+                            self.i += 2;
+                            let ch = char::from_u32(u32::from(code)).unwrap_or('\u{FFFD}');
+                            let mut encoded = [0u8; 4];
+                            out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+                        }
                         b'u' => {
                             let code = hex4(self.s.get(self.i..self.i.checked_add(4)?)?)?;
                             self.i += 4;
@@ -912,7 +924,8 @@ pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
     // A bare trailing "p" ("5:30p") only counts when it follows a digit, not a word like "Sep".
     let bare_p = lower.strip_suffix('p').is_some_and(|rest| rest.trim_end().ends_with(|c: char| c.is_ascii_digit()));
     let pm = lower.contains("pm") || bare_p;
-    let am = lower.contains("am");
+    let bare_a = lower.strip_suffix('a').is_some_and(|rest| rest.trim_end().ends_with(|c: char| c.is_ascii_digit()));
+    let am = lower.contains("am") || bare_a;
     // Tokens: runs of digits (kept as text, so a run can be split between fields typed without
     // separators) and month names.
     let mut nums: VecDeque<String> = VecDeque::new();
@@ -1413,6 +1426,15 @@ pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn javascript_escapes_are_decoded() {
+        assert_eq!(
+            parse_format("AFNumber_Format(2, 0, 0, 0, \"\\x24\", true);"),
+            Some(Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true })
+        );
+        assert_eq!(parse_format("AFDate_FormatEx(\"\\b\\f\\v\\0\\q\");"), Some(Format::Date("\u{8}\u{c}\u{b}\0q".into())));
+    }
 
     #[test]
     fn scripts_are_recognised_and_written_back() {

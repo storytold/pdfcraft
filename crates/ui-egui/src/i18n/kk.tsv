@@ -102,6 +102,8 @@
 	Next view	Келесі көрініс
 	Page display	Беттерді көрсету
 	Continuous scrolling	Үздіксіз айналдыру
+	Show gaps between pages	Беттер арасындағы бос орындарды көрсету
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Беттердің шеттерін біріктіру үшін олардың арасындағы бос орындарды жасырыңыз. PDF ішіндегі жиектер өзгеріссіз қалады.
 	Two-page view	Екі беттік көрініс
 	Single page	Бір бет
 	Show cover page in two-page view	Екі беттік көріністе мұқаба бетін көрсету
@@ -798,6 +800,7 @@
 	Insert Page Number	Бет нөмірін енгізу
 	Insert Date	Күнді енгізу
 	Start page number	Бастапқы бет нөмірі
+	Shrink the page content to make room for the header and footer	Жоғарғы және төменгі колонтитулға орын босату үшін бет мазмұнын кішірейту
 	Source	Дереккөз
 	Fit to page	Бетке сыйдыру
 	Rotation	Бұрылу
@@ -1164,6 +1167,7 @@
 	Off	Өшірулі
 	Flip on long edge	Ұзын жиек бойынша аудару
 	Flip on short edge	Қысқа жиек бойынша аудару
+	Printer default	Принтер әдепкісі
 	Paper:	Қағаз:
 	Pages to Print	Басып шығарылатын беттер
 	More options:	Қосымша параметрлер:
@@ -1305,6 +1309,8 @@
 	This document has no layers.	Бұл құжатта қабаттар жоқ.
 	This document has no attachments.	Бұл құжатта тіркемелер жоқ.
 	Hide layer	Қабатты жасыру
+	Layer options	Қабат параметрлері
+	Reset to Initial Visibility	Бастапқы көрінуді қалпына келтіру
 	Show layer	Қабатты көрсету
 	Set layer visibility	Қабаттың көрінісін орнату
 	on page {label}	{label} бетінде
@@ -2276,6 +2282,7 @@ key	Space	Бос орын
 	Looking for printers…	Принтерлер ізделуде…
 	Sending sheet {s} of {n} to {printer}…	{n} парақтың {s}-парағы {printer} құрылғысына жіберілуде…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтерлер табылмады. Принтердің орнатылғанын және басып шығару кезегі қызметінің жұмыс істеп тұрғанын тексеріп, «Басып шығару» терезесін қайта ашыңыз.
+	Reading the printer's settings…	Принтер параметрлері оқылуда…
 	Sending to {printer}…	{printer} құрылғысына жіберілуде…
 	Enter permissions password…	Рұқсаттар құпиясөзін енгізу…
 	Permissions password	Рұқсаттар құпиясөзі
@@ -2284,6 +2291,7 @@ key	Space	Бос орын
 	Couldn't unlock {name}: {e}	{name} құлпын ашу мүмкін болмады: {e}
 	This document has no restrictions to lift	Бұл құжатта алып тасталатын шектеулер жоқ
 	The document's security settings don't allow copying text and images	Құжаттың қауіпсіздік параметрлері мәтін мен суреттерді көшіруге рұқсат бермейді
+	The document's security settings don't allow printing	Құжаттың қауіпсіздік параметрлері басып шығаруға рұқсат бермейді
 	Add the files to combine	Біріктірілетін файлдарды қосыңыз
 	Leave out files that can't be read?	Оқылмайтын файлдарды қалдырып кету керек пе?
 	These files can't be read, so they won't be in the combined PDF:	Бұл файлдар оқылмайды, сондықтан біріктірілген PDF-ке кірмейді:
@@ -2310,6 +2318,7 @@ key	Space	Бос орын
 	Printer paper and scaling may differ. Check driver settings.	Принтер қағазы мен масштабы өзгеше болуы мүмкін. Драйвер параметрлерін тексеріңіз.
 	Drawing scale changes. Use Actual size for full-scale plans.	Сызба масштабы өзгереді. Толық масштабты жоспарлар үшін Нақты өлшемді пайдаланыңыз.
 	Reload documents when their files change on disk	Дискідегі файлдары өзгергенде құжаттарды қайта жүктеу
+	Always use my default zoom and page layout	Әрқашан әдепкі масштаб пен бет орналасуын пайдалану
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Бұл файл дискіде өзгертілді. «Қайта жүктеу» жаңа нұсқаны көрсетіп, сақталмаған өзгерістеріңізді тастайды; «Сақтау» оны осы нұсқамен алмастырады.
 	Reload	Қайта жүктеу
 	Couldn't reload {name}: {e}	{name} қайта жүктеу мүмкін болмады: {e}
@@ -2479,3 +2488,28 @@ animation effects	Off	Өшірулі
 	Paragraph spacing	Абзац аралығы
 	Less	Азырақ
 	Other options	Басқа параметрлер
+	Thumbnail size	Нобай өлшемі
+	Smaller thumbnails	Кішірек нобайлар
+	Larger thumbnails	Үлкенірек нобайлар
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Пікір пішінін өзгерту
+
+# Prepare a form ▸ Text field table
+	Add text field table	Мәтін өрістерінің кестесін қосу
+	Text field table	Мәтін өрістерінің кестесі
+	Text Field Table	Мәтін өрістерінің кестесі
+	Columns	Бағандар
+	Row spacing	Жолдар аралығы
+	Column spacing	Бағандар аралығы
+	First row number	Бірінші жол нөмірі
+	Column widths	Баған ендері
+	Distribute evenly	Біркелкі бөлу
+	Field names	Өріс атаулары
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N немесе {row} — жол нөмірі, {col} — баған нөмірі, {seq} — ұяшық нөмірі. Олардың ешқайсысы болмаса, жол нөмірі соңына қосылады.
+	Column {n}	{n}-баған
+	Add fields	Өрістерді қосу
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	жолдар тым аласа: аймақты биіктетіңіз немесе жолдар санын не жолдар аралығын азайтыңыз
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	баған тым тар: аймақты кеңейтіңіз, бағанға көбірек ен беріңіз немесе бағандар санын не бағандар аралығын азайтыңыз
+	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
+	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
+	a field named {name} already exists	{name} атты өріс бар

@@ -219,6 +219,33 @@ fn a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it() {
 }
 
 #[test]
+fn a_tool_chosen_with_an_already_open_file_focuses_its_tab_and_still_runs() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-tool-focus-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("picked.pdf");
+    std::fs::write(&path, fixture(2)).unwrap();
+    let pick = path.to_string_lossy().into_owned();
+    let picked = pick.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // The file is already open, but the Home tab is showing (no active document).
+        app.open_path(&picked);
+        app.active = None;
+        app.pick_override = Some(vec![pick]);
+        app
+    });
+    h.run_steps(2);
+    h.state_mut().run_command("export.text");
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.len(), 1, "the existing tab is reused, not duplicated");
+    assert_eq!(app.active, Some(0), "the pick focused the tab it already opened");
+    assert!(matches!(app.dialog, Some(Dialog::Export(_))), "the tool still runs on it: {:?}", app.dialog);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn shortcuts_run_registered_commands() {
     let mut h = harness();
     h.key_press_modifiers(Modifiers::COMMAND, Key::D);

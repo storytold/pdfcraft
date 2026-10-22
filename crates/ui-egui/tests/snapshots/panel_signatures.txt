@@ -1,0 +1,7 @@
+Label = "Signatures"
+Label = "0"
+Button "Close" [off]
+Button "Validate all"
+Button "Expand" [off]
+Image
+Label = "Unsigned signature field: Approval"

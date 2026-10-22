@@ -8,6 +8,8 @@ const JAPANESE: &str = "日本語の文字";
 const CHINESE: &str = "简体中文欢迎";
 const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
+const HEBREW: &str = "ייפוי כח.pdf";
+const DEVANAGARI: &str = "हिंदी पाठ सम्पादन";
 
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
@@ -163,7 +165,31 @@ fn system_fallback_covers_devanagari() {
         assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_DEVANAGARI_FALLBACK).count(), 1, "{family:?}");
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
-    const DEVANAGARI: &str = "हिंदी पाठ सम्पादन";
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, DEVANAGARI), "{id:?} lacks {DEVANAGARI}");
+    }
+    assert!(layout_widths(&mut fonts, DEVANAGARI).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// Built with craft-fonts, Hindi text renders with real glyphs (no tofu) in every family: a
+/// `Deva` face is a fallback after the app's own fonts. Without craft-fonts it is the installed
+/// Devanagari fallback's job (see `system_fallback_covers_devanagari`), and the web build has
+/// neither.
+#[test]
+fn devanagari_ui_text_uses_craft_fonts() {
+    if pdfcraft_fonts::ui_devanagari_fonts().is_empty() {
+        eprintln!("skipping devanagari_ui_text_uses_craft_fonts: built without craft-fonts (set CRAFT_FONTS_DIR to run it)");
+        return;
+    }
+    let defs = theme::font_definitions();
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        let first =
+            stack.iter().position(|n| pdfcraft_fonts::ui_devanagari_fonts().iter().any(|f| f.name() == *n)).expect("a Deva face is a fallback");
+        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
+        assert!(own < first, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
         assert!(fonts.has_glyphs(&id, DEVANAGARI), "{id:?} lacks {DEVANAGARI}");
     }
@@ -246,6 +272,29 @@ fn system_fallback_covers_thai() {
     assert!(layout_widths(&mut fonts, THAI_SAMPLE).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
+/// On a machine with an installed Hebrew font, the installed definitions include it and a
+/// Hebrew file name has glyphs in the document tab and the recent files (#586). macOS always
+/// ships Arial Hebrew and SF Hebrew, so there the test never skips.
+#[test]
+fn system_fallback_covers_hebrew() {
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_HEBREW_FALLBACK));
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    let off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
+    if !defs.font_data.contains_key(theme::SYSTEM_HEBREW_FALLBACK) && (off || !cfg!(target_os = "macos")) {
+        eprintln!("skipping system_fallback_covers_hebrew: no installed Hebrew fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_HEBREW_FALLBACK)));
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_HEBREW_FALLBACK).count(), 1, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, HEBREW), "{id:?} lacks {HEBREW}");
+    }
+    assert!(layout_widths(&mut fonts, HEBREW).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
 /// The Han characters of a catalog's translations.
 fn catalog_han(catalog: &str) -> String {
     let mut han: Vec<char> = catalog
@@ -317,7 +366,7 @@ fn ui_fonts_work_without_craft_fonts() {
     theme::install_fonts(&ctx);
 }
 
-/// Latin- and Cyrillic-script catalogs (Czech, Brazilian Portuguese, German, Spanish, French, Russian, Bulgarian, Hungarian, Ukrainian, Italian, Slovene) are drawn entirely by the app's own faces
+/// Latin- and Cyrillic-script catalogs (Czech, Brazilian Portuguese, German, Spanish, French, Russian, Bulgarian, Kazakh, Hungarian, Ukrainian, Italian, Slovene, Lithuanian, Greek, Turkish, Indonesian, Vietnamese, Albanian, Catalan) are drawn entirely by the app's own faces
 /// (Inter, JetBrains Mono with Inter fallback): no letter falls through to egui's defaults or a CJK fallback. (egui's
 /// `has_glyphs` can't answer this: with only the primary face it is also the replacement face.)
 #[test]
@@ -344,9 +393,19 @@ fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
         ("tr", include_str!("../src/i18n/tr.tsv")),
         ("sl", include_str!("../src/i18n/sl.tsv")),
         ("lt", include_str!("../src/i18n/lt.tsv")),
+        ("id", include_str!("../src/i18n/id.tsv")),
         ("vi", include_str!("../src/i18n/vi.tsv")),
+        ("fi", include_str!("../src/i18n/fi.tsv")),
+        ("sq", include_str!("../src/i18n/sq.tsv")),
+        ("ca", include_str!("../src/i18n/ca.tsv")),
+        ("ro", include_str!("../src/i18n/ro.tsv")),
+        ("nb", include_str!("../src/i18n/nb.tsv")),
     ] {
-        let mut text = String::from("áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽãõçâêôàÃÕÇÂÊÔÀñÑüÜäÄöÖőűß„“¿¡«»…ґҐєЄіІїЇәғқңөұүһӘҒҚҢӨҰҮҺ");
+        // Vietnamese stacks its diacritics: the precomposed letters and the base letters they
+        // combine with, including `đ` and the tone marks `ạ ả ấ ầ ẩ ẫ ậ ắ ằ ẳ ẵ ặ ế ề ể ễ ệ`.
+        let mut text = String::from(
+            "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽãõçâêôàÃÕÇÂÊÔÀñÑüÜäÄöÖőűßæøåÆØÅ„“¿¡«»…ґҐєЄіІїЇәғқңөұүһӘҒҚҢӨҰҮҺđĐạảấầẩẫậắằẳẵặếềểễệọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ",
+        );
         for line in catalog.lines().filter(|l| !l.starts_with('#')) {
             if let Some(translation) = line.split('\t').nth(2) {
                 text.extend(translation.chars().filter(|c| !c.is_whitespace()));
@@ -363,4 +422,28 @@ fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
             assert!(missing.is_empty(), "{code}: {name} lacks {missing:?}");
         }
     }
+}
+
+/// On a machine with an installed Korean font, the installed definitions include it and Hangul has
+/// glyphs, so a Korean file name in a tab title is not boxes. macOS always ships Apple SD Gothic
+/// Neo and Windows Malgun Gothic, so there the test never skips.
+#[test]
+fn system_fallback_covers_hangul() {
+    const HANGUL: &str = "성가대 찬양곡 목록";
+    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_HANGUL_FALLBACK));
+    let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
+    let off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
+    if !defs.font_data.contains_key(theme::SYSTEM_HANGUL_FALLBACK) && (off || cfg!(all(unix, not(target_os = "macos")))) {
+        eprintln!("skipping system_fallback_covers_hangul: no installed Korean fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
+        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_HANGUL_FALLBACK)));
+        return;
+    }
+    for (family, stack) in &defs.families {
+        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_HANGUL_FALLBACK).count(), 1, "{family:?}: {stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, HANGUL), "{id:?} lacks {HANGUL}");
+    }
+    assert!(layout_widths(&mut fonts, HANGUL).iter().all(|w| w.is_finite() && *w > 0.0));
 }

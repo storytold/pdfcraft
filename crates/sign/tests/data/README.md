@@ -11,6 +11,7 @@ The password of every `.p12` is `test`.
 | `ec-legacy.p12` | `ec-p256.p12` re-exported with `-legacy` (3DES, SHA-1 MAC): the format macOS `security import` accepts |
 | `ec-p384.p12` | P-384 self-signed "Test Signer P384"; AES-128-CBC, SHA-1 MAC |
 | `chain.p12` | RSA 2048 "Ada Lovelace" issued by a P-256 test root, chain included |
+| `chain-legacy.p12` | `chain.p12` re-exported with `-legacy`, for the Keychain tests |
 | `rsa.crt.pem`, `ca.crt.pem` | the RSA certificate and the test root alone |
 
 Regenerate with:
@@ -29,6 +30,7 @@ openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=Ad
 printf "basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,nonRepudiation\n" > leaf.ext
 openssl x509 -req -in leaf.csr -CA ca.crt -CAkey ca.key -set_serial 77 -days 3650 -extfile leaf.ext -out leaf.crt
 openssl pkcs12 -export -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain.p12 -passout pass:test -name "Ada Lovelace"
+openssl pkcs12 -export -legacy -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain-legacy.p12 -passout pass:test -name "Ada Lovelace"
 ```
 
 `openssl-signed.pdf` is a hand-written one-page PDF with a `/Contents` placeholder, signed with

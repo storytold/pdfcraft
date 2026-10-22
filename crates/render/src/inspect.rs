@@ -30,6 +30,10 @@ const LOAD_STREAM_LIMIT: usize = 256 << 20;
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
+/// Decoded bytes read from an XFA form's configuration packet (or a whole-XDP `/XFA` stream) to
+/// find `dynamicRender`. Designer's packets are a few kilobytes; a whole XDP can hold the template.
+const MAX_XFA_CONFIG_BYTES: usize = 16 << 20;
+
 /// File specifications retained from a remote-Go-To action are deliberately small.
 const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
 const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
@@ -90,8 +94,8 @@ pub enum Xfa {
     /// The pages and fields are ordinary PDF; the XFA packets describe the same form (and hold
     /// its data, which Acrobat shows in preference to the fields).
     Static,
-    /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields): the
-    /// PDF pages are only a placeholder.
+    /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields and a
+    /// configuration that doesn't forbid dynamic rendering): the PDF pages are only a placeholder.
     Dynamic,
 }
 
@@ -217,6 +221,18 @@ impl PageInfo {
             _ => (u, v),
         };
         [a * self.width, b * self.height]
+    }
+
+    /// A point as displayed (points from the page's top-left, y down, before any view rotation)
+    /// → the `/XYZ` position `[left, top]` in user space that puts it at the window's top-left.
+    /// Only a coordinate that is given is pinned: a bookmark made at the top of the window
+    /// leaves the horizontal position alone. On a page turned a quarter, the displayed `y` decides
+    /// the user `left` and the displayed `x` the user `top` (the inverse of [`Self::dest_fraction`]).
+    /// A value that is not finite counts as not given.
+    pub fn xyz_for_view(&self, x: Option<f32>, y: Option<f32>) -> [Option<f32>; 2] {
+        let (x, y) = (x.filter(|v| v.is_finite()), y.filter(|v| v.is_finite()));
+        let [ux, uy] = self.view_to_user(x.unwrap_or(0.0), y.unwrap_or(0.0));
+        if self.rotation.is_multiple_of(180) { [x.map(|_| ux), y.map(|_| uy)] } else { [y.map(|_| ux), x.map(|_| uy)] }
     }
 
     /// A destination's user-space point (each coordinate possibly unspecified) → the same point
@@ -386,6 +402,9 @@ pub struct Annotation {
     /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
     /// signature or initials (the rules of `pdfcraft_annot::is_fill_sign`).
     pub fill_sign: bool,
+    /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
+    /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
+    pub points: Vec<[f32; 2]>,
 }
 
 impl Annotation {
@@ -425,6 +444,8 @@ pub struct Layer {
     pub id: (u32, u16),
     pub name: String,
     pub visible: bool,
+    /// Shown as the file opens: the default configuration (`/OCProperties /D`).
+    pub initial: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -643,6 +664,9 @@ impl<'a> Inspector<'a> {
             .ok()
             .and_then(|o| self.dict(o))
             .and_then(|m| m.get(b"Marked").ok())
+            // Any value may be written as an indirect reference, `/Marked 9 0 R` included, so the
+            // flag is resolved before it is read as a boolean (#3671).
+            .map(|o| self.resolve(o))
             .and_then(|o| o.as_bool().ok())
             .unwrap_or(false);
         match self.page_labels(catalog, &mut info.pages) {
@@ -683,8 +707,12 @@ impl<'a> Inspector<'a> {
         }
         info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
         let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
-        if catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).is_some_and(|form| form.get(b"XFA").is_ok()) {
-            info.xfa = Some(if needs_rendering || info.fields.is_empty() { Xfa::Dynamic } else { Xfa::Static });
+        if let Some(xfa) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).and_then(|form| form.get(b"XFA").ok()) {
+            // A form with no fields is taken to be laid out from its template, unless its
+            // configuration says it is a static form (#3180): Designer writes
+            // `<dynamicRender>forbidden</dynamicRender>` for one, whose pages are the form.
+            let static_form = self.xfa_dynamic_render(xfa).as_deref() == Some("forbidden");
+            info.xfa = Some(if needs_rendering || (info.fields.is_empty() && !static_form) { Xfa::Dynamic } else { Xfa::Static });
         }
         self.layers(catalog, &mut info.layers);
         info.layer_groups = self.layer_groups(catalog);
@@ -753,6 +781,28 @@ impl<'a> Inspector<'a> {
             }
             info.transitions.push(t);
         }
+    }
+
+    /// The value of `dynamicRender` in an XFA form's configuration packet (`config`, under
+    /// `acrobat/acrobat7`): `required` for a dynamic form, `forbidden` for a static one. `/XFA` is
+    /// either one stream holding the whole XDP or an array of packet names and streams (ISO
+    /// 32000-1 §12.7.8). Lenient: `None` when the packet is missing, unreadable or over
+    /// `MAX_XFA_CONFIG_BYTES` decoded, or has no such element.
+    fn xfa_dynamic_render(&self, xfa: &'a Object) -> Option<String> {
+        let stream = match self.resolve(xfa) {
+            Object::Array(items) => {
+                let at = items.iter().position(|o| matches!(self.resolve(o), Object::String(name, _) if name.as_slice() == b"config"))?;
+                self.resolve(items.get(at.checked_add(1)?)?)
+            }
+            whole => whole,
+        };
+        let stream = stream.as_stream().ok()?;
+        let bytes = if stream.dict.get(b"Filter").is_ok() {
+            stream.decompressed_content_with_limit(MAX_XFA_CONFIG_BYTES).ok()?
+        } else {
+            stream.content.get(..stream.content.len().min(MAX_XFA_CONFIG_BYTES))?.to_vec()
+        };
+        xfa_config_dynamic_render(&xfa_packet_text(&bytes))
     }
 
     fn resolve(&self, o: &'a Object) -> &'a Object {
@@ -1149,6 +1199,16 @@ impl<'a> Inspector<'a> {
                 };
                 let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
                 let fill_sign = self.is_fill_sign(d, &subtype);
+                // Keep in step with `pdfcraft_annot::summaries`.
+                let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
+                let points = match d.get(key).map(|o| self.resolve(o)) {
+                    Ok(Object::Array(v)) if matches!(subtype.as_str(), "Line" | "PolyLine" | "Polygon") => {
+                        let v: Vec<f32> = v.iter().map(|o| o.as_float().unwrap_or(0.0)).collect();
+                        let pts: Vec<[f32; 2]> = v.as_chunks::<2>().0.to_vec();
+                        if subtype == "Line" && pts.len() != 2 { Vec::new() } else { pts }
+                    }
+                    _ => Vec::new(),
+                };
                 info.annotations.push(Annotation {
                     page,
                     subtype,
@@ -1167,6 +1227,7 @@ impl<'a> Inspector<'a> {
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
                     fill_sign,
+                    points,
                 });
             }
         }
@@ -1428,7 +1489,7 @@ impl<'a> Inspector<'a> {
                 _ => !base_off,
             };
             let Some(id) = id else { continue };
-            out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible });
+            out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
         }
     }
 
@@ -1638,6 +1699,116 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
         }
     };
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+}
+
+/// An XFA packet's bytes as text: UTF-16 (little- or big-endian, told by a byte order mark or by
+/// how `<` is written) or UTF-8, as `pdfcraft_xfa::packets::decode` reads them. Lossy: only one
+/// element is looked for.
+fn xfa_packet_text(bytes: &[u8]) -> String {
+    let utf16 = |b: &[u8], from: fn([u8; 2]) -> u16| {
+        let units = b.as_chunks::<2>().0.iter().map(|c| from(*c));
+        char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect::<String>()
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [b'<', 0, ..] => utf16(bytes, u16::from_le_bytes),
+        [0, b'<', ..] => utf16(bytes, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// One markup tag found by [`next_tag`]: where it starts (`<`) and ends (after `>`), whether it
+/// closes (`</x>`) or closes itself (`<x/>`), and its name without a namespace prefix.
+struct Tag<'a> {
+    start: usize,
+    end: usize,
+    close: bool,
+    empty: bool,
+    local: &'a str,
+}
+
+/// The next element tag in `xml` at or after `from`, skipping comments, CDATA sections,
+/// processing instructions and declarations. A byte scan, not an XML parser: enough to find one
+/// known element in an XFA packet, whose tags Designer writes with a line break before each `>`.
+fn next_tag(xml: &str, mut from: usize) -> Option<Tag<'_>> {
+    loop {
+        let lt = from + xml.get(from..)?.find('<')?;
+        let rest = xml.get(lt..)?;
+        let skip_to = |end: &str| rest.find(end).map(|i| lt + i + end.len());
+        if rest.starts_with("<!--") {
+            from = skip_to("-->")?;
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            from = skip_to("]]>")?;
+            continue;
+        }
+        if rest.starts_with("<?") || rest.starts_with("<!") {
+            from = skip_to(">")?;
+            continue;
+        }
+        let gt = lt + rest.find('>')?;
+        let inner = xml.get(lt + 1..gt)?;
+        let (close, inner) = match inner.strip_prefix('/') {
+            Some(i) => (true, i),
+            None => (false, inner),
+        };
+        let empty = !close && inner.ends_with('/');
+        let name = inner.split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or_default();
+        let local = name.rsplit(':').next().unwrap_or(name);
+        return Some(Tag { start: lt, end: gt + 1, close, empty, local });
+    }
+}
+
+/// What `<name>…</name>` holds: the content of the first top-level element of `xml` called `name`
+/// (any prefix). Elements nested in other elements are not looked at. `None` when there is none,
+/// it closes itself, or it is never closed.
+fn xml_child_body<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+    let mut at = 0;
+    // The elements open around `at`, innermost last: a closing tag must name the innermost one,
+    // or the markup is malformed and has no value.
+    let mut open_tags: Vec<&str> = Vec::new();
+    // Where the wanted element's content starts, once its opening tag is seen at the top level.
+    let mut open = None;
+    loop {
+        let tag = next_tag(xml, at)?;
+        at = tag.end;
+        if tag.close {
+            if open_tags.pop()? != tag.local {
+                return None;
+            }
+            if open_tags.is_empty()
+                && let Some(start) = open
+            {
+                return xml.get(start..tag.start);
+            }
+        } else if !tag.empty {
+            if open_tags.is_empty() && tag.local == name {
+                open = Some(tag.end);
+            }
+            open_tags.push(tag.local);
+        } else if open_tags.is_empty() && tag.local == name {
+            return None;
+        }
+    }
+}
+
+/// The trimmed text at `path` (element names from the outside in, any prefix, each a child of the
+/// one before) in `xml`, if it is plain text.
+fn xml_path_text(xml: &str, path: &[&str]) -> Option<String> {
+    let body = path.iter().try_fold(xml, |within, name| xml_child_body(within, name))?;
+    let text = body.trim();
+    (!text.is_empty() && !text.contains('<')).then(|| text.to_owned())
+}
+
+/// `dynamicRender` at `config/acrobat/acrobat7` in the configuration packet: the `config` child
+/// of the `xdp` root in a whole-XDP stream, or the `config` packet itself. The same names inside
+/// the form data or the template are not the configuration.
+fn xfa_config_dynamic_render(packet: &str) -> Option<String> {
+    const IN_CONFIG: [&str; 4] = ["config", "acrobat", "acrobat7", "dynamicRender"];
+    xml_path_text(packet, &["xdp", IN_CONFIG[0], IN_CONFIG[1], IN_CONFIG[2], IN_CONFIG[3]]).or_else(|| xml_path_text(packet, &IN_CONFIG))
 }
 
 #[cfg(test)]
@@ -2358,6 +2529,24 @@ trailer << /Root 1 0 R /Info 4 0 R >>
         assert_eq!(info.layer_groups, [vec![(5, 0), (6, 0)], vec![(6, 0), (7, 0)]]);
     }
 
+    #[test]
+    fn initial_layer_visibility_is_the_default_configuration() {
+        // BaseState OFF: Red is listed ON; Green is listed both ON and OFF, and OFF wins; Blue
+        // isn't listed, so it takes the base state.
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D << /BaseState /OFF /ON [5 0 R 6 0 R] /OFF [6 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Red) >> endobj
+6 0 obj << /Type /OCG /Name (Green) >> endobj
+7 0 obj << /Type /OCG /Name (Blue) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+        let layers: Vec<_> = info.layers.iter().map(|l| (l.name.as_str(), l.initial)).collect();
+        assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
+    }
+
     const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
@@ -2437,6 +2626,71 @@ trailer << /Root 1 0 R >>
         // page dictionaries about 50,000 times.
         let reads = counting.reads.get();
         assert!(reads < 20 * (PAGES + PAGES * PER_PAGE), "{reads} object reads");
+    }
+
+    /// #2365: the issue's fixture is two PDFs concatenated, the second cut off before its
+    /// cross-reference data, and the first's only trailer is a cross-reference stream. The
+    /// lazy reader refuses a file that needed repair, and lopdf's rebuild found no `trailer`
+    /// keyword and failed, so Document Properties showed every field empty. The rebuild now
+    /// takes the cross-reference stream's dictionary as the trailer.
+    #[test]
+    fn rebuilt_file_keeps_the_info_of_its_cross_reference_stream() {
+        let header = "%PDF-1.5\n";
+        let obj1 = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
+        let obj2 = "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n";
+        let obj3 = "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>endobj\n";
+        let obj4 = "4 0 obj<</Title(Kept)/Creator(Me)>>endobj\n";
+        let o1 = header.len();
+        let o2 = o1 + obj1.len();
+        let o3 = o2 + obj2.len();
+        let o4 = o3 + obj3.len();
+        let o5 = o4 + obj4.len();
+        let rows: Vec<u8> =
+            [[0u8, 0, 0, 255], [1, 0, o1 as u8, 0], [1, 0, o2 as u8, 0], [1, 0, o3 as u8, 0], [1, 0, o4 as u8, 0], [1, (o5 >> 8) as u8, o5 as u8, 0]]
+                .concat();
+        let mut bytes = format!("{header}{obj1}{obj2}{obj3}{obj4}").into_bytes();
+        bytes.extend_from_slice(format!("5 0 obj<</Type/XRef/Root 1 0 R/Info 4 0 R/Size 6/W[1 2 1]/Length {}>>stream\n", rows.len()).as_bytes());
+        bytes.extend_from_slice(&rows);
+        // A wrong startxref, and a second file after %%EOF: every reader rebuilds the table.
+        bytes.extend_from_slice(b"\nendstream\nendobj\nstartxref\n999999\n%%EOF\n%PDF-1.3\n");
+        bytes.extend_from_slice(&[b'x'; 1024]);
+
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.title.as_deref(), Some("Kept"));
+        assert_eq!(info.creator.as_deref(), Some("Me"));
+    }
+
+    /// #2365 review: the rebuild prefers a trailer whose /Root is the catalog. A later
+    /// cross-reference stream whose /Root points at the Info dictionary used to replace the
+    /// earlier `trailer`, so Document Properties lost the catalog it should have read.
+    #[test]
+    fn rebuilt_file_prefers_a_trailer_whose_root_is_the_catalog() {
+        let mut bytes = b"%PDF-1.5\n".to_vec();
+        for body in [
+            "<</Type/Catalog/Pages 2 0 R>>",
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>",
+            "<</Title(Kept)/Creator(Me)>>",
+        ] {
+            let n = bytes.iter().filter(|b| **b == b'\n').count();
+            bytes.extend_from_slice(format!("{n} 0 obj{body}endobj\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"trailer\n<</Size 5/Root 1 0 R/Info 4 0 R>>\n");
+        bytes.extend_from_slice(b"5 0 obj<</Type/XRef/Root 4 0 R/Size 6/W[1 2 1]/Length 4>>stream\n\x01\x00\x09\x00\nendstream\nendobj\n");
+        // A wrong startxref, and a second file after %%EOF: every reader rebuilds the table.
+        bytes.extend_from_slice(b"startxref\n999999\n%%EOF\n%PDF-1.3\n");
+        bytes.extend_from_slice(&[b'x'; 1024]);
+
+        let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.title.as_deref(), Some("Kept"));
+        // A later stream whose /Root names the catalog's number with another generation does
+        // not count either: loading `1 1 R` finds no such object.
+        let at = bytes.windows(10).position(|w| w == b"/Root 4 0 ").unwrap();
+        bytes[at..at + 10].copy_from_slice(b"/Root 1 1 ");
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!((info.pages.len(), info.title.as_deref()), (1, Some("Kept")));
     }
 
     #[test]
@@ -2663,6 +2917,101 @@ trailer << /Root 1 0 R >>
         assert_eq!(titles, ["第一章", "目录", "A\u{FFFD}B", "概述", "Café", "A"]);
     }
 
+    #[test]
+    fn xfa_dynamic_render_is_read_from_config_acrobat7_only() {
+        let text = xfa_config_dynamic_render;
+        let config =
+            |inner: &str| format!("<config xmlns=\"http://www.xfa.org/schema/xci/3.0/\"><acrobat><acrobat7>{inner}</acrobat7></acrobat></config>");
+        // Designer's style: a line break before each `>`.
+        assert_eq!(
+            text("<config\n><acrobat\n><acrobat7\n><dynamicRender\n>forbidden</dynamicRender\n></acrobat7\n></acrobat\n></config\n>").as_deref(),
+            Some("forbidden")
+        );
+        assert_eq!(text(&config("<xci:dynamicRender> required </xci:dynamicRender>")).as_deref(), Some("required"));
+        // Commented out, in CDATA, or a longer name: not the element.
+        assert_eq!(text(&config("<!-- a > b <dynamicRender>forbidden</dynamicRender> -->")), None);
+        assert_eq!(text(&config("<![CDATA[ a > b <dynamicRender>forbidden</dynamicRender> ]]>")), None);
+        assert_eq!(text(&config("<dynamicRenderX>forbidden</dynamicRenderX>")), None);
+        // Self-closing, empty, or holding markup: no value.
+        assert_eq!(text(&config("<dynamicRender/>")), None);
+        assert_eq!(text(&config("<dynamicRender></dynamicRender>")), None);
+        assert_eq!(text(&config("<dynamicRender><b>forbidden</b></dynamicRender>")), None);
+        // Closing tags that don't match what they close: malformed, no value (review on #3192).
+        assert_eq!(text(&config("<dynamicRender>forbidden</other>")), None);
+        assert_eq!(text("<config><acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat></acrobat7></config>"), None);
+        // The same name anywhere but config/acrobat/acrobat7 (form data, another config branch).
+        let xdp = "<xdp:xdp><xfa:datasets><xfa:data><dynamicRender>forbidden</dynamicRender></xfa:data></xfa:datasets><config><present><dynamicRender>forbidden</dynamicRender></present></config></xdp:xdp>";
+        assert_eq!(text(xdp), None);
+        // A whole XDP with the config after the template.
+        let xdp = format!("<xdp:xdp><template><subform/></template>{}</xdp:xdp>", config("<dynamicRender>forbidden</dynamicRender>"));
+        assert_eq!(text(&xdp).as_deref(), Some("forbidden"));
+        // A whole config path inside the form data, before the real config packet, is data: the
+        // real packet's value counts (review on #3192).
+        let xdp = format!(
+            "<?xml version=\"1.0\"?><xdp:xdp><xfa:datasets><xfa:data>{}</xfa:data></xfa:datasets>{}</xdp:xdp>",
+            config("<dynamicRender>forbidden</dynamicRender>"),
+            config("<dynamicRender>required</dynamicRender>")
+        );
+        assert_eq!(text(&xdp).as_deref(), Some("required"));
+        // Only in the data, or nested in the template: no configuration at all.
+        let xdp =
+            format!("<xdp:xdp><xfa:datasets><xfa:data>{}</xfa:data></xfa:datasets></xdp:xdp>", config("<dynamicRender>forbidden</dynamicRender>"));
+        assert_eq!(text(&xdp), None);
+        let xdp = format!("<xdp:xdp><template>{}</template></xdp:xdp>", config("<dynamicRender>forbidden</dynamicRender>"));
+        assert_eq!(text(&xdp), None);
+        // acrobat7 must be a child of acrobat, not deeper.
+        assert_eq!(text("<config><acrobat><x><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></x></acrobat></config>"), None);
+        // Cut short anywhere: no panic, nothing read.
+        let whole = config("<!-- x --><dynamicRender>forbidden</dynamicRender>");
+        for end in 0..whole.len() {
+            assert_eq!(text(&whole[..end]), None, "cut at {end}");
+        }
+        assert_eq!(text(&whole).as_deref(), Some("forbidden"));
+    }
+
+    #[test]
+    fn xfa_config_packets_are_read_in_utf16_too() {
+        let xml = "<config><acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></acrobat></config>";
+        let le: Vec<u8> = xml.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = xml.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for bytes in [
+            le.clone(),
+            be.clone(),
+            [&[0xFF, 0xFE][..], &le].concat(),
+            [&[0xFE, 0xFF][..], &be].concat(),
+            [&[0xEF, 0xBB, 0xBF][..], xml.as_bytes()].concat(),
+        ] {
+            assert_eq!(xfa_packet_text(&bytes), xml);
+        }
+        // An odd byte or a broken surrogate doesn't stop the scan.
+        assert!(xfa_packet_text(&[0xFF, 0xFE, b'<', 0, 0x00, 0xD8, b'x']).starts_with('<'));
+    }
+
+    /// #3180: an XFA form with no fields was always taken to be dynamic, so its pages were
+    /// replaced by a layout on open, even when its configuration says it is a static form.
+    #[test]
+    fn an_xfa_form_without_fields_is_static_when_its_config_forbids_dynamic_rendering() {
+        let xfa_of = |config: &str, catalog_extra: &str| {
+            let bodies = [
+                format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} /AcroForm << /Fields [] /XFA [(config) 4 0 R (template) 5 0 R] >> >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+                "<< /Type /Page /Parent 2 0 R >>".to_string(),
+                format!("<< /Length {} >>\nstream\n{config}\nendstream", config.len()),
+                "<< /Length 11 >>\nstream\n<template/>\nendstream".to_string(),
+            ];
+            inspect(Arc::new(pdf_of(&bodies)), None).expect("opens").xfa
+        };
+        let config = |value: &str| {
+            format!(
+                r#"<config xmlns="http://www.xfa.org/schema/xci/3.0/"><acrobat><acrobat7><dynamicRender>{value}</dynamicRender></acrobat7></acrobat></config>"#
+            )
+        };
+        assert_eq!(xfa_of(&config("forbidden"), ""), Some(Xfa::Static));
+        assert_eq!(xfa_of(&config("required"), ""), Some(Xfa::Dynamic));
+        assert_eq!(xfa_of("<config/>", ""), Some(Xfa::Dynamic), "no field and no word from the config: dynamic, as before");
+        assert_eq!(xfa_of(&config("forbidden"), "/NeedsRendering true"), Some(Xfa::Dynamic), "/NeedsRendering still wins");
+    }
+
     /// A file whose objects are `bodies` in order (object 1 first), with a cross-reference table.
     fn pdf_of(bodies: &[String]) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n".to_vec();
@@ -2776,6 +3125,41 @@ trailer << /Root 1 0 R >>
         // A degenerate crop box never divides by zero.
         let flat = PageInfo { crop: [0.0, 0.0, 0.0, 0.0], rotation: 0, ..p };
         assert!(flat.dest_fraction(Some(5.0), Some(-5.0), 0).iter().all(|f| f.is_some_and(|f| (0.0..=1.0).contains(&f))));
+    }
+
+    #[test]
+    fn a_displayed_point_becomes_the_xyz_position_that_goes_back_to_it() {
+        // Every rotation, on a crop box away from the origin: pinning a displayed point and
+        // reading the destination back lands on the same fraction of the displayed page.
+        for rotation in [0u16, 90, 180, 270] {
+            let (width, height) = if rotation.is_multiple_of(180) { (300.0, 400.0) } else { (400.0, 300.0) };
+            let p = PageInfo { width, height, label: "1".into(), crop: [100.0, 50.0, 400.0, 450.0], rotation };
+            let (x, y) = (0.25 * width, 0.75 * height);
+            let near = |got: [Option<f32>; 2], want: [Option<f32>; 2]| {
+                for (g, w) in got.iter().zip(want) {
+                    match (g, w) {
+                        (Some(g), Some(w)) => assert!((g - w).abs() < 1e-4, "{rotation}: {got:?} vs {want:?}"),
+                        (None, None) => {}
+                        _ => panic!("{rotation}: {got:?} vs {want:?}"),
+                    }
+                }
+            };
+            let [l, t] = p.xyz_for_view(Some(x), Some(y));
+            assert!(l.is_some() && t.is_some(), "{rotation}: a point pins both");
+            near(p.dest_fraction(l, t, 0), [Some(0.25), Some(0.75)]);
+            // Only a height: the horizontal position is left alone, whichever user axis that is.
+            let [l, t] = p.xyz_for_view(None, Some(y));
+            assert_eq!((l.is_some(), t.is_some()), if rotation.is_multiple_of(180) { (false, true) } else { (true, false) }, "{rotation}");
+            near(p.dest_fraction(l, t, 0), [None, Some(0.75)]);
+            let [l, t] = p.xyz_for_view(Some(x), None);
+            near(p.dest_fraction(l, t, 0), [Some(0.25), None]);
+            assert_eq!(p.xyz_for_view(None, None), [None, None]);
+            assert_eq!(p.xyz_for_view(Some(f32::NAN), Some(f32::INFINITY)), [None, None], "not finite is not given");
+        }
+        // The top of an upright page is the crop box's top edge.
+        let p = PageInfo { width: 300.0, height: 400.0, label: "1".into(), crop: [100.0, 50.0, 400.0, 450.0], rotation: 0 };
+        assert_eq!(p.xyz_for_view(None, Some(0.0)), [None, Some(450.0)]);
+        assert_eq!(p.xyz_for_view(None, Some(100.0)), [None, Some(350.0)]);
     }
 
     #[test]

@@ -7,7 +7,8 @@
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
 //!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
-//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>
+//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
+//!  --page-gaps on|off  --default-page-gaps on|off
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
@@ -557,6 +558,11 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   `WGPU_BACKEND` asks for them. Creating a Vulkan instance loads every installed Vulkan driver
 ///   into the process, and a faulty one (an Intel driver in issue #37) crashed PdfCraft before
 ///   its window appeared. D3D12 is the native, best-supported backend there.
+/// - On Windows, Direct3D 12 presents through a DirectComposition visual rather than a swap chain
+///   on the window itself, unless `WGPU_DX12_PRESENTATION_SYSTEM` says otherwise. While the window
+///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
+///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
+///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
@@ -604,6 +610,15 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
         setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12 | eframe::wgpu::Backends::GL;
     }
+    if cfg!(target_os = "windows") {
+        setup.instance_descriptor.backend_options.dx12.presentation_system = dx12_presentation(eframe::wgpu::Dx12SwapchainKind::from_env());
+    }
+}
+
+/// How Direct3D 12 presents on Windows: through a DirectComposition visual (issue #2738), unless
+/// `WGPU_DX12_PRESENTATION_SYSTEM` asked for something else (`asked`).
+fn dx12_presentation(asked: Option<eframe::wgpu::Dx12SwapchainKind>) -> eframe::wgpu::Dx12SwapchainKind {
+    asked.unwrap_or(eframe::wgpu::Dx12SwapchainKind::DxgiFromVisual)
 }
 
 /// Surface textures must fit the device's enabled limits, not just the physical GPU's limits.
@@ -878,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_backends_avoid_vulkan_on_windows_and_prefer_low_power() {
+    fn gpu_setup_avoids_vulkan_and_stretched_resizes_on_windows_and_prefers_low_power() {
         let mut native = eframe::NativeOptions::default();
         super::configure_gpu(&mut native);
         let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else {
@@ -895,6 +910,18 @@ mod tests {
             let backends = setup.instance_descriptor.backends;
             assert!(backends.contains(eframe::wgpu::Backends::DX12), "{backends:?}");
             assert!(!backends.contains(eframe::wgpu::Backends::VULKAN), "issue #37: {backends:?}");
+        }
+        use eframe::wgpu::Dx12SwapchainKind::{DxgiFromHwnd, DxgiFromVisual};
+        assert_eq!(super::dx12_presentation(None), DxgiFromVisual);
+        assert_eq!(super::dx12_presentation(Some(DxgiFromHwnd)), DxgiFromHwnd, "WGPU_DX12_PRESENTATION_SYSTEM still decides");
+        assert_eq!(super::dx12_presentation(Some(DxgiFromVisual)), DxgiFromVisual);
+        let presentation = setup.instance_descriptor.backend_options.dx12.presentation_system;
+        if cfg!(target_os = "windows") {
+            // A composition visual unless WGPU_DX12_PRESENTATION_SYSTEM asks otherwise.
+            let asked = eframe::wgpu::Dx12SwapchainKind::from_env();
+            assert_eq!(presentation, asked.unwrap_or(DxgiFromVisual), "issue #2738: resizing stretches a window swap chain");
+        } else {
+            assert_eq!(presentation, eframe::wgpu::Dx12SwapchainKind::default().with_env(), "only Windows changes it");
         }
     }
 

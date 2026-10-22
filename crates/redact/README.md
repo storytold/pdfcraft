@@ -32,7 +32,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 
 A verification pass re-reads each redacted page and fails the operation if any glyph or inline
 image is still under an area. Content that can't be decoded makes the operation fail rather than
-leave it unredacted.
+leave it unredacted. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
+`/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
+skipping that mark. The count covers the marks on the pages being applied.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text
@@ -42,7 +44,11 @@ the document. Reduce the marked area, disable repeated text, or apply fewer page
 This limits appearance generation; it is not a limit on the input PDF or the whole process's memory.
 
 Structure cleanup resolves named MCIDs and indirect content references. Form content
-references are updated to the cleaned copy; unchanged sibling descriptions remain.
+references are updated to the cleaned copy; unchanged sibling descriptions remain. The structure
+tree's object references (`/OBJR`) to the annotations and form fields `apply` removes are dropped,
+as Sanitize drops them, so a full rewrite of a tagged PDF can't keep a removed comment or field value.
+A tree where that can't be done (an element written in place, or one too large to walk) makes
+`apply` fail with `RedactError::Tags` rather than leave the annotation reachable.
 
 Replacement descriptions are removed only from marked-content spans changed by cleanup.
 Unchanged spans retain their descriptions; unused property entries are retired during redaction

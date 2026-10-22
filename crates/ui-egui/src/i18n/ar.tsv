@@ -138,6 +138,8 @@
 	Next view	العرض التالي
 	Page display	عرض الصفحات
 	Continuous scrolling	تمرير متواصل
+	Show gaps between pages	إظهار الفراغات بين الصفحات
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	أخفِ الفراغات لوصل حواف الصفحات. تبقى الهوامش داخل ملف PDF دون تغيير.
 	Two-page view	عرض صفحتين
 	Single page	صفحة واحدة
 	Show cover page in two-page view	إظهار صفحة الغلاف في عرض الصفحتين
@@ -841,6 +843,7 @@
 	Insert Page Number	إدراج رقم الصفحة
 	Insert Date	إدراج التاريخ
 	Start page number	رقم صفحة البداية
+	Shrink the page content to make room for the header and footer	تصغير محتوى الصفحة لإفساح المجال للرأس والتذييل
 	Source	المصدر
 	Fit to page	ملاءمة الصفحة
 	Rotation	التدوير
@@ -1219,6 +1222,7 @@
 	Off	متوقف
 	Flip on long edge	قلب على الحافة الطويلة
 	Flip on short edge	قلب على الحافة القصيرة
+	Printer default	افتراضي الطابعة
 	Paper:	الورق:
 	Pages to Print	الصفحات المراد طباعتها
 	More options:	خيارات أخرى:
@@ -1362,6 +1366,8 @@
 	This document has no layers.	هذا المستند لا يحتوي على طبقات.
 	This document has no attachments.	هذا المستند لا يحتوي على مرفقات.
 	Hide layer	إخفاء الطبقة
+	Layer options	خيارات الطبقات
+	Reset to Initial Visibility	إعادة تعيين إلى الرؤية الأولية
 	Show layer	إظهار الطبقة
 	Set layer visibility	ضبط ظهور الطبقة
 	on page {label}	في الصفحة {label}
@@ -1650,6 +1656,7 @@
 	Looking for printers…	جارٍ البحث عن الطابعات…
 	Sending sheet {s} of {n} to {printer}…	جارٍ إرسال الورقة {s} من {n} إلى {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	لم يُعثر على أي طابعة. تحقّق من أن الطابعة مثبّتة وأن خدمة التخزين المؤقت للطباعة تعمل، ثم افتح «طباعة» مرة أخرى.
+	Reading the printer's settings…	جارٍ قراءة إعدادات الطابعة…
 	Sending to {printer}…	جارٍ الإرسال إلى {printer}…
 	Choose a folder for the searchable files	اختر مجلدًا للملفات القابلة للبحث
 	Files are combined from top to bottom. Leave Pages empty to take every page.	تُدمج الملفات من الأعلى إلى الأسفل. اترك «الصفحات» فارغًا لأخذ كل الصفحات.
@@ -1794,6 +1801,7 @@
 	This document has no restrictions to lift	لا توجد في هذا المستند قيود لرفعها
 	The document's security settings don't allow this change	إعدادات أمان المستند لا تسمح بهذا التغيير
 	The document's security settings don't allow copying text and images	إعدادات أمان المستند لا تسمح بنسخ النصوص والصور
+	The document's security settings don't allow printing	إعدادات أمان المستند لا تسمح بالطباعة
 	Open a document first	افتح مستندًا أولًا
 	Security will be removed when you save	سيُزال الأمان عند الحفظ
 	Click text or an image to edit it	انقر على نص أو صورة لتحريرها
@@ -2332,6 +2340,7 @@ key	Space	مسافة
 	Printer paper and scaling may differ. Check driver settings.	قد يختلف ورق الطابعة ومقياس الطباعة. تحقق من إعدادات برنامج التشغيل.
 	Drawing scale changes. Use Actual size for full-scale plans.	يتغير مقياس الرسم. استخدم الحجم الفعلي لطباعة المخططات بمقياسها الأصلي.
 	Reload documents when their files change on disk	إعادة تحميل المستندات عند تغيّر ملفاتها على القرص
+	Always use my default zoom and page layout	استخدام التكبير وتخطيط الصفحة الافتراضيين دائمًا
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	تغيّر هذا الملف على القرص. «إعادة التحميل» تعرض النسخة الجديدة وتُسقط تغييراتك غير المحفوظة؛ و«حفظ» يستبدلها بهذه النسخة.
 	Reload	إعادة تحميل
 	Couldn't reload {name}: {e}	تعذّرت إعادة تحميل {name}: {e}
@@ -2757,3 +2766,28 @@ certificate	Version	الإصدار
 	Paragraph spacing	تباعد الفقرات
 	Less	أقل
 	Other options	خيارات أخرى
+	Thumbnail size	حجم الصور المصغرة
+	Smaller thumbnails	تصغير الصور المصغرة
+	Larger thumbnails	تكبير الصور المصغرة
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	إعادة تشكيل التعليق
+
+# Prepare a form ▸ Text field table
+	Add text field table	إضافة جدول حقول نصية
+	Text field table	جدول حقول نصية
+	Text Field Table	جدول حقول نصية
+	Columns	الأعمدة
+	Row spacing	المسافة بين الصفوف
+	Column spacing	المسافة بين الأعمدة
+	First row number	رقم الصف الأول
+	Column widths	عروض الأعمدة
+	Distribute evenly	توزيع بالتساوي
+	Field names	أسماء الحقول
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N أو {row} هو رقم الصف، و{col} رقم العمود، و{seq} رقم الخلية. إذا لم يوجد أي منها، يُضاف رقم الصف في النهاية.
+	Column {n}	العمود {n}
+	Add fields	إضافة الحقول
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	الصفوف قصيرة جدًا: اجعل المنطقة أطول، أو استخدم صفوفًا أقل أو مسافة أقل بين الصفوف
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	أحد الأعمدة ضيق جدًا: اجعل المنطقة أعرض، أو امنح العمود عرضًا أكبر، أو استخدم أعمدة أقل أو مسافة أقل بين الأعمدة
+	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
+	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
+	a field named {name} already exists	يوجد حقل باسم {name} بالفعل

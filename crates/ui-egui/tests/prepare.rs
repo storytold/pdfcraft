@@ -2,9 +2,11 @@
 //! Field Properties and deleting.
 
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use egui_kittest::kittest::{Queryable, by};
+use pdfcraft_engine::field_table::TableColumn;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
@@ -114,6 +116,46 @@ fn placing_moving_editing_and_deleting_a_field() {
     h.run_steps(4);
     let r = rect_of(&h, "Check Box1");
     assert_eq!((r[2] - r[0], r[3] - r[1]), (14.0, 14.0));
+}
+
+/// The arrow keys nudge the selected field a point, Shift and an arrow ten points (#2608), as they
+/// do for a selected object or image and as dragging it does. One press is one undo step, the page
+/// does not turn with them, and the field stays selected for the next press.
+#[test]
+fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
+    let mut h = harness();
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    // A click places a default-size text field and selects it.
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+    let before = rect_of(&h, &name);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    let right = rect_of(&h, &name);
+    assert!(near(right[0], before[0] + 1.0) && near(right[2], before[2] + 1.0), "{before:?} → {right:?}");
+    assert!(near(right[2] - right[0], before[2] - before[0]), "moved, not resized");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change field properties"));
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowUp);
+    h.run_steps(2);
+    let up = rect_of(&h, &name);
+    assert!(near(up[1], right[1] + 10.0) && near(up[3], right[3] + 10.0), "{right:?} → {up:?}");
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(2);
+    let back = rect_of(&h, &name);
+    assert!(near(back[0], up[0] - 1.0) && near(back[1], up[1] - 1.0), "{up:?} → {back:?}");
+    assert!(h.state().views[0].prepare.selected.is_some(), "it stays selected for the next nudge");
+    assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
 }
 
 #[test]
@@ -230,6 +272,20 @@ fn appearance_tab_restyles_the_field() {
     let s = h.state();
     let l = s.session.get(s.views[0].id).unwrap().field_look("city").unwrap();
     assert_eq!((l.style, l.font, l.fill), (BorderStyle::Dashed, FieldFont::Courier, Some([1.0, 1.0, 0.8])));
+}
+
+#[test]
+fn appearance_tab_keeps_auto_font_size() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().unwrap().font_size = 0.0;
+    h.run_steps(3);
+    assert_eq!(h.state().field_props.as_ref().unwrap().font_size, 0.0, "Auto (0) must survive a frame");
 }
 
 #[test]
@@ -654,6 +710,233 @@ fn actions_tab_adds_and_removes_actions() {
             (FieldTrigger::OnBlur, FieldAction::Uri("https://example.org".into()))
         ]
     );
+}
+
+/// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
+/// 120 points from (40, 240) as displayed. The table's window opens for it.
+fn draw_table(h: &mut Harness<'static, PdfCraftApp>) {
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    let (a, b) = (at(h, 40.0, 240.0), at(h, 240.0, 360.0));
+    drag(h, a, b);
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable));
+}
+
+fn columns(patterns: &[(&str, f64)]) -> Vec<TableColumn> {
+    patterns.iter().map(|(p, w)| TableColumn { pattern: (*p).to_owned(), width: *w }).collect()
+}
+
+#[test]
+fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
+    let mut h = harness();
+    let before = names(&h);
+    draw_table(&mut h);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select once the area is drawn");
+    {
+        let s = h.state_mut();
+        let id = s.views[0].id;
+        let d = s.field_table_draft.as_mut().expect("the table's window is open");
+        assert_eq!((d.doc, d.page), (id, 0));
+        let r = d.table.rect;
+        assert!([40.0, 240.0, 240.0, 360.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "drawn as displayed: {r:?}");
+        d.table.rows = 2;
+        d.table.columns = columns(&[("desc_N", 3.0), ("price_N", 1.0)]);
+    }
+    h.run_steps(2);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "added, the window closes");
+    let added: Vec<_> = names(&h).into_iter().filter(|n| !before.contains(n)).collect();
+    assert_eq!(added, ["desc_1", "price_1", "desc_2", "price_2"]);
+    // 150 and 50 points wide, 60 high, the first row at the top: user space has y up from 400.
+    let r = rect_of(&h, "desc_1");
+    assert!([40.0, 100.0, 190.0, 160.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    let r = rect_of(&h, "price_2");
+    assert!([190.0, 40.0, 240.0, 100.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add text field table"));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), before, "one undo takes the whole table back");
+}
+
+#[test]
+fn a_table_whose_names_are_taken_stays_open_saying_so() {
+    let mut h = harness();
+    draw_table(&mut h);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert!(names(&h).contains(&"Table1_4".to_owned()), "{:?}", names(&h));
+    // The next table takes the next free names on its own.
+    draw_table(&mut h);
+    assert_eq!(h.state().field_table_draft.as_ref().unwrap().table.columns[0].pattern, "Table2_N");
+    // Named like the first, it can't be added: the window says why and keeps what was set up.
+    h.state_mut().field_table_draft.as_mut().unwrap().table.columns[0].pattern = "Table1_N".into();
+    h.run_steps(2);
+    let count = names(&h).len();
+    h.get_by_label("a field named \"Table1_1\" already exists");
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), count, "nothing added");
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    // Escape closes it, adding nothing.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some(), names(&h).len()), (None, false, count));
+}
+
+/// Enter commits a number being typed. It used to add the table there and then, before the rest
+/// of it was set up.
+#[test]
+fn enter_in_a_number_field_does_not_add_the_table() {
+    let mut h = harness();
+    let before = names(&h).len();
+    draw_table(&mut h);
+    let rows = h.query_all(by().role(Role::SpinButton)).next().map(|n| n.rect()).expect("the Rows field");
+    h.hover_at(rows.center());
+    h.drag_at(rows.center());
+    h.run_steps(1);
+    h.drop_at(rows.center());
+    h.run_steps(2);
+    h.key_press(egui::Key::Backspace);
+    h.event(egui::Event::Text("6".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), before, "nothing added");
+    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.rows), Some(6), "the number is in, the window open");
+}
+
+/// With 26 or more columns each pair of columns has less than twice the least share a divider
+/// keeps, and dragging one panicked in `f64::clamp`.
+#[test]
+fn dragging_a_column_divider_between_many_columns() {
+    let mut h = harness();
+    draw_table(&mut h);
+    h.state_mut().field_table_draft.as_mut().unwrap().table.columns = columns(&[("c{c}_N", 1.0); 30]);
+    h.run_steps(2);
+    let (above, below) = (h.get_by_label("Distribute evenly").rect(), h.get_by_label("Field names").rect());
+    let p = egui::pos2(above.center().x - 120.0, (above.bottom() + below.top()) / 2.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    for dx in [-10.0, -20.0] {
+        h.hover_at(p + egui::vec2(dx, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(p + egui::vec2(-20.0, 0.0));
+    h.run_steps(2);
+    let widths: Vec<f64> = h.state().field_table_draft.as_ref().unwrap().table.columns.iter().map(|c| c.width).collect();
+    assert!(widths.iter().any(|w| (w - 1.0).abs() > 1e-9), "a divider moved: {widths:?}");
+    assert!((widths.iter().sum::<f64>() - 30.0).abs() < 1e-9 && widths.iter().all(|w| *w > 0.0), "{widths:?}");
+}
+
+#[test]
+fn the_table_window_closes_when_its_document_is_left() {
+    let mut h = harness();
+    let blank = pdfcraft_engine::Session::new().create_blank(300.0, 400.0, 1).unwrap().to_vec();
+    h.state_mut().open_bytes("other.pdf", None, blank).unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+    let before = names(&h).len();
+    draw_table(&mut h);
+    // The other document's tab is still in reach of the pointer: choosing it closes the window.
+    let tab = h.get_all_by_label("other.pdf").next().map(|n| n.rect()).expect("its tab");
+    h.hover_at(tab.center());
+    h.run_steps(1);
+    h.drag_at(tab.center());
+    h.run_steps(1);
+    h.drop_at(tab.center());
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(1));
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert_eq!(names(&h).len(), before, "nothing added to either document");
+    // So does leaving Prepare a form.
+    draw_table(&mut h);
+    h.state_mut().left_open = false;
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+}
+
+/// With its panel closed after the tool was picked, the form is still prepared and a table can be
+/// drawn: its window opens Prepare a form again, which it belongs to. Drawing sends the tool back
+/// to Select, so the window used to close itself at once, nothing being prepared any more.
+#[test]
+fn a_table_drawn_with_the_panel_closed_opens_it_again() {
+    let mut h = harness();
+    let before = names(&h).len();
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    h.state_mut().left_open = false;
+    h.run_steps(2);
+    assert!(h.state().is_preparing(), "the picked tool keeps the form prepared");
+    let (a, b) = (at(&h, 40.0, 240.0), at(&h, 240.0, 360.0));
+    drag(&mut h, a, b);
+    h.run_steps(3);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (Some(Dialog::FieldTable), true), "the window stays open");
+    assert!(h.state().left_open && h.state().is_preparing(), "Prepare a form is open again");
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert!(names(&h).len() > before, "the table is added");
+}
+
+/// The window belongs to the page as it was when it opened: rotated (or moved, deleted, undone)
+/// under it, the page would put the area the table was set up for somewhere else.
+#[test]
+fn the_table_window_closes_when_the_document_changes_under_it() {
+    let mut h = harness();
+    let before = names(&h);
+    draw_table(&mut h);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "closed by the rotation");
+    assert_eq!(names(&h), before, "nothing added");
+}
+
+/// Escape in a name field leaves the field, as it does in any field; it closed the window too,
+/// and the column setup with it.
+#[test]
+fn escape_in_a_name_field_leaves_the_field_not_the_table() {
+    let mut h = harness();
+    draw_table(&mut h);
+    // The app's own text boxes (zoom, page number) are inputs too: take the one in the window.
+    let window = h.get_by_label("Text Field Table").rect();
+    let field =
+        h.query_all(by().role(Role::TextInput)).map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the first column's name field");
+    h.hover_at(field.center());
+    h.drag_at(field.center());
+    h.run_steps(1);
+    h.drop_at(field.center());
+    h.run_steps(2);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.columns[0].pattern.as_str()), Some("Table1_Nx"), "what was typed stays");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "a second Escape closes it");
+}
+
+/// A click puts the default 180 × 110 table's corner at the pointer; near the page's edges it is
+/// moved in so that all of it is on the page (here 5 pt from the right, 100 pt from the bottom).
+#[test]
+fn a_table_clicked_near_the_page_edge_stays_on_the_page() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    let p = at(&h, 295.0, 300.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let r = h.state().field_table_draft.as_ref().expect("the table's window").table.rect;
+    assert!([120.0, 290.0, 300.0, 400.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "on the 300 × 400 page: {r:?}");
 }
 
 /// Prepare a form ▸ Calculation order opens as a page of its own, with the form still being

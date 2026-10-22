@@ -900,7 +900,10 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                         tm = tlm;
                     }
                     let items: Vec<Object> = match o {
-                        b"TJ" => op.operands.first().and_then(Object::as_array).cloned().unwrap_or_default(),
+                        // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
+                        // takes the one immediately before it, as the renderer and every other
+                        // reader here do (#3569), so a redaction search matches what is drawn.
+                        b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
                         _ => op.operands.last().cloned().into_iter().collect(),
                     };
                     // Vertical-writing text is laid out horizontally by `show`, so its glyphs are

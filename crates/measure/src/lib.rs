@@ -110,6 +110,19 @@ impl Scale {
         }
         Self::new(real_distance / length, unit, precision)
     }
+    /// A scale as a plan writes it: `page` `page_unit` on the page is `real` `unit` in the real
+    /// world ("1 mm = 50 mm" at 1:50). `a` and `b` are the user-space ends of one display point,
+    /// as for [`Scale::calibrate`]. The page side is converted to points, so the stored factors
+    /// stay per user-space unit; the ratio string keeps the units as entered.
+    pub fn ratio(a: Point, b: Point, page: f64, page_unit: PageUnit, real: f64, unit: &str, precision: u8) -> Result<Self> {
+        if !page.is_finite() || page <= 0.0 || !real.is_finite() || real <= 0.0 {
+            return Err(invalid("both sides of a scale ratio must be finite and positive"));
+        }
+        let mut out = Self::calibrate(a, b, real / (page * page_unit.points()), unit, precision)?;
+        out.ratio = format!("{} {} = {} {unit}", ratio_number(page), page_unit.label(), ratio_number(real));
+        out.validate()?;
+        Ok(out)
+    }
     pub fn validate(&self) -> Result<()> {
         for f in [self.x, self.y, self.distance_factor, self.area_factor] {
             if !f.is_finite() || !(1e-12..=1e12).contains(&f) {
@@ -201,6 +214,44 @@ impl Scale {
         out.validate()?;
         Ok(out)
     }
+}
+/// The unit of the page side of a scale ratio. The PDF keeps scales per user-space unit
+/// (ISO 32000-2 §12.9), so a ratio given in one of these is converted to points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageUnit {
+    Pt,
+    In,
+    Mm,
+    Cm,
+}
+impl PageUnit {
+    pub const ALL: [Self; 4] = [Self::Pt, Self::In, Self::Mm, Self::Cm];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pt => "pt",
+            Self::In => "in",
+            Self::Mm => "mm",
+            Self::Cm => "cm",
+        }
+    }
+    pub fn from_label(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|u| u.label() == s.trim())
+    }
+    /// Points in one of this unit.
+    pub fn points(self) -> f64 {
+        match self {
+            Self::Pt => 1.0,
+            Self::In => 72.0,
+            Self::Mm => 72.0 / 25.4,
+            Self::Cm => 72.0 / 2.54,
+        }
+    }
+}
+/// A side of a scale ratio as people write it: at most six decimals, no trailing zeros.
+fn ratio_number(v: f64) -> String {
+    let fixed = format!("{v:.6}");
+    let short = fixed.trim_end_matches('0').trim_end_matches('.');
+    if short == "0" || short.len() > 24 { format!("{v:e}") } else { short.into() }
 }
 pub(crate) fn check_points(points: &[Point]) -> Result<()> {
     if points.len() > MAX_POINTS || points.iter().flatten().any(|v| !v.is_finite() || v.abs() > MAX_COORD) {

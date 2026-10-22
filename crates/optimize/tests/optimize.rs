@@ -1022,3 +1022,65 @@ fn images_are_not_resampled_when_some_uses_could_not_be_measured() {
     let refs = pdfcraft_annot::page_refs(&doc).unwrap();
     assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
 }
+
+#[test]
+fn image_resolution_keeps_comments_across_content_pieces() {
+    for ending in ["", "\n", "\r", "\r\n"] {
+        let mut doc = Document::new_empty();
+        let visible = image(&mut doc, 20, 20, 3, false, None);
+        let hidden = image(&mut doc, 20, 20, 3, false, None);
+        let page = page(&mut doc, &[("Visible", visible), ("Hidden", hidden)], "");
+        let first = doc
+            .add(Object::Stream(Stream::from_raw(Dict::new(), format!("q 72 0 0 72 0 0 cm /Visible Do Q\n% trailing comment{ending}").into_bytes())));
+        let second = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 144 0 0 144 0 0 cm /Hidden Do Q\n".to_vec())));
+        doc.update_dict(page, |dict| {
+            dict.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Int(17), Object::Ref(second)]));
+        })
+        .unwrap();
+        let measured = effective_resolutions(&doc, &[page]);
+        assert_eq!(measured.get(&visible), Some(&20.0));
+        if ending.is_empty() {
+            assert_eq!(measured.len(), 1);
+            assert_eq!(measured.get(&hidden), None, "a comment must hide the next piece's first line");
+        } else {
+            assert_eq!(measured.len(), 2);
+            assert_eq!(measured.get(&hidden), Some(&10.0), "a real line ending exposes the image");
+        }
+    }
+}
+
+#[test]
+fn a_hostile_image_size_is_left_alone_not_multiplied_into_overflow() {
+    // /Width and /Height are file-controlled: 2^32 + 100 wraps to 100 when read as u32, while the
+    // real values overflow `w * h * n`. The image must be skipped, not sized by a wrapped product.
+    let mut doc = Document::new_empty();
+    let side = i64::from(u32::MAX) + 101;
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(side));
+    d.set(b"Height".to_vec(), Object::Int(side));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let hostile = doc.add(Object::Stream(Stream::flate(d, &[7u8; 256])));
+    page(&mut doc, &[("Im", hostile)], "q 1 0 0 1 10 10 cm /Im Do Q");
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    assert_eq!(stream(&doc, hostile).dict.int(b"Width"), Some(side), "the image is left as it was");
+}
+
+#[test]
+fn a_hostile_soft_mask_leaves_its_image_unchanged() {
+    let mut doc = Document::new_empty();
+    let mask = image(&mut doc, 400, 400, 1, false, None);
+    let mut hostile = stream(&doc, mask);
+    hostile.dict.set(b"Width".to_vec(), Object::Int(i64::from(u32::MAX) + 401));
+    doc.set(mask, Object::Stream(hostile.clone()));
+    let photo = image(&mut doc, 400, 400, 3, false, Some(mask));
+    let before = stream(&doc, photo);
+    page(&mut doc, &[("Photo", photo)], "q 72 0 0 72 10 10 cm /Photo Do Q");
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    assert_eq!(stream(&doc, photo), before);
+    assert_eq!(stream(&doc, mask), hostile);
+}

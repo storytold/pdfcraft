@@ -357,6 +357,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "Add form components",
                 items: &[
                     item("Text field", "text-cursor-input", "form.add.text", Ready),
+                    item("Text field table", "grid-3x3", "form.add.text_table", Ready),
                     item("Checkbox", "check-circle-2", "form.add.checkbox", Ready),
                     item("Radio button", "circle", "form.add.radio", Ready),
                     item("Drop-down list", "chevron-down", "form.add.combo", Ready),

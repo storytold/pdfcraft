@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_content::Matrix;
+use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
@@ -26,17 +26,16 @@ pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
 pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Vec<u8> {
     match &*doc.resolve(contents) {
         Object::Stream(s) => s.decoded().unwrap_or_default(),
-        Object::Array(a) => a
-            .iter()
-            .flat_map(|c| match &*doc.resolve(c) {
-                Object::Stream(s) => {
-                    let mut v = s.decoded().unwrap_or_default();
-                    v.push(b'\n');
-                    v
-                }
-                _ => Vec::new(),
-            })
-            .collect(),
+        Object::Array(a) => {
+            let pieces: Vec<_> = a
+                .iter()
+                .filter_map(|c| match &*doc.resolve(c) {
+                    Object::Stream(s) => Some(s.decoded().unwrap_or_default()),
+                    _ => None,
+                })
+                .collect();
+            Pieces::join(&pieces).data().to_vec()
+        }
         _ => Vec::new(),
     }
 }
@@ -230,15 +229,19 @@ fn is_dct(s: &Stream) -> Option<bool> {
 
 /// 8-bit samples of an image (`n` components), decoded.
 pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
-    let (w, h) = (s.dict.int(b"Width")? as usize, s.dict.int(b"Height")? as usize);
+    let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return None;
+    }
+    let bytes = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(n)?;
     if is_dct(s)? {
         let img = image::load_from_memory_with_format(&s.raw, image::ImageFormat::Jpeg).ok()?;
         // Adobe CMYK/YCCK JPEGs aren't handled (the colour space check excludes them).
         let v = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
-        (v.len() == w * h * n).then_some(v)
+        (v.len() == bytes).then_some(v)
     } else {
         let v = s.decoded().ok()?;
-        (v.len() >= w * h * n).then(|| v[..w * h * n].to_vec())
+        Some(v.get(..bytes)?.to_vec())
     }
 }
 
@@ -316,7 +319,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         return None;
     }
     let was_dct = is_dct(s)?;
-    let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
     }
@@ -347,7 +350,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
             if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
                 return None;
             }
-            let (mw, mh) = (m.dict.int(b"Width")? as u32, m.dict.int(b"Height")? as u32);
+            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
             let mpx = pixels(m, 1)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
             smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
@@ -408,4 +411,25 @@ pub(crate) fn run(
         return Err(OptimizeError::Cancelled);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod dimension_tests {
+    use super::*;
+
+    #[test]
+    fn pixel_reader_rejects_hostile_dimensions_before_decoding() {
+        for (width, height, channels) in [(-1, 1, 1), (0, 1, 1), (i64::from(u32::MAX) + 101, 1, 1), (80_000_001, 1, 1), (2, 2, usize::MAX)] {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(width));
+            dict.set(b"Height".to_vec(), Object::Int(height));
+            let stream = Stream::from_raw(dict, vec![0; 4]);
+            assert!(pixels(&stream, channels).is_none(), "{width} x {height} x {channels}");
+        }
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(2));
+        dict.set(b"Height".to_vec(), Object::Int(2));
+        let stream = Stream::from_raw(dict, vec![1, 2, 3, 4, 5]);
+        assert_eq!(pixels(&stream, 1), Some(vec![1, 2, 3, 4]));
+    }
 }

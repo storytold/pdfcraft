@@ -1057,6 +1057,75 @@ fn unreadable_content_fails_closed() {
     assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(1)));
 }
 
+/// Leaves a mark with nothing readable: /QuadPoints becomes a name and /Rect is removed.
+fn break_area(doc: &mut Document, obj: ObjRef) {
+    doc.update_dict(obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::name("oops"));
+        d.remove(b"Rect");
+    })
+    .unwrap();
+}
+
+/// A Redact annotation with no readable area (neither usable QuadPoints nor a usable Rect) used to
+/// vanish: `marks` skipped it, so applying the readable mark next to it reported success and left
+/// the text under the broken mark in place. Now the whole operation is refused before anything
+/// changes, and the count is of the unreadable marks.
+#[test]
+fn a_mark_with_no_readable_area_is_refused_instead_of_vanishing() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 95.0, 50.0, 110.0]], "");
+    mark(&mut doc, 0, &[[0.0, 95.0, 10.0, 110.0]], "");
+    for m in marks(&doc) {
+        break_area(&mut doc, m.obj);
+    }
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    assert_eq!(marks(&doc).len(), 1, "only the readable mark is listed");
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(2)));
+    // Nothing changed: the readable mark is still pending and its text is still drawn.
+    assert_eq!(marks(&doc).len(), 1);
+    assert!(content(&doc, 0).contains("(AB1234CD) Tj"), "{}", content(&doc, 0));
+}
+
+/// A mark whose QuadPoints can't be used still redacts through its Rect, as it always did.
+#[test]
+fn a_mark_with_only_a_usable_rect_still_redacts() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::name("oops"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(20), Object::Int(95), Object::Int(40), Object::Int(110)]));
+    })
+    .unwrap();
+    assert_eq!(marks(&doc).len(), 1, "the Rect keeps the mark readable");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 4));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// Only the pages being applied decide the refusal: an unreadable mark on another page does not
+/// stop the marks of the selected page from being applied.
+#[test]
+fn an_unreadable_mark_on_another_page_does_not_stop_the_selected_page() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (XY) Tj ET"),
+    ]);
+    mark(&mut doc, 1, &[[10.0, 95.0, 30.0, 110.0]], "");
+    let broken = marks(&doc).swap_remove(0);
+    break_area(&mut doc, broken.obj);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    assert_eq!(apply(&mut doc, Some(&[0])).map(|r| r.glyphs), Ok(4));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
 /// A document with something in every hidden-information category.
 fn hidden_fixture() -> Document {
     let content = b"BT /F1 10 Tf 10 100 Td (Visible) Tj 3 Tr (Hidden) Tj 0 Tr ET BT /F1 10 Tf 500 500 Td (Offpage) Tj ET /OC /L1 BDC BT /F1 10 Tf 10 50 Td (Layer) Tj ET EMC";
@@ -1139,6 +1208,130 @@ fn hidden_information_is_counted_and_removed() {
         _ => false,
     });
     assert!(shown, "the field's value stays visible as page content");
+}
+
+/// A one-page document whose catalog names an outline root (object 5). `items` are the outline
+/// items, objects 6 onward.
+fn outlined_document(items: Vec<Vec<u8>>) -> Document {
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Outlines /First 6 0 R >>".to_vec(),
+    ];
+    objs.extend(items);
+    pdf(objs)
+}
+
+/// An outline of `levels` levels with two items each. Both items of a level name the first item
+/// of the next level as their /First, so each of those items has two parents, and a walk that
+/// follows every path takes 2^levels steps. Items a and b of level k are objects 6 + 2k and 7 + 2k.
+fn hostile_outline(levels: usize) -> Document {
+    let mut items = Vec::new();
+    for k in 0..levels {
+        let (a, b) = (6 + 2 * k, 7 + 2 * k);
+        let child = if k + 1 < levels { format!(" /First {} 0 R", a + 2) } else { String::new() };
+        items.push(format!("<< /Title (a) /Next {b} 0 R{child} >>").into_bytes());
+        items.push(format!("<< /Title (b){child} /Parent {a} 0 R >>").into_bytes());
+    }
+    outlined_document(items)
+}
+
+/// Runs `work` on another thread and returns its result. A walk that spins fails the test after
+/// `bound` instead of hanging the whole run; the thread stays behind and ends with the process.
+fn finishes_within<T: Send + 'static>(bound: std::time::Duration, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    match rx.recv_timeout(bound) {
+        Ok(out) => out,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("the walk did not finish within {bound:?}: it is spinning on shared outline items")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the walk panicked"),
+    }
+}
+
+/// Generous for a slow machine: the bounded walk takes a few milliseconds.
+const WALK_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// An outline whose items name shared children is counted item by item, each item once, and the
+/// walk ends. Counting along every path instead takes 2^60 steps.
+#[test]
+fn an_outline_whose_items_share_children_is_counted_without_spinning() {
+    use crate::sanitize::{Hidden, scan};
+    let doc = hostile_outline(60);
+    let counts = finishes_within(WALK_BOUND, move || scan(&doc));
+    assert_eq!(counts.iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 120)), "60 levels of two distinct items");
+}
+
+/// Removing the bookmarks counts them through the same walk first, so it must finish too, and
+/// it must take the outline out of the catalog.
+#[test]
+fn removing_bookmarks_from_an_outline_whose_items_share_children_finishes() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = hostile_outline(60);
+    let (done, outlines_left) = finishes_within(WALK_BOUND, move || {
+        let done = remove_hidden(&mut doc, &[Hidden::Bookmarks]);
+        let root = doc.root().unwrap();
+        let left = doc.get(root).as_dict().is_some_and(|c| c.contains(b"Outlines"));
+        (done, left)
+    });
+    assert_eq!(done.unwrap(), [(Hidden::Bookmarks, 120)]);
+    assert!(!outlines_left, "the outline is removed from the catalog");
+}
+
+/// Nesting and siblings: every item of an ordinary outline is counted once, as before.
+#[test]
+fn a_nested_outline_is_counted_item_by_item() {
+    use crate::sanitize::{Hidden, scan};
+    let doc = outlined_document(vec![
+        b"<< /Title (Chapter 1) /Parent 5 0 R /First 7 0 R /Last 8 0 R /Next 9 0 R >>".to_vec(),
+        b"<< /Title (1.1) /Parent 6 0 R /Next 8 0 R >>".to_vec(),
+        b"<< /Title (1.2) /Parent 6 0 R /Prev 7 0 R >>".to_vec(),
+        b"<< /Title (Chapter 2) /Parent 5 0 R /Prev 6 0 R /First 10 0 R >>".to_vec(),
+        b"<< /Title (2.1) /Parent 9 0 R >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 5)));
+}
+
+/// Two levels of 60,000 distinct items: each level is under the per-level cap, so only the total
+/// cap stops the count at 100,000 (without it the count would be 120,000).
+#[test]
+fn an_outline_counts_no_more_items_than_its_total_budget() {
+    use crate::sanitize::{Hidden, scan};
+    let per_level = 60_000;
+    let mut items = Vec::with_capacity(2 * per_level);
+    // Item j is object 6 + j. Level one is items 0..per_level; its first item leads to level two.
+    for i in 0..per_level {
+        let next = if i + 1 < per_level { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        let first = if i == 0 { format!(" /First {} 0 R", 6 + per_level) } else { String::new() };
+        items.push(format!("<< /Title (a){next}{first} >>").into_bytes());
+    }
+    for i in 0..per_level {
+        let next = if i + 1 < per_level { format!(" /Next {} 0 R", 7 + per_level + i) } else { String::new() };
+        items.push(format!("<< /Title (b){next} >>").into_bytes());
+    }
+    let doc = outlined_document(items);
+    assert_eq!(scan(&doc).iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 100_000)));
+}
+
+/// Items written inline (not as indirect objects) count towards the total budget too. Each of
+/// 60,000 indirect siblings has one inline child, so 120,000 items are reached, and the total must
+/// still stop at 100,000.
+#[test]
+fn inline_outline_children_count_towards_the_total_budget() {
+    use crate::sanitize::{Hidden, scan};
+    let siblings = 60_000;
+    let mut items = Vec::with_capacity(siblings);
+    for i in 0..siblings {
+        let next = if i + 1 < siblings { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        items.push(format!("<< /Title (a){next} /First << /Title (c) >> >>").into_bytes());
+    }
+    let doc = outlined_document(items);
+    assert_eq!(scan(&doc).iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 100_000)));
 }
 
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
@@ -1240,6 +1433,89 @@ fn flattened_widgets_and_far_pop_ups_leave_the_structure_tree() {
         saved.get(ObjRef::new(n, saved.generation(n))).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") || d.contains(b"FT"))
     });
     assert!(!field_left, "the flattened field didn't survive the save through the structure tree");
+}
+
+/// Issue #2874: applying redactions removes the comment and the form field under a mark, and
+/// with them the structure tree's object references (`/OBJR`) to them, so a full rewrite of a
+/// tagged PDF can't keep the comment's text or the field's value. The field's widget on another
+/// page goes with it; a comment outside the mark keeps its reference.
+#[test]
+fn applied_redactions_drop_structure_tree_references_to_what_they_remove() {
+    let objs: Vec<Vec<u8>> = vec![
+        // 1 catalog with a form and a structure tree
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /MarkInfo << /Marked true >> /StructTreeRoot 9 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 16 0 R] /Count 2 >>".to_vec(),
+        // 3 page 1: a label, a text field's widget and a comment under the mark, a comment outside
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [7 0 R 8 0 R 15 0 R] /StructParents 0 >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 230 Td (Name:) Tj ET"),
+        FONT.replace("95 0 R", "14 0 R").into_bytes(),
+        // 6 the field, 7 its widget on page 1 (17 is its widget on page 2), 8 the comment
+        b"<< /FT /Tx /T (name) /V (FIELDSECRETVALUE) /Kids [7 0 R 17 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 6 0 R /P 3 0 R /Rect [50 225 200 240] /StructParent 1 /AP << /N 13 0 R >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /P 3 0 R /Rect [200 200 220 220] /StructParent 2 /Contents (COMMENTSECRETNOTE) >>".to_vec(),
+        // 9 struct tree root, 10 document, 11 form element (direct OBJRs to both widgets),
+        // 12 annotation element (OBJR to the comment), 18 annotation element for the kept comment
+        b"<< /Type /StructTreeRoot /K 10 0 R /ParentTree << /Nums [1 11 0 R 2 12 0 R 3 18 0 R 4 11 0 R] >> /ParentTreeNextKey 5 >>".to_vec(),
+        b"<< /Type /StructElem /S /Document /P 9 0 R /K [11 0 R 12 0 R 18 0 R] >>".to_vec(),
+        b"<< /Type /StructElem /S /Form /P 10 0 R /Pg 3 0 R /Alt (FIELDSECRETVALUE) /K [<< /Type /OBJR /Obj 7 0 R /Pg 3 0 R >> << /Type /OBJR /Obj 17 0 R /Pg 16 0 R >>] >>".to_vec(),
+        b"<< /Type /StructElem /S /Annot /P 10 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 8 0 R /Pg 3 0 R >>] >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 150 15] /Resources << /Font << /F1 5 0 R >> >>", b"BT /F1 10 Tf 2 3 Td (FIELDSECRETVALUE) Tj ET"),
+        widths(),
+        // 15 the comment outside the mark
+        b"<< /Type /Annot /Subtype /Text /P 3 0 R /Rect [250 10 270 30] /StructParent 3 /Contents (Kept note) >>".to_vec(),
+        // 16 page 2, with the field's second widget
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [17 0 R] /StructParents 4 >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 6 0 R /P 16 0 R /Rect [50 50 200 65] /StructParent 4 /AP << /N 13 0 R >> >>".to_vec(),
+        b"<< /Type /StructElem /S /Annot /P 10 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 15 0 R /Pg 3 0 R >>] >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[40.0, 190.0, 230.0, 245.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.annotations, report.fields), (1, 1), "{report:?}");
+    assert!(report.tags >= 3, "the three references to the comment and both widgets are counted: {report:?}");
+    // Without object streams, whose compression would hide the strings from the search.
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Name:)") && has(b"(Kept note)"), "the search sees the saved objects");
+    assert!(!has(b"COMMENTSECRETNOTE"), "the redacted comment's text survived the save through the structure tree");
+    assert!(!has(b"FIELDSECRETVALUE"), "the redacted field's value survived the save through the structure tree");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let widget_left = saved
+        .object_numbers()
+        .into_iter()
+        .any(|n| saved.get(ObjRef::new(n, saved.generation(n))).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")));
+    assert!(!widget_left, "neither of the field's widgets survived the save");
+    // The kept comment is still tagged.
+    let kept = saved.object_numbers().into_iter().any(|n| {
+        saved.get(ObjRef::new(n, saved.generation(n))).as_dict().and_then(|d| d.get(b"K")).is_some_and(|k| match &*saved.resolve(k) {
+            Object::Array(a) => a.iter().any(|x| {
+                saved.resolve(x).as_dict().and_then(|d| d.get(b"Obj")).and_then(Object::as_ref).is_some_and(|r| {
+                    saved.get(r).as_dict().and_then(|d| d.get(b"Contents")).and_then(Object::as_string).is_some_and(|s| s.to_text() == "Kept note")
+                })
+            }),
+            _ => false,
+        })
+    });
+    assert!(kept, "the comment outside the mark keeps its structure reference");
+}
+
+/// #2874: a structure element written in place that tags a comment under a mark can't be edited
+/// without rewriting what holds it, so applying is refused rather than leaving the comment
+/// reachable (fail-closed, as in Sanitize).
+#[test]
+fn applying_redactions_refuses_an_in_place_element_tagging_a_removed_comment() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /Rect [200 200 220 220] /StructParent 0 /Contents (COMMENTSECRETNOTE) >>".to_vec(),
+        b"<< >>".to_vec(),
+        // 6 the root's only kid, an annotation element written in place
+        b"<< /Type /StructTreeRoot /K [<< /Type /StructElem /S /Annot /K [<< /Type /OBJR /Obj 4 0 R >>] >>] >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[190.0, 190.0, 230.0, 230.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Tags)));
 }
 
 /// #2532 review: a structure tree larger than the walk's limit can't be searched in full, so a
@@ -2186,3 +2462,13 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 }
 
 mod property_retirement;
+
+/// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
+/// draws only the one immediately before it (LASTARR, 7 glyphs, 35 pt wide from x = 10) -- not
+/// the first (FIRSTARR, 8 glyphs), which is never drawn at all, as the renderer agrees (#3569).
+#[test]
+fn a_tj_surplus_arrays_undrawn_glyphs_are_not_seen_under_a_mark() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td [(FIRSTARR)] [(LASTARR)] TJ ET", "", vec![]);
+    assert_eq!(under(&mut doc, 0, &[[45.0, 95.0, 50.0, 110.0]]), 0, "nothing is drawn past LASTARR's 35pt width");
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 45.0, 110.0]]), 7, "LASTARR's 7 glyphs, the one the page draws");
+}

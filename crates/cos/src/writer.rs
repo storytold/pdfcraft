@@ -49,8 +49,10 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
         out.push(b'0');
         return;
     }
-    if r.fract() == 0.0 && r.abs() < 1e15 {
-        let _ = write!(out, "{}", r as i64);
+    // A whole number is written as an integer only within the integer range Annex C gives
+    // (±2³¹−1), so `4e9` or `1e30` stays a real token for readers with 32-bit integers.
+    if r.fract() == 0.0 && r.abs() <= f64::from(i32::MAX) {
+        let _ = write!(out, "{}", r as i32);
         return;
     }
     // Plain decimal notation (§7.3.3 has no exponents). Rust's `Display` for f64 prints the
@@ -58,6 +60,10 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
     // round-trip exactly (rounding to a fixed number of places visibly shifted shading colours).
     let s = format!("{r}");
     out.extend_from_slice(if s == "-0" { b"0" } else { s.as_bytes() });
+    // A whole number past that range prints without a point; the trailing `.` keeps it a real.
+    if !s.contains('.') && s != "-0" {
+        out.push(b'.');
+    }
 }
 
 fn write_name(n: &[u8], out: &mut Vec<u8>) {
@@ -697,14 +703,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn whole_reals_past_the_integer_limit_stay_reals() {
+        for (r, text) in [
+            (2_147_483_647.0, "2147483647"),
+            (-2_147_483_647.0, "-2147483647"),
+            (2_147_483_648.0, "2147483648."),
+            (4e9, "4000000000."),
+            (-4e9, "-4000000000."),
+            (1e30, "1000000000000000000000000000000."),
+            (595.0, "595"),
+            (-0.0, "0"),
+        ] {
+            let mut out = Vec::new();
+            serialize(&Object::Real(r), &mut out);
+            assert_eq!(String::from_utf8_lossy(&out), text, "{r}");
+            let back = roundtrip(&Object::Real(r));
+            if r.abs() > f64::from(i32::MAX) {
+                assert_eq!(back, Object::Real(r), "{r} must read back as a real");
+            }
+        }
+    }
+
     proptest! {
         #[test]
         fn any_finite_real_round_trips(r in proptest::num::f64::NORMAL | proptest::num::f64::SUBNORMAL | proptest::num::f64::ZERO) {
-            prop_assume!(r.abs() < 1e15 || r.fract() == 0.0);
             let back = roundtrip(&Object::Real(r));
             match back {
                 Object::Real(b) => prop_assert_eq!(b, r),
-                Object::Int(i) => prop_assert_eq!(i as f64, r),
+                Object::Int(i) => {
+                    prop_assert!(i.unsigned_abs() <= i32::MAX as u64, "{r} came back as integer {i}");
+                    prop_assert_eq!(i as f64, r);
+                }
                 other => prop_assert!(false, "unexpected {other:?}"),
             }
         }

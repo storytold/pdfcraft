@@ -136,6 +136,8 @@
 	Next view	Наступний вигляд
 	Page display	Відображення сторінок
 	Continuous scrolling	Безперервне прокручування
+	Show gaps between pages	Показувати проміжки між сторінками
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Приховайте проміжки, щоб з’єднати краї сторінок. Поля всередині PDF залишаться без змін.
 	Two-page view	Дві сторінки
 	Single page	Одна сторінка
 	Show cover page in two-page view	Показувати обкладинку в режимі двох сторінок
@@ -839,6 +841,7 @@
 	Insert Page Number	Вставити номер сторінки
 	Insert Date	Вставити дату
 	Start page number	Початковий номер сторінки
+	Shrink the page content to make room for the header and footer	Зменшити вміст сторінки, щоб звільнити місце для колонтитулів
 	Source	Джерело
 	Fit to page	За розміром сторінки
 	Rotation	Поворот
@@ -1217,6 +1220,7 @@
 	Off	Вимкнено
 	Flip on long edge	Перевертати за довгим краєм
 	Flip on short edge	Перевертати за коротким краєм
+	Printer default	За замовчуванням принтера
 	Paper:	Папір:
 	Pages to Print	Сторінки для друку
 	More options:	Додаткові параметри:
@@ -1360,6 +1364,8 @@
 	This document has no layers.	Цей документ не має шарів.
 	This document has no attachments.	Цей документ не має вкладень.
 	Hide layer	Приховати шар
+	Layer options	Параметри шарів
+	Reset to Initial Visibility	Відновити початкову видимість
 	Show layer	Показати шар
 	Set layer visibility	Задати видимість шару
 	on page {label}	на сторінці {label}
@@ -1648,6 +1654,7 @@
 	Looking for printers…	Пошук принтерів…
 	Sending sheet {s} of {n} to {printer}…	Надсилання аркуша {s} із {n} на {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтери не знайдено. Перевірте, що принтер установлено, а диспетчер друку працює, і знову відкрийте «Друк».
+	Reading the printer's settings…	Читання налаштувань принтера…
 	Sending to {printer}…	Надсилання на {printer}…
 	Choose a folder for the searchable files	Виберіть теку для файлів із пошуком
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файли об’єднуються згори донизу. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
@@ -1792,6 +1799,7 @@
 	This document has no restrictions to lift	Цей документ не має обмежень, які можна зняти
 	The document's security settings don't allow this change	Налаштування захисту документа не дозволяють цю зміну
 	The document's security settings don't allow copying text and images	Налаштування захисту документа не дозволяють копіювати текст і зображення
+	The document's security settings don't allow printing	Налаштування захисту документа не дозволяють друк
 	Open a document first	Спочатку відкрийте документ
 	Security will be removed when you save	Захист буде знято під час збереження
 	Click text or an image to edit it	Клацніть текст або зображення для редагування
@@ -2333,6 +2341,7 @@ key	Space	Пробіл
 	Printer paper and scaling may differ. Check driver settings.	Папір і масштаб принтера можуть відрізнятися. Перевірте налаштування драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Масштаб креслення змінюється. Для друку в початковому масштабі виберіть Фактичний розмір.
 	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
+	Always use my default zoom and page layout	Завжди використовувати мій типовий масштаб і макет сторінок
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Цей файл змінено на диску. «Перезавантажити» покаже нову версію й відкине незбережені зміни; «Зберегти» замінить її цією версією.
 	Reload	Перезавантажити
 	Couldn't reload {name}: {e}	Не вдалося перезавантажити {name}: {e}
@@ -2503,3 +2512,28 @@ animation effects	Off	Вимкнено
 	Paragraph spacing	Інтервал між абзацами
 	Less	Менше
 	Other options	Інші параметри
+	Thumbnail size	Розмір мініатюр
+	Smaller thumbnails	Зменшити мініатюри
+	Larger thumbnails	Збільшити мініатюри
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Змінити форму коментаря
+
+# Prepare a form ▸ Text field table
+	Add text field table	Додати таблицю текстових полів
+	Text field table	Таблиця текстових полів
+	Text Field Table	Таблиця текстових полів
+	Columns	Стовпці
+	Row spacing	Інтервал між рядками
+	Column spacing	Інтервал між стовпцями
+	First row number	Номер першого рядка
+	Column widths	Ширина стовпців
+	Distribute evenly	Розподілити рівномірно
+	Field names	Імена полів
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N або {row} — номер рядка, {col} — номер стовпця, {seq} — номер клітинки. Якщо їх немає, номер рядка додається в кінці.
+	Column {n}	Стовпець {n}
+	Add fields	Додати поля
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	рядки занадто низькі: збільште висоту області, зменште кількість рядків або інтервал між ними
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	стовпець занадто вузький: розширте область, дайте стовпцю більше ширини, зменште кількість стовпців або інтервал між ними
+	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
+	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
+	a field named {name} already exists	поле з іменем {name} уже існує

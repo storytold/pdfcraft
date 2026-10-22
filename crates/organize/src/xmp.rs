@@ -54,21 +54,42 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 /// that can't be edited safely.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     let Some((name, ns, shape)) = property(key) else { return Ok(()) };
-    let Some(root) = doc.root() else { return Ok(()) };
+    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
+}
+
+/// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
+/// was there.
+pub(crate) fn remove_properties(doc: &mut Document, names: &[&str]) -> Result<bool, OrganizeError> {
+    edit_packet(doc, |xmp| {
+        let mut out: Option<String> = None;
+        for name in names {
+            // Each removal shortens the packet, so this ends.
+            while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name, "", Shape::Text, "") {
+                out = Some(next);
+            }
+        }
+        out
+    })
+}
+
+/// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files
+/// without XMP and packets that can't be edited safely are left alone.
+fn edit_packet(doc: &mut Document, edit: impl FnOnce(&str) -> Option<String>) -> Result<bool, OrganizeError> {
+    let Some(root) = doc.root() else { return Ok(false) };
     // A metadata stream is always indirect (§7.3.8); anything else is left alone.
-    let Some(r) = doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata")) else { return Ok(()) };
+    let Some(r) = doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata")) else { return Ok(false) };
     let obj = doc.get(r);
-    let Object::Stream(stream) = &*obj else { return Ok(()) };
-    let Ok(bytes) = stream.decoded_within(MAX_XMP) else { return Ok(()) };
-    let Ok(xmp) = String::from_utf8(bytes) else { return Ok(()) };
-    let Some(updated) = set_property(&xmp, name, ns, shape, value) else { return Ok(()) };
+    let Object::Stream(stream) = &*obj else { return Ok(false) };
+    let Ok(bytes) = stream.decoded_within(MAX_XMP) else { return Ok(false) };
+    let Ok(xmp) = String::from_utf8(bytes) else { return Ok(false) };
+    let Some(updated) = edit(&xmp) else { return Ok(false) };
     // Written unfiltered, as PDF/A asks of metadata streams, so other tools can read it.
     let mut dict = stream.dict.clone();
     for k in [&b"Filter"[..], b"DecodeParms", b"DL", b"Length"] {
         dict.remove(k);
     }
     doc.set(r, Object::Stream(Stream::from_raw(dict, updated.into_bytes())));
-    Ok(())
+    Ok(true)
 }
 
 /// `xmp` with the property `name` (namespace `ns`) set to `value`, or removed when `value` is

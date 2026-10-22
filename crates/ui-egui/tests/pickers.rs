@@ -691,6 +691,110 @@ fn unlocking_a_late_startup_url_keeps_it_in_the_background() {
     assert_eq!(h.state().active, Some(1));
 }
 
+/// How an encrypted file reaches the password prompt.
+#[derive(Clone, Copy, Debug)]
+enum OpenedFrom {
+    CommandLine,
+    FileOpen,
+    StartPage,
+    Drop,
+}
+
+#[derive(Debug)]
+struct Dropped(std::path::PathBuf, Vec<u8>);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(self.1.clone())
+    }
+}
+
+/// Types `text` the way keys arrive where egui-winit hands text fields to an input method, as on
+/// Linux (X11 XIM, Wayland text-input): each character is with the input method (a pre-edit) for
+/// a frame before it is committed. A frame that asks to interrupt the composition makes
+/// egui-winit switch the input method off and on again, which drops what it holds, so the commit
+/// never comes.
+fn type_through_input_method(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    for c in text.chars() {
+        let c = c.to_string();
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: c.clone(), active_range_chars: Some(0..1) }));
+        h.step();
+        let interrupted = h.output().platform_output.ime.as_ref().is_none_or(|ime| ime.should_interrupt_composition);
+        let next = if interrupted { egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None } } else { egui::ImeEvent::Commit(c) };
+        h.event(egui::Event::Ime(next));
+        h.step();
+    }
+}
+
+/// #2818: nothing typed into the password prompt arrived on Linux. The field asked for focus on
+/// every frame, and each request also interrupts the input method.
+#[test]
+fn the_open_password_can_be_typed_through_an_input_method_however_the_file_is_opened() {
+    let bytes = encrypted_fixture();
+    for from in [OpenedFrom::CommandLine, OpenedFrom::FileOpen, OpenedFrom::StartPage, OpenedFrom::Drop] {
+        let dir = scratch(&format!("password-{from:?}"));
+        let file = dir.join("encrypted.pdf");
+        std::fs::write(&file, &bytes).unwrap();
+        let path = file.to_string_lossy().into_owned();
+        let arg = path.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            // As `main` opens the files named on the command line.
+            if matches!(from, OpenedFrom::CommandLine) {
+                app.open_path(&arg);
+            }
+            app
+        });
+        h.run_steps(4);
+        match from {
+            OpenedFrom::CommandLine => {}
+            OpenedFrom::FileOpen => {
+                h.state_mut().pick_override = Some(vec![path.clone()]);
+                assert!(h.state_mut().execute("file.open"));
+            }
+            OpenedFrom::StartPage => {
+                h.state_mut().pick_override = Some(vec![path.clone()]);
+                h.get_by_label("Open file").click();
+            }
+            OpenedFrom::Drop => h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(file.clone(), bytes.clone()))),
+        }
+        support::wait_until(&mut h, "password prompt", |app| app.password_prompt.is_some());
+        h.run_steps(2);
+        type_through_input_method(&mut h, "test-password");
+        assert_eq!(h.state().password_prompt.as_ref().map(|p| p.input.as_str()), Some("test-password"), "opened from {from:?}");
+        h.key_press(egui::Key::Enter);
+        support::wait_until(&mut h, "unlocked document", |app| app.password_prompt.is_none() && app.views.len() == 1);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!((doc.path.as_deref(), doc.info.pages.len()), (Some(path.as_str()), 1), "opened from {from:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The permissions password prompt is the same box (#2818).
+#[test]
+fn the_permissions_password_can_be_typed_through_an_input_method() {
+    use pdfcraft_engine::{Edit, Protection, Session};
+    let mut s = Session::new();
+    let id = s.open("locked.pdf", None, std::sync::Arc::new(fixture(1)), None).unwrap();
+    s.apply(id, Edit::Protect(Protection { permissions_password: Some("owner".into()), ..Default::default() })).unwrap();
+    let locked = s.save_bytes(id).unwrap().as_ref().clone();
+    let mut h = harness(&[]);
+    h.state_mut().open_bytes("locked.pdf", None, locked).unwrap();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("protect.remove"));
+    h.run_steps(2);
+    assert!(h.state().unlock_prompt.is_some(), "Remove security asks for the permissions password");
+    type_through_input_method(&mut h, "owner");
+    assert_eq!(h.state().unlock_prompt.as_ref().map(|p| p.input.as_str()), Some("owner"));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().unlock_prompt.is_none(), "the typed password is accepted");
+}
+
 #[test]
 fn a_late_startup_url_preserves_the_combine_files_tab() {
     let mut h = harness(&[]);

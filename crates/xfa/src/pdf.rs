@@ -491,8 +491,8 @@ impl Emitter<'_> {
         Ok(Some(r))
     }
 
-    /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs and GIFs decoded
-    /// to samples (`FlateDecode`, with a soft mask for transparency). `None`, with a warning,
+    /// An image XObject for a picture: JPEGs as they are (`DCTDecode`), PNGs, GIFs, BMPs and TIFFs
+    /// decoded to samples (`FlateDecode`, with a soft mask for transparency). `None`, with a warning,
     /// for anything else.
     fn image_xobject(&mut self, data: &[u8], content_type: &str) -> Option<ObjRef> {
         let hash = content_hash(data);
@@ -509,6 +509,9 @@ impl Emitter<'_> {
         Some(r)
     }
 
+    /// Write a new image XObject for a picture, tagged with its `hash`: a JPEG as it is, a PNG
+    /// or GIF decoded to samples with a soft mask for any transparency. `None`, with a warning,
+    /// when the picture can't be read or is another kind.
     fn new_image_xobject(&mut self, data: &[u8], content_type: &str, hash: &[u8; 32]) -> Option<ObjRef> {
         let what = if content_type.is_empty() { "picture" } else { content_type };
         let mut d = Dict::new();
@@ -539,7 +542,7 @@ impl Emitter<'_> {
                 d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
                 Some(self.doc.add(Object::Stream(Stream::from_raw(d, data.to_vec()))))
             }
-            Some(crate::image::Kind::Png | crate::image::Kind::Gif) => {
+            Some(crate::image::Kind::Png | crate::image::Kind::Gif | crate::image::Kind::Bmp | crate::image::Kind::Tiff) => {
                 let img = match crate::image::decode(data) {
                     Ok(img) => img,
                     Err(why) => {
@@ -564,12 +567,15 @@ impl Emitter<'_> {
                 Some(self.doc.add(Object::Stream(Stream::flate(d, &img.samples))))
             }
             None => {
-                self.warnings.push(format!("a {what} image is not a JPEG, PNG or GIF and is left out"));
+                self.warnings.push(format!("a {what} image is not a JPEG, PNG, GIF, BMP or TIFF and is left out"));
                 None
             }
         }
     }
 
+    /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
+    /// content stream, the fonts and images it uses as resources, and its widgets as
+    /// annotations. Returns the page object.
     fn page(&mut self, page: &Page, pages_ref: ObjRef) -> Result<ObjRef, XfaError> {
         let page_ref = self.doc.add(Object::Dict(Dict::new()));
         let mut content: Vec<u8> = Vec::new();
@@ -612,11 +618,17 @@ impl Emitter<'_> {
                     }
                     let name = s.face.resource_name();
                     fonts.insert(name, s.face.family.base_font(s.face.bold, s.face.italic));
+                    // Horizontal scaling is text state, which outlives the text object: a
+                    // condensed span gets a graphics state of its own, so the next isn't.
+                    let scaled = (s.face.h_scale - 1.0).abs() > 1e-6;
+                    let (open, tz, close) =
+                        if scaled { ("q BT", format!(" {} Tz", n(s.face.h_scale * 100.0)), " ET Q") } else { ("BT", String::new(), " ET") };
                     content.extend(
-                        format!("BT /{name} {} Tf {} rg 1 0 0 1 {} {} Tm ", n(s.face.size), rgb(s.face.color), n(s.x), n(h - s.baseline)).bytes(),
+                        format!("{open} /{name} {} Tf {} rg{tz} 1 0 0 1 {} {} Tm ", n(s.face.size), rgb(s.face.color), n(s.x), n(h - s.baseline))
+                            .bytes(),
                     );
                     content.extend(literal(&win_ansi(&s.text)));
-                    content.extend_from_slice(b" Tj ET\n");
+                    content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
                 }
                 Item::Image { rect, data, content_type } => {
                     let Some(r) = self.image_xobject(data, content_type) else { continue };

@@ -1,4 +1,5 @@
 //! `split --out-dir DIR` creates DIR when it does not exist yet (#249), and says so when it can't.
+//! `--every` must be a positive whole number of pages, checked before the file is opened.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -72,5 +73,24 @@ fn an_out_dir_that_cannot_be_created_is_reported_as_such() {
     assert!(stderr.contains("--out-dir") && stderr.contains("parts"), "{stderr}");
     assert!(!stderr.contains("report-p1.pdf"), "the folder is the problem, not the first part: {stderr}");
     assert_eq!(std::fs::read(&not_a_dir).unwrap(), b"in the way");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--every` must be a positive whole number of pages. `0` parses, but the engine used to
+/// clamp it to 1 silently; refused here, before the file is opened, it cannot surprise anyone.
+#[test]
+fn a_non_positive_or_unparseable_every_is_refused_before_the_file_is_opened() {
+    let dir = workdir("every");
+    for value in ["0", "abc"] {
+        let out_dir = dir.join("parts");
+        let out = Command::new(BIN).args(["split", "missing.pdf", "--every", value, "--out-dir", out_dir.to_str().unwrap()]).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "--every {value}");
+        assert_eq!(
+            out.stderr,
+            format!("pdfcraft-cli: bad --every: expected a positive whole number of pages, got {value:?}\n").as_bytes(),
+            "--every {value}"
+        );
+        assert!(!out_dir.exists(), "--every {value}: nothing may be written");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -141,9 +141,9 @@ mod one_based_arguments {
             for destination in ["output.pam", "new.pam", "input.pdf"] {
                 std::fs::write(dir.0.join("output.pam"), b"keep destination").unwrap();
                 for (command, option, value, diagnostic) in [
-                    ("render", "--page", "0", "--page must be at least 1"),
-                    ("edit", "--move", "1:0", "--move target must be at least 1"),
-                    ("edit", "--insert-blank", "0", "--insert-blank must be at least 1"),
+                    ("render", "--page", "0", "bad --page: expected a positive page number"),
+                    ("edit", "--move", "1:0", "bad --move target: expected a page number of at least 1, got \"0\""),
+                    ("edit", "--insert-blank", "0", "bad --insert-blank position: expected a page position of at least 1, got \"0\""),
                 ] {
                     let out = Command::new(BIN).current_dir(&dir.0).args([command, input, "--out", destination, option, value]).output().unwrap();
                     assert_eq!(out.status.code(), Some(1), "{command} {input} {option} {value}");
@@ -192,6 +192,33 @@ mod one_based_arguments {
         assert_eq!((info.pages[1].width, info.pages[1].height, info.pages[1].rotation), (300.0, 200.0, 90));
         assert_eq!(std::fs::read(dir.0.join("input.pdf")).unwrap(), source);
     }
+}
+
+/// A value the option cannot hold names the option and the value, and fails before the input
+/// file is opened: a missing input still gets the option's own message.
+#[test]
+fn a_value_an_option_cannot_hold_is_named_before_the_file_is_opened() {
+    let dir = tmp("values", "");
+    for (option, value, diagnostic) in [
+        ("--rotate", "1:abc", "bad --rotate degrees: expected a whole number of degrees, got \"abc\""),
+        ("--rotate", "1:45", "bad --rotate degrees: expected a multiple of 90 (such as 90, -90 or 180), got 45"),
+        ("--rotate", "1:-45", "bad --rotate degrees: expected a multiple of 90 (such as 90, -90 or 180), got -45"),
+        ("--move", "1:abc", "bad --move target: expected a page number of at least 1, got \"abc\""),
+        ("--move", "1:0", "bad --move target: expected a page number of at least 1, got \"0\""),
+        ("--insert-blank", "abc", "bad --insert-blank position: expected a page position of at least 1, got \"abc\""),
+        ("--insert-blank", "0", "bad --insert-blank position: expected a page position of at least 1, got \"0\""),
+    ] {
+        let out = Command::new(BIN).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", option, value]).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{option} {value}");
+        assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
+        assert!(out.stdout.is_empty(), "{option} {value}");
+        assert!(!dir.join("out.pdf").exists(), "{option} {value}: no output may be written");
+    }
+    // A negative multiple of 90 is still a rotation the engine accepts: the refusal above is
+    // the multiple-of-90 rule, not a sign problem (the missing input is the next error).
+    let out = Command::new(BIN).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", "--rotate", "1:-90"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("--rotate degrees"), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// A destination past the end must fail, not silently become an append (#1330).

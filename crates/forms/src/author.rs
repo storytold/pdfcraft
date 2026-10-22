@@ -7,9 +7,11 @@
 //! immediately so every viewer shows the empty field.
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 use crate::{Field, FieldKind, FormError, Widget, appearance, fields, flags, page_refs};
+
+/// The smallest width and height of a field's widget, in points: a smaller one is refused.
+pub const MIN_FIELD_SIDE: f64 = 4.0;
 
 /// The kind of field to add.
 #[derive(Clone, Debug, PartialEq)]
@@ -546,7 +548,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
     let pages = page_refs(doc);
     let page_ref = *pages.get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page + 1)))?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-    if !rect.iter().all(|v| v.is_finite()) || rect[2] - rect[0] < 4.0 || rect[3] - rect[1] < 4.0 {
+    if !rect.iter().all(|v| v.is_finite()) || rect[2] - rect[0] < MIN_FIELD_SIDE || rect[3] - rect[1] < MIN_FIELD_SIDE {
         return invalid("the field is too small");
     }
     let existing = fields(doc);
@@ -690,6 +692,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
                 tab: usize::MAX,
                 locked: false,
                 hidden: false,
+                read_only: false,
                 rotation: 0,
                 caption: None,
                 list: None,
@@ -715,6 +718,9 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
     redraw_widgets(doc, name, None)
 }
 
+/// `redraw_field` for the widget at index `only` alone (so a caption-only edit leaves the field's
+/// other widgets' appearances as they are), or for every widget when `only` is `None`. Fails with
+/// `FormError::NoSuchField` when no field is named `name`.
 fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     let mut undrawn = false;
@@ -737,7 +743,7 @@ fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result
                 appearance::check_box_states(doc, w, f.kind, &on)
             }
             FieldKind::PushButton => {
-                let (s, m) = button_appearance(doc, w);
+                let (s, m) = button_appearance(doc, w, &f.da);
                 missing = m;
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
@@ -796,9 +802,11 @@ fn form_stream(place: crate::appearance::Placement, content: Vec<u8>, resources:
 }
 
 /// A push button: background, border, its icon (`/MK /I`, scaled to fit and centred) and its
-/// centred caption (unless the layout is icon only, `/TP 1`). The caption is drawn in Helvetica,
-/// with the first character it can't draw (drawn as `?`), for the caller to mark and report.
-fn button_appearance(doc: &Document, w: &Widget) -> (Stream, Option<char>) {
+/// centred caption (unless the layout is icon only, `/TP 1`). The caption uses the font, size and
+/// color its `/DA` asks for (the widget's, else `field_da`, the field's own or inherited one).
+/// Also returns the first caption character the font can't draw (drawn as `?`), for the caller to
+/// mark and report.
+fn button_appearance(doc: &Document, w: &Widget, field_da: &str) -> (Stream, Option<char>) {
     let (mut c, place) = frame_only(doc, w);
     let (width, height) = (place.layout_w, place.layout_h);
     let wobj = doc.get(w.obj);
@@ -823,21 +831,15 @@ fn button_appearance(doc: &Document, w: &Widget) -> (Stream, Option<char>) {
         }
     }
     let mut missing = None;
-    if !icon_only && !caption.is_empty() {
-        missing = pdfcraft_fonts::first_undrawable(&caption);
-        let size = ((height - 4.0) * 0.6).clamp(4.0, 14.0);
-        let tw = helvetica_width(&caption, size);
-        content.extend(format!("BT /Helv {size:.2} Tf 0 g 1 0 0 1 {:.3} {:.3} Tm ", (width - tw) / 2.0, (height - size * 0.7) / 2.0).bytes());
-        content.extend(literal(&win_ansi(&caption)));
-        content.extend_from_slice(b" Tj ET\n");
-    }
-    let mut font = Dict::new();
-    font.set(b"Type".to_vec(), Object::name("Font"));
-    font.set(b"Subtype".to_vec(), Object::name("Type1"));
-    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let mut fonts = Dict::new();
-    fonts.set(b"Helv".to_vec(), Object::Dict(font));
+    if !icon_only && !caption.is_empty() {
+        let da = wobj.as_dict().and_then(|d| d.get(b"DA")).and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text()));
+        let auto = ((height - 4.0) * 0.6).clamp(4.0, 14.0);
+        let (ops, name, font, m) = appearance::button_caption(doc, da.as_deref().unwrap_or(field_da), &caption, width, height, auto);
+        content.extend(ops);
+        fonts.set(name.into_bytes(), font);
+        missing = m;
+    }
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     if !xobjects.is_empty() {
@@ -887,7 +889,7 @@ fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let (nw, nh) = (y1 - y0, x1 - x0);
     let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
-    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= 4.0 && out[3] - out[1] >= 4.0).then_some(out)
+    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
 }
 
 /// Change a field's properties (General and Options tabs) and redraw it.
@@ -951,12 +953,14 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         if n.is_empty() || n.contains('.') {
             return invalid("field names can't be empty or contain a period");
         }
-        if all.iter().any(|x| x.name == n) {
-            return invalid(format!("a field named {n:?} already exists"));
-        }
-        // Rename the terminal part (the field's own /T).
+        // Rename the terminal part (the field's own /T). The parents' part stays, so the name that
+        // must be free is the full one: `MASTER.a` renamed to `b` takes `MASTER.b` (ISO 32000-2
+        // §12.7.4.2). The field itself is no clash when it keeps its own name.
         let prefix = f.name.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
         new_name = format!("{prefix}{n}");
+        if all.iter().any(|x| x.obj != f.obj && x.name == new_name) {
+            return invalid(format!("a field named {new_name:?} already exists"));
+        }
         doc.update_dict(f.obj, |d| d.set(b"T".to_vec(), PdfString::text(n)))?;
         // Calculations read the field by its new name, unless another field keeps the old one.
         if all.iter().filter(|x| x.name == f.name).count() == 1 {
@@ -1134,7 +1138,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if let Some((wi, r)) = props.rect {
         let w = f.widgets.get(wi).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {}", wi + 1)))?;
         let r = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
-        if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < 4.0 || r[3] - r[1] < 4.0 {
+        if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < MIN_FIELD_SIDE || r[3] - r[1] < MIN_FIELD_SIDE {
             return invalid("the field is too small");
         }
         doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;

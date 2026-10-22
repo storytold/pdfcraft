@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
 use pdfcraft_sign::{
-    Detail, Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS, der, in_english, kind, pkcs12, signatures,
+    Certificate, Detail, DigitalId, Modification, Name, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS, der,
+    in_english, kind, pkcs12, signatures,
 };
 
 fn data(name: &str) -> Vec<u8> {
@@ -13,14 +14,20 @@ fn data(name: &str) -> Vec<u8> {
 
 /// One page with text and an unsigned signature field "Approval".
 fn fixture() -> Vec<u8> {
-    let objs: Vec<&[u8]> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+    fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>", &[])
+}
+
+/// [`fixture`] with its catalog replaced by `catalog` and `more` objects from number 7 on.
+fn fixture_with(catalog: &[u8], more: &[&[u8]]) -> Vec<u8> {
+    let mut objs: Vec<&[u8]> = vec![
+        catalog,
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
         b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
     ];
+    objs.extend_from_slice(more);
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -237,6 +244,23 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     // Certified allowing comments: fine.
     let certified3 = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(3), ..opts() }).unwrap();
     assert_eq!(check(&edit_after(&certified3, add_comment)).status, Status::Valid);
+    // #1788: a later revision relaxing the signed P 1 to P 3 does not permit the comment.
+    let relaxed = edit_after(&certified, |doc| {
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let sig = doc.resolve(catalog.get(b"Perms").unwrap()).as_dict().and_then(|p| p.get(b"DocMDP").and_then(Object::as_ref)).unwrap();
+        doc.update_dict(sig, |v| {
+            if let Some(Object::Array(r)) = v.get_mut(b"Reference")
+                && let Some(Object::Dict(sr)) = r.first_mut()
+                && let Some(Object::Dict(tp)) = sr.get_mut(b"TransformParams")
+            {
+                tp.set(b"P".to_vec(), Object::Int(3));
+            }
+        })
+        .unwrap();
+        add_comment(doc);
+    });
+    let s = check(&relaxed);
+    assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
 #[test]
@@ -290,7 +314,7 @@ fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
     let typed = Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]], vec![[0.2, 0.1], [0.8, 0.1], [0.5, 0.4]]]);
     for (graphic, drawn) in [
         (strokes, " c\n"),
-        (typed, "f*\n"),
+        (typed, "f\n"),
         // 40 x 10 in the left half (94 x 44 inside the padding): 94 wide, centred vertically.
         (picture(true), "q 94 0 0 23.5 3 13.25 cm /Im1 Do Q"),
     ] {
@@ -667,6 +691,49 @@ fn signing_with_keychain_identities() {
     result.unwrap();
 }
 
+/// A Keychain identity carries the certificates macOS chains it to, as a `.p12`'s does, so the
+/// signature embeds its issuers. Ignored by default: the throwaway keychain joins the user's
+/// keychain search list while the test runs (restored afterwards).
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "creates a temporary macOS keychain; run with --ignored"]
+fn keychain_identities_carry_their_issuers() {
+    use std::process::Command;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-keychain-chain-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let kc = dir.join("test.keychain-db");
+    let sec = |args: &[&str]| Command::new("security").args(args).output().unwrap();
+    let list = String::from_utf8(sec(&["list-keychains", "-d", "user"]).stdout).unwrap();
+    let saved: Vec<String> = list.lines().map(|l| l.trim().trim_matches('"').to_string()).filter(|l| !l.is_empty()).collect();
+    let k = kc.to_str().unwrap();
+    assert!(sec(&["create-keychain", "-p", "pc-test", k]).status.success());
+    let set_list = |extra: Option<&str>| {
+        let mut args = vec!["list-keychains", "-d", "user", "-s"];
+        args.extend(saved.iter().map(String::as_str));
+        args.extend(extra);
+        sec(&args);
+    };
+    // macOS finds an identity's issuers in the keychains on the search list.
+    set_list(Some(k));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sec(&["unlock-keychain", "-p", "pc-test", k]);
+        let p = format!("{}/tests/data/chain-legacy.p12", env!("CARGO_MANIFEST_DIR"));
+        let out = sec(&["import", &p, "-k", k, "-P", "test", "-A"]);
+        assert!(out.status.success(), "chain-legacy.p12: {}", String::from_utf8_lossy(&out.stderr));
+        let listed = pdfcraft_sign::keychain::identities(Some(&kc)).unwrap();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        let id = pdfcraft_sign::keychain::find(&pdfcraft_sign::keychain::reference(&listed[0].certificate)).unwrap();
+        let issuers: Vec<_> = id.chain.iter().map(|c| c.subject.common_name()).collect();
+        assert_eq!(issuers, [Some("PrintCraft Test Root CA")]);
+        let file = pkcs12::open(&data("chain.p12"), "test").unwrap();
+        assert_eq!(id.chain.iter().map(|c| &c.raw).collect::<Vec<_>>(), file.chain.iter().map(|c| &c.raw).collect::<Vec<_>>());
+    }));
+    sec(&["delete-keychain", k]);
+    set_list(None);
+    let _ = std::fs::remove_dir_all(&dir);
+    result.unwrap();
+}
+
 /// `fixture()` plus a Form XObject (object 7) that the page draws.
 fn fixture_with_xobject() -> Vec<u8> {
     let objs: Vec<&[u8]> = vec![
@@ -749,6 +816,59 @@ fn declaring_a_form_xfa_does_not_excuse_replacing_the_pages() {
     }
 }
 
+/// A form whose AcroForm carries its XFA as packets: template (7), datasets (8), form (9).
+fn xfa_fixture() -> Vec<u8> {
+    fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /XFA [(template) 7 0 R (datasets) 8 0 R (form) 9 0 R] >> >>",
+        &[
+            b"<< /Length 11 >>\nstream\n<template/>\nendstream",
+            b"<< /Length 22 >>\nstream\n<xfa:datasets><a>1</a>\nendstream",
+            b"<< /Length 7 >>\nstream\n<form/>\nendstream",
+        ],
+    )
+}
+
+/// Rewrite object `num` as a stream holding `body`.
+fn rewrite_stream(num: u32, body: &'static [u8]) -> impl FnOnce(&mut Document) {
+    move |doc| doc.set(pdfcraft_cos::ObjRef { num, generation: 0 }, stream_of(body))
+}
+
+/// #2759: filling a certified XFA form rewrites its `datasets` (and `form`) packets, as a Reader
+/// Extensions save of the IRCC forms does. That is form fill, which certification level 2
+/// permits; level 1 still refuses it, and rewriting the template is not a form fill. The packets'
+/// roles come from the signed revision: a later revision that names the template "datasets"
+/// doesn't make rewriting it a form fill.
+#[test]
+fn rewriting_a_certified_forms_xfa_data_is_a_form_fill() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let certified = pdfcraft_sign::sign(&open(&xfa_fixture()), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    assert_eq!(check(&certified).status, Status::Valid);
+    for num in [8, 9] {
+        let s = check(&edit_after(&certified, rewrite_stream(num, b"<xfa:datasets><a>2</a></xfa:datasets>")));
+        assert_eq!((s.status, s.modification.clone()), (Status::Valid, Modification::Allowed(vec![kind::FORM_FILL])), "{num}: {:?}", s.details);
+    }
+    let s = check(&edit_after(&certified, rewrite_stream(7, b"<template><subform/></template>")));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+    let renamed = edit_after(&certified, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(form)) = c.get_mut(b"AcroForm") {
+                form.set(b"XFA".to_vec(), Object::Array(vec![Object::String(PdfString::text("datasets")), oref(7)]));
+            }
+        })
+        .unwrap();
+        rewrite_stream(7, b"<template><subform/></template>")(doc);
+    });
+    let s = check(&renamed);
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.modification);
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::OTHER)), "{:?}", s.modification);
+    let locked = pdfcraft_sign::sign(&open(&xfa_fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let s = check(&edit_after(&locked, rewrite_stream(8, b"<xfa:datasets><a>2</a></xfa:datasets>")));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::FORM_FILL])));
+}
+
 /// Re-encode a DER CMS the way Windows CryptoAPI / Adobe PPKMS / `openssl cms -stream` write it:
 /// indefinite lengths on ContentInfo, [0] and SignedData (the signed attributes stay DER).
 fn to_ber(der_cms: &[u8]) -> Vec<u8> {
@@ -795,6 +915,105 @@ fn validates_signatures_written_with_ber_indefinite_lengths() {
         tampered[i] = b'K';
         let s = signatures(&open(&tampered), &tampered, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
         assert_eq!(s.status, Status::Invalid);
+    }
+}
+
+/// A signed attribute: the attribute type and a SET holding its one value.
+fn attribute(oid: &str, value: &[u8]) -> Vec<u8> {
+    der::seq(&[&der::oid(oid), &der::set_of(&[value])])
+}
+
+/// `signed` with its signature made again by `id` over the signed attributes `attrs` and its
+/// encapsulated content typed `encap_type`, the rest of the CMS built as the signer builds it, so
+/// only those differ.
+fn resigned_with_attributes(signed: &[u8], id: &pkcs12::DigitalId, encap_type: &str, attrs: &[Vec<u8>]) -> Vec<u8> {
+    use pdfcraft_sign::DigestAlg;
+    use pdfcraft_sign::der::tag;
+    let alg = DigestAlg::Sha256;
+    let refs: Vec<&[u8]> = attrs.iter().map(Vec::as_slice).collect();
+    let set = der::set_of(&refs);
+    let signature = id.key.sign(alg, &set).unwrap();
+    let mut signed_attrs = set.clone();
+    signed_attrs[0] = tag::ctx(0);
+    let cert = &id.certificate;
+    let sid = der::seq(&[&cert.issuer.raw, &der::uint(&cert.serial)]);
+    let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &id.key.signature_algorithm(alg), &der::octets(&signature)]);
+    let encap = der::seq(&[&der::oid(encap_type)]);
+    let signed_data =
+        der::seq(&[&der::int(1), &der::set_of(&[&alg.algorithm()]), &encap, &der::tlv(tag::ctx(0), &cert.raw), &der::set_of(&[&signer])]);
+    let cms = der::seq(&[&der::oid("1.2.840.113549.1.7.2"), &der::explicit(0, &signed_data)]);
+    let (a, b) = contents_span(signed);
+    assert!(cms.len() * 2 <= b - a, "the CMS fits the /Contents placeholder");
+    let hex: String = cms.iter().chain(std::iter::repeat(&0)).take((b - a) / 2).map(|x| format!("{x:02x}")).collect();
+    let mut out = signed.to_vec();
+    out[a..b].copy_from_slice(hex.as_bytes());
+    out
+}
+
+const DATA: &str = "1.2.840.113549.1.7.1";
+const TST_INFO: &str = "1.2.840.113549.1.9.16.1.4";
+const CONTENT_TYPE: &str = "1.2.840.113549.1.9.3";
+const MESSAGE_DIGEST: &str = "1.2.840.113549.1.9.4";
+
+/// RFC 5652 §5.3: signed attributes carry the message digest, which ties the signature to the
+/// document, and the content type (data, for a document). A signature over attributes without
+/// the digest covers nothing of the document and is invalid; another content type is not a
+/// document signature; a missing content type is read anyway, with a note. `eContentType` must
+/// be data too, and the same type as the attribute, which the signature covers and it does not.
+#[test]
+fn signed_attributes_must_bind_the_document() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let (a, b) = contents_span(&signed);
+    let digest = pdfcraft_sign::DigestAlg::Sha256.digest(&[&signed[..a - 1], &signed[b + 1..]]);
+    let data_type = attribute(CONTENT_TYPE, &der::oid(DATA));
+    let tst_type = attribute(CONTENT_TYPE, &der::oid(TST_INFO));
+    let message_digest = attribute(MESSAGE_DIGEST, &der::octets(&digest));
+    let check_as = |encap_type: &str, attrs: &[Vec<u8>]| {
+        let pdf = resigned_with_attributes(&signed, &id, encap_type, attrs);
+        signatures(&open(&pdf), &pdf, &trust).into_iter().find(|s| s.signed).unwrap()
+    };
+    let check = |attrs: &[Vec<u8>]| check_as(DATA, attrs);
+    let said = |s: &pdfcraft_sign::SignatureInfo, sentence: &str| s.details.iter().any(|d| d.message == sentence);
+    let unreadable_because = |s: &pdfcraft_sign::SignatureInfo, why: &str| {
+        s.details.iter().any(|d| d.pattern == "The signature could not be read ({})." && d.message.contains(why))
+    };
+
+    // Both attributes, as a signer writes them: valid, so the cases below differ only in them.
+    let s = check(&[data_type.clone(), message_digest.clone()]);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+
+    let s = check(std::slice::from_ref(&data_type));
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(said(&s, "The signature's signed attributes have no message digest, so the signature does not cover the document."), "{:?}", s.details);
+
+    // An RFC 3161 token's types, TSTInfo in the attribute and in eContentType.
+    let s = check_as(TST_INFO, &[tst_type.clone(), message_digest.clone()]);
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(
+        said(&s, "The signature's signed attributes name a content type other than data, so it is not a signature of the document."),
+        "{:?}",
+        s.details
+    );
+
+    let s = check(std::slice::from_ref(&message_digest));
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(said(&s, "The signature's signed attributes have no content type, which CMS requires; it was read anyway."), "{:?}", s.details);
+
+    // A content type the attribute does not name, and one that only eContentType names.
+    let s = check_as(TST_INFO, &[data_type.clone(), message_digest.clone()]);
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(unreadable_because(&s, "the signed content type is not the encapsulated content type"), "{:?}", s.details);
+    let s = check_as(TST_INFO, std::slice::from_ref(&message_digest));
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(unreadable_because(&s, "the encapsulated content is not data"), "{:?}", s.details);
+
+    // A second content-type attribute, with the same value or another one.
+    for second in [&data_type, &tst_type] {
+        let s = check(&[data_type.clone(), second.clone(), message_digest.clone()]);
+        assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+        assert!(unreadable_because(&s, "one content type with one value"), "{:?}", s.details);
     }
 }
 
@@ -1905,6 +2124,55 @@ fn appearance_labels_helvetica_cannot_draw_are_refused() {
         assert!(content.contains(word), "{word}: {content}");
     }
     assert!(!content.contains("Reason") && !content.contains("Date:") && !content.contains('?'), "{content}");
+}
+
+/// A visible signature with Central European characters (č, ć, ž, š) embeds the bundled
+/// Inter font and draws them cleanly instead of refusing or writing `?`.
+#[test]
+fn visible_appearance_draws_central_european_characters_with_embedded_font() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("Luka Petravić", "Oddelek", "Podjetje d.o.o.", "luka@example.com", "SI");
+    let cert = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let luka_id = DigitalId { key: id.key, certificate: cert, chain: Vec::new(), friendly_name: None };
+    let shown =
+        pdfcraft_sign::Appearance { name: true, distinguished_name: true, reason: true, location: true, ..pdfcraft_sign::Appearance::default() };
+    let sl = SignOptions {
+        rect: Some([150.0, 20.0, 280.0, 70.0]),
+        reason: Some("Podpisano s potrdilom".into()),
+        location: Some("Ljubljana, Slovenija".into()),
+        appearance: shown,
+        ..opts()
+    };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &luka_id, &sl).unwrap();
+    let (content, res) = appearance_of(&signed, "Signature1");
+    // Verify that the appearance stream does not write `?` in place of non-WinAnsi characters.
+    assert!(!content.contains('?'), "appearance content should not write '?' for Central European characters: {content}");
+    // Verify an embedded TrueType font was added to the appearance resources.
+    let fonts = res.get(b"Font").and_then(|o| o.as_dict()).unwrap();
+    assert!(fonts.contains(b"PCFull0"), "appearance should reference the embedded font: {fonts:?}");
+    // Verify signature validation still passes.
+    let doc = open(&signed);
+    let trust = TrustStore { certs: vec![luka_id.certificate.clone()] };
+    let s = signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid);
+    assert_eq!(s.reason.as_deref(), Some("Podpisano s potrdilom"));
+}
+
+/// A label Helvetica can't draw is refused even when a detail already needs the embedded font: the
+/// labels never choose the font, so a Japanese label beside a Latin Extended name is never written
+/// as the wrong glyphs.
+#[test]
+fn appearance_label_outside_helvetica_is_refused_beside_an_embedded_font_name() {
+    use pdfcraft_sign::{Appearance, AppearanceLabels};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("Luka Petravić", "Oddelek", "Podjetje d.o.o.", "luka@example.com", "SI");
+    let cert = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let luka_id = DigitalId { key: id.key, certificate: cert, chain: Vec::new(), friendly_name: None };
+    let japanese = AppearanceLabels { signed_by: "署名者".into(), ..AppearanceLabels::default() };
+    let o = SignOptions { rect: Some([150.0, 20.0, 280.0, 70.0]), appearance: Appearance::default(), appearance_labels: japanese, ..opts() };
+    let err = pdfcraft_sign::sign(&open(&fixture()), &luka_id, &o).unwrap_err();
+    assert!(matches!(err, SignError::Unsupported(_)), "{err:?}");
+    assert!(err.to_string().contains("the signed_by label"), "{err}");
 }
 
 /// Every sentence this crate says about a signature is listed in `WORDINGS`, and every sentence on

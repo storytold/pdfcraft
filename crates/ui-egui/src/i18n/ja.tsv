@@ -138,6 +138,8 @@
 	Next view	次の表示
 	Page display	ページ表示
 	Continuous scrolling	連続スクロール
+	Show gaps between pages	ページ間の余白を表示
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	ページ間の余白を非表示にしてページの端をつなげます。PDF 内の余白は変更されません。
 	Two-page view	見開き表示
 	Single page	単一ページ
 	Show cover page in two-page view	見開き表示で表紙を単独表示
@@ -842,6 +844,7 @@
 	Insert Page Number	ページ番号を挿入
 	Insert Date	日付を挿入
 	Start page number	開始ページ番号
+	Shrink the page content to make room for the header and footer	ヘッダーとフッターの領域を空けるためにページの内容を縮小
 	Source	ソース
 	Fit to page	ページに合わせる
 	Rotation	回転
@@ -1220,6 +1223,7 @@
 	Off	オフ
 	Flip on long edge	長辺とじ
 	Flip on short edge	短辺とじ
+	Printer default	プリンターの既定
 	Paper:	用紙:
 	Pages to Print	印刷するページ
 	More options:	詳細オプション:
@@ -1363,6 +1367,8 @@
 	This document has no layers.	この文書にレイヤーはありません。
 	This document has no attachments.	この文書に添付ファイルはありません。
 	Hide layer	レイヤーを非表示
+	Layer options	レイヤーのオプション
+	Reset to Initial Visibility	初期表示状態にリセット
 	Show layer	レイヤーを表示
 	Set layer visibility	レイヤーの表示を設定
 	on page {label}	ページ {label}
@@ -1660,6 +1666,7 @@
 	Looking for printers…	プリンターを検索しています…
 	Sending sheet {s} of {n} to {printer}…	{printer} に用紙 {s} / {n} を送信しています…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	プリンターが見つかりません。プリンターがインストールされ、印刷スプーラーが動作していることを確認してから、もう一度［印刷］を開いてください。
+	Reading the printer's settings…	プリンターの設定を読み込んでいます…
 	Sending to {printer}…	{printer} に送信しています…
 	Choose a folder for the searchable files	検索可能なファイルの保存先フォルダーを選択
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ファイルは上から順に結合されます。すべてのページを使用する場合は「ページ」を空欄にしてください。
@@ -1806,6 +1813,7 @@
 	This document has no restrictions to lift	この文書には解除する制限がありません
 	The document's security settings don't allow this change	文書のセキュリティ設定により、この変更は許可されていません
 	The document's security settings don't allow copying text and images	文書のセキュリティ設定により、テキストと画像のコピーは許可されていません
+	The document's security settings don't allow printing	文書のセキュリティ設定により、印刷は許可されていません
 	Open a document first	先に文書を開いてください
 	Security will be removed when you save	セキュリティは保存時に解除されます
 	Click text or an image to edit it	テキストまたは画像をクリックして編集
@@ -2311,6 +2319,7 @@ key	Space	スペース
 	Printer paper and scaling may differ. Check driver settings.	プリンターの用紙や倍率は異なる場合があります。ドライバーの設定を確認してください。
 	Drawing scale changes. Use Actual size for full-scale plans.	図面の縮尺が変わります。原寸で印刷するには「実際のサイズ」を使用してください。
 	Reload documents when their files change on disk	ディスク上のファイルが変更されたら文書を再読み込みする
+	Always use my default zoom and page layout	常に既定のズームとページレイアウトを使用する
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	このファイルはディスク上で変更されました。「再読み込み」は新しい版を表示して未保存の変更を破棄し、「保存」はこの版で置き換えます。
 	Reload	再読み込み
 	Couldn't reload {name}: {e}	{name} を再読み込みできませんでした: {e}
@@ -2481,3 +2490,28 @@ animation effects	Off	オフ
 	Paragraph spacing	段落間隔
 	Less	折りたたむ
 	Other options	その他のオプション
+	Thumbnail size	サムネイルのサイズ
+	Smaller thumbnails	サムネイルを小さく
+	Larger thumbnails	サムネイルを大きく
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	コメントの形状を変更
+
+# Prepare a form ▸ Text field table
+	Add text field table	テキストフィールドの表を追加
+	Text field table	テキストフィールドの表
+	Text Field Table	テキストフィールドの表
+	Columns	列
+	Row spacing	行の間隔
+	Column spacing	列の間隔
+	First row number	最初の行番号
+	Column widths	列の幅
+	Distribute evenly	均等に配分
+	Field names	フィールド名
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N または {row} は行番号、{col} は列番号、{seq} はセル番号です。どれもない場合は、行番号が末尾に付きます。
+	Column {n}	列 {n}
+	Add fields	フィールドを追加
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	行の高さが足りません: 範囲を高くするか、行数または行の間隔を減らしてください
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	列の幅が足りません: 範囲を広げるか、その列の幅を増やすか、列数または列の間隔を減らしてください
+	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
+	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
+	a field named {name} already exists	{name} という名前のフィールドは既にあります

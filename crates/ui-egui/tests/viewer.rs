@@ -330,6 +330,9 @@ fn layouts_fit_height_labels_and_system_theme() {
     assert_eq!(labels[1], "ii");
     assert!(h.state_mut().views[0].go_to_typed("ii", &labels));
     assert_eq!(h.state().views[0].current, 1);
+    // Under the box, the physical position, since "ii" does not say which page it is (#2834).
+    h.run_steps(2);
+    h.get(By::new().label(&format!("2/{}", labels.len())));
     assert!(!h.state_mut().views[0].go_to_typed("xx", &labels));
     // Follow the system theme.
     h.state_mut().set_option("theme", "system").unwrap();
@@ -1406,6 +1409,86 @@ fn thumbnail_rect(h: &Harness<'static, PdfCraftApp>, n: usize) -> egui::Rect {
 /// Whether `r` lies wholly in the part of the Pages panel in view.
 fn in_panel_view(h: &Harness<'static, PdfCraftApp>, r: egui::Rect) -> bool {
     h.state().views[0].pages_panel.expect("the Pages panel is shown").contains_rect(r)
+}
+
+#[test]
+fn pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection() {
+    let mut h = pages_panel_harness(&[(200, 300); 30]);
+    h.state_mut().views[0].select_pages(&[0, 1]);
+    h.run_steps(2);
+    let usual = thumbnail_rect(&h, 1).width();
+    let zoom = h.state().views[0].zoom;
+    let visible = |h: &Harness<'static, PdfCraftApp>| (1..=30).filter(|n| in_panel_view(h, thumbnail_rect(h, *n))).count();
+    let before = visible(&h);
+    h.get_by_label("Smaller thumbnails").click();
+    h.run_steps(4);
+    assert!(thumbnail_rect(&h, 1).width() < usual);
+    assert!(visible(&h) > before, "smaller thumbnails show more complete pages");
+    assert_eq!(h.state().views[0].target_pages(), vec![0, 1]);
+    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].zoom, zoom, "only the thumbnails are resized");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    if let Ok(dir) = std::env::var("PDFCRAFT_THUMBNAIL_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/small.png")).unwrap();
+    }
+    h.get_by_label("Larger thumbnails").click();
+    h.run_steps(4);
+    assert!((thumbnail_rect(&h, 1).width() - usual).abs() < 0.1);
+    h.get_by_label("Larger thumbnails").click();
+    h.run_steps(4);
+    assert!(thumbnail_rect(&h, 1).width() > usual);
+    assert_eq!(h.state().views[0].target_pages(), vec![0, 1]);
+    if let Ok(dir) = std::env::var("PDFCRAFT_THUMBNAIL_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/large.png")).unwrap();
+        h.state_mut().set_option("theme", "dark").unwrap();
+        h.run_steps(4);
+        h.render().unwrap().save(format!("{dir}/large-dark.png")).unwrap();
+    }
+}
+
+#[test]
+fn pages_panel_thumbnail_zoom_is_bounded_independent_and_survives_reload() {
+    let mut h = pages_panel_harness(&[(200, 300); 6]);
+    let usual = thumbnail_rect(&h, 1).width();
+    let zoom = h.state().views[0].zoom;
+    h.state_mut().set_option("grid-zoom", "200").unwrap();
+    h.state_mut().set_option("thumbnail-zoom", "50%").unwrap();
+    h.run_steps(4);
+    let small = thumbnail_rect(&h, 1).width();
+    assert!(small < usual);
+    for invalid in ["0", "49", "151", "NaN", "inf", "nope"] {
+        assert!(h.state_mut().set_option("thumbnail-zoom", invalid).is_err(), "reject {invalid}");
+    }
+    h.run_steps(3);
+    assert_eq!(thumbnail_rect(&h, 1).width(), small);
+    assert_eq!(h.state().views[0].grid_zoom(), 2.0);
+    assert_eq!(h.state().views[0].zoom, zoom);
+    let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
+    h.state_mut().views[0].document_replaced(&info);
+    h.run_steps(4);
+    assert_eq!(thumbnail_rect(&h, 1).width(), small, "file reload keeps the chosen thumbnail size");
+    h.state_mut().views[0].set_thumbnail_zoom(f32::NAN);
+    assert_eq!(h.state().views[0].thumbnail_zoom(), 0.5);
+    h.state_mut().views[0].set_thumbnail_zoom(f32::MAX);
+    assert_eq!(h.state().views[0].thumbnail_zoom(), 1.5);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    let mut empty = PdfCraftApp::new();
+    assert!(empty.set_option("thumbnail-zoom", "100").is_err());
+}
+
+#[test]
+fn pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible() {
+    let mut h = pages_panel_harness(&[(200, 300); 30]);
+    h.state_mut().views[0].go_to_page(24);
+    h.run_steps(4);
+    for size in ["50", "150", "80", "100"] {
+        h.state_mut().set_option("thumbnail-zoom", size).unwrap();
+        h.run_steps(4);
+        assert!(in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 stays visible at {size}%");
+        assert_eq!(h.state().views[0].current, 24);
+        h.get_by_label("Smaller thumbnails");
+        h.get_by_label("Larger thumbnails");
+    }
 }
 
 /// #2781: as in Acrobat, going to a page whose thumbnail is out of sight scrolls the Pages

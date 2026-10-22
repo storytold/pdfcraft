@@ -17,7 +17,7 @@
 //! - layers (optional content groups) used by the pages are registered in the destination's
 //!   `/OCProperties`, keeping their default on/off state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -240,21 +240,29 @@ pub fn import_pages_with(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
-    let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
+    let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
         Ok(imported) => imported,
         Err(e) => {
             // A refusal while copying (a source too deep to follow) has only added objects:
             // take them back, so the destination is as it was.
-            for n in dst.object_numbers().into_iter().filter(|n| *n >= first_new) {
-                dst.free(ObjRef::new(n, dst.generation(n)));
+            for r in added_objects(dst, &before) {
+                dst.free(r);
             }
             return Err(e);
         }
     };
-    let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
+    let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
+}
+
+/// The objects in `dst` that are not among `before`, the numbers it held before an import: the
+/// ones the import added. They are not always numbered above the others: when no number is left
+/// above the highest (the document holds object 4294967295, or its `/Size` is exhausted),
+/// [`Document::add`] fills free numbers below it.
+fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
+    dst.object_numbers().into_iter().filter(|n| !before.contains(n)).map(|n| ObjRef::new(n, dst.generation(n))).collect()
 }
 
 /// Insert Pages from File: [`import_pages_with`], and the inserted file's bookmarks come along
@@ -270,9 +278,9 @@ pub fn insert_file_pages(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
-    let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
+    let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
-    let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
+    let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
     let outline = source_outline(src, imported.page_map);
     if let Some(first) = imported.pages.first()

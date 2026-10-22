@@ -147,15 +147,7 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
 /// (4.46 → 4.47 MB), a text page at 220 dpi 70 → 40 ms (0.85 → 0.89 MB), and an annual
 /// report page at 150 dpi 179 → 64 ms (1.41 → 1.38 MB).
 pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
-    // Checked here, not left to the encoder: `as_chunks` below drops a partial trailing pixel,
-    // and the opaque path would write the rest as a valid image.
-    let expected = usize::try_from(width).ok().zip(usize::try_from(height).ok()).and_then(|(w, h)| w.checked_mul(h)?.checked_mul(4));
-    if expected != Some(premultiplied.len()) {
-        return Err(match expected {
-            Some(n) => format!("a {width}×{height} raster is {n} bytes of RGBA, got {}", premultiplied.len()),
-            None => format!("a {width}×{height} raster is too large"),
-        });
-    }
+    check_raster(width, height, premultiplied)?;
     let pixels = premultiplied.as_chunks::<4>().0;
     let opaque = pixels.iter().all(|px| px[3] == 255);
     let (color, data) = if opaque {
@@ -213,6 +205,22 @@ impl ImageFormat {
     }
 }
 
+/// Checks that `premultiplied` is exactly `width × height` RGBA pixels, and at least one,
+/// before any encoder sees it: `as_chunks` drops a partial trailing pixel, so the rest would be
+/// written as a valid image, and the JPEG and TIFF encoders panic on a buffer that doesn't fit
+/// the size.
+fn check_raster(width: u32, height: u32, premultiplied: &[u8]) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err(format!("a {width}×{height} raster has no pixels"));
+    }
+    let expected = usize::try_from(width).ok().zip(usize::try_from(height).ok()).and_then(|(w, h)| w.checked_mul(h)?.checked_mul(4));
+    match expected {
+        Some(n) if n == premultiplied.len() => Ok(()),
+        Some(n) => Err(format!("a {width}×{height} raster is {n} bytes of RGBA, got {}", premultiplied.len())),
+        None => Err(format!("a {width}×{height} raster is too large")),
+    }
+}
+
 /// Premultiplied RGBA composited over white → RGB.
 fn over_white(premultiplied: &[u8]) -> Vec<u8> {
     premultiplied
@@ -230,6 +238,7 @@ fn over_white(premultiplied: &[u8]) -> Vec<u8> {
 pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8, dpi: f64) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
     use image::codecs::jpeg::{JpegEncoder, PixelDensity};
+    check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
     let mut out = Vec::new();
     let mut enc = JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
@@ -246,6 +255,7 @@ pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> R
     use tiff::encoder::{Compression, Rational, TiffEncoder, colortype::RGB8};
     use tiff::tags::{ResolutionUnit, Tag};
     let err = |e: tiff::TiffError| e.to_string();
+    check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
     let mut out = std::io::Cursor::new(Vec::new());
     let mut tiff = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Lzw);
@@ -287,8 +297,10 @@ mod image_name_tests {
 }
 
 #[cfg(test)]
-mod png_tests {
-    use super::encode_png;
+mod raster_tests {
+    use super::{ImageFormat, encode_image, encode_png};
+
+    const FORMATS: [ImageFormat; 3] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff];
 
     /// The colour type and pixels of a PNG.
     fn decode(png: &[u8]) -> (png::ColorType, Vec<u8>) {
@@ -318,8 +330,9 @@ mod png_tests {
         assert_eq!(pixels, [128, 0, 64, 128, 0, 0, 0, 0, 10, 20, 30, 255]);
     }
 
-    /// A buffer that is not exactly `width × height` RGBA pixels is an error, opaque or not. The
-    /// opaque path used to drop a partial trailing pixel and write the rest as a valid image.
+    /// A buffer that is not exactly `width × height` RGBA pixels is an error in every format,
+    /// opaque or not. A partial trailing pixel used to be dropped and the rest written as a
+    /// valid image, and a buffer too short for its size panicked in the JPEG and TIFF encoders.
     #[test]
     fn rasters_of_the_wrong_length_are_rejected() {
         let cases: [(&str, u32, u32, &[u8]); 7] = [
@@ -331,8 +344,22 @@ mod png_tests {
             ("empty", 1, 1, &[]),
             ("a size whose byte count overflows", u32::MAX, u32::MAX, &[10, 20, 30, 255]),
         ];
-        for (what, width, height, data) in cases {
-            assert!(encode_png(width, height, data).is_err(), "{what}");
+        for format in FORMATS {
+            for (what, width, height, data) in cases {
+                assert!(encode_image(width, height, data, format, 72.0).is_err(), "{}, {what}", format.label());
+            }
+        }
+    }
+
+    /// A raster of no pixels is the right length (no bytes), and refused before any encoder sees
+    /// it, in every format.
+    #[test]
+    fn rasters_of_no_pixels_are_an_error() {
+        for format in FORMATS {
+            for (width, height) in [(0, 0), (0, 3), (3, 0)] {
+                let refused = encode_image(width, height, &[], format, 72.0).err();
+                assert_eq!(refused, Some(format!("a {width}×{height} raster has no pixels")), "{}", format.label());
+            }
         }
     }
 }

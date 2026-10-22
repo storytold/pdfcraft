@@ -67,6 +67,7 @@ fn push_buttons_alone_show_no_form_bar_and_a_screen_annotation_is_not_a_comment(
     }
     assert!(h.query_by_label_contains("interactive form fields").is_none(), "nothing to fill in, so no form bar");
     assert!(h.query_by_label("Highlight fields").is_none());
+    assert!(h.query_by_label("Hide field highlights").is_none());
 }
 
 #[test]
@@ -75,5 +76,5 @@ fn a_fillable_field_beside_push_buttons_still_shows_the_form_bar() {
     let text = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 160 200 180] /P 3 0 R >>";
     let h = open(pdf(&[&button, text, SCREEN]));
     h.get_by_label_contains("This document contains 2 interactive form fields.");
-    h.get_by_label("Highlight fields");
+    h.get_by_label("Hide field highlights");
 }

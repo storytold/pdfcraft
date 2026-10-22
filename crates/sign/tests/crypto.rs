@@ -239,6 +239,87 @@ fn certificates_load_from_pem_and_der_and_export_as_pem() {
     assert!(pdfcraft_sign::x509::load_certificates(b"hello").is_err());
 }
 
+/// Base64 in 64-column lines, for PEM armour.
+fn encode_base64(der: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::new();
+    for c in der.chunks(3) {
+        let n = u32::from(c[0]) << 16 | u32::from(*c.get(1).unwrap_or(&0)) << 8 | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            s.push(if i <= c.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    let lines: Vec<&str> = s.as_bytes().chunks(64).map(|l| std::str::from_utf8(l).unwrap()).collect();
+    lines.join("\n")
+}
+
+/// A PKCS #7 certificate bundle (degenerate SignedData, RFC 5652 §5.2) holding `certs`, laid out
+/// as `openssl crl2pkcs7 -nocrl` writes it.
+fn p7b(certs: &[&[u8]]) -> Vec<u8> {
+    use pdfcraft_sign::der::{explicit, int, oid, seq, set_of, tlv};
+    let encap = seq(&[&oid(cms::DATA)]);
+    let mut sd = vec![int(1), set_of(&[]), encap];
+    if !certs.is_empty() {
+        sd.push(tlv(0xA0, &certs.concat()));
+    }
+    sd.push(set_of(&[]));
+    let refs: Vec<&[u8]> = sd.iter().map(Vec::as_slice).collect();
+    seq(&[&oid(cms::SIGNED_DATA), &explicit(0, &seq(&refs))])
+}
+
+#[test]
+fn certificates_load_from_pkcs7_bundles() {
+    use pdfcraft_sign::x509::{load_certificates, to_pem};
+    let leaf = load_certificates(&data("rsa.crt.pem")).unwrap().remove(0);
+    let root = load_certificates(&data("ca.crt.pem")).unwrap().remove(0);
+    let bundle = p7b(&[&leaf.raw, &root.raw]);
+    // .p7b / .p7c in DER, the way Windows and Acrobat export a chain.
+    assert_eq!(load_certificates(&bundle).unwrap(), vec![leaf.clone(), root.clone()]);
+    // The same bundle as PEM `PKCS7` and `CMS` blocks, after a key and a plain certificate.
+    let b64 = encode_base64(&bundle);
+    for label in ["PKCS7", "CMS"] {
+        let text = format!(
+            "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n{}-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
+            to_pem(&leaf),
+            b64
+        );
+        assert_eq!(load_certificates(text.as_bytes()).unwrap(), vec![leaf.clone(), leaf.clone(), root.clone()], "{label}");
+    }
+    // An END that closes a different block ends nothing.
+    let mismatched = format!("-----BEGIN PKCS7-----\n{b64}\n-----END CERTIFICATE-----\n");
+    assert!(load_certificates(mismatched.as_bytes()).is_err());
+    // A block that never ends is a damaged file, not a shorter list.
+    let unclosed = format!("{}-----BEGIN PKCS7-----\n{b64}\n", to_pem(&leaf));
+    assert!(load_certificates(unclosed.as_bytes()).is_err());
+    // A bundle with no certificate, and a SignedData that isn't one, are errors, not empty lists.
+    assert!(load_certificates(&p7b(&[])).is_err());
+    let not_signed_data = pdfcraft_sign::der::seq(&[&pdfcraft_sign::der::oid(cms::DATA), &pdfcraft_sign::der::explicit(0, &[])]);
+    assert!(load_certificates(&not_signed_data).is_err());
+    // A SignedData out of shape: no signerInfos SET, or a version that isn't an INTEGER.
+    {
+        use pdfcraft_sign::der::{explicit, int, oid, seq, set_of, tlv};
+        let wrap = |sd: &[&[u8]]| seq(&[&oid(cms::SIGNED_DATA), &explicit(0, &seq(sd))]);
+        let (certs, encap) = (tlv(0xA0, &[leaf.raw.as_slice(), &root.raw].concat()), seq(&[&oid(cms::DATA)]));
+        assert_eq!(load_certificates(&wrap(&[&int(1), &set_of(&[]), &encap, &certs, &set_of(&[])])).unwrap().len(), 2);
+        assert!(load_certificates(&wrap(&[&int(1), &set_of(&[]), &encap, &certs])).is_err());
+        assert!(load_certificates(&wrap(&[&set_of(&[]), &set_of(&[]), &encap, &certs, &set_of(&[])])).is_err());
+        // An empty encapContentInfo, a repeated [0], and [1] CRLs before [0] certificates.
+        let crls = tlv(0xA1, &[]);
+        assert!(load_certificates(&wrap(&[&int(1), &set_of(&[]), &seq(&[]), &certs, &set_of(&[])])).is_err());
+        assert!(load_certificates(&wrap(&[&int(1), &set_of(&[]), &encap, &certs, &certs, &set_of(&[])])).is_err());
+        assert!(load_certificates(&wrap(&[&int(1), &set_of(&[]), &encap, &crls, &certs, &set_of(&[])])).is_err());
+        assert_eq!(load_certificates(&wrap(&[&int(1), &set_of(&[]), &encap, &certs, &crls, &set_of(&[])])).unwrap().len(), 2);
+    }
+    let mut trailing = bundle.clone();
+    trailing.extend_from_slice(&[0x05, 0x00]);
+    assert!(load_certificates(&trailing).is_err());
+    assert!(cms::certificate_bundle(&bundle).is_ok());
+    // Truncated anywhere: an error, never a panic.
+    for n in 0..bundle.len() {
+        let _ = load_certificates(&bundle[..n]);
+    }
+}
+
 // ── CRL and OCSP verification (RFC 5280, RFC 6960) ─────────────────────────────────────────
 
 use pdfcraft_sign::der::{self, tag};
@@ -544,6 +625,51 @@ fn weak_digests_say_so_in_words_that_are_pinned() {
             _ => assert_eq!(note, None, "{}", alg.name()),
         }
     }
+}
+
+#[test]
+fn small_rsa_keys_say_so_and_others_do_not() {
+    let rsa = |n: Vec<u8>| PublicKey::Rsa { n, e: vec![1, 0, 1] };
+    let note = Some(
+        "This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.",
+    );
+    // 1024 bits, with and without the leading zero byte of a DER INTEGER.
+    assert_eq!(rsa(vec![0xC0; 128]).weakness(), note);
+    assert_eq!(rsa([vec![0], vec![0xC0; 128]].concat()).weakness(), note);
+    // 2047 bits is still short; 2048 bits and more are not.
+    assert_eq!(rsa([vec![0x7F], vec![0xFF; 255]].concat()).weakness(), note);
+    assert_eq!(rsa([vec![0, 0x80], vec![0; 255]].concat()).weakness(), None);
+    assert_eq!(rsa(vec![0xFF; 512]).weakness(), None);
+    assert_eq!(rsa(Vec::new()).weakness(), note, "an empty modulus is not a strong key");
+    // The key description counts the same bits, so it never says 2048 next to the warning.
+    assert_eq!(rsa([vec![0], vec![0xC0; 128]].concat()).describe(), "RSA 1024-bit");
+    assert_eq!(rsa([vec![0x7F], vec![0xFF; 255]].concat()).describe(), "RSA 2047-bit");
+    assert_eq!(rsa([vec![0, 0x80], vec![0; 255]].concat()).describe(), "RSA 2048-bit");
+    assert_eq!(PublicKey::P256(vec![4; 65]).weakness(), None);
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    assert_eq!(id.certificate.public_key.weakness(), None, "the 2048-bit test identity");
+}
+
+/// A synthetic 1024-bit key made for this test (`openssl genrsa 1024`, e = 65537) and its
+/// PKCS #1 v1.5 SHA-256 signature of `hello`.
+const RSA_1024_N: &str = "ae561814194f0a06475c002fc7633b81e83a738ad3f35ba1ded959be6f6b62302028d58707403f44b7bda959e446f13849896711985ac4815e58d7d323aee664771c35bf2dc3db1bcdc49ac61ae7282a24ec7a5af9f6ebe98945e6a71c4998ed31c41bbb997c4873fb4b8271fd3cf76648efcbff76972ab7bcaf831b9e203d47";
+const RSA_1024_SIG: &str = "0de5110137e768a6b00201cf8340688c81a901fe309489f2c8186b7dc56e67f7e64188970a9bea926b9bd99b19985adfb0489956ffd5e0264468b678c4fd49a155a895fcb9ab127d0c3742b7a07866b3deec20a5b2f61af4cbfd2901517dc268e4d6edf4e905e0f4e05cdc740c3180971c1ec1470c1476f90ea988e2ab4cbb18";
+
+#[test]
+fn a_signature_made_with_a_small_rsa_key_verifies_with_the_note() {
+    use pdfcraft_sign::keys::Scheme;
+    let key = PublicKey::Rsa { n: unhex(RSA_1024_N), e: vec![1, 0, 1] };
+    let weak = key.weakness().expect("a 1024-bit key is short");
+    let sig = unhex(RSA_1024_SIG);
+    let mut notes = Vec::new();
+    let digest = DigestAlg::Sha256.digest(&[b"hello"]);
+    assert!(key.verify_noting(Scheme::RsaPkcs1, DigestAlg::Sha256, &digest, &sig, &mut notes).unwrap());
+    assert_eq!(notes, [weak]);
+    // A signature that doesn't verify says nothing about the key.
+    let mut notes = Vec::new();
+    let other = DigestAlg::Sha256.digest(&[b"hullo"]);
+    assert!(!key.verify_noting(Scheme::RsaPkcs1, DigestAlg::Sha256, &other, &sig, &mut notes).unwrap());
+    assert!(!notes.contains(&weak), "{notes:?}");
 }
 
 #[test]

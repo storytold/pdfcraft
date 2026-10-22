@@ -104,3 +104,23 @@ fn push_buttons_set_layer_visibility() {
     let s = h.state();
     assert!(!s.session.get(s.views[0].id).unwrap().dirty, "showing and hiding layers doesn't change the document");
 }
+
+#[test]
+fn layer_options_reset_to_initial_visibility() {
+    // Red off and Green on: the opposite of how the file opens.
+    let mut h = harness(|app| {
+        app.set_option("layer", "Red=off").unwrap();
+        app.set_option("layer", "Green=on").unwrap();
+        app.set_option("panel", "layers").unwrap();
+    });
+    assert_eq!(shown(&h), layers(false, true));
+    h.get_by_label("Layer options").click();
+    h.run_steps(2);
+    h.get_by_label("Reset to Initial Visibility").click();
+    h.run_steps(3);
+    assert_eq!(shown(&h), layers(true, false));
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(!doc.dirty, "showing and hiding layers doesn't change the document");
+    assert_eq!(doc.can_undo(), None, "nor is it an edit to undo");
+}

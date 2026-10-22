@@ -1,5 +1,5 @@
 //! Form tools: list fields, fill them (several at once, one undo step), clear the form, and
-//! prepare a form (add, change and delete fields).
+//! prepare a form (add fields one at a time or as a table, change and delete them).
 
 use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format, Validate};
 use pdfcraft_engine::{CalculationIssue, Edit, FieldProps, FieldValue, FormField, FormFieldKind, NewField, field_flags};
@@ -340,6 +340,67 @@ impl Automation {
         Ok(out)
     }
 
+    /// A table of text fields: `rect` (points from the top-left of the displayed page) divided
+    /// into rows and columns, one field per cell, as one undo step.
+    pub(crate) fn form_add_field_table(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::field_table::{self, FieldTable, MAX_COLUMNS, TableColumn, TableError};
+        let page = self.page(a)?;
+        let rect = a
+            .get("rect")
+            .and_then(Value::as_array)
+            .and_then(|r| r.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>())
+            .and_then(|r| <[f64; 4]>::try_from(r).ok())
+            .ok_or_else(|| bad("rect must be 4 numbers"))?;
+        let names = a.get("names").map(|_| a.strs("names")).transpose()?;
+        let widths = match a.get("widths") {
+            None => None,
+            Some(v) => Some(
+                v.as_array()
+                    .and_then(|w| w.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>())
+                    .ok_or_else(|| bad("widths must be an array of numbers"))?,
+            ),
+        };
+        // A negative count is no count: the table refuses it with its own words.
+        let counts = [a.opt_int("columns")?.map(|n| usize::try_from(n).unwrap_or(0)), names.as_ref().map(Vec::len), widths.as_ref().map(Vec::len)];
+        let mut given = counts.into_iter().flatten();
+        let columns = given.next().unwrap_or(1);
+        if given.any(|n| n != columns) {
+            return Err(bad("columns, names and widths must agree on the number of columns"));
+        }
+        // Before anything is sized by it.
+        if !(1..=MAX_COLUMNS).contains(&columns) {
+            return Err(bad(TableError::Columns.to_string()));
+        }
+        let (edit, fields) = {
+            let doc = self.doc(a)?;
+            let base = field_table::free_base(doc.form.iter().map(|f| f.name.as_str()));
+            let mut table = FieldTable::new(rect, &base);
+            table.rows = usize::try_from(a.int("rows")?).unwrap_or(0);
+            table.columns = (0..columns)
+                .map(|c| TableColumn {
+                    pattern: names.as_ref().and_then(|n| n.get(c)).map_or_else(|| field_table::column_pattern(&base, c + 1), |p| (*p).to_owned()),
+                    width: widths.as_ref().and_then(|w| w.get(c)).copied().unwrap_or(1.0),
+                })
+                .collect();
+            table.row_gap = a.opt_num("row_gap")?.unwrap_or(0.0);
+            table.column_gap = a.opt_num("column_gap")?.unwrap_or(0.0);
+            table.first_row = a.opt_int("first_row")?.map_or(1, |n| usize::try_from(n).unwrap_or(usize::MAX));
+            let info = doc.info.pages.get(page).ok_or_else(|| bad(format!("page {} does not exist", page + 1)))?;
+            let edit = field_table::edit(&table, page, info, &doc.form).map_err(|e| bad(e.to_string()))?;
+            // The names the batch adds, in the order it adds them.
+            let fields: Vec<String> = match &edit {
+                Edit::Batch { edits, .. } => {
+                    edits.iter().filter_map(|e| if let Edit::AddField { name, .. } = e { name.clone() } else { None }).collect()
+                }
+                _ => Vec::new(),
+            };
+            (edit, fields)
+        };
+        let mut out = self.apply(a, edit)?;
+        out["fields"] = json!(fields);
+        Ok(out)
+    }
+
     pub(crate) fn form_set_props(&mut self, a: &Args) -> Result<Value> {
         if a.get("widget").is_some() && a.get("caption").is_none() {
             return Err(bad("widget requires caption"));
@@ -418,7 +479,7 @@ impl Automation {
                 let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
                 let r = <[f64; 4]>::try_from(r).map_err(|_| ToolError::InvalidArgs("rect must be 4 numbers".into()))?;
                 let page = f.widgets.first().and_then(|w| w.page).ok_or_else(|| failed(format!("{name} is not on a page")))?;
-                let p = &doc.info.pages[page];
+                let p = doc.info.pages.get(page).ok_or_else(|| failed(format!("{name} is on page {}, which could not be read", page + 1)))?;
                 let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
                 Some((0, [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64]))
             }

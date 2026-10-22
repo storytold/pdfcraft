@@ -23,10 +23,10 @@ pub use craft::load_custom_thai_font_file;
 pub use craft::{
     BUNDLED_SARABUN, BUNDLED_SARABUN_BYTES, BUNDLED_TLWG_TYPEWRITER, BUNDLED_TLWG_TYPEWRITER_BYTES, CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO,
     ThaiFontEntry, active_thai_font, active_thai_font_entry, available_thai_fonts, bundled_tlwg_typewriter_font, document_arabic_font,
-    document_hebrew_font, document_japanese_font, document_japanese_font_for_style, document_japanese_fonts_for_style, document_thai_font,
-    font_directories, load_custom_thai_font, load_custom_thai_font_named, register_custom_thai_font, rescan_thai_fonts, set_active_thai_font_by_name,
-    set_active_thai_font_by_path, set_active_thai_font_entry, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts,
-    ui_telugu_fonts, ui_thai_fonts,
+    document_devanagari_font, document_hebrew_font, document_japanese_font, document_japanese_font_for_style, document_japanese_fonts_for_style,
+    document_latin_fonts, document_thai_font, font_directories, load_custom_thai_font, load_custom_thai_font_named, register_custom_thai_font,
+    rescan_thai_fonts, set_active_thai_font_by_name, set_active_thai_font_by_path, set_active_thai_font_entry, ui_arabic_fonts, ui_chinese_fonts,
+    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
@@ -58,6 +58,18 @@ pub fn cjk_width(s: &str, size: f64) -> f64 {
         .sum()
 }
 
+/// Approximate advance of `s` in Inter Regular at `size` points.
+pub fn inter_width(s: &str, size: f64) -> f64 {
+    use skrifa::MetadataProvider as _;
+    let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return helvetica_width(s, size) };
+    let loc = skrifa::instance::LocationRef::default();
+    let upem = font.metrics(skrifa::instance::Size::unscaled(), loc).units_per_em.max(1) as f64;
+    let scale = size / upem;
+    let charmap = font.charmap();
+    let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
+    s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
+}
+
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
 fn is_wide(c: char) -> bool {
     matches!(c,
@@ -76,7 +88,7 @@ fn is_wide(c: char) -> bool {
     )
 }
 
-/// Greedy line breaking within `width` points (paragraphs split on newlines; words longer
+/// Greedy line breaking within `width` points (paragraphs split on line breaks, where CRLF counts as one; words longer
 /// than a line are broken by character).
 pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     wrap_with(text, size, width, helvetica_width)
@@ -85,7 +97,8 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 /// [`wrap`], measuring with `measure` (for example [`cjk_width`]).
 pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
-    for para in text.split(['\n', '\r']) {
+    // A CRLF pair is one break, a lone CR or LF is one break each.
+    for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let mut line = String::new();
         // No word is on the line yet; an empty word (a leading space) still starts it.
         let mut fresh = true;
@@ -290,6 +303,15 @@ mod tests {
     }
 
     #[test]
+    fn crlf_is_one_line_break() {
+        assert_eq!(wrap("a\r\nb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\rb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\nb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\r\n\r\nb", 12.0, 100.0), ["a", "", "b"]);
+        assert_eq!(wrap("a\n\rb", 12.0, 100.0), ["a", "", "b"]);
+    }
+
+    #[test]
     fn win_ansi_encodability_matches_the_encoder() {
         for c in ['a', 'é', 'ÿ', '€', '—', '™', '\t', '?'] {
             assert!(win_ansi_encodable(c), "{c:?}");
@@ -323,6 +345,14 @@ mod tests {
         // Another value under the key is not a character: no mark.
         d.set(UNDRAWN_MARK.to_vec(), pdfcraft_cos::Object::Bool(true));
         assert_eq!(undrawn_mark(&d), None);
+    }
+
+    #[test]
+    fn inter_width_measures_latin_extended_and_ascii() {
+        assert!(inter_width("Luka Petravić", 12.0) > 0.0);
+        assert_eq!(inter_width("", 12.0), 0.0);
+        let w = inter_width("čžšć", 10.0);
+        assert!(w > 10.0 && w < 100.0);
     }
 
     #[test]

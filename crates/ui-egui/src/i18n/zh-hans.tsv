@@ -521,6 +521,7 @@
 	Insert Page Number	插入页码
 	Insert Date	插入日期
 	Start page number	起始页码
+	Shrink the page content to make room for the header and footer	缩小页面内容，为页眉和页脚留出空间
 	Source	来源
 	Fit to page	适合页面
 	Rotation	旋转
@@ -906,6 +907,7 @@
 	Off	关
 	Flip on long edge	沿长边翻转
 	Flip on short edge	沿短边翻转
+	Printer default	打印机默认
 	Paper:	纸张：
 	Pages to Print	要打印的页面
 	More options:	更多选项：
@@ -973,6 +975,8 @@
 	Next view	下一个视图
 	Page display	页面显示
 	Continuous scrolling	连续滚动
+	Show gaps between pages	显示页面间距
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隐藏间距以连接页面边缘。PDF 内的页边距保持不变。
 	Two-page view	双页视图
 	Single page	单页
 	Show cover page in two-page view	在双页视图中显示封面页
@@ -1311,6 +1315,8 @@
 	This document has no layers.	本文档没有图层。
 	This document has no attachments.	本文档没有附件。
 	Hide layer	隐藏图层
+	Layer options	图层选项
+	Reset to Initial Visibility	重置为初始可见性
 	Show layer	显示图层
 	Set layer visibility	设置图层可见性
 	on page {label}	第 {label} 页
@@ -1618,6 +1624,7 @@
 	Looking for printers…	正在查找打印机…
 	Sending sheet {s} of {n} to {printer}…	正在将第 {s} 张（共 {n} 张）发送到{printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	未找到打印机。请检查打印机是否已安装、打印后台处理程序是否在运行，然后重新打开“打印”。
+	Reading the printer's settings…	正在读取打印机设置…
 	Sending to {printer}…	正在发送到{printer}…
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
 	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
@@ -1764,6 +1771,7 @@
 	This document has no restrictions to lift	此文档没有可解除的限制
 	The document's security settings don't allow this change	文档安全设置不允许此更改
 	The document's security settings don't allow copying text and images	文档安全设置不允许复制文本和图像
+	The document's security settings don't allow printing	文档安全设置不允许打印
 	Open a document first	请先打开文档
 	Security will be removed when you save	保存时将删除安全性设置
 	Click text or an image to edit it	单击文本或图像进行编辑
@@ -2135,6 +2143,7 @@
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
 	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
+	Always use my default zoom and page layout	始终使用我的默认缩放和页面布局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此文件已在磁盘上更改。“重新加载”显示新版本并放弃未保存的更改；“保存”则用此版本替换它。
 	Reload	重新加载
 	Couldn't reload {name}: {e}	无法重新加载{name}：{e}
@@ -2445,3 +2454,28 @@ animation effects	Off	关
 	Paragraph spacing	段落间距
 	Less	收起
 	Other options	其他选项
+	Thumbnail size	缩略图大小
+	Smaller thumbnails	缩小缩略图
+	Larger thumbnails	放大缩略图
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	更改注释形状
+
+# Prepare a form ▸ Text field table
+	Add text field table	添加文本字段表格
+	Text field table	文本字段表格
+	Text Field Table	文本字段表格
+	Columns	列
+	Row spacing	行间距
+	Column spacing	列间距
+	First row number	起始行号
+	Column widths	列宽
+	Distribute evenly	平均分布
+	Field names	字段名称
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 表示行号，{col} 表示列号，{seq} 表示单元格序号。如果都没有，行号加在末尾。
+	Column {n}	第 {n} 列
+	Add fields	添加字段
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	行太矮：请增加区域高度，或减少行数或行间距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某列太窄：请加宽区域、给该列更多宽度，或减少列数或列间距
+	field names can't contain a period: {name}	字段名称不能包含句点：{name}
+	two cells would both be named {name}	两个单元格的名称都会是 {name}
+	a field named {name} already exists	已存在名为 {name} 的字段

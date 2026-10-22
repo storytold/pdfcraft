@@ -1,8 +1,8 @@
 //! Embeds the fonts of the optional craft-fonts build input (`CRAFT_FONTS_DIR`) as `CRAFT_FONTS`.
 //! The recipe is craft-fonts' `docs/integration.md`; unset, `CRAFT_FONTS` is empty. It only reads
 //! the local checkout (no network). On wasm32 it embeds only the UI faces (BIZ UDPGothic Regular
-//! and any `Arab`, `Telu`, `Hebr` or `Thai` face), to keep the web build within hosting limits (Cloudflare Pages:
-//! 25 MiB per file).
+//! and any `Arab`, `Telu`, `Hebr`, `Thai` or `Deva` face), to keep the web build within hosting
+//! limits (Cloudflare Pages: 25 MiB per file).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -55,8 +55,14 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         let telugu = scripts.split(',').any(|s| s.trim() == "Telu");
         // And the Hebrew ones (small), for Hebrew text and Edit text on the web.
         let hebrew = scripts.split(',').any(|s| s.trim() == "Hebr");
-        let web_face =
-            (*family == "BIZ UDPGothic" && *style == "Regular") || arabic || telugu || hebrew || scripts.split(',').any(|s| s.trim() == "Thai");
+        // Devanagari too, for the Hindi interface (one small face).
+        let devanagari = scripts.split(',').any(|s| s.trim() == "Deva");
+        let web_face = (*family == "BIZ UDPGothic" && *style == "Regular")
+            || arabic
+            || telugu
+            || hebrew
+            || scripts.split(',').any(|s| s.trim() == "Thai")
+            || devanagari;
         if wasm && !web_face {
             continue;
         }

@@ -1,4 +1,5 @@
 //! The robustness harness visits each directory once, including symlink aliases and cycles.
+//! Its `--timeout` and `--dpi` options are checked before anything is scanned.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -108,4 +109,23 @@ fn check_follows_directory_and_file_symlinks() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["status"], "ok");
     assert_eq!(results[0]["file"], file_alias.to_string_lossy().as_ref());
+}
+
+/// `--timeout` and `--dpi` are checked before any input is scanned: a zero timeout used to
+/// make every file time out at once, and a dpi that is not a positive finite number used to
+/// reach each child, which printed nothing and was reported as a crash per file.
+#[test]
+fn a_bad_timeout_or_dpi_is_refused_before_scanning() {
+    let out = Command::new(BIN).args(["check", "no-such-input", "--timeout", "0"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.stderr, b"pdfcraft-cli: bad --timeout: expected a positive whole number of seconds, got \"0\"\n");
+    for value in ["abc", "0", "-3", "NaN"] {
+        let out = Command::new(BIN).args(["check", "no-such-input", "--dpi", value]).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "--dpi {value}");
+        assert_eq!(
+            out.stderr,
+            format!("pdfcraft-cli: bad --dpi: expected a positive number of dots per inch, got {value:?}\n").as_bytes(),
+            "--dpi {value}"
+        );
+    }
 }

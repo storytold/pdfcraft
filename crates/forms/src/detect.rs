@@ -5,7 +5,7 @@
 //! [`detect`] is a pure function over the page's words and drawn shapes; [`page_shapes`] reads
 //! the shapes from a page's content, [`raster::shapes`] from a picture of the page (a scan).
 
-use pdfcraft_content::{Matrix, parse};
+use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{Document, Object};
 
 pub mod raster;
@@ -136,11 +136,10 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
         },
         None => Vec::new(),
     };
-    let mut data = Vec::new();
+    let mut pieces = Vec::new();
     for o in list {
         if let Object::Stream(s) = &*doc.resolve(&o) {
-            data.extend(s.decoded().unwrap_or_default());
-            data.push(b'\n');
+            pieces.push(s.decoded().unwrap_or_default());
         }
     }
     let mut ctm = Matrix::IDENTITY;
@@ -149,7 +148,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut subpaths: Vec<DetectionPath> = Vec::new();
     let mut path = DetectionPath::default();
     let mut cur: Option<[f64; 2]> = None;
-    for op in parse(&data).ops {
+    for op in Pieces::join(&pieces).parse().ops {
         match op.op.as_slice() {
             b"q" => stack.push(ctm),
             b"Q" => ctm = stack.pop().unwrap_or(ctm),

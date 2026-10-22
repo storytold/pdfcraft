@@ -7,7 +7,14 @@ A dynamic XFA form is a PDF shell around an XML template (`/AcroForm /XFA`): one
 ("requires Adobe Reader") and `/NeedsRendering true`. Viewers without an XFA engine show the
 placeholder. This crate reads the template, lays it out, and writes ordinary pages and AcroForm
 fields into the document, so everything else in PdfCraft (rendering, filling, saving, printing,
-the automation tools) works on it unchanged. The engine does this when it opens such a form.
+the automation tools) works on it unchanged. The engine does this when it opens such a form,
+and repeats layout after an edited multiline text field without a fixed height changes value.
+This uses the final datasets after calculations, including on forms without scripts; pages
+and widgets refresh together and undo/redo restores their layout. Text longer than a page
+uses the existing page-text fallback: the full value remains in the datasets and is shown
+across pages, with a warning that it can no longer be edited as a widget. Fixed-height fields
+keep their geometry. If a value cannot be synchronized to the datasets, the engine reports
+that warning and keeps the existing layout and accepted widget values.
 
 ## What it does
 
@@ -17,6 +24,7 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   page areas, content areas and media; measurements in mm, cm, in, pt and px; fonts, paragraphs,
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
+  text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
   inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
@@ -59,7 +67,9 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   the datasets packet per event), and `rerender`, which lays the form out again from template,
   data and overrides. The scripts themselves run in the `js` crate's XFA object model; the
   engine runs initialize and calculate on open, change, exit, validate and calculate after a
-  field changes, and click for buttons.
+  field changes, and click for buttons. Every generated copy of a page-master button resolves
+  its own PDF field to the shared XFA click script, so clicking an early copy works as well
+  as the last, including through `js_run` and after save/reopen.
 
   Private keys PdfCraft writes (other viewers ignore them):
 
@@ -117,7 +127,9 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   engine's own limits end it, and the document's scripts are turned off. Memory a script
   allocates is not capped (the same holds for AcroForm JavaScript).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
-  only their data is read and written.
+  only their data is read and written. A form with no fields is also static when its `config`
+  packet says `<dynamicRender>forbidden</dynamicRender>` (Designer's static PDF form): its pages
+  are the form and are not laid out again (#3180). Without that, no fields means dynamic.
 - **Flattening and converting.** `strip` takes the XFA out of a document: the packets,
   `/NeedsRendering`, the layout mark, the overrides and the private keys on the fields. The
   engine calls it after flattening an XFA form's fields (so Adobe's viewers show the baked

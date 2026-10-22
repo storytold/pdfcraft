@@ -10,7 +10,7 @@ It reports two kinds of finding:
 
 - **faux redaction**: an opaque filled rectangle painted *after* text it overlaps, dark enough
   against the text's colour (WCAG contrast below 3) to hide it, while the text is still
-  extractable underneath;
+  extractable underneath; opaque filled Square annotations count as covers too;
 - **unapplied mark**: a Redact annotation that was marked but never applied.
 
 A properly applied redaction removes the text, so it never flags. Page backgrounds, table

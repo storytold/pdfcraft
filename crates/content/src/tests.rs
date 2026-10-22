@@ -151,6 +151,32 @@ fn filtered_unknown_and_damaged_inline_images_keep_the_existing_fallback() {
     }
 }
 
+/// A zlib stream (one stored block) for 64 DeviceGray samples whose bytes hold " EI\n" at offset 41,
+/// the way a stored deflate block copies incompressible samples verbatim (#3579).
+const FLATE_WITH_EI: &str = "789c014000bfffed746159d50788f7ea604984cd08e00b4c8983207f56fe82c77ef8dfb8b9a3a586382045490a3120\
+    31206c2025630aaa4353e6813e233b96539c18bc3a2c5009e9d51b81";
+
+#[test]
+fn flate_inline_image_is_not_cut_at_an_ei_inside_its_compressed_bytes() {
+    let flate: Vec<u8> = (0..FLATE_WITH_EI.len()).step_by(2).map(|i| u8::from_str_radix(&FLATE_WITH_EI[i..i + 2], 16).unwrap()).collect();
+    assert_eq!(flate.len(), 75);
+    assert_eq!(&flate[41..45], b" EI\n");
+    for parameters in [b"/W 64 /H 1 /BPC 8 /CS /G /F /Fl".as_slice(), b"/W 64 /H 1 /BPC 8 /CS /G /F /Fl /L 75"] {
+        let mut src = b"q 200 0 0 200 100 300 cm BI ".to_vec();
+        src.extend_from_slice(parameters);
+        src.extend_from_slice(b" ID ");
+        src.extend_from_slice(&flate);
+        src.extend_from_slice(b"\nEI Q BT /F1 24 Tf 72 200 Td (AFTER) Tj ET");
+        let parsed = parse(&src);
+        let label = String::from_utf8_lossy(parameters);
+        assert_eq!(parsed.ops[2].inline.as_ref().unwrap().1.len(), 75, "{label}");
+        let names: Vec<&[u8]> = parsed.ops.iter().map(|o| o.op.as_slice()).collect();
+        assert_eq!(names, [&b"q"[..], b"cm", b"BI", b"Q", b"BT", b"Tf", b"Td", b"Tj", b"ET"], "{label}");
+        assert_eq!(parsed.skipped, 0, "{label}");
+        assert_eq!(parse(&serialize_ops(&parsed.ops)).ops[2].inline, parsed.ops[2].inline, "{label}");
+    }
+}
+
 fn inline_pdf(content: &[u8], object_streams: bool) -> Vec<u8> {
     use pdfcraft_cos::{Document, SaveOptions, Stream, write_full};
 
@@ -387,4 +413,49 @@ fn piece_lookup_preserves_exact_boundary_and_empty_piece_mapping() {
     let empty = Pieces::join::<&[u8]>(&[]);
     assert_eq!(empty.piece_of(0), 0);
     assert_eq!(empty.piece_of(usize::MAX), 0);
+}
+
+#[test]
+fn inline_image_terminator_without_preceding_whitespace() {
+    let cases: &[(&[u8], &[u8])] = &[
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /F /AHx ID 2060A0E0>EI Q BT /F1 18 Tf (After) Tj ET", b"2060A0E0>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /Filter /ASCIIHexDecode ID 2060A0E0>EI Q BT /F1 18 Tf (After) Tj ET", b"2060A0E0>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /F [/AHx] ID 2060A0E0>EI Q BT /F1 18 Tf (After) Tj ET", b"2060A0E0>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /F [/AHx /RL] ID 2060A0E0>EI Q BT /F1 18 Tf (After) Tj ET", b"2060A0E0>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /F /A85 ID 5s,^g~>EI Q BT /F1 18 Tf (After) Tj ET", b"5s,^g~>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /Filter /ASCII85Decode ID 5s,^g~>EI Q BT /F1 18 Tf (After) Tj ET", b"5s,^g~>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G /F [/A85 /RL] ID 5s,^g~>EI Q BT /F1 18 Tf (After) Tj ET", b"5s,^g~>"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G ID ab()EI Q BT /F1 18 Tf (After) Tj ET", b"ab()"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G ID ab[]EI Q BT /F1 18 Tf (After) Tj ET", b"ab[]"),
+        (b"BI /W 4 /H 1 /BPC 8 /CS /G ID \x20\x60\xa0\xe0EI Q BT /F1 18 Tf (After) Tj ET", b"\x20\x60\xa0\xe0"),
+    ];
+
+    for (src, expected_data) in cases {
+        let p = parse(src);
+        assert_eq!(p.skipped, 0, "stream should have 0 skipped bytes: {}", String::from_utf8_lossy(src));
+        let names: Vec<&[u8]> = p.ops.iter().map(|o| o.op.as_slice()).collect();
+        assert_eq!(
+            names,
+            [&b"BI"[..], b"Q", b"BT", b"Tf", b"Tj", b"ET"],
+            "operators after inline image must be preserved: {}",
+            String::from_utf8_lossy(src)
+        );
+        let (_, img) = p.ops[0].inline.as_ref().unwrap();
+        assert_eq!(img, expected_data, "inline image data must match: {}", String::from_utf8_lossy(src));
+    }
+}
+
+#[test]
+fn ascii85_inline_image_does_not_terminate_at_gt_ei_inside_payload() {
+    for src in [
+        b"BI /W 4 /H 1 /BPC 8 /CS /G /F /A85 ID !!!!>EI !!~>\nEI Q BT /F1 18 Tf (After) Tj ET".as_slice(),
+        b"BI /W 4 /H 1 /BPC 8 /CS /G /F [/A85 /AHx] ID !!!!>EI !!~>\nEI Q BT /F1 18 Tf (After) Tj ET".as_slice(),
+    ] {
+        let p = parse(src);
+        assert_eq!(p.skipped, 0);
+        let names: Vec<&[u8]> = p.ops.iter().map(|o| o.op.as_slice()).collect();
+        assert_eq!(names, [&b"BI"[..], b"Q", b"BT", b"Tf", b"Tj", b"ET"]);
+        let (_, img) = p.ops[0].inline.as_ref().unwrap();
+        assert_eq!(img, b"!!!!>EI !!~>");
+    }
 }

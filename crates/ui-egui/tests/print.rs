@@ -6,9 +6,16 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    harness_with_settings(None)
+}
+
+fn harness_with_settings(settings: Option<String>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        if let Some(json) = &settings {
+            app.restore(json);
+        }
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app
     });
@@ -182,11 +189,11 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     h.get_by_label("›").click();
     h.run_steps(2);
     h.get_by_label("Sheet 2 of 3");
-    h.state_mut().print_draft.duplex = Duplex::LongEdge;
+    h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
     h.run_steps(2);
     h.get_by_label_contains("Cut and stack needs Two-sided: Off");
     assert!(!h.state_mut().print_now());
-    h.state_mut().print_draft.duplex = Duplex::Off;
+    h.state_mut().print_draft.duplex = Some(Duplex::Off);
     h.state_mut().print_draft.printer = None;
     let out = std::env::temp_dir().join(format!("pdfcraft-cut-stack-ui-{}.pdf", std::process::id()));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
@@ -317,6 +324,57 @@ fn printers_listed_in_the_background_preselect_the_default_unless_one_was_picked
     assert_eq!(h.state().print_draft.printer, None, "Save as PDF, as picked");
 }
 
+/// The printer picked in the dialog, Save as PDF included, is still chosen the next time Print
+/// opens (#3537), until a fresh list no longer has it.
+#[test]
+fn the_picked_printer_is_kept_for_the_next_print_while_it_is_listed() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    let listed = Arc::new(Mutex::new(vec!["Office", "Front Desk"]));
+    let source = listed.clone();
+    h.state_mut().printer_source = Some(Arc::new(move || {
+        let names = source.lock().map(|n| n.clone()).unwrap_or_default();
+        names.into_iter().map(|name| Printer { name: name.into(), default: name == "Front Desk", two_sided: None }).collect()
+    }));
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().dialog = None;
+        assert!(h.state_mut().execute("print.dialog"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().print_draft.printers_loading);
+        h.run_steps(2);
+    };
+    open(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Front Desk"), "the default first");
+
+    // As the Printer list records a choice.
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = None;
+        d.printer_picked = true;
+    }
+    open(&mut h);
+    assert_eq!(h.state().print_draft.printer, None, "Save as PDF, as picked last time");
+
+    {
+        let d = &mut h.state_mut().print_draft;
+        d.printer = Some("Office".into());
+        d.printer_picked = true;
+    }
+    open(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office"), "Office, as picked last time");
+
+    // Unplugged: the fresh list doesn't have it, so the dialog goes back to the default.
+    *listed.lock().unwrap() = vec!["Front Desk"];
+    open(&mut h);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Front Desk"));
+    assert!(!h.state().print_draft.printer_picked);
+}
+
 #[test]
 fn architectural_page_can_be_matched_at_100_percent() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
@@ -425,4 +483,393 @@ fn an_empty_printer_list_says_none_were_found() {
     h.run_steps(2);
     h.get_by_label_contains("No printers were found");
     assert!(!h.get_by_role_and_label(Role::Button, "Save as PDF").accesskit_node().is_disabled());
+}
+
+/// `PAPERS` index of the named sheet.
+fn paper(name: &str) -> usize {
+    pdfcraft_engine::print::PAPERS.iter().position(|p| p.0 == name).unwrap()
+}
+
+/// Label loads label stock; leaving it gives the paper the person had back (#3564).
+#[test]
+fn leaving_label_gives_back_the_paper_it_replaced() {
+    use pdfcraft_engine::print::LABEL_PAPER;
+    use pdfcraft_ui_egui::PrintHandling;
+    let a4 = paper("A4");
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    for (mode, tab) in
+        [(PrintHandling::Size, "Size"), (PrintHandling::Poster, "Poster"), (PrintHandling::Multiple, "Multiple"), (PrintHandling::Booklet, "Booklet")]
+    {
+        h.state_mut().print_draft.paper = a4;
+        h.state_mut().print_draft.handling = PrintHandling::Size;
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Label").click();
+        h.run_steps(2);
+        assert_eq!(h.state().print_draft.handling, PrintHandling::Label);
+        assert_eq!(h.state().print_draft.paper, LABEL_PAPER, "Label puts label stock in");
+        h.get_by_role_and_label(Role::Button, tab).click();
+        h.run_steps(2);
+        assert_eq!(h.state().print_draft.handling, mode);
+        assert_eq!(h.state().print_draft.paper, a4, "{tab} gives A4 back after Label");
+        h.get_by_value("A4");
+    }
+}
+
+/// A paper picked while in Label is the person's choice, and leaving Label keeps it.
+#[test]
+fn a_paper_picked_while_in_label_is_kept_when_leaving_it() {
+    use pdfcraft_engine::print::LABEL_PAPER;
+    use pdfcraft_ui_egui::{PrintDraft, PrintHandling};
+    let (a4, letter) = (paper("A4"), paper("US Letter"));
+    let mut d = PrintDraft { paper: a4, ..Default::default() };
+    d.set_handling(PrintHandling::Label);
+    assert_eq!(d.paper, LABEL_PAPER);
+    d.paper = letter;
+    d.set_handling(PrintHandling::Size);
+    assert_eq!(d.paper, letter);
+    // A second round trip from the kept paper gives that paper back.
+    d.set_handling(PrintHandling::Label);
+    d.set_handling(PrintHandling::Poster);
+    assert_eq!(d.paper, letter);
+    // Clicking Label again while in Label doesn't forget the paper it replaced.
+    d.set_handling(PrintHandling::Label);
+    d.set_handling(PrintHandling::Label);
+    d.set_handling(PrintHandling::Multiple);
+    assert_eq!(d.paper, letter);
+}
+
+/// Picking the label stock from the Paper menu switches to Label (the existing behaviour); leaving
+/// Label afterwards gives back the paper picked before it.
+#[test]
+fn label_stock_picked_from_the_paper_menu_is_undone_by_leaving_label() {
+    use pdfcraft_engine::print::{LABEL_PAPER, PAPERS};
+    use pdfcraft_ui_egui::PrintHandling;
+    let a4 = paper("A4");
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.state_mut().print_draft.paper = a4;
+    h.run_steps(2);
+    h.get_by_value("A4").click();
+    h.run_steps(2);
+    // The label stock is last in a menu that scrolls: bring it into view (it settles over a few
+    // frames) before clicking it.
+    h.get_by_label(PAPERS[LABEL_PAPER].0).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label(PAPERS[LABEL_PAPER].0).click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.paper, LABEL_PAPER);
+    assert_eq!(h.state().print_draft.handling, PrintHandling::Label);
+    h.get_by_role_and_label(Role::Button, "Size").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.handling, PrintHandling::Size);
+    assert_eq!(h.state().print_draft.paper, a4);
+}
+
+/// The same through the Paper menu: US Letter picked while in Label stays when Size is chosen,
+/// rather than the A4 Label replaced coming back.
+#[test]
+fn a_paper_picked_from_the_menu_while_in_label_is_kept() {
+    use pdfcraft_engine::print::{LABEL_PAPER, PAPERS};
+    use pdfcraft_ui_egui::PrintHandling;
+    let (a4, letter) = (paper("A4"), paper("US Letter"));
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.state_mut().print_draft.paper = a4;
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Label").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.paper, LABEL_PAPER);
+    h.get_by_value(PAPERS[LABEL_PAPER].0).click();
+    h.run_steps(2);
+    h.get_by_label("US Letter").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("US Letter").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.paper, letter);
+    h.get_by_role_and_label(Role::Button, "Size").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.handling, PrintHandling::Size);
+    assert_eq!(h.state().print_draft.paper, letter, "the paper picked in Label is kept");
+    h.get_by_value("US Letter");
+}
+
+/// Properties… reads the printer's driver options off the GUI thread: the dialog keeps drawing
+/// while CUPS answers, and a read that dies leaves the panel with nothing rather than waiting
+/// (#1818). The click's request is made directly, so the test runs where Properties… opens the
+/// driver's own window instead (Windows).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn printer_options_are_read_off_the_gui_thread_and_a_dead_read_offers_nothing() {
+    use pdfcraft_engine::print::spool::PrinterOption;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    // The source waits until the test lets it answer, so the dialog is seen while it reads.
+    let gate = Arc::new(Mutex::new(()));
+    let hold = gate.lock().unwrap();
+    let wait = gate.clone();
+    h.state_mut().options_source = Some(Arc::new(move |printer: &str| {
+        assert_ne!(printer, "Dead", "the read died");
+        let _open = wait.lock();
+        vec![PrinterOption {
+            key: "InputSlot".into(),
+            label: "Paper tray".into(),
+            group: String::new(),
+            choices: vec![("Auto".into(), "Automatic".into()), ("Tray2".into(), "Tray 2".into())],
+            default: "Auto".into(),
+        }]
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    let ask = |h: &mut Harness<'static, PdfCraftApp>, printer: &str| {
+        let d = &mut h.state_mut().print_draft;
+        d.driver_options = None;
+        d.driver_options_loading = Some(printer.into());
+        d.read_options_for = Some(printer.into());
+        d.show_driver_options = true;
+    };
+    let settle = |h: &mut Harness<'static, PdfCraftApp>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while h.state().print_draft.driver_options_loading.is_some() && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    ask(&mut h, "Office");
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.driver_options_loading.as_deref(), Some("Office"), "frames keep coming while the read waits");
+    assert!(h.state().print_draft.driver_options.is_none());
+    h.get_by_label("Reading the printer's settings…");
+    drop(hold);
+    settle(&mut h);
+    let (read_for, options) = h.state().print_draft.driver_options.clone().expect("the options arrived");
+    assert_eq!(read_for, "Office");
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].key, "InputSlot");
+    h.get_by_label("Paper tray");
+
+    ask(&mut h, "Dead");
+    settle(&mut h);
+    assert_eq!(h.state().print_draft.driver_options, Some(("Dead".into(), Vec::new())), "a dead read offers nothing, and the panel says so");
+    h.get_by_label("This printer offers no settings of its own.");
+}
+
+/// A read of the printer's options that dies still asks for a frame, so an idle dialog stops
+/// saying it is reading without waiting for the mouse to move (#2108 review).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_dead_options_read_wakes_an_idle_dialog() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    let gate = Arc::new(Mutex::new(()));
+    let hold = gate.lock().unwrap();
+    let wait = gate.clone();
+    let dying = Arc::new(AtomicBool::new(false));
+    let flag = dying.clone();
+    h.state_mut().options_source = Some(Arc::new(move |_: &str| {
+        let _open = wait.lock();
+        flag.store(true, Ordering::SeqCst);
+        panic!("the read died");
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    let d = &mut h.state_mut().print_draft;
+    d.driver_options = None;
+    d.driver_options_loading = Some("Office".into());
+    d.read_options_for = Some("Office".into());
+    d.show_driver_options = true;
+    // The preview's page rasters render on the pool and ask for frames until they arrive; on a
+    // loaded machine that outlasts `run`'s step budget, so the dialog is idle only after them.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().render_pending() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run();
+    assert!(!h.ctx.has_requested_repaint(), "the dialog is idle while the read waits");
+    drop(hold);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !(dying.load(Ordering::SeqCst) && h.ctx.has_requested_repaint()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.ctx.has_requested_repaint(), "the dead read asked for a frame");
+    h.run();
+    assert_eq!(h.state().print_draft.driver_options, Some(("Office".into(), Vec::new())));
+}
+
+/// A document whose security forbids printing (#2669) says so before the dialog opens, and the
+/// top bar's Print button is disabled, instead of the dialog refusing on confirm.
+#[test]
+fn print_restricted_documents_say_so_before_the_dialog() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(include_bytes!("data/form.pdf").to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b100,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("restricted.pdf", None, bytes).unwrap();
+        app
+    });
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.run_steps(4);
+    assert!(h.get_by_label("Print (Ctrl+P)").accesskit_node().is_disabled());
+    h.get_by_label("Print (Ctrl+P)").hover();
+    h.run_steps(30);
+    h.get_by_label_contains("don't allow printing");
+    assert!(!h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("The document's security settings don't allow printing"));
+}
+
+/// With no document open the top bar's Print button is disabled too, but not for security
+/// reasons: its tooltip must not blame the document's settings (#2669).
+#[test]
+fn print_without_a_document_does_not_blame_security() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.run_steps(4);
+    assert!(h.get_by_label("Print (Ctrl+P)").accesskit_node().is_disabled());
+    h.get_by_label("Print (Ctrl+P)").hover();
+    h.run_steps(30);
+    assert!(h.query_by_label_contains("don't allow printing").is_none());
+}
+
+#[test]
+fn paper_choice_survives_cancel_and_settings_restore() {
+    use pdfcraft_engine::print::{Orientation, PAPERS};
+    let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    let letter = PAPERS.iter().position(|(name, _)| *name == "US Letter").unwrap();
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_value("US Letter").click();
+    h.run_steps(2);
+    h.get_by_label("A4").click();
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.paper, a4);
+    // Only paper should be added to persistence; these choices still belong to this session.
+    let draft = &mut h.state_mut().print_draft;
+    draft.copies = 5;
+    draft.which = pdfcraft_ui_egui::PrintWhich::Range;
+    draft.range = "1".into();
+    draft.orientation = Orientation::Landscape;
+    draft.grayscale = true;
+    let before_cancel = draft.clone();
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(h.state().print_draft, before_cancel, "cancel keeps the existing draft behavior");
+    let saved = h.state().persist();
+    let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
+    let mut app = PdfCraftApp::new();
+    app.restore(&saved);
+    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
+    assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
+    let mut restarted = harness_with_settings(Some(saved));
+    assert!(restarted.state_mut().execute("print.dialog"));
+    restarted.run_steps(3);
+    restarted.get_by_value("A4");
+    assert_eq!(restarted.state().print_draft.paper, a4);
+    restarted.get_by_value("A4").click();
+    restarted.run_steps(2);
+    restarted.get_by_label("US Letter").click();
+    restarted.run_steps(2);
+    restarted.get_by_label("Cancel").click();
+    restarted.run_steps(2);
+    let saved = restarted.state().persist();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap()["print_paper"], "US Letter");
+    let mut again = harness_with_settings(Some(saved));
+    assert!(again.state_mut().execute("print.dialog"));
+    again.run_steps(3);
+    again.get_by_value("US Letter");
+    assert_eq!(again.state().print_draft.paper, letter);
+}
+
+#[test]
+fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
+    use pdfcraft_engine::print::PAPERS;
+    for (index, (name, _)) in PAPERS.iter().enumerate() {
+        let mut app = PdfCraftApp::new();
+        app.restore(&serde_json::json!({"print_paper": name}).to_string());
+        assert_eq!(app.print_draft.paper, index);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_paper"], *name);
+    }
+    for invalid in [
+        "not JSON",
+        "{}",
+        r#"{"print_paper":null}"#,
+        r#"{"print_paper":true}"#,
+        r#"{"print_paper":[]}"#,
+        r#"{"print_paper":{}}"#,
+        r#"{"print_paper":"unknown"}"#,
+        r#"{"print_paper":"a4"}"#,
+        r#"{"print_paper":4}"#,
+        r#"{"print_paper":-1}"#,
+        r#"{"print_paper":4294967296}"#,
+        r#"{"print_paper":18446744073709551615}"#,
+        r#"{"print_paper":1e100}"#,
+    ] {
+        let mut app = PdfCraftApp::new();
+        let factory = app.print_draft.paper;
+        app.restore(invalid);
+        assert_eq!(app.print_draft.paper, factory, "{invalid}");
+        app.restore(r#"{"print_paper":"A4"}"#);
+        let selected = app.print_draft.paper;
+        app.restore(invalid);
+        assert_eq!(app.print_draft.paper, selected, "invalid input must not replace a valid choice: {invalid}");
+    }
+    let mut app = PdfCraftApp::new();
+    app.print_draft.paper = usize::MAX;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_paper"], serde_json::Value::Null);
+}
+
+#[test]
+fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
+    use pdfcraft_engine::print::{self, PAPERS};
+    let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;
+    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4"}"#.into()));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_value("A4");
+    h.get_by_label("Sheet 1 of 1");
+    let id = h.state().views[h.state().active.unwrap()].id;
+    let doc = h.state().session.get(id).unwrap();
+    let sizes: Vec<_> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+    let labels: Vec<_> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+    let settings = h.state().print_draft.settings(sizes.len(), &labels).unwrap();
+    assert_eq!(settings.paper, a4);
+    let sheets = print::layout(&sizes, &settings).unwrap();
+    assert_eq!(sheets.len(), 1);
+    assert_eq!(sheets[0].size, a4, "preview uses the restored paper");
+    let out = std::env::temp_dir().join(format!("pdfcraft-restored-paper-{}.pdf", std::process::id()));
+    h.state_mut().print_draft.printer = None;
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
+    let pages = pdfcraft_model::pages(&printed);
+    assert_eq!(pages.len(), sheets.len());
+    let size = pages[0].display_size(&printed);
+    assert!((size.0 - a4.0).abs() < 0.01 && (size.1 - a4.1).abs() < 0.01, "saved sheet: {size:?}");
+    std::fs::remove_file(out).unwrap();
 }

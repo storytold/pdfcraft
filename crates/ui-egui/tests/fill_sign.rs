@@ -101,6 +101,29 @@ fn rendered_ink(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) -> image:
     panic!("signature ink did not render at ({x}, {y})");
 }
 
+/// #2392: the Line tool's line runs across the page as displayed, on turned pages too (its box was
+/// sized in the page's own axes, so a quarter turn stood it on end).
+#[test]
+fn the_line_mark_runs_across_turned_pages() {
+    for degrees in [0, 90, 180, 270] {
+        let mut h = harness();
+        {
+            let s = h.state_mut();
+            let id = s.views[0].id;
+            s.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        }
+        h.run_steps(4);
+        assert!(h.state_mut().execute("sign.fill.line"));
+        click(&mut h, 150.0, 350.0);
+        let s = h.state();
+        let info = &s.session.get(s.views[0].id).unwrap().info;
+        let r = info.annotations.last().expect("a line was placed").rect;
+        let (a, b) = (info.pages[0].user_to_view(r[0], r[1]), info.pages[0].user_to_view(r[2], r[3]));
+        let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
+        assert!(w > 4.0 * h, "rotation {degrees}: the line's displayed box is {w} × {h}, not across");
+    }
+}
+
 #[test]
 fn text_marks_and_date() {
     let mut h = harness();
@@ -166,6 +189,60 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     assert_eq!(restored.fill_text_size, 24.0);
     restored.restore(r#"{"fill_text_size":1000000}"#);
     assert_eq!(restored.fill_text_size, 24.0, "invalid settings do not change the size");
+}
+
+/// #1274: with a placed Fill & Sign text selected, the Font size control resizes that text,
+/// not only text typed afterwards; with nothing selected it changes nothing on the page.
+#[test]
+fn fill_text_size_resizes_the_selected_text() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Resize me".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let height = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Resize me")).cloned().unwrap();
+        a.rect[3] - a.rect[1]
+    };
+    let before = height(&h);
+    let set_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
+            .expect("the Font size control")
+            .click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+    };
+    // Nothing selected: only the size for new text changes.
+    h.state_mut().views[0].comments.selected = None;
+    set_size(&mut h, "18");
+    assert_eq!(h.state().fill_text_size, 18.0);
+    assert_eq!(height(&h), before, "an unselected placed text keeps its size");
+    // The placed text picked up with the Add text tool, then resized.
+    let annotation = {
+        let s = h.state();
+        s.session
+            .get(s.views[0].id)
+            .unwrap()
+            .info
+            .annotations
+            .iter()
+            .find(|a| a.contents.as_deref() == Some("Resize me"))
+            .map(|a| (a.page, a.index))
+            .unwrap()
+    };
+    h.state_mut().views[0].comments.selected = Some(annotation);
+    set_size(&mut h, "36");
+    assert_eq!(h.state().fill_text_size, 36.0);
+    let after = height(&h);
+    assert!(after > before * 2.0, "36 pt text has a taller box than 10 pt text: {before} -> {after}");
 }
 
 #[test]
@@ -1242,6 +1319,81 @@ fn drawn_signatures_resize_from_their_corners() {
     assert_rect(rects(&h)[0], now);
 }
 
+/// Whether black ink is drawn within 3 pixels of `p`.
+fn ink_near(pixels: &image::RgbaImage, p: Pos2) -> bool {
+    (-3..=3).any(|dy| (-3..=3).any(|dx| pixels.get_pixel((p.x as i32 + dx) as u32, (p.y as i32 + dy) as u32).0[..3].iter().all(|v| *v < 60)))
+}
+
+/// A Fill & Sign line, like every stamp, is stretched with its frame while a handle is dragged:
+/// it grows and shrinks with the pointer instead of keeping its old length until the release.
+#[test]
+fn lines_grow_and_shrink_with_their_handles_before_release() {
+    let _gpu = gpu();
+    for (document_rotation, view_rotation) in [(0, 0), (90, 0), (0, 90), (90, 270)] {
+        let rot = (document_rotation, view_rotation);
+        // A line runs across the page as /Rotate displays it (#3781): along user y on a quarter turn.
+        // `d` is the distance along the line from the click at (100, 250).
+        let along =
+            |h: &Harness<'static, PdfCraftApp>, d: f32| if document_rotation == 90 { at(h, 100.0, 250.0 + d) } else { at(h, 100.0 + d, 250.0) };
+        let line = |from: f32, to: f32| {
+            if document_rotation == 90 { [98.0, 250.0 + from, 102.0, 250.0 + to] } else { [100.0 + from, 248.0, 100.0 + to, 252.0] }
+        };
+        let mut h = harness();
+        if document_rotation != 0 {
+            h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: document_rotation });
+        }
+        while h.state().views[0].rotation != view_rotation {
+            h.state_mut().views[0].rotate_view(true);
+        }
+        h.run_steps(3);
+        assert!(h.state_mut().execute("sign.fill.line"));
+        click(&mut h, 100.0, 250.0);
+        assert_rect(rects(&h)[0], line(-18.0, 18.0));
+        // In line mode a click on the line picks it up, with its handles.
+        click(&mut h, 100.0, 250.0);
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "{rot:?}");
+        let generation = h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
+
+        // The handle at the line's end, dragged out to 60 from the middle.
+        h.drag_at(along(&h, 18.0));
+        h.run_steps(1);
+        h.hover_at(along(&h, 60.0));
+        // Wait only for the one-time layers. Later pointer frames are immediate.
+        let mut grown = h.render().unwrap();
+        for _ in 0..50 {
+            if ink_near(&grown, along(&h, 50.0)) {
+                break;
+            }
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            grown = h.render().unwrap();
+        }
+        assert!(ink_near(&grown, along(&h, 50.0)), "{rot:?}: the line grows with the handle before release");
+        assert!(ink_near(&grown, along(&h, -10.0)), "{rot:?}: from where it starts");
+
+        // Back in, shorter than it was, still without letting go.
+        h.hover_at(along(&h, 0.0));
+        h.run_steps(2);
+        let shrunk = h.render().unwrap();
+        assert!(ink_near(&shrunk, along(&h, -10.0)), "{rot:?}: the line still starts where it did");
+        for d in [10.0, 50.0] {
+            assert!(!ink_near(&shrunk, along(&h, d)), "{rot:?}: the line shrinks with the handle before release (ink at {d})");
+        }
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!((doc.edit_generation(), doc.can_undo()), (generation, Some("Add line")), "{rot:?}: pointer frames never edit the document");
+        if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+            grown.save(format!("{dir}/line-live-grow-{document_rotation}-{view_rotation}.png")).unwrap();
+            shrunk.save(format!("{dir}/line-live-shrink-{document_rotation}-{view_rotation}.png")).unwrap();
+        }
+        h.drop_at(along(&h, 0.0));
+        h.run_steps(3);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Resize comment"), "{rot:?}");
+        let [now] = rects(&h)[..] else { panic!("{rot:?}: still one line: {:?}", rects(&h)) };
+        assert!(now.iter().zip(line(-18.0, 0.0)).all(|(a, b)| (a - b).abs() < 0.01), "{rot:?}: {now:?}");
+    }
+}
+
 /// A signature placed over a form field is picked up by the Select tool: the field under it
 /// doesn't take the press. Away from the signature, a click still fills the field.
 #[test]
@@ -1514,4 +1666,65 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     assert!(h.state().toast.as_ref().unwrap().0.contains("Couldn't import"));
     assert_eq!(h.state().views.len(), tabs, "nothing opened behind the dialog");
     std::fs::remove_file(photo).unwrap();
+}
+
+/// Where a mode bar tab is, by its label.
+fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
+    h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
+}
+
+/// Scroll the page until `what` (on screen) lies across the mode bar, then the cursor over each
+/// tab it lies under: with the All tools panel closed, every tab: All tools, Edit, Convert and E-Sign.
+fn mode_tab_cursors(
+    h: &mut Harness<'static, PdfCraftApp>,
+    what: impl Fn(&Harness<'static, PdfCraftApp>) -> egui::Rect,
+) -> [(&'static str, egui::CursorIcon); 4] {
+    let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).expect("on screen");
+    let y = what(h).center().y - page(h).top();
+    let tabs = mode_tab(h, "Convert").center().y;
+    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.run_steps(4);
+    let top = page(h).top();
+    h.state_mut().views[0].goto = Some((0, (top - (tabs - y)) / page(h).height()));
+    h.run_steps(4);
+    let under = what(h);
+    ["All tools", "Edit", "Convert", "E-Sign"].map(|label| {
+        let at = mode_tab(h, label).center();
+        assert!(under.contains(at), "{under:?} lies under {label} at {at:?}");
+        h.hover_at(at);
+        h.run_steps(2);
+        (label, h.output().platform_output.cursor_icon)
+    })
+}
+
+const HAND_ON_EVERY_TAB: [(&str, egui::CursorIcon); 4] = [
+    ("All tools", egui::CursorIcon::PointingHand),
+    ("Edit", egui::CursorIcon::PointingHand),
+    ("Convert", egui::CursorIcon::PointingHand),
+    ("E-Sign", egui::CursorIcon::PointingHand),
+];
+
+/// The Fill & Sign text box scrolled up under the mode bar leaves its tabs the hand (#2755): it
+/// floated over them, gave them its I-beam and took their clicks.
+#[test]
+fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("sign.fill.text"));
+    h.state_mut().set_option("left", "closed").unwrap();
+    // The page across the window, so the box reaches under the tabs.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Text));
+    click(&mut h, 10.0, 360.0);
+    h.event(egui::Event::Text("Ada Lovelace, Countess of Lovelace".into()));
+    h.run_steps(3);
+    assert_eq!(mode_tab_cursors(&mut h, type_box_rect), HAND_ON_EVERY_TAB);
+    let convert = mode_tab(&h, "Convert").center();
+    h.hover_at(convert);
+    h.run_steps(1);
+    h.drag_at(convert);
+    h.run_steps(1);
+    h.drop_at(convert);
+    h.run_steps(3);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
 }

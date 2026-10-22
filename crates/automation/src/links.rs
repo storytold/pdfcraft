@@ -70,9 +70,8 @@ impl Automation {
             .links()
             .iter()
             .map(|l| {
-                let p = &doc.info.pages[l.page];
-                let (v0, v1) = (p.user_to_view(l.rect[0] as f32, l.rect[1] as f32), p.user_to_view(l.rect[2] as f32, l.rect[3] as f32));
-                let rect = [v0[0].min(v1[0]), v0[1].min(v1[1]), v0[0].max(v1[0]), v0[1].max(v1[1])].map(|x| (x * 100.0).round() / 100.0);
+                // The link's page may be one the viewer could not read (#2660): rect unchanged then.
+                let rect = crate::view_rect(&doc.info, l.page, l.rect.map(|x| x as f32));
                 let mut v = json!({ "page": l.page + 1, "index": l.index + 1, "rect": rect, "visible": l.style.visible });
                 // Where an in-document link goes, as the viewer resolves it: named destinations
                 // included, with the position on the page.

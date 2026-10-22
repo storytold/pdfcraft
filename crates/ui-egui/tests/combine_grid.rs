@@ -403,7 +403,8 @@ fn thumbnails_show_the_first_page_each_file_takes() {
     assert!(matches!(thumbs[0], CombineThumb::Ready { page: 2, .. }), "\"3, 1\" starts with page 3: {:?}", thumbs[0]);
     assert!(matches!(thumbs[1], CombineThumb::Ready { page: 0, .. }));
     let CombineThumb::Ready { width, height, .. } = thumbs[1] else { unreachable!() };
-    assert!(width > 0 && height > 0 && width <= 768 && height <= 768, "{width}×{height}");
+    // Within MAX_SIDE (combine_grid), which is not visible from here.
+    assert!(width > 0 && height > 0 && width <= 1536 && height <= 1536, "{width}×{height}");
     // A new range is a new thumbnail, never the old page.
     h.state_mut().combine_draft[0].range = "2".into();
     assert!(settle(&mut h, |app| matches!(app.combine_thumbnails()[0], CombineThumb::Ready { page: 1, .. })));
@@ -541,7 +542,8 @@ fn long_thin_pages_get_thumbnails_within_the_size_limits() {
     assert!(settle(&mut h, |app| app.combine_thumbnails().iter().all(|t| *t != CombineThumb::None && *t != CombineThumb::Pending)));
     for t in h.state().combine_thumbnails() {
         match t {
-            CombineThumb::Ready { width, height, .. } => assert!(width <= 768 && height <= 768, "{width}×{height}"),
+            // Within MAX_SIDE (combine_grid), which is not visible from here.
+            CombineThumb::Ready { width, height, .. } => assert!(width <= 1536 && height <= 1536, "{width}×{height}"),
             other => panic!("each strip gets a thumbnail: {other:?}"),
         }
     }
@@ -728,15 +730,15 @@ fn the_toolbar_sizes_the_cards_within_limits_and_the_size_is_kept_in_the_setting
     assert_eq!(h.state().combine_zoom, 1.25);
     let after = card(&h, "a.pdf");
     assert!(after.width() > before.width() && after.height() > before.height(), "{before:?} → {after:?}");
-    // Larger until it can't go further: 200%, and the button says so.
-    for _ in 0..10 {
+    // Larger until it can't go further: 500% (#2531), and the button says so.
+    for _ in 0..12 {
         if disabled(&h, "Larger pages") {
             break;
         }
         h.get_by_label("Larger pages").click();
         h.run_steps(2);
     }
-    assert_eq!(h.state().combine_zoom, 2.0);
+    assert_eq!(h.state().combine_zoom, 5.0);
     assert!(disabled(&h, "Larger pages"));
     // The percentage resets it.
     h.get_by_label("Reset page size").click();
@@ -758,17 +760,22 @@ fn the_toolbar_sizes_the_cards_within_limits_and_the_size_is_kept_in_the_setting
     fresh.restore(&saved);
     assert_eq!(fresh.combine_zoom, 0.6);
     fresh.restore(r#"{"combine_zoom": 99}"#);
-    assert_eq!(fresh.combine_zoom, 2.0);
+    assert_eq!(fresh.combine_zoom, 5.0);
     fresh.restore(r#"{"combine_zoom": "big"}"#);
-    assert_eq!(fresh.combine_zoom, 2.0);
+    assert_eq!(fresh.combine_zoom, 5.0);
     // Scriptable in percent, with a clear refusal outside the range.
     let app = h.state_mut();
     app.set_option("combine-zoom", "150%").unwrap();
     assert_eq!(app.combine_zoom, 1.5);
-    for bad in ["59", "201", "big", "NaN", "inf", ""] {
+    // #2531: 200% was not enough to read a value off a card; 500% has to be reachable.
+    for pct in ["200", "300", "400", "500"] {
+        app.set_option("combine-zoom", pct).unwrap();
+        assert_eq!(app.combine_zoom, pct.parse::<f32>().unwrap() / 100.0);
+    }
+    for bad in ["59", "501", "big", "NaN", "inf", ""] {
         assert!(app.set_option("combine-zoom", bad).is_err(), "{bad:?}");
     }
-    assert_eq!(app.combine_zoom, 1.5);
+    assert_eq!(app.combine_zoom, 5.0, "a refused value leaves the size alone");
     // The list has no card size.
     h.get_by_label("List view").click();
     h.run_steps(2);
@@ -780,7 +787,7 @@ fn the_slider_sizes_the_cards_from_smallest_to_largest() {
     let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 1)]);
     let slider = h.get_by_label("Page size").rect();
     drag(&mut h, slider.center(), slider.right_center() + vec2(40.0, 0.0));
-    assert_eq!(h.state().combine_zoom, 2.0);
+    assert_eq!(h.state().combine_zoom, 5.0);
     let slider = h.get_by_label("Page size").rect();
     drag(&mut h, slider.center(), slider.left_center() - vec2(40.0, 0.0));
     assert_eq!(h.state().combine_zoom, 0.6);
@@ -883,7 +890,38 @@ fn zooming_keeps_the_card_under_the_pointer_in_place_and_thumbnails_never_go_bla
 }
 
 #[test]
-fn dragging_and_arrow_keys_work_at_the_smallest_and_largest_sizes() {
+fn cards_at_the_top_zoom_render_a_sharper_thumbnail_within_the_texture_limit() {
+    // #2531: raising the ceiling is only worth something if the thumbnail gets sharper with it.
+    // The texture cap was 768px, which upscaled any card past 200%.
+    let mut h = grid_of_pages(&[("a.pdf", 1)]);
+    h.state_mut().set_option("combine-zoom", "100").unwrap();
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails()[0])));
+    let CombineThumb::Ready { width: w0, height: h0, .. } = h.state().combine_thumbnails()[0] else { unreachable!() };
+    let at_100 = w0.max(h0);
+
+    h.state_mut().set_option("combine-zoom", "500").unwrap();
+    // The old thumbnail stands in until the sharper one arrives, so "ready" is not enough: wait
+    // for the size to actually change.
+    let mut redrawn = false;
+    for _ in 0..400 {
+        h.run_steps(1);
+        if matches!(h.state().combine_thumbnails()[0], CombineThumb::Ready { width, height, .. } if width.max(height) != at_100) {
+            redrawn = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let CombineThumb::Ready { width, height, .. } = h.state().combine_thumbnails()[0] else { unreachable!() };
+    let at_500 = width.max(height);
+    assert!(redrawn, "500% never re-rendered the thumbnail: {width}×{height}");
+    assert!(at_500 <= 1536, "past the texture limit: {width}×{height}");
+    assert!(at_500 >= at_100 * 4, "500% is not sharper than 100%: {at_100}px → {at_500}px");
+}
+
+// 60% against a large size, rather than the largest: at 500% a card is wider than this viewport,
+// so only one fits across and "down moves a row" would have nothing to check.
+#[test]
+fn dragging_and_arrow_keys_work_at_the_smallest_and_a_large_size() {
     let mut columns = Vec::new();
     for zoom in ["60", "200"] {
         let files: Vec<(String, Vec<u8>)> = (0..24).map(|i| (format!("f{i:02}.pdf"), fixture(1))).collect();

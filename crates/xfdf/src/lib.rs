@@ -312,9 +312,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
             let fl: Vec<&str> = FLAGS.iter().filter(|(b, _)| flags & b != 0).map(|(_, s)| *s).collect();
-            if !fl.is_empty() {
-                let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
-            }
+            let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
             if let Some(c) = hex(&nums_of(doc, d.get(b"C"))) {
                 let _ = write!(attrs, " color=\"{c}\"");
             }
@@ -415,7 +413,13 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
             continue;
         }
         let mut node = &mut root;
-        for part in f.name.split('.') {
+        // One `<field>` level per part of the name, but no more levels than the import reads
+        // back. A `/T` can hold periods of its own, so a name can split into far more parts than
+        // the field tree has levels: nesting every part wrote a file the import refuses and, for
+        // a long enough name, recursed in `write_node` until the stack overflowed. The parts past
+        // the last level stay together in the deepest element's name, and the import joins them
+        // back with periods into the same full name.
+        for part in f.name.splitn(MAX_DEPTH, '.') {
             let i = match node.kids.iter().position(|(k, _)| k == part) {
                 Some(i) => i,
                 None => {

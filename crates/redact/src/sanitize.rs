@@ -8,7 +8,7 @@ use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::interp::{Mode, Scope, process};
-use crate::{RedactError, Report, annots_of, page_streams};
+use crate::{RedactError, Report, annots_of, listed_annotations, page_streams};
 
 /// The categories of Acrobat's Remove Hidden Information panel that PdfCraft handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -97,17 +97,45 @@ fn name_tree_len(doc: &Document, node: &Dict, depth: usize) -> usize {
     leaves + kids.iter().filter_map(|k| doc.resolve(k).as_dict().cloned()).map(|k| name_tree_len(doc, &k, depth + 1)).sum::<usize>()
 }
 
+/// The most distinct outline items one count reads, over all levels together.
+const OUTLINE_ITEM_BUDGET: usize = 100_000;
+
 fn outline_len(doc: &Document, first: Option<&Object>, depth: usize) -> usize {
+    let (mut seen, mut counted) = (std::collections::HashSet::new(), 0);
+    outline_len_seen(doc, first, depth, &mut seen, &mut counted)
+}
+
+/// Counts an outline level and everything below it, each item once. `seen` holds the indirect items
+/// already counted, and `counted` every item counted so far, inline ones included, which the total
+/// budget applies to. An item that two others name (as `/First` or `/Next`) is counted where the walk
+/// first reaches it, and a level stops at an item already seen, because the walk that reached that
+/// item counts the rest of its level. A hostile outline therefore costs one step per item, not 2^n
+/// steps for n levels of shared children. The depth limit of 64 only matters for outlines nested that
+/// deep: an item first reached through a deeper path is not visited again from a shallower one, so
+/// items nested beyond the limit may stay uncounted.
+fn outline_len_seen(
+    doc: &Document,
+    first: Option<&Object>,
+    depth: usize,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    counted: &mut usize,
+) -> usize {
     let mut n = 0;
     let mut cur = first.cloned();
     let mut guard = 0;
     while let Some(o) = cur {
         guard += 1;
-        if guard > 100_000 || depth > 64 {
+        if guard > 100_000 || depth > 64 || *counted >= OUTLINE_ITEM_BUDGET {
+            break;
+        }
+        if let Object::Ref(r) = &o
+            && !seen.insert(*r)
+        {
             break;
         }
         let Some(d) = doc.resolve(&o).as_dict().cloned() else { break };
-        n += 1 + outline_len(doc, d.get(b"First"), depth + 1);
+        *counted += 1;
+        n += 1 + outline_len_seen(doc, d.get(b"First"), depth + 1, seen, counted);
         cur = d.get(b"Next").cloned();
     }
     n
@@ -287,10 +315,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     };
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
-    let listed = |doc: &Document| -> std::collections::HashSet<ObjRef> {
-        pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| a.as_ref()).collect()
-    };
-    let listed_before = listed(doc);
+    let listed_before = listed_annotations(doc);
     if which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0 {
         // Fields without appearances get one first, so their values stay visible.
         for f in pdfcraft_forms::fields(doc) {
@@ -363,7 +388,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     // A tagged PDF's structure tree still points at the removed links, comments and flattened
     // widgets (#2447): drop those references, or the full rewrite keeps the annotations, URLs,
     // text and field values included.
-    let still = listed(doc);
+    let still = listed_annotations(doc);
     let gone: std::collections::HashSet<ObjRef> = listed_before.difference(&still).copied().collect();
     crate::tags::drop_object_refs(doc, &gone)?;
     let off = hidden_layers(doc);

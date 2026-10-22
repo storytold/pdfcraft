@@ -9,7 +9,11 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 /// One valid page (proper xref, so no repair banner covers the dialog): black text on white.
 fn pdf() -> Vec<u8> {
-    let objs: Vec<Vec<u8>> = vec![
+    pdf_pages(1)
+}
+
+fn pdf_pages(count: usize) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
@@ -19,6 +23,12 @@ fn pdf() -> Vec<u8> {
         },
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
+    let mut kids = vec!["3 0 R".to_owned()];
+    for _ in 1..count {
+        kids.push(format!("{} 0 R", objs.len() + 1));
+        objs.push(objs[2].clone());
+    }
+    objs[1] = format!("<< /Type /Pages /Kids [{}] /Count {count} >>", kids.join(" ")).into_bytes();
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -34,6 +44,47 @@ fn pdf() -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+#[test]
+fn pending_pages_use_document_reading_background() {
+    use egui::{Color32, Context, RawInput, Rect, Shape, pos2, vec2};
+
+    let custom = ReadingColors::parse("custom", Some("#eeeeee"), Some("#182430"), None, None).unwrap();
+    for (colors, expected) in [
+        (ReadingColors::default(), Color32::WHITE),
+        (ReadingColors::BLACK_ON_WHITE, Color32::WHITE),
+        (ReadingColors::WHITE_ON_BLACK, Color32::BLACK),
+        (ReadingColors::YELLOW_ON_BLACK, Color32::BLACK),
+        (ReadingColors::GREEN_ON_BLACK, Color32::BLACK),
+        (custom, Color32::from_rgb(0x18, 0x24, 0x30)),
+    ] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("pending.pdf", None, pdf_pages(3)).unwrap();
+        let id = app.views[0].id;
+        // Deliberately differ from the app preference: the document is the source of truth.
+        app.session.set_reading_colors(id, colors);
+        let ctx = Context::default();
+        for page in 0..3 {
+            app.views[0].go_to_page(page);
+            // Draw the real canvas without finishing the render frame, so no texture can
+            // race the assertion or hide the pending-page background.
+            let mut output =
+                ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() }, |ui| {
+                    pdfcraft_ui_egui::canvas::document_area(&mut app, 0, ui);
+                });
+            output.textures_delta.clear();
+            let view = &app.views[0];
+            assert_eq!(view.raster_memory().page_count, 0, "the page must still be waiting for its raster");
+            let rect = view.page_screen_rect(page).expect("target page visible");
+            let fill = output.shapes.iter().find_map(|s| match &s.shape {
+                Shape::Rect(r) if r.rect == rect && r.stroke.width == 0.0 => Some(r.fill),
+                _ => None,
+            });
+            assert_eq!(fill, Some(expected), "page {page}, reading mode {}", colors.mode_name());
+        }
+    }
 }
 
 /// A small PNG for the Create ▸ Images path, which opens the document it builds.

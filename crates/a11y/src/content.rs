@@ -47,7 +47,7 @@ fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
             .flat_map(|x| match &*doc.resolve(x) {
                 Object::Stream(s) => {
                     let mut v = s.decoded().unwrap_or_default();
-                    v.push(b'\n');
+                    v.push(b' ');
                     v
                 }
                 _ => Vec::new(),
@@ -143,6 +143,28 @@ fn catalog(doc: &Document) -> Dict {
     doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default()
 }
 
+/// The most references one value may be written through. A chain is unusual but legal, and the
+/// render inspector follows them (lopdf's `dereference` has a limit of its own), so the two
+/// readers of a flag must agree about one.
+const MAX_REFERENCE_CHAIN: usize = 32;
+
+/// The value a chain of indirect references ends at. [`Document::resolve`] follows one reference,
+/// and an indirect object's value may itself be a reference (ISO 32000-2 §7.3.10): `/Marked
+/// 8 0 R` with object 8 holding `9 0 R` holding `true` is a tagged document, which this rule read
+/// as untagged while `doc_info` read it as tagged. Bounded and cycle-safe, since a damaged file
+/// can point a reference at itself; a chain longer than that, or one that loops, is no value.
+fn resolved(doc: &Document, o: &Object) -> std::sync::Arc<Object> {
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let mut value = doc.resolve(o);
+    while let Object::Ref(r) = &*value {
+        if seen.len() >= MAX_REFERENCE_CHAIN || !seen.insert(*r) {
+            return std::sync::Arc::new(Object::Null);
+        }
+        value = doc.get(*r);
+    }
+    value
+}
+
 fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
@@ -167,12 +189,16 @@ pub(crate) fn document_rule(doc: &Document, rule: Rule, pages: &[Page], scan: &S
             }
         }
         Rule::TaggedPdf => {
-            let marked = cat.get(b"MarkInfo").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().and_then(|d| d.get(b"Marked").cloned()));
+            // `/Marked` may be an indirect reference like any other value -- or a chain of
+            // them -- so it is followed to the value before the test below, which looks for the
+            // boolean itself (#3671).
+            let marked =
+                cat.get(b"MarkInfo").map(|m| resolved(doc, m)).and_then(|m| m.as_dict().and_then(|d| d.get(b"Marked").map(|v| resolved(doc, v))));
             let mut out = Vec::new();
             if !cat.contains(b"StructTreeRoot") {
                 out.push(Finding::plain(None, "The document has no tags (structure tree)"));
             }
-            if !matches!(marked, Some(Object::Bool(true))) {
+            if !matches!(marked.as_deref(), Some(Object::Bool(true))) {
                 out.push(Finding::plain(None, "The document isn't marked as tagged (MarkInfo Marked)"));
             }
             out
@@ -360,8 +386,47 @@ fn full_name(doc: &Document, field: ObjRef) -> String {
     parts.join(".")
 }
 
-/// Whether text in this font can be mapped to Unicode (ToUnicode, a standard encoding, or a
-/// predefined CJK character collection).
+/// Predefined CJK CMaps (ISO 32000-2 §9.7.5.2, Table 116), excluding Identity-H/V.
+/// Test complete names: neither a custom CMap nor a nonexistent vertical variant is predefined.
+fn predefined_cjk_cmap(name: &[u8]) -> bool {
+    if matches!(name, b"H" | b"V" | b"83pv-RKSJ-H" | b"90pv-RKSJ-H" | b"KSCpc-EUC-H" | b"UniAKR-UTF8-H" | b"UniAKR-UTF16-H" | b"UniAKR-UTF32-H") {
+        return true;
+    }
+    let Some(base) = name.strip_suffix(b"-H").or_else(|| name.strip_suffix(b"-V")) else { return false };
+    matches!(
+        base,
+        b"GB-EUC"
+            | b"GBpc-EUC"
+            | b"GBK-EUC"
+            | b"GBKp-EUC"
+            | b"GBK2K"
+            | b"UniGB-UCS2"
+            | b"UniGB-UTF16"
+            | b"B5pc"
+            | b"HKscs-B5"
+            | b"ETen-B5"
+            | b"ETenms-B5"
+            | b"CNS-EUC"
+            | b"UniCNS-UCS2"
+            | b"UniCNS-UTF16"
+            | b"90ms-RKSJ"
+            | b"90msp-RKSJ"
+            | b"Add-RKSJ"
+            | b"EUC"
+            | b"Ext-RKSJ"
+            | b"UniJIS-UCS2"
+            | b"UniJIS-UCS2-HW"
+            | b"UniJIS-UTF16"
+            | b"KSC-EUC"
+            | b"KSCms-UHC"
+            | b"KSCms-UHC-HW"
+            | b"UniKS-UCS2"
+            | b"UniKS-UTF16"
+    )
+}
+
+/// Whether text in this font declares a Unicode mapping route (ToUnicode, a standard encoding,
+/// a predefined CJK CMap, or an Adobe CJK character collection). This does not validate every glyph.
 fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
     if f.contains(b"ToUnicode") {
         return true;
@@ -369,16 +434,22 @@ fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
     let enc = f.get(b"Encoding").map(|e| doc.resolve(e));
     match f.name(b"Subtype") {
         Some(b"Type0") => {
-            let identity = matches!(enc.as_deref(), Some(Object::Name(n)) if n.starts_with(b"Identity"));
-            let ordering = f
+            // ISO 32000-2 §9.10.2: either a predefined non-Identity CMap or the descendant's
+            // Adobe CJK collection supplies the route. Identity-H/V do not rule out the latter.
+            if matches!(enc.as_deref(), Some(Object::Name(n)) if predefined_cjk_cmap(n)) {
+                return true;
+            }
+            let system = f
                 .get(b"DescendantFonts")
                 .map(|d| doc.resolve(d))
                 .and_then(|d| d.as_array().and_then(|a| a.first().cloned()))
                 .and_then(|d| doc.resolve(&d).as_dict().cloned())
-                .and_then(|d| d.get(b"CIDSystemInfo").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()))
-                .and_then(|c| c.get(b"Ordering").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.bytes.clone())));
-            let known = matches!(ordering.as_deref(), Some(b"Japan1" | b"GB1" | b"CNS1" | b"Korea1" | b"KR"));
-            !identity && known
+                .and_then(|d| d.get(b"CIDSystemInfo").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()));
+            let Some(system) = system else { return false };
+            let registry = system.get(b"Registry").map(|r| doc.resolve(r));
+            let ordering = system.get(b"Ordering").map(|o| doc.resolve(o));
+            matches!(registry.as_deref(), Some(Object::String(s)) if s.bytes == b"Adobe")
+                && matches!(ordering.as_deref(), Some(Object::String(s)) if matches!(s.bytes.as_slice(), b"Japan1" | b"GB1" | b"CNS1" | b"Korea1" | b"KR"))
         }
         Some(b"Type3") => enc.is_some(),
         _ => match enc.as_deref() {

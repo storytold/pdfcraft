@@ -25,6 +25,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use boa_engine::object::builtins::{JsArray, JsFunction};
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
@@ -194,7 +195,7 @@ impl Default for Limits {
 }
 
 struct Host {
-    fields: Vec<FieldState>,
+    fields: Arc<Vec<FieldState>>,
     changed: BTreeSet<usize>,
     alerts: Vec<String>,
     console: Vec<String>,
@@ -286,7 +287,8 @@ fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
 fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
-    change(&mut h.fields[i]);
+    let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
+    change(field);
     h.changed.insert(i);
     Ok(())
 }
@@ -1098,6 +1100,13 @@ fn refuse(source: &str) -> Option<String> {
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
 /// functions field scripts call), with the form's `fields`.
 pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared(script, event, doc, Arc::new(fields.to_vec()), doc_scripts, limits)
+}
+
+/// Like [`run`], sharing an immutable initial field snapshot. Scripts still get a fresh
+/// context; the first field write copies the snapshot, so neither the caller nor another
+/// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
+pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = std::iter::once(script).chain(doc_scripts.iter().map(String::as_str)).find_map(refuse) {
         return failed(why);
@@ -1119,12 +1128,12 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
     run_here(script, event, doc, fields, doc_scripts, limits)
 }
 
-fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
+fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
     let mut ctx = Context::default();
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
-        fields: fields.to_vec(),
+        fields,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),

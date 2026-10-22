@@ -545,27 +545,44 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
 }
 
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
-/// `.pem`, Acrobat's `.fdf`-free exports).
+/// `.pem`, Acrobat's `.fdf`-free exports), or a PKCS #7 bundle (`.p7b`, `.p7c`) in DER or as a
+/// PEM `PKCS7`/`CMS` block, as Windows, Acrobat and certificate authorities export chains.
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
-        return Ok(vec![Certificate::parse(bytes)?]);
+        // One DER certificate, else a DER bundle; a file that is neither reports the
+        // certificate's error, the common case.
+        return match Certificate::parse(bytes) {
+            Ok(cert) => Ok(vec![cert]),
+            Err(e) => crate::cms::certificate_bundle(bytes).map_err(|_| e),
+        };
     }
     let text = String::from_utf8_lossy(bytes);
     let mut out = Vec::new();
-    let mut block: Option<String> = None;
+    // The block being read: its label and its base64 so far.
+    let mut block: Option<(&str, String)> = None;
     for line in text.lines().map(str::trim) {
-        if line == "-----BEGIN CERTIFICATE-----" {
-            block = Some(String::new());
-        } else if line == "-----END CERTIFICATE-----" {
-            if let Some(b) = block.take() {
-                out.push(Certificate::parse(&base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?)?);
+        if let Some(label) = line.strip_prefix("-----BEGIN ").and_then(|l| l.strip_suffix("-----")) {
+            block = matches!(label, "CERTIFICATE" | "PKCS7" | "CMS").then(|| (label, String::new()));
+        } else if let Some(label) = line.strip_prefix("-----END ").and_then(|l| l.strip_suffix("-----")) {
+            // An END that doesn't close the open block ends nothing.
+            if let Some((open, b)) = block.take_if(|(open, _)| *open == label) {
+                let der = base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?;
+                if open == "CERTIFICATE" {
+                    out.push(Certificate::parse(&der)?);
+                } else {
+                    out.extend(crate::cms::certificate_bundle(&der)?);
+                }
             }
-        } else if let Some(b) = block.as_mut() {
+        } else if let Some((_, b)) = block.as_mut() {
             b.push_str(line);
         }
     }
+    // Certificates before a block that never ends are not a smaller set: the file is damaged.
+    if block.is_some() {
+        return Err(SignError::Malformed("a PEM block is not closed".into()));
+    }
     if out.is_empty() {
-        return Err(SignError::Malformed("no certificate found (expected DER or PEM)".into()));
+        return Err(SignError::Malformed("no certificate found (expected DER, PEM or a PKCS #7 bundle)".into()));
     }
     Ok(out)
 }

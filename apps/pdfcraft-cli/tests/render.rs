@@ -88,3 +88,27 @@ fn an_unknown_extension_fails_and_writes_nothing() {
     assert!(stderr.contains(".png, .jpg, .tif or .pam"), "{stderr}");
     assert!(!out.exists());
 }
+
+/// `--page` and `--dpi` are checked before the file is opened. A page that is not a positive
+/// whole number names the same expectation `text` names; a dpi that parses as an `f32` but
+/// cannot be rendered (`0`, a negative value, `NaN`) names the option and the value, instead
+/// of reaching the renderer as a scale it refuses with its own internal message.
+#[test]
+fn a_page_or_dpi_the_renderer_cannot_use_is_refused_before_reading_the_file() {
+    for (option, value, diagnostic) in [
+        ("--page", "abc", "bad --page: expected a positive page number"),
+        ("--page", "0", "bad --page: expected a positive page number"),
+        ("--dpi", "abc", "bad --dpi: expected a positive number of dots per inch, got \"abc\""),
+        ("--dpi", "0", "bad --dpi: expected a positive number of dots per inch, got \"0\""),
+        ("--dpi", "-3", "bad --dpi: expected a positive number of dots per inch, got \"-3\""),
+        ("--dpi", "NaN", "bad --dpi: expected a positive number of dots per inch, got \"NaN\""),
+        ("--dpi", "inf", "bad --dpi: expected a positive number of dots per inch, got \"inf\""),
+    ] {
+        let out = tmp("refuse", "out.png");
+        // `missing.pdf` is never read: the option's own message is the error.
+        let r = Command::new(BIN).args(["render", "missing.pdf", "--out", out.to_str().unwrap(), option, value]).output().unwrap();
+        assert_eq!(r.status.code(), Some(1), "{option} {value}");
+        assert_eq!(r.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
+        assert!(!out.exists(), "{option} {value}: no output may be written");
+    }
+}

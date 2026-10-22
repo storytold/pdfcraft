@@ -38,6 +38,12 @@ pub enum RedactError {
     NothingToApply,
     #[error("page {0} has content that can't be read, so it can't be redacted safely")]
     Unreadable(usize),
+    /// Redact annotations with no readable area (neither usable `/QuadPoints` nor a usable `/Rect`).
+    /// Skipping them would leave the text under them in the file while the others report success.
+    #[error(
+        "{0} redaction mark(s) have no readable area (neither usable QuadPoints nor a usable Rect), so the text under them can't be known; nothing was redacted. Remove those marks or mark the text again, then apply again"
+    )]
+    UnreadableMark(usize),
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
     /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
@@ -127,7 +133,8 @@ pub struct Report {
     pub annotations: usize,
     pub fields: usize,
     pub replacement_text: usize,
-    /// Structure elements that lost alternate/actual text or emptied marked content.
+    /// Structure elements that lost alternate/actual text or emptied marked content, and
+    /// structure references to removed annotations.
     pub tags: usize,
     /// The form was an AcroForm+XFA form and its `/XFA` packets (which still held redacted field
     /// values, and from which a relayout could rebuild them) were removed.
@@ -153,9 +160,21 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
     page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
+/// Every annotation the pages list. Compared before and after a removal, what is no longer listed
+/// leaves the structure tree too ([`tags::drop_object_refs`]).
+pub(crate) fn listed_annotations(doc: &Document) -> HashSet<ObjRef> {
+    pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| a.as_ref()).collect()
+}
+
 /// Every redaction mark in the document, page by page.
 pub fn marks(doc: &Document) -> Vec<Mark> {
-    let mut out = Vec::new();
+    marks_checked(doc).0
+}
+
+/// [`marks`], and the 0-based page of each Redact annotation that has no readable area, which
+/// [`apply`] refuses rather than skipping.
+pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
+    let (mut out, mut unreadable) = (Vec::new(), Vec::new());
     for (pi, p) in pdfcraft_model::pages(doc).iter().enumerate() {
         for a in annots_of(doc, &p.dict) {
             let Some(r) = a.as_ref() else { continue };
@@ -190,13 +209,14 @@ pub fn marks(doc: &Document) -> Vec<Mark> {
                 rects.push(r);
             }
             if rects.is_empty() {
+                unreadable.push(pi);
                 continue;
             }
             let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
             out.push(Mark { page: pi, obj: r, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d) });
         }
     }
-    out
+    (out, unreadable)
 }
 
 /// A page's content streams: (the references or inline objects as listed, their decoded data).
@@ -319,7 +339,13 @@ fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfc
 /// sensitive content still present. Call this on a working clone and replace the original only
 /// on success. On any error, discard the working clone; do not save or reuse it.
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
-    let all_marks = marks(doc);
+    let (all_marks, unreadable) = marks_checked(doc);
+    // A mark with no readable area is not applied, and applying the others would look complete:
+    // refuse before anything changes. Only the pages being applied count.
+    let unreadable = unreadable.iter().filter(|page| pages.is_none_or(|p| p.contains(page))).count();
+    if unreadable > 0 {
+        return Err(RedactError::UnreadableMark(unreadable));
+    }
     let chosen: Vec<&Mark> = all_marks.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).collect();
     if chosen.is_empty() {
         return Err(RedactError::NothingToApply);
@@ -351,6 +377,7 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
     let mut retired_properties = Vec::new();
     let widget_owner: Vec<(ObjRef, String)> =
         pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.name.clone())).collect::<Vec<_>>()).collect();
+    let listed_before = listed_annotations(doc);
 
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -522,6 +549,12 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             report.fields += 1;
         }
     }
+
+    // 3a. A tagged PDF's structure tree still points at the removed comments and widgets
+    // (`/OBJR`, #2874): drop those references, or a full rewrite keeps them reachable, the
+    // comment text and the field value included. Widgets of a removed field on other pages count.
+    let gone: HashSet<ObjRef> = listed_before.difference(&listed_annotations(doc)).copied().collect();
+    report.tags += tags::drop_object_refs(doc, &gone)?;
 
     // 3b. An XFA form mirrors its field values in the /XFA datasets packet, and a relayout
     // rebuilds fields and pages from that packet, so deleting the AcroForm field alone leaves the

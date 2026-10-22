@@ -143,6 +143,7 @@ impl PdfCraftApp {
                     tl!("The document's security settings don't allow this change").to_string()
                 }
                 commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
+                commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
                 commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
                 _ => tl!("Open a document first").to_string(),
             };
@@ -251,6 +252,11 @@ impl PdfCraftApp {
                     v.set_continuous(!v.continuous());
                 }
             }
+            "view.page_gaps" => {
+                if let Some(view) = active.and_then(|i| self.views.get(i)) {
+                    self.set_active_page_gaps(!view.show_page_gaps);
+                }
+            }
             "view.layout.cover" => {
                 if let Some(i) = active {
                     let v = &mut self.views[i];
@@ -270,7 +276,7 @@ impl PdfCraftApp {
                 let on = !self.full_screen;
                 match self.ctx.clone() {
                     Some(ctx) => self.set_full_screen(&ctx, on),
-                    None => self.full_screen = on,
+                    None => self.apply_full_screen(on),
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),

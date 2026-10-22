@@ -165,7 +165,7 @@ pub(crate) fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
             .flat_map(|x| match &*doc.resolve(x) {
                 Object::Stream(s) => {
                     let mut v = s.decoded().unwrap_or_default();
-                    v.push(b'\n');
+                    v.push(b' ');
                     v
                 }
                 _ => Vec::new(),
@@ -321,25 +321,33 @@ fn marked(doc: &Document, props: &Dict, op: &pdfcraft_content::Op, ids: &HashSet
 fn artifact_marked_content(doc: &mut Document, page: &pdfcraft_model::Page, ids: &HashSet<i64>) -> Result<bool, AltError> {
     let Some(entries) = content_entries(doc, &page.dict) else { return Ok(false) };
     let props = page_properties(doc, &page.dict);
+    let mut streams: Vec<Option<(Stream, Vec<u8>)>> = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        match &*doc.resolve(entry) {
+            Object::Stream(s) => streams.push(Some((s.clone(), s.decoded().unwrap_or_default()))),
+            _ => streams.push(None),
+        }
+    }
+    let decoded: Vec<&[u8]> = streams.iter().flatten().map(|(_, bytes)| bytes.as_slice()).collect();
+    let pieces = pdfcraft_content::Pieces::join(&decoded);
+    let edits: Vec<_> =
+        pieces.parse().ops.into_iter().filter(|op| marked(doc, &props, op, ids)).map(|op| (op.span, b"/Artifact BMC".to_vec())).collect();
+    if edits.is_empty() {
+        return Ok(false);
+    }
+    let mut spliced = pieces.splice(edits).into_iter();
     let mut next = Vec::with_capacity(entries.len());
     let mut changed = false;
-    for entry in entries {
-        let Some(stream) = (match &*doc.resolve(&entry) {
-            Object::Stream(s) => Some(s.clone()),
-            _ => None,
-        }) else {
+    for (entry, stream) in entries.into_iter().zip(streams) {
+        let Some((stream, old)) = stream else {
             next.push(entry);
             continue;
         };
-        let mut ops = pdfcraft_content::parse(&stream.decoded().unwrap_or_default()).ops;
-        let mut ours = false;
-        for op in &mut ops {
-            if marked(doc, &props, op, ids) {
-                *op = pdfcraft_content::Op::new("BMC", vec![Object::name("Artifact")]);
-                ours = true;
-            }
-        }
-        if !ours {
+        let Some(new) = spliced.next() else {
+            next.push(entry);
+            continue;
+        };
+        if new == old {
             next.push(entry);
             continue;
         }
@@ -348,15 +356,10 @@ fn artifact_marked_content(doc: &mut Document, page: &pdfcraft_model::Page, ids:
         dict.remove(b"Length");
         dict.remove(b"Filter");
         dict.remove(b"DecodeParms");
-        let stream = Object::Stream(Stream::flate(dict, &pdfcraft_content::serialize_ops(&ops)));
-        let stored = match entry {
-            Object::Ref(r) => {
-                doc.set(r, stream);
-                Object::Ref(r)
-            }
-            _ => Object::Ref(doc.add(stream)),
-        };
-        next.push(stored);
+        let stream = Object::Stream(Stream::flate(dict, &new));
+        // Splicing depends on this occurrence's neighbours. The original stream may also
+        // appear elsewhere in this array or on another page, where it must stay unchanged.
+        next.push(Object::Ref(doc.add(stream)));
     }
     if changed {
         let contents = match next.as_slice() {

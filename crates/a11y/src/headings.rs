@@ -263,7 +263,9 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             tm = tlm;
         }
         let pieces: Vec<&Object> = match op.op.as_slice() {
-            b"TJ" => op.operands.first().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
+            // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still takes the
+            // one immediately before it, as the renderer and every other reader here do (#3569).
+            b"TJ" => op.operands.last().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
             _ => op.operands.last().into_iter().collect(),
         };
         for piece in pieces {

@@ -49,6 +49,9 @@ pub struct Page {
     pub height: f64,
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
+    /// The colour the whole page is painted before its content (a page background), as sRGB
+    /// components in 0..=1; `None` for a page with no background of its own.
+    pub background: Option<[f64; 3]>,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -662,6 +665,14 @@ fn section(page: &Page) -> String {
     )
 }
 
+/// The page colour of a Word document: Word has one background for the whole document, so it
+/// is written only when every page has the same, non-white background (#2992).
+fn word_background(pages: &[Page]) -> Option<String> {
+    let first = rgb8(pages.first()?.background?);
+    let same = pages.iter().all(|p| p.background.map(rgb8) == Some(first));
+    (same && first != [255, 255, 255]).then(|| format!("{:02X}{:02X}{:02X}", first[0], first[1], first[2]))
+}
+
 /// A Word document (.docx, Office Open XML). Ordinary pages flow as paragraphs and tables;
 /// pages with rotated text, or text that overlaps artwork, use floating shapes to retain their layout.
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
@@ -728,10 +739,13 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
         }
         after_table = false;
     }
+    // Word shows a document background only when its settings say so (`settings.xml` below).
+    let page_colour = word_background(pages);
+    let background = page_colour.as_deref().map(|c| format!("<w:background w:color=\"{c}\"/>")).unwrap_or_default();
     let doc = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
 <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
-xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\"><w:body>{body}\
+xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\">{background}<w:body>{body}\
 </w:body></w:document>"
     );
     let mut types = String::from(
@@ -742,6 +756,11 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
 <Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\
 <Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>",
     );
+    if page_colour.is_some() {
+        types.push_str(
+            "<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>",
+        );
+    }
     types.push_str("</Types>");
     let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
 <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
@@ -755,6 +774,9 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
             "<Relationship Id=\"rIdImg{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{name}\"/>",
             i + 1
         ));
+    }
+    if page_colour.is_some() {
+        doc_rels.push_str("<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>");
     }
     doc_rels.push_str("</Relationships>");
     let styles = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
@@ -773,6 +795,9 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
     z.add("word/document.xml", doc.as_bytes(), true);
     z.add("word/styles.xml", styles.as_bytes(), true);
     z.add("word/_rels/document.xml.rels", doc_rels.as_bytes(), true);
+    if page_colour.is_some() {
+        z.add("word/settings.xml", b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:displayBackgroundShape/></w:settings>", true);
+    }
     for (name, im) in &media {
         z.add(&format!("word/media/{name}"), &im.bytes, false);
     }
@@ -912,6 +937,7 @@ mod tests {
                 size: [200.0, 150.0],
                 rotation: 0.0,
             }],
+            background: None,
         }
     }
 
@@ -1005,6 +1031,30 @@ mod tests {
         assert!(xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"));
         assert_eq!(xml.matches("id=\"Text1\"").count(), 1);
         assert_eq!(xml.matches(">Meter</w:t>").count(), 2);
+    }
+
+    /// #2992: pages that share a background colour get it as the Word document's page colour
+    /// (with the setting that makes Word show it); differing or white backgrounds don't.
+    #[test]
+    fn docx_keeps_a_shared_page_background() {
+        let teal = Page { background: Some([0.0, 0.5, 0.5]), ..page() };
+        let zip = docx(&[teal.clone(), teal.clone()], "Teal");
+        let xml = part(&zip, "word/document.xml");
+        assert!(xml.contains("<w:background w:color=\"008080\"/><w:body>"), "{xml}");
+        assert!(part(&zip, "word/settings.xml").contains("<w:displayBackgroundShape/>"));
+        assert!(part(&zip, "[Content_Types].xml").contains("/word/settings.xml"));
+        assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"settings.xml\""));
+        let other = Page { background: Some([1.0, 0.0, 0.0]), ..page() };
+        for (pages, why) in [
+            (vec![teal.clone(), other], "different colours"),
+            (vec![teal.clone(), page()], "a page without one"),
+            (vec![Page { background: Some([1.0; 3]), ..page() }], "white"),
+            (vec![page()], "none"),
+        ] {
+            let zip = docx(&pages, "Plain");
+            assert!(!part(&zip, "word/document.xml").contains("<w:background"), "{why}");
+            assert!(!zip.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "{why}");
+        }
     }
 
     /// One part of a package written by [`Zip`], inflated.
@@ -1134,6 +1184,7 @@ mod tests {
                 },
             ],
             images: Vec::new(),
+            background: None,
         }
     }
 
@@ -1214,6 +1265,7 @@ mod tests {
                 })
                 .collect(),
             images: Vec::new(),
+            background: None,
         };
         let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
         assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -1248,6 +1300,7 @@ mod tests {
                 block("conducted during a WGP tournament.", 164.3, 502.0, 352.5, 516.6),
             ],
             images: Vec::new(),
+            background: None,
         };
         let h = html(std::slice::from_ref(&p), "Regulations");
         assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -1267,7 +1320,7 @@ mod tests {
             blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
             blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
         let h = html(std::slice::from_ref(&p), "Event");
         assert!(!h.contains("<table>"), "sentences became a table: {h}");
         assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -1284,7 +1337,7 @@ mod tests {
             blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
             blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
         }
-        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
         let h = html(std::slice::from_ref(&p), "Prizes");
         assert!(h.contains("<table>"), "the prize table was lost: {h}");
         assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
@@ -1311,6 +1364,7 @@ mod tests {
                 para("Second right block, still a tall flowing paragraph rather than a cell.", 320.0, 400.0),
             ],
             images: Vec::new(),
+            background: None,
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");

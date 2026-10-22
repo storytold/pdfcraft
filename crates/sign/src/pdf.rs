@@ -354,10 +354,14 @@ pub const WORDINGS: &[&str] = &[
     "The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.",
     "The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.",
     "The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.",
-    // What a signature that validates with an old hash still does not prove.
+    "The signature's signed attributes have no content type, which CMS requires; it was read anyway.",
+    // What a signature that validates with an old hash or a small key still does not prove.
     "This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.",
     "This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.",
+    "This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.",
     // Whether the signed bytes and the signature still agree.
+    "The signature's signed attributes have no message digest, so the signature does not cover the document.",
+    "The signature's signed attributes name a content type other than data, so it is not a signature of the document.",
     "The document has been altered or corrupted since the signature was applied.",
     "The signer's certificate is not in the signature.",
     "The signature value does not match the signer's certificate: the signature is corrupt.",
@@ -680,6 +684,19 @@ fn is_doc_timestamp(d: &Dict) -> bool {
     d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
 }
 
+/// The DocMDP permission level (`/P`, 1–3) of signature value `v`, or `None` for an approval
+/// signature.
+fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
+    v.get(b"Reference")
+        .map(|r| doc.resolve(r))
+        .and_then(|r| r.as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|r| doc.resolve(&r).as_dict().cloned())
+        .find(|r| r.name(b"TransformMethod") == Some(b"DocMDP"))
+        .map(|r| r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8)
+}
+
 fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
@@ -697,17 +714,7 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
     info.contact = text(doc, v, b"ContactInfo");
     info.sub_filter = v.name(b"SubFilter").map(|s| String::from_utf8_lossy(s).into_owned());
     info.signer = text(doc, v, b"Name");
-    info.certify = v
-        .get(b"Reference")
-        .map(|r| doc.resolve(r))
-        .and_then(|r| r.as_array().cloned())
-        .into_iter()
-        .flatten()
-        .filter_map(|r| doc.resolve(&r).as_dict().cloned())
-        .find(|r| r.name(b"TransformMethod") == Some(b"DocMDP"))
-        .map(|r| {
-            r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8
-        });
+    info.certify = docmdp(doc, v);
     let invalid = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -787,6 +794,36 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
         }
         None => cache.digest(s.digest, bytes, l0, o1, covered),
     };
+    // With signed attributes the signature is made over them, not over the document: their
+    // message digest is what ties it to the signed bytes, and their content type says what those
+    // bytes are (data, for a document). RFC 5652 §5.3 requires both.
+    if s.signed_attrs.is_some() {
+        match s.content_type.as_deref() {
+            Some(crate::cms::DATA) => {}
+            Some(_) => {
+                return invalid(
+                    info,
+                    Detail::plain("The signature's signed attributes name a content type other than data, so it is not a signature of the document."),
+                );
+            }
+            None => {
+                info.details.push(Detail::plain("The signature's signed attributes have no content type, which CMS requires; it was read anyway."))
+            }
+        }
+        if s.message_digest.is_none() {
+            return invalid(
+                info,
+                Detail::plain("The signature's signed attributes have no message digest, so the signature does not cover the document."),
+            );
+        }
+    }
+    // A PDF signature signs data: the document, or (adbe.pkcs7.sha1) its digest. A content-type
+    // attribute was checked above, and `SignedData::parse` refuses one that differs from
+    // `eContentType`; without that attribute, `eContentType` is the only place that says so.
+    if sd.econtent_type != crate::cms::DATA {
+        let why = SignError::Malformed("CMS: the encapsulated content is not data".into());
+        return invalid(info, Detail::of("The signature could not be read ({}).", Fill::Reason(why.to_string())));
+    }
     if let Some(md) = &s.message_digest
         && *md != content_digest
     {
@@ -855,7 +892,18 @@ fn finish_validation(
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(doc, bytes, covered), info.certify)
+        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788). This
+        // signature is the one whose byte range ends that revision.
+        let old = cache.revision(doc, bytes, covered);
+        if let Some(old) = &old
+            && let Some(v) = sig_fields(old)
+                .iter()
+                .filter_map(|f| f.signature(old))
+                .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
+        {
+            info.certify = docmdp(old, &v);
+        }
+        classify_changes(doc, old, info.certify)
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an
@@ -1200,6 +1248,8 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
         .collect();
     // The signed revision's document-level XMP stream.
     let old_metadata = old.root().and_then(|root| old.get(root).as_dict().and_then(|c| c.get(b"Metadata").and_then(Object::as_ref)));
+    // The signed revision's XFA data packets: filling the form rewrites them.
+    let old_xfa_data = xfa_data_packets(&old);
     // What each object was in the signed revision: its pages, and its trailer /Info. A changed
     // object is judged by the role it held when signed, never by the labels or keys its new,
     // attacker-written version carries (relabelling a signed page /Type /Sig, or dropping its
@@ -1295,6 +1345,12 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
                     // else, even one it already had when signed (a page's Form XObject: the
                     // renderer ignores /Type), does not make rewriting it a metadata change.
                     kind::METADATA
+                } else if old_xfa_data.contains(&r) {
+                    // The form's XFA data (`datasets`) or state (`form`) as the signed revision
+                    // named it: filling an XFA form rewrites these, as a Reader Extensions (UR3)
+                    // save of a certified form does (#2759). The role comes from the signed
+                    // revision, so a later one can't name page content as XFA data.
+                    kind::FORM_FILL
                 } else {
                     kind::OTHER
                 }
@@ -1316,6 +1372,21 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
         }
     }
     if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+}
+
+/// The streams of `doc`'s XFA form that hold its data and state: the `datasets` and `form`
+/// packets of the AcroForm's `/XFA` array (name, stream, name, stream, …). A form given as one
+/// XFA stream holds its template too, and is not listed.
+fn xfa_data_packets(doc: &Document) -> HashSet<ObjRef> {
+    let Some(form) = acroform(doc) else { return HashSet::new() };
+    let Some(xfa) = form.get(b"XFA").map(|x| doc.resolve(x)) else { return HashSet::new() };
+    let Object::Array(xfa) = &*xfa else { return HashSet::new() };
+    xfa.as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|[name, _]| doc.resolve(name).as_string().is_some_and(|s| matches!(s.to_text().as_str(), "datasets" | "form")))
+        .filter_map(|[_, packet]| packet.as_ref())
+        .collect()
 }
 
 /// Where an object sits in the Document Security Store (ISO 32000-2 §12.8.4.3).
@@ -1605,7 +1676,8 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     // change is only a brand-new object, or one that was already a signature object when signed.
     let signature_ok = before.is_none_or(is_signature_dict);
     match ty {
-        Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if signature_ok => return kind::SIGNATURE,
+        // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
+        Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
         Some(b"Catalog") => {
             let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering"];
             return match before {
@@ -2063,17 +2135,19 @@ pub fn display_date(pdf: &str) -> String {
 }
 
 /// The visible signature: the signer's name large on the left, or the graphic in its place, and
-/// the details on the right (Acrobat's standard layout), in Helvetica. A graphic with no details
-/// beside it fills the box. An error, before anything is drawn, when a detail it writes in
-/// Helvetica (the signer's name, the certificate's subject, the reason or the location) has a
-/// character Helvetica can't draw: signing invisibly, or leaving that part out, still works. A
-/// graphic doesn't change this: the name it replaces on the left is still among the details.
-/// A label that is drawn ([`AppearanceLabels`], the caller's words) is refused the same way.
+/// the details on the right (Acrobat's standard layout), in Helvetica, or in the bundled Inter
+/// font when a detail needs characters beyond Western European. A graphic with no details beside
+/// it fills the box. An error, before anything is drawn, when a detail it writes (the signer's
+/// name, the certificate's subject, the reason or the location) has a character neither font can
+/// draw: signing invisibly, or leaving that part out, still works. A graphic doesn't change this:
+/// the name it replaces on the left is still among the details. A label that is drawn
+/// ([`AppearanceLabels`], the caller's words) must be drawable in Helvetica, and is refused otherwise.
 fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate, opts: &SignOptions) -> Result<Stream, SignError> {
-    use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, undrawable_message, win_ansi, wrap};
+    use pdfcraft_fonts::{first_undrawable, helvetica_width, inter_width, literal, undrawable_message, win_ansi, wrap, wrap_with};
     let (w, h) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
     let a = &opts.appearance;
     let dn = cert.subject.display();
+    let mut needs_unicode = false;
     if w > 1.0 && h > 1.0 {
         let shown = [
             (a.name, "the signer's name", Some(name)),
@@ -2082,11 +2156,22 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
             (a.location, "the location", opts.location.as_deref()),
         ];
         for (on, what, text) in shown {
-            if on && let Some(c) = text.and_then(first_undrawable) {
-                return Err(SignError::Unsupported(format!(
-                    "{}; sign without a visible appearance, or leave {what} out of it",
-                    undrawable_message(&format!("{what} of the visible signature"), c)
-                )));
+            if on
+                && let Some(s) = text
+                && first_undrawable(s).is_some()
+            {
+                for c in s.chars() {
+                    if matches!(c, '\n' | '\r') {
+                        continue;
+                    }
+                    if !pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &c.to_string()) {
+                        return Err(SignError::Unsupported(format!(
+                            "{}; sign without a visible appearance, or leave {what} out of it",
+                            undrawable_message(&format!("{what} of the visible signature"), c)
+                        )));
+                    }
+                }
+                needs_unicode = true;
             }
         }
         // The labels are the caller's words (a translation), checked as the details are: only
@@ -2128,6 +2213,31 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
     lines.retain(|l| !l.is_empty());
     let mut out = Vec::new();
     let mut image = None;
+    let mut fonts = Dict::new();
+    let (font_tag, metrics) = if needs_unicode {
+        let tag = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter")
+            .map_err(|e| SignError::Pdf(format!("failed to embed signature font: {e}")))?;
+        let font_dict = fonts
+            .get(tag.as_bytes())
+            .map(|o| doc.resolve(o))
+            .and_then(|o| o.as_dict().cloned())
+            .ok_or_else(|| SignError::Pdf("embedded signature font dictionary not found".into()))?;
+        let m = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict);
+        (tag, Some(m))
+    } else {
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        fonts.set(b"Helv".to_vec(), Object::Dict(font));
+        ("Helv".to_string(), None)
+    };
+    let measure = |s: &str, sz: f64| -> f64 { if needs_unicode { inter_width(s, sz) } else { helvetica_width(s, sz) } };
+    let wrap_text =
+        |s: &str, sz: f64, max_w: f64| -> Vec<String> { if needs_unicode { wrap_with(s, sz, max_w, inter_width) } else { wrap(s, sz, max_w) } };
+    let encode_line =
+        |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
     if w > 1.0 && h > 1.0 {
         let pad = (h * 0.06).clamp(1.0, 6.0);
         let (left_w, right_x) = match (&opts.graphic, a.name) {
@@ -2146,14 +2256,14 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
             // The name fills the left half.
             let mut size = (h * 0.4).min(36.0);
             let fit = (left_w - 2.0 * pad).max(1.0);
-            let longest = helvetica_width(name, 1.0).max(0.01);
+            let longest = measure(name, 1.0).max(0.01);
             size = size.min(fit / longest).max(4.0);
-            let words = wrap(name, size, fit);
+            let words = wrap_text(name, size, fit);
             let total = words.len() as f64 * size * 1.1;
             let mut y = (h + total) / 2.0 - size * 0.85;
             for l in &words {
-                out.extend(format!("/Helv {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(pad), fmt(y)).bytes());
-                out.extend(literal(&win_ansi(l)));
+                out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(pad), fmt(y)).bytes());
+                out.extend(encode_line(l));
                 out.extend_from_slice(b" Tj\n");
                 y -= size * 1.1;
             }
@@ -2161,7 +2271,7 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
         // The details, shrunk to fit the right side.
         let mut size = (h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
         let wrapped = loop {
-            let all: Vec<String> = lines.iter().flat_map(|l| wrap(l, size, right_w)).collect();
+            let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, right_w)).collect();
             if all.len() as f64 * size * 1.15 <= h - 2.0 * pad || size <= 3.0 {
                 break all;
             }
@@ -2169,8 +2279,8 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
         };
         let mut y = h - pad - size * 0.9;
         for l in &wrapped {
-            out.extend(format!("/Helv {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
-            out.extend(literal(&win_ansi(l)));
+            out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
+            out.extend(encode_line(l));
             out.extend_from_slice(b" Tj\n");
             y -= size * 1.15;
         }
@@ -2180,13 +2290,6 @@ fn appearance(doc: &mut Document, rect: [f64; 4], name: &str, cert: &Certificate
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, w, h].iter().map(|x| Object::Real(*x)).collect()));
-    let mut font = Dict::new();
-    font.set(b"Type".to_vec(), Object::name("Font"));
-    font.set(b"Subtype".to_vec(), Object::name("Type1"));
-    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-    let mut fonts = Dict::new();
-    fonts.set(b"Helv".to_vec(), Object::Dict(font));
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     if let Some(im) = image {

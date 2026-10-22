@@ -336,3 +336,146 @@ fn listing(dir: &Path) -> Vec<(PathBuf, u64)> {
     out.sort();
     out
 }
+
+/// A six-page file whose fourth `/Kids` entry points at an object that does not exist (#2660),
+/// with a link, a URI link and a comment on every page, and a form field and text added by
+/// PdfCraft (its `/PCAdded` marker) on the last. Readers
+/// disagree on such a file: the viewer stopped at the dangling entry and saw three pages, while
+/// the editing layer sees all six, so annotations come back on pages the viewer does not have.
+fn dangling_kid_pdf() -> Vec<u8> {
+    let pages: Vec<u32> = (0..6).map(|i| 10 + 2 * i).collect();
+    let mut kids: Vec<u32> = pages[..3].to_vec();
+    kids.push(77); // does not exist
+    kids.extend(&pages[3..]);
+    let kids: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();
+    let mut objs: Vec<(u32, String)> = vec![
+        (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [50 0 R] >> >>".into()),
+        (2, format!("<< /Type /Pages /Kids [{}] /Count 6 >>", kids.join(" "))),
+        (90, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into()),
+    ];
+    for (i, &page) in pages.iter().enumerate() {
+        let text = format!("BT /F1 24 Tf 50 300 Td (Page {}) Tj ET", i + 1);
+        let (field, contents) = if i == 5 { (" 50 0 R", format!("[{} 0 R 60 0 R]", page + 1)) } else { ("", format!("{} 0 R", page + 1)) };
+        objs.push((
+            page,
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /Font << /F1 90 0 R >> >> /Contents {contents} \
+                 /Annots [<< /Type /Annot /Subtype /Link /Rect [10 10 100 40] /Dest [10 0 R /Fit] >> \
+                 << /Type /Annot /Subtype /Link /Rect [10 50 100 80] /A << /S /URI /URI (https://example.com/) >> >> \
+                 << /Type /Annot /Subtype /Text /Rect [200 200 220 220] /Contents (note) /T (author) >>{field}] >>"
+            ),
+        ));
+        objs.push((page + 1, format!("<< /Length {} >>\nstream\n{text}\nendstream", text.len())));
+    }
+    objs.push((50, "<< /FT /Tx /T (name) /Type /Annot /Subtype /Widget /Rect [50 100 250 130] /P 20 0 R >>".into()));
+    let added = "BT /F1 12 Tf 72 80 Td (AddedSample) Tj ET";
+    objs.push((
+        60,
+        format!(
+            "<< /PCMark /Added /PCAdded << /Kind /Text /Rect [70 70 150 100] /Text (AddedSample) /Size 12 >> /Length {} >>\nstream\n{added}\nendstream",
+            added.len()
+        ),
+    ));
+    objs.sort_by_key(|(n, _)| *n);
+
+    let size = 100;
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = vec![None; size];
+    for (num, body) in &objs {
+        if let Some(slot) = offsets.get_mut(*num as usize) {
+            *slot = Some(out.len());
+        }
+        out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for offset in offsets.iter().skip(1) {
+        out.extend_from_slice(
+            match offset {
+                Some(o) => format!("{o:010} 00000 n \n"),
+                None => "0000000000 65535 f \n".to_string(),
+            }
+            .as_bytes(),
+        );
+    }
+    out.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+#[test]
+fn no_tool_panics_when_the_viewer_sees_fewer_pages_than_the_file_has() {
+    // #2660: `link_list` indexed the viewer's pages with a page number from the editing layer
+    // ("index out of bounds: the len is 3 but the index is 3"). Every tool, on a fresh copy of a
+    // file where the two disagree, must answer with a result or an error.
+    let root = tmp("dangling-kid");
+    // The JSON a call answers with, or the error it gave.
+    let answer = |a: &mut Automation, tool: &str, args: &Value| -> std::result::Result<Value, String> {
+        match catch_unwind(AssertUnwindSafe(|| a.call(tool, args))) {
+            Ok(Ok(content)) => content
+                .into_iter()
+                .find_map(|c| match c {
+                    pdfcraft_automation::Content::Json(v) => Some(v),
+                    pdfcraft_automation::Content::Png { .. } => None,
+                })
+                .ok_or_else(|| format!("{tool} answered without JSON")),
+            Ok(Err(e)) => Err(format!("{tool} failed: {e:?}")),
+            Err(_) => Err(format!("{tool} panicked")),
+        }
+    };
+    let pdf = dangling_kid_pdf();
+    let mut failures = Vec::new();
+    for def in tools() {
+        // Written again for every tool: tools that save write to `in.pdf`, the plausible path.
+        std::fs::write(root.join("in.pdf"), &pdf).expect("fixture");
+        let mut a = Automation::new().with_root(&root).expect("root");
+        let opened = a.call("doc_open", &json!({ "path": "in.pdf" })).expect("open the damaged file");
+        let doc = opened
+            .into_iter()
+            .find_map(|c| match c {
+                pdfcraft_automation::Content::Json(v) => v["doc"].as_u64(),
+                pdfcraft_automation::Content::Png { .. } => None,
+            })
+            .expect("the opened document has an id");
+        if let Err(e) = guarded(&mut a, def.name, &Value::Object(plausible_with(&def, Some(doc)))) {
+            failures.push(e);
+        }
+        match def.name {
+            // The field sits on the sixth page; a rect is placed on the field's own page. That is
+            // refused, saying why, and the field is left as it was.
+            "form_set_props" => {
+                let fields = |a: &mut Automation| answer(a, "form_fields", &json!({ "doc": doc }));
+                let before = fields(&mut a);
+                match catch_unwind(AssertUnwindSafe(|| a.call(def.name, &json!({ "doc": doc, "field": "name", "rect": [10, 10, 60, 30] })))) {
+                    Ok(Err(ToolError::Failed(m))) if m == "name is on page 6, which could not be read" => {}
+                    Ok(Err(e)) => failures.push(format!("form_set_props gave the wrong error: {e:?}")),
+                    Ok(Ok(_)) => failures.push("form_set_props placed a rect on a page the viewer could not read".into()),
+                    Err(_) => failures.push("form_set_props panicked on a rect for the field on page 6".into()),
+                }
+                let after = fields(&mut a);
+                if before.is_err() || before != after {
+                    failures.push(format!("form_set_props changed the field: {before:?} became {after:?}"));
+                }
+            }
+            // Listing still reports what is on the pages the viewer lacks, not just survives it.
+            "link_list" => match answer(&mut a, def.name, &json!({ "doc": doc })) {
+                Ok(v) if v["count"] == 12 => {}
+                other => failures.push(format!("link_list did not list the file's 12 links: {other:?}")),
+            },
+            // The added text on page 6 is reported, its rect unchanged (user space), as
+            // `doc_info` reports rects on pages the viewer could not read.
+            "content_list" => match answer(&mut a, def.name, &json!({ "doc": doc })) {
+                Ok(v)
+                    if v["items"].as_array().is_some_and(|items| {
+                        items.iter().any(|it| it["page"] == 6 && it["type"] == "text" && it["rect"] == json!([70.0, 70.0, 150.0, 100.0]))
+                    }) => {}
+                other => failures.push(format!("content_list did not report the added text on page 6 at [70, 70, 150, 100]: {other:?}")),
+            },
+            _ => {}
+        }
+    }
+    for f in &failures {
+        eprintln!("  {f}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(failures.is_empty(), "{} failure(s); the first is: {}", failures.len(), failures.first().map_or("", String::as_str));
+}

@@ -135,6 +135,8 @@
 	Next view	Vista successiva
 	Page display	Visualizzazione pagina
 	Continuous scrolling	Scorrimento continuo
+	Show gaps between pages	Mostra spazi tra le pagine
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Nascondi gli spazi per unire i bordi delle pagine. I margini all’interno del PDF rimangono invariati.
 	Two-page view	Visualizzazione doppia
 	Single page	Pagina singola
 	Show cover page in two-page view	Mostra la copertina in visualizzazione doppia
@@ -838,6 +840,7 @@
 	Insert Page Number	Inserisci numero di pagina
 	Insert Date	Inserisci data
 	Start page number	Numero di pagina iniziale
+	Shrink the page content to make room for the header and footer	Riduci il contenuto della pagina per fare spazio a intestazione e piè di pagina
 	Source	Origine
 	Fit to page	Adatta alla pagina
 	Rotation	Rotazione
@@ -1216,6 +1219,7 @@
 	Off	Disattivato
 	Flip on long edge	Rilegatura sul lato lungo
 	Flip on short edge	Rilegatura sul lato corto
+	Printer default	Come da stampante
 	Paper:	Carta:
 	Pages to Print	Pagine da stampare
 	More options:	Altre opzioni:
@@ -1358,6 +1362,8 @@
 	This document has no layers.	Questo documento non ha livelli.
 	This document has no attachments.	Questo documento non ha allegati.
 	Hide layer	Nascondi livello
+	Layer options	Opzioni livelli
+	Reset to Initial Visibility	Ripristina visibilità iniziale
 	Show layer	Mostra livello
 	Set layer visibility	Imposta visibilità livello
 	on page {label}	a pagina {label}
@@ -1655,6 +1661,7 @@
 	Looking for printers…	Ricerca delle stampanti…
 	Sending sheet {s} of {n} to {printer}…	Invio del foglio {s} di {n} a {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nessuna stampante trovata. Verifica che la stampante sia installata e che lo spooler di stampa sia in esecuzione, quindi riapri Stampa.
+	Reading the printer's settings…	Lettura delle impostazioni della stampante…
 	Sending to {printer}…	Invio a {printer}…
 	Choose a folder for the searchable files	Scegli una cartella per i file ricercabili
 	Files are combined from top to bottom. Leave Pages empty to take every page.	I file vengono combinati dall'alto verso il basso. Lascia vuoto Pagine per prendere tutte le pagine.
@@ -1801,6 +1808,7 @@
 	This document has no restrictions to lift	Questo documento non ha restrizioni da rimuovere
 	The document's security settings don't allow this change	Le impostazioni di sicurezza del documento non consentono questa modifica
 	The document's security settings don't allow copying text and images	Le impostazioni di sicurezza del documento non consentono di copiare testo e immagini
+	The document's security settings don't allow printing	Le impostazioni di sicurezza del documento non consentono la stampa
 	Open a document first	Apri prima un documento
 	Security will be removed when you save	La protezione verrà rimossa al salvataggio
 	Click text or an image to edit it	Fai clic su un testo o un'immagine per modificarlo
@@ -2320,6 +2328,7 @@ key	Space	Spazio
 	Printer paper and scaling may differ. Check driver settings.	Carta e scala della stampante possono differire. Controlla le impostazioni del driver.
 	Drawing scale changes. Use Actual size for full-scale plans.	La scala del disegno cambia. Usa Dimensioni effettive per le planimetrie in scala.
 	Reload documents when their files change on disk	Ricarica i documenti quando i loro file cambiano sul disco
+	Always use my default zoom and page layout	Usa sempre il mio ingrandimento e layout di pagina predefiniti
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Questo file è cambiato sul disco. Ricarica mostra la nuova versione e scarta le modifiche non salvate; Salva la sostituisce con questa versione.
 	Reload	Ricarica
 	Couldn't reload {name}: {e}	Impossibile ricaricare {name}: {e}
@@ -2693,3 +2702,48 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Paragraph spacing	Spaziatura paragrafi
 	Less	Meno
 	Other options	Altre opzioni
+	Thumbnail size	Dimensione miniature
+	Smaller thumbnails	Miniature più piccole
+	Larger thumbnails	Miniature più grandi
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Modifica la forma del commento
+
+# Entries the other catalogs had and Italian lacked (2026-10-21)
+	The password must have at least 8 characters.	La password deve contenere almeno 8 caratteri.
+
+# Entries from #1523 that the catalog lacked.
+	Color	Colore
+	Comment	Commento
+	Error	Errore
+	Next	Avanti
+	On	Attivo
+	Rotate view clockwise (⇧⌘+)	Ruota la vista in senso orario (⇧⌘+)
+	Save (M4)	Salva (M4)
+	Save changes?	Salvare le modifiche?
+	System	Sistema
+	Zoom in / out (also pinch or ⌘-scroll)	Ingrandisci / riduci (anche con il pizzico o ⌘+scorrimento)
+	of	di
+
+# Prepare a form ▸ Text field table
+	Add text field table	Aggiungi tabella di campi di testo
+	Text field table	Tabella di campi di testo
+	Text Field Table	Tabella di campi di testo
+	Columns	Colonne
+	Row spacing	Spaziatura tra le righe
+	Column spacing	Spaziatura tra le colonne
+	First row number	Numero della prima riga
+	Column widths	Larghezze delle colonne
+	Distribute evenly	Distribuisci uniformemente
+	Field names	Nomi dei campi
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N o {row} è il numero di riga, {col} quello di colonna, {seq} quello di cella. Senza nessuno di essi, il numero di riga va alla fine.
+	Column {n}	Colonna {n}
+	Add fields	Aggiungi campi
+	a table has 1 to {max} rows	una tabella ha da 1 a {max} righe
+	a table has 1 to {max} columns	una tabella ha da 1 a {max} colonne
+	the first row number can be at most {max}	il numero della prima riga può essere al massimo {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	l'area, la spaziatura e le larghezze delle colonne devono essere numeri, la spaziatura 0 o più e ogni larghezza maggiore di 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	le righe sono troppo basse: rendi l'area più alta oppure usa meno righe o meno spaziatura tra le righe
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	una colonna è troppo stretta: rendi l'area più larga, dai più spazio alla colonna oppure usa meno colonne o meno spaziatura tra le colonne
+	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
+	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
+	a field named {name} already exists	esiste già un campo chiamato {name}

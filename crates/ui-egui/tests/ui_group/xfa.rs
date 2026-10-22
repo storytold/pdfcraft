@@ -58,8 +58,8 @@ fn a_dynamic_xfa_form_is_laid_out_and_filled() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 2);
     assert!(doc.form.iter().any(|f| f.name == "familyName"));
-    // The notice offers to highlight the fields, like any form.
-    h.get_by_label("Highlight fields");
+    // The notice offers the highlight toggle, like any form; highlights are on by default.
+    h.get_by_label("Hide field highlights");
 }
 
 #[test]
@@ -87,8 +87,8 @@ fn a_static_xfa_form_is_filled_from_its_data_and_says_so() {
     assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").unwrap().value, vec!["Ada".to_string()]);
     assert_eq!(doc.form.iter().find(|f| f.name == "form1[0].page1[0].agree[0]").unwrap().value, vec!["1".to_string()]);
     assert!(!doc.dirty);
-    // The fields can still be highlighted from the notice.
-    h.get_by_label("Highlight fields");
+    // The highlight toggle (on by default, so it reads "Hide") is still in the notice.
+    h.get_by_label("Hide field highlights");
 }
 
 #[test]
@@ -228,6 +228,6 @@ fn a_secured_dynamic_xfa_form_shows_its_layout_and_its_security() {
     .unwrap();
     let h = open(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
     h.get_by_label_contains("laid out from its template: 2 pages, 11 fields. This document is secured.");
-    h.get_by_label("Highlight fields");
+    h.get_by_label("Hide field highlights");
     h.get_by_label("Security settings");
 }

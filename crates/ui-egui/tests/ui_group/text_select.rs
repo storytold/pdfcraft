@@ -227,6 +227,27 @@ fn selected_text_copy_edit_and_context_menus() {
 }
 
 #[test]
+fn escape_closes_an_open_menu_before_it_clears_the_selection() {
+    // #3535: one Escape closed the main menu and dropped the selection with it.
+    use egui_kittest::kittest::Queryable;
+    let (mut h, at) = harness(|_| {});
+    click(&mut h, at);
+    click(&mut h, at);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closes the menu");
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"), "and keeps the selection");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].selected_text(), None, "a second Escape clears it");
+}
+
+#[test]
 fn selected_text_copy_command_requires_selection() {
     let (mut h, at) = harness(|_| {});
     assert!(!h.state_mut().execute("edit.copy"));
@@ -543,4 +564,85 @@ fn coalesced_primary_clicks_select_line_then_spaced_click_clears() {
         assert_eq!((doc.can_undo(), doc.can_redo()), (None, None));
         assert_eq!(doc.saved_bytes(), saved);
     }
+}
+
+/// Review on #2070: a click on the page in full screen waits out the double-click time before
+/// it turns the page, and a link clicked meanwhile used to leave that turn pending: the link
+/// jumped to page 3, then the page moved on to page 4.
+#[test]
+fn full_screen_link_click_cancels_the_pending_page_turn() {
+    let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>";
+    let four_pages = String::from_utf8(two_lines())
+        .unwrap()
+        .replace("/Kids [3 0 R] /Count 1", "/Kids [3 0 R 6 0 R 7 0 R 8 0 R] /Count 4")
+        .replace("/Contents 4 0 R /Resources", "/Annots [9 0 R] /Contents 4 0 R /Resources")
+        .replace(
+            "trailer",
+            &format!(
+                "6 0 obj {page} endobj\n7 0 obj {page} endobj\n8 0 obj {page} endobj\n9 0 obj << /Type /Annot /Subtype /Link /Rect [200 20 280 60] /Border [0 0 0] /Dest [7 0 R /Fit] >> endobj\ntrailer"
+            ),
+        )
+        .into_bytes();
+    let (mut h, _) = harness_with(four_pages, |_| {});
+    h.state_mut().apply_full_screen(true);
+    crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height());
+    // A click on blank page area, then, within the double-click time, a click on the link.
+    h.hover_at(at(150.0, 90.0));
+    h.run_steps(1);
+    click(&mut h, at(150.0, 90.0));
+    h.run_steps(3);
+    h.hover_at(at(240.0, 40.0));
+    h.run_steps(1);
+    click(&mut h, at(240.0, 40.0));
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 2, "the link's page, and no turn after it");
+}
+
+/// Review on #2070: in full screen a click goes forward a page, but a double-click selects the
+/// word and stays: the click waits out the double-click time before turning. Turning on the first
+/// click's release had sent the second click to the next page. Leaving full screen meanwhile
+/// drops the pending turn.
+#[test]
+fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
+    // The same page twice.
+    let two_pages = String::from_utf8(two_lines())
+        .unwrap()
+        .replace("/Kids [3 0 R] /Count 1", "/Kids [3 0 R 6 0 R] /Count 2")
+        .replace(
+            "trailer",
+            "6 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\ntrailer",
+        )
+        .into_bytes();
+    let (mut h, _) = harness_with(two_pages, |_| {});
+    h.state_mut().apply_full_screen(true);
+    crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
+    let at = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer");
+    h.hover_at(at);
+    h.run_steps(1);
+
+    // A double-click selects "quick" and stays on page 1, also once the double-click time is over.
+    click(&mut h, at);
+    click(&mut h, at);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "the double-click didn't turn the page");
+
+    // A single click turns it once the double-click time is over.
+    // Entering full screen again clears the selection.
+    h.state_mut().apply_full_screen(false);
+    h.state_mut().apply_full_screen(true);
+    h.run_steps(30);
+    click(&mut h, at);
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 1, "a click goes forward");
+
+    // A click right before leaving full screen doesn't turn the page after it.
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(30);
+    click(&mut h, at);
+    h.state_mut().apply_full_screen(false);
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "no page turn after leaving");
 }

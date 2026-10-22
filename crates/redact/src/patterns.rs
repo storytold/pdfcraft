@@ -56,7 +56,12 @@ fn digit_run(s: &[char], start: usize, seps: &[char], max_len: usize) -> (usize,
         let c = s[i];
         if c.is_ascii_digit() {
             n += 1;
-        } else if !(seps.contains(&c) && (digit(s.get(i + 1)) || s.get(i + 1) == Some(&'(')) || (c == '(' || c == ')') && seps.contains(&c)) {
+        } else if !(seps.contains(&c)
+            && (digit(s.get(i + 1)) || s.get(i + 1) == Some(&'('))
+            // A slash only ever joins two digits ("0426/123456").
+            && (c != '/' || digit(s.get(i + 1)) && digit(i.checked_sub(1).and_then(|p| s.get(p))))
+            || (c == '(' || c == ')') && seps.contains(&c))
+        {
             break;
         }
         i += 1;
@@ -84,8 +89,56 @@ fn run_continues(s: &[char], k: usize, step: isize, seps: &[char]) -> bool {
     }
 }
 
+/// Words that label the number after them as a phone number, lowercased ("Tel.", "cell.", "Fax:").
+const PHONE_LABELS: [&str; 24] = [
+    "tel",
+    "tél",
+    "tele",
+    "telefon",
+    "telefono",
+    "teléfono",
+    "telephone",
+    "téléphone",
+    "phone",
+    "ph",
+    "cell",
+    "cel",
+    "cellulare",
+    "cellphone",
+    "mobile",
+    "mob",
+    "mobil",
+    "móvil",
+    "movil",
+    "handy",
+    "fax",
+    "tlf",
+    "telf",
+    "gsm",
+];
+
+/// Whether the text before `i` is a phone label, with one to four spaces, colons or dots between.
+fn labelled(s: &[char], i: usize) -> bool {
+    let before = |k: usize| k.checked_sub(1).and_then(|p| s.get(p)).copied();
+    let mut j = i;
+    while i - j < 4 && before(j).is_some_and(|c| matches!(c, ' ' | ':' | '.' | '\u{a0}')) {
+        j -= 1;
+    }
+    let end = j;
+    while end - j < 12 && before(j).is_some_and(char::is_alphabetic) {
+        j -= 1;
+    }
+    if end == i || before(j).is_some_and(char::is_alphanumeric) {
+        return false;
+    }
+    let label: String = s.get(j..end).unwrap_or_default().iter().flat_map(|c| c.to_lowercase()).collect();
+    PHONE_LABELS.contains(&label.as_str())
+}
+
 fn phone(s: &[char], i: usize) -> Option<usize> {
     const SEPS: [char; 5] = [' ', '-', '.', '(', ')'];
+    // A slash joins the area code to the number in Italian and German landlines ("0426/123456").
+    const RUN_SEPS: [char; 6] = [' ', '-', '.', '(', ')', '/'];
     let start_ok = s[i] == '+' && digit(s.get(i + 1)) || s[i] == '(' && digit(s.get(i + 1)) || s[i].is_ascii_digit();
     if !start_ok || word(i.checked_sub(1).and_then(|p| s.get(p))) || s.get(i.wrapping_sub(1)) == Some(&'+') {
         return None;
@@ -97,20 +150,26 @@ fn phone(s: &[char], i: usize) -> Option<usize> {
     }
     let plus = s[i] == '+';
     let first = if plus { i + 1 } else { i };
-    let (end, n) = digit_run(s, first, &SEPS, 28);
+    let (end, n) = digit_run(s, first, &RUN_SEPS, 28);
     let run = s.get(first..end)?;
     let seps = run.iter().filter(|c| !c.is_ascii_digit()).count();
-    // Always grouped by at least one separator, so plain numbers never match; nor does the
-    // head of a run too long to be a phone number.
-    if seps == 0 || digit(s.get(end)) || run_continues(s, end - 1, 1, &SEPS) {
+    // Grouped by at least one separator, or labelled ("cell. 3451234567", #3205), so plain
+    // numbers never match; nor does the head of a run too long to be a phone number.
+    if seps == 0 && !labelled(s, i) || digit(s.get(end)) || run_continues(s, end.checked_sub(1)?, 1, &SEPS) {
+        return None;
+    }
+    // Only an area code with a trunk 0 takes a slash, so "2024/123456" is no phone number; and
+    // only one, right after it ("0426/123456", not "0426/12/3456" or "0426 12/3456").
+    let slash = run.contains(&'/');
+    if run.iter().filter(|c| **c == '/').count() > 1 || slash && !run.iter().take_while(|c| **c != '/').all(char::is_ascii_digit) {
         return None;
     }
     let ok = if plus {
         // E.164: a `+` country code and up to 15 digits in all ("+49 2151 123456").
-        (8..=15).contains(&n)
+        !slash && (8..=15).contains(&n)
     } else {
         // North American: 10 digits, 11 with a country code ("(555) 123-4567").
-        let nanp = (10..=11).contains(&n);
+        let nanp = (10..=11).contains(&n) && !slash;
         // National with a trunk 0 and 6–14 more digits ("0211 123456", "01 23 45 67 89").
         // The first group needs two digits so decimals ("0.1234567") don't match, and
         // day-first dates ("01.10.2026") are left to the date pattern.
@@ -399,6 +458,48 @@ mod tests {
             found(
                 Pattern::Phone,
                 "on 01.10.2026 or 09-10-2026, ratio 0.1234567, id 0211123456, +4921511234567, +1 234 567, 0211 12, +49 1234 5678 9012 3456"
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// #3205: Italian numbers written with a slash, and, after a phone label, without separators.
+    #[test]
+    fn slashed_and_labelled_unseparated_phone_numbers() {
+        let lines = [
+            "A tel. 0426 123456",
+            "B tel. +39 0426 123456",
+            "C cell. 345 1234567",
+            "D cell. 3451234567",
+            "E tel. 0426/123456",
+            "F cell. 345.123.4567",
+            "G tel. 0426.123456",
+            "H cell. +393451234567",
+            "Fax: 0211123456",
+            "Telefono 0426/123456",
+        ];
+        assert_eq!(
+            found(Pattern::Phone, &lines.join("\n")),
+            [
+                "0426 123456",
+                "+39 0426 123456",
+                "345 1234567",
+                "3451234567",
+                "0426/123456",
+                "345.123.4567",
+                "0426.123456",
+                "+393451234567",
+                "0211123456",
+                "0426/123456"
+            ]
+        );
+        // Without a label, or after a word that only ends like one, unseparated numbers stay
+        // unmarked; a slash needs a trunk 0 and digits on both sides, and dates stay dates.
+        assert_eq!(
+            found(
+                Pattern::Phone,
+                "id 0211123456, +4921511234567, hotel 3451234567, prot. 2024/123456, on 01/10/2026, \
+                 tel. 12345, tel 0426/ 123456, +39 0426/123456, tel 0426/12/3456, tel 0426 12/3456"
             ),
             Vec::<String>::new()
         );

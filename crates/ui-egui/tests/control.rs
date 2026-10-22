@@ -87,6 +87,31 @@ fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, pa
 }
 
 #[test]
+fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "pages"}));
+    ok(&mut h, &c, "ui.set", json!({"key": "thumbnail-zoom", "value": "50"}));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["active"]["thumbnail_zoom"], 0.5);
+    assert_eq!(state["active"]["grid_zoom"], 1.0);
+    assert_eq!(state["documents"][0]["dirty"], false);
+    let controls = ok(&mut h, &c, "ui.inspect", json!({"query": "thumbnails"}));
+    let widgets = controls["widgets"].as_array().unwrap();
+    assert!(widgets.iter().any(|w| w["label"] == "Larger thumbnails"));
+    assert!(widgets.iter().any(|w| w["label"] == "Smaller thumbnails" && w["enabled"] == false));
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "thumbnail-zoom", "value": "NaN"})).is_err());
+    ok(&mut h, &c, "ui.click", json!({"label": "Larger thumbnails"}));
+    h.run_steps(3);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["thumbnail_zoom"], 0.75);
+    let sliders = ok(&mut h, &c, "ui.inspect", json!({"query": "Thumbnail size", "role": "Slider"}));
+    let slider = sliders["widgets"].as_array().unwrap().first().expect("the thumbnail size slider is labelled");
+    ok(&mut h, &c, "ui.focus", json!({"id": slider["id"]}));
+    ok(&mut h, &c, "ui.key", json!({"key": "ArrowRight"}));
+    h.run_steps(3);
+    assert!(ok(&mut h, &c, "ui.state", json!({}))["active"]["thumbnail_zoom"].as_f64().unwrap() > 0.75);
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [
@@ -156,7 +181,7 @@ fn control_button_focus_preserves_document_undo_redo_shortcuts() {
 #[test]
 fn control_text_focus_retains_text_undo_ownership() {
     let (mut h, c) = harness_pages(2);
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Target".into(), page: 0 });
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Target".into(), page: 0, left: None, top: None });
     ok(&mut h, &c, "ui.command", json!({"id": "page.insert_blank"}));
     ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "bookmarks"}));
     let widgets = ok(&mut h, &c, "ui.inspect", json!({"query": "Search", "role": "TextInput"}));
@@ -242,7 +267,7 @@ fn control_quit_clean_document_requests_normal_window_close() {
 fn bookmark_titles_can_be_searched_over_control() {
     let (mut h, c) = harness();
     for (index, title, page) in [(0, "Background", 0), (1, "Target chapter", 3)] {
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page });
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page, left: None, top: None });
     }
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "bookmarks" }));
     h.run_steps(3);
@@ -1245,6 +1270,7 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
     h.state_mut().views[0].measure.drawing_points = 10.0;
+    h.state_mut().views[0].measure.page_unit = Some(pdfcraft_engine::measure::PageUnit::Pt);
     h.state_mut().views[0].measure.real_distance = 1.0;
     h.state_mut().views[0].measure.unit = "m".into();
     h.get_by_label("Apply scale").click();
@@ -1291,6 +1317,49 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     click(&mut h, &c, 130.0, 50.0);
     assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_1_to_50_scale_in_millimetres_measures_a_10_mm_line_as_500_mm() {
+    // #2752: a plan drawn at 1:50 is "1 mm = 50 mm". The page side of the scale was fixed in
+    // points, so this stored 1 pt = 50 mm, 72 / 25.4 = 2.835 times too big.
+    use pdfcraft_engine::measure::{self, Kind};
+    let (mut h, c) = harness_pages(1);
+    let doc = h.state().views[0].id;
+    h.state_mut().set_option("zoom", "100").unwrap();
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
+    h.run_steps(3);
+    let m = &mut h.state_mut().views[0].measure;
+    (m.drawing_points, m.real_distance, m.unit) = (1.0, 50.0, "mm".into());
+    h.get_by_label("Apply scale").click();
+    h.run_steps(3);
+    let mm = 72.0 / 25.4;
+    let line = [[20.0, 30.0], [20.0 + 10.0 * mm, 30.0]];
+    let stored = |h: &Harness<'static, PdfCraftApp>| {
+        let scale = h.state().session.get(doc).unwrap().measurement_scale(0, line[0]).unwrap();
+        (measure::reading(Kind::Distance, &line, &scale).unwrap().value, scale.ratio)
+    };
+    let (value, ratio) = stored(&h);
+    assert!((value - 500.0).abs() < 1e-9, "a 10 mm line at 1:50 reads {value} ({ratio})");
+    assert_eq!(ratio, "1 mm = 50 mm");
+    // The scale is one undoable edit.
+    ok(&mut h, &c, "ui.command", json!({"id":"edit.undo"}));
+    h.run_steps(2);
+    assert!((stored(&h).0 - 500.0).abs() > 1.0);
+    ok(&mut h, &c, "ui.command", json!({"id":"edit.redo"}));
+    h.run_steps(2);
+    assert_eq!(stored(&h), (value, ratio));
+    // Measuring the line on the page with the Distance tool reads the same.
+    ok(&mut h, &c, "ui.command", json!({"id":"measure.distance"}));
+    for [x, y] in line {
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        ok(&mut h, &c, "ui.click", json!({"x":r.left()+x as f32*r.width()/200.0,"y":r.top()+y as f32*r.height()/300.0}));
+        h.run_steps(2);
+    }
+    let measurements = h.state().session.get(doc).unwrap().measurements().unwrap().measurements;
+    assert_eq!(measurements.len(), 1);
+    assert!((measurements[0].reading.value - 500.0).abs() < 0.05, "{:?}", measurements[0].reading);
+    assert_eq!(measurements[0].reading.unit, "mm");
 }
 
 #[test]
@@ -1359,8 +1428,22 @@ fn docking_renders_real_pdf_default_floating_and_redocked() {
             let (mut h, c) = harness_pages_at(5, width, scale);
             ok(&mut h, &c, "ui.resize", json!({"width":width,"height":900}));
             ok(&mut h, &c, "ui.set", json!({"key":"panel","value":"bookmarks"}));
-            h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Overview".into(), page: 0 });
-            h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 1, title: "Details".into(), page: 2 });
+            h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
+                parent: vec![],
+                index: 0,
+                title: "Overview".into(),
+                page: 0,
+                left: None,
+                top: None,
+            });
+            h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
+                parent: vec![],
+                index: 1,
+                title: "Details".into(),
+                page: 2,
+                left: None,
+                top: None,
+            });
             for state in ["default", "floating", "redocked"] {
                 if state == "floating" {
                     ok(&mut h, &c, "ui.dock", json!({"operation":"float", "panel":"inspector", "rect":[160,100,330,480]}));
@@ -1519,6 +1602,89 @@ fn read_mode_retains_existing_rail_click_to_close_policy() {
     h.run_steps(3);
     assert_eq!(h.state().right, None);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+}
+
+#[test]
+fn control_open_of_an_already_open_file_replies_ok_and_focuses_its_tab() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-open-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.pdf").to_string_lossy().into_owned();
+    let b = dir.join("b.pdf").to_string_lossy().into_owned();
+    std::fs::write(&a, fixture(2)).unwrap();
+    std::fs::write(&b, fixture(3)).unwrap();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let s = slot.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // Inline opens: this test pins the synchronous open contract (focus vs open vs
+        // failure). Live apps schedule the worker instead and reply `pending` (#1620).
+        app.run_inline = true;
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+
+    let first = ok(&mut h, &c, "ui.open", json!({ "path": a }));
+    assert_eq!(first["opened"], json!(a), "{first}");
+    ok(&mut h, &c, "ui.open", json!({ "path": b }));
+    // The file is already open: the tab focuses, and the reply must be Ok — an agent driving the
+    // app headlessly would otherwise read a focus as a read failure (#1620).
+    let again = ok(&mut h, &c, "ui.open", json!({ "path": a }));
+    assert_eq!(again["focused"], true, "{again}");
+
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    let docs = state["documents"].as_array().cloned().unwrap_or_default();
+    assert_eq!(docs.len(), 2, "opening an open file adds no tab: {state}");
+    let a_tab = docs.iter().find(|d| d["path"] == json!(a)).unwrap();
+    assert_eq!(a_tab["active"], true, "the already-open tab is in front: {state}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The other half of the #1620 contract on a live UI: a fresh open is scheduled on the
+/// background worker and answered `pending` (upstream's reply shape), the tab appears once
+/// the open completes, and opening the file again then focuses that tab.
+#[test]
+fn control_open_replies_pending_while_the_worker_opens_and_focuses_once_it_has() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-open-pending-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("pending.pdf").to_string_lossy().into_owned();
+    std::fs::write(&a, fixture(2)).unwrap();
+    let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
+    let s = slot.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app
+    });
+    h.run_steps(4);
+    let c = slot.lock().unwrap().take().unwrap();
+
+    let first = ok(&mut h, &c, "ui.open", json!({ "path": a }));
+    assert_eq!(first["accepted"], json!(a), "{first}");
+    assert_eq!(first["pending"], true, "{first}");
+
+    // The worker completes the open on later frames; the tab shows, and only then does a
+    // repeated open focus it instead of reporting another pending open.
+    let mut documents = 0;
+    for _ in 0..30 {
+        h.run_steps(1);
+        let state = ok(&mut h, &c, "ui.state", json!({}));
+        documents = state["documents"].as_array().map(|d| d.len()).unwrap_or_default();
+        if documents == 1 {
+            break;
+        }
+    }
+    assert_eq!(documents, 1, "the pending open completed into a tab");
+
+    let again = ok(&mut h, &c, "ui.open", json!({ "path": a }));
+    assert_eq!(again["focused"], true, "{again}");
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    let docs = state["documents"].as_array().cloned().unwrap_or_default();
+    assert_eq!(docs.len(), 1, "focusing the completed open adds no tab: {state}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn navigation_frame(h: &mut Harness<'static, PdfCraftApp>, events: Vec<egui::Event>) {

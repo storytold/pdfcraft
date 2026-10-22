@@ -156,7 +156,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     for (parent, index, title, page) in
         [(vec![], 0, "Unrelated", 0), (vec![], 1, "Reports", 0), (vec![1], 0, "Other chapter", 1), (vec![1], 1, "Résumé results", 2)]
     {
-        h.state_mut().apply_edit(Edit::AddBookmark { parent, index, title: title.into(), page });
+        h.state_mut().apply_edit(Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
     }
     h.run_steps(3);
     h.get_by_label("Bookmark options").click();
@@ -252,7 +252,7 @@ fn expanding_and_collapsing_all_bookmarks() {
     use pdfcraft_engine::Edit;
     let mut h = harness();
     for (parent, title) in [(vec![], "Part"), (vec![0], "Chapter"), (vec![0, 0], "Section")] {
-        h.state_mut().apply_edit(Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0 });
+        h.state_mut().apply_edit(Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0, left: None, top: None });
     }
     h.run_steps(3);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
