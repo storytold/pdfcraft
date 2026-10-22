@@ -91,6 +91,14 @@ pub(crate) fn context_menu(
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
+            if turnable(a) {
+                for (label, degrees) in [("Rotate counterclockwise", 90.0), ("Rotate clockwise", -90.0)] {
+                    if ui.add_enabled(allowed, egui::Button::new(tl!(label))).clicked() {
+                        action = Some(CanvasAction::Edit(Box::new(Edit::RotateAnnotation { page, index, degrees })));
+                        ui.close();
+                    }
+                }
+            }
             ui.separator();
             // The engine's own check: a locked comment, or one with a locked reply, stays.
             if ui.add_enabled(allowed && deletable(page, index), egui::Button::new(tl!("Delete"))).clicked() {

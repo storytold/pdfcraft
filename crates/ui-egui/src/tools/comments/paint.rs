@@ -45,8 +45,39 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
+        // Turning: the outline as it will be, and the angle by the pointer.
+        if let Some(Gesture::Rotate { page: p, index: i, centre, from, quarter }) = &cv.gesture
+            && (*p, *i) == (page, index)
+        {
+            let degrees = pointer.map_or(0.0, |at| turn_degrees(*centre, *from, at, shift, *quarter));
+            let (outline, closed) = cx.outline(a, degrees);
+            let stroke = Stroke::new(1.5, SELECT_BLUE);
+            painter.add(if closed { egui::Shape::closed_line(outline, stroke) } else { egui::Shape::line(outline, stroke) });
+            painter.circle(*centre, 3.0, SELECT_BLUE, Stroke::NONE);
+            if let Some(at) = pointer {
+                let label = format!("{}°", degrees.round());
+                painter.text(at + vec2(14.0, -14.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(12.0), SELECT_BLUE);
+            }
+            return paint_gesture(painter, cx, view);
+        }
+        if cx.allowed && turnable(a) && cv.gesture.is_none() {
+            let r = cx.screen_rect(a).expand(2.0);
+            let knob = turn_handle(r);
+            painter.line_segment([r.center_top(), knob], Stroke::new(1.0, SELECT_BLUE));
+            painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
+        }
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
+        }
+        // A turned box: its turned outline, moved along while it is dragged; no resize handles.
+        if a.turn.is_some() {
+            let shift_by = match (&cv.gesture, pointer) {
+                (Some(Gesture::Move { page: p, index: i, from }), Some(at)) if (*p, *i) == (page, index) => at - *from,
+                _ => vec2(0.0, 0.0),
+            };
+            let (outline, _) = cx.outline(a, 0.0);
+            painter.add(egui::Shape::closed_line(outline.into_iter().map(|q| q + shift_by).collect(), Stroke::new(1.0, SELECT_BLUE)));
+            return paint_gesture(painter, cx, view);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);

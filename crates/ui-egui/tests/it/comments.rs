@@ -3022,3 +3022,111 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+fn add_shape(h: &mut Harness<'static, PdfCraftApp>, shape: pdfcraft_engine::Shape) {
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Tester".into(),
+    }));
+    settle(h);
+}
+
+/// The rotate handle above the selected comment's frame (see `comments::turn_handle`).
+fn turn_knob(h: &Harness<'static, PdfCraftApp>, a: &Annotation) -> Pos2 {
+    let (tl, br) = (at(h, a.rect[0], a.rect[3]), at(h, a.rect[2], a.rect[1]));
+    pos2((tl.x + br.x) / 2.0, tl.y - 2.0 - 22.0)
+}
+
+/// The rotate handle turns a selected rectangle about its middle: dragged a quarter round
+/// counterclockwise, the rectangle keeps its own box and turns by 90°; Tab while turning goes on
+/// in quarter turns, Shift+Tab back.
+#[test]
+fn the_rotate_handle_turns_a_rectangle_and_tab_turns_it_by_quarters() {
+    let mut h = harness(|app| app.set_option("quick", "select").unwrap());
+    add_shape(&mut h, pdfcraft_engine::Shape::Rectangle { rect: [100.0, 60.0, 200.0, 140.0] });
+    let a = comments(&h)[0].clone();
+    h.state_mut().views[0].comments.selected = Some((0, a.index));
+    h.run_steps(2);
+    let knob = turn_knob(&h, &a);
+    let centre = at(&h, 150.0, 100.0);
+    // A quarter round counterclockwise: from above the middle to its left.
+    drag(&mut h, knob, centre + egui::vec2(-(centre.y - knob.y), 0.0));
+    settle(&mut h);
+    let a = comments(&h)[0].clone();
+    let (angle, own) = a.turn.expect("turned");
+    assert!((angle - 90.0).abs() < 1.0, "{angle}");
+    assert_eq!(own, [100.0, 60.0, 200.0, 140.0], "the own box stays");
+
+    // Tab twice while turning: half a turn more, whatever the pointer does; Shift+Tab one back.
+    let knob = turn_knob(&h, &a);
+    h.hover_at(knob);
+    h.run_steps(1);
+    h.drag_at(knob);
+    h.run_steps(1);
+    h.hover_at(knob + egui::vec2(30.0, 5.0));
+    h.run_steps(1);
+    // Through the app's raw input hook, which takes the Tabs before egui moves the focus with them.
+    for shift in [false, false, true, false] {
+        let modifiers = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+        let mut raw = egui::RawInput::default();
+        for pressed in [true, false] {
+            raw.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed, repeat: false, modifiers });
+        }
+        let ctx = h.ctx.clone();
+        eframe::App::raw_input_hook(h.state_mut(), &ctx, &mut raw);
+        assert!(raw.events.is_empty(), "the hook took the Tab");
+        h.run_steps(1);
+    }
+    h.drop_at(knob + egui::vec2(30.0, 5.0));
+    h.run_steps(3);
+    settle(&mut h);
+    let (angle, _) = comments(&h)[0].turn.expect("still turned");
+    assert!((angle + 90.0).abs() < 0.01, "90° and two quarters more: -90°, got {angle}");
+}
+
+/// A line turns by its points from the page's right-click menu; a turned box is picked up inside
+/// its turned outline, not in the corners of the upright rectangle around it.
+#[test]
+fn comments_turn_from_the_page_menu_and_turned_boxes_are_hit_inside_their_outline() {
+    let mut h = harness(|app| app.set_option("quick", "select").unwrap());
+    add_shape(
+        &mut h,
+        pdfcraft_engine::Shape::Line {
+            from: [40.0, 100.0],
+            to: [120.0, 100.0],
+            start: pdfcraft_engine::LineEnding::None,
+            end: pdfcraft_engine::LineEnding::None,
+        },
+    );
+    let line = comments(&h)[0].clone();
+    h.state_mut().views[0].comments.selected = Some((0, line.index));
+    h.run_steps(2);
+    let p = at(&h, 80.0, 100.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    settle(&mut h);
+    let points = comments(&h).into_iter().find(|a| a.subtype == "Line").unwrap().points;
+    let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01;
+    assert!(near(points[0], [80.0, 140.0]) && near(points[1], [80.0, 60.0]), "a quarter clockwise about its middle: {points:?}");
+
+    // A square turned 45°: its upright hull's corner is outside it.
+    add_shape(&mut h, pdfcraft_engine::Shape::Rectangle { rect: [180.0, 60.0, 260.0, 140.0] });
+    let square = comments(&h).into_iter().find(|a| a.subtype == "Square").unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotateAnnotation { page: 0, index: square.index, degrees: 45.0 });
+    settle(&mut h);
+    let square = comments(&h).into_iter().find(|a| a.subtype == "Square").unwrap();
+    assert!(square.rect[2] - square.rect[0] > 110.0, "the hull of a square turned 45°: {:?}", square.rect);
+    h.state_mut().views[0].comments.selected = None;
+    click_pt(&mut h, (square.rect[0] + 4.0, square.rect[3] - 4.0));
+    assert_eq!(h.state().views[0].comments.selected, None, "the hull's corner is outside the turned square");
+    click_pt(&mut h, (220.0, 100.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, square.index)), "its middle is inside");
+}

@@ -1,6 +1,6 @@
 use super::geometry::{
     CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
-    resized, snapped_caret,
+    resized, snapped_caret, turn_degrees, turn_handle, turnable,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -73,6 +73,10 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     };
     let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
     if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
+        // The rotate handle above the frame.
+        if turnable(a) && turn_handle(cx.screen_rect(a).expand(2.0)).distance(p) <= 8.0 {
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Turn }, Layer::Handle, egui::CursorIcon::Grab));
+        }
         if grabs_points(cx.tool)
             && reshapable(a)
             && let Some(point) = point_handle(cx, a, p)
@@ -80,6 +84,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
         }
         if resizable(a)
+            && a.turn.is_none()
             && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
         {
             let icon = match (x, y) {
@@ -109,8 +114,10 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
 /// under the pointer), so the tools beneath leave it: a live move, resize or reshape, or a press
 /// held by a comment that keeps its drag.
 fn grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
-    {
+    if matches!(
+        view.comments.gesture,
+        Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page
+    ) {
         return true;
     }
     if cx.ptr.any_down {
@@ -183,6 +190,10 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         && let (Some((a, part)), Some(o)) = (owner, origin)
     {
         match part {
+            CommentPart::Turn => {
+                cv.gesture = Some(Gesture::Rotate { page: cx.page, index: a.index, centre: cx.turn_centre(a), from: o, quarter: None });
+                consumed = true;
+            }
             CommentPart::Point(point) => {
                 let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
                 cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
@@ -211,7 +222,10 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
             CommentPart::Body => {}
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    if matches!(
+        cv.gesture,
+        Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page
+    ) {
         consumed = true;
     }
     if resp.drag_stopped()
@@ -244,6 +258,13 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
                 if moved {
                     view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                }
+            }
+            Some(Gesture::Rotate { page, index, centre, from, quarter }) if page == cx.page => {
+                cv.gesture = None;
+                let degrees = turn_degrees(centre, from, p, ui.input(|i| i.modifiers.shift), quarter);
+                if degrees.abs() >= 0.5 {
+                    view.pending_edit = Some(Edit::RotateAnnotation { page, index, degrees });
                 }
             }
             _ => {}

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::geometry::{corner_ratio, is_markup, resized};
+use super::geometry::{corner_ratio, inside, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -29,6 +29,10 @@ pub enum Gesture {
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
+    /// Turning a comment by its rotate handle about `centre` (on screen), from the press at
+    /// `from`. `quarter`: Tab has set the turn to this many quarter turns counterclockwise (Shift+Tab
+    /// clockwise), and the pointer no longer turns it.
+    Rotate { page: usize, index: usize, centre: Pos2, from: Pos2, quarter: Option<i32> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -382,9 +386,55 @@ impl PageCx<'_> {
     }
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
-    /// comments by position, not in paint order).
+    /// comments by position, not in paint order). A turned box is hit inside its turned outline.
     pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
+        self.comments()
+            .filter(|a| match a.turn {
+                Some(_) => self.screen_rect(a).expand(3.0).contains(p) && inside(&self.outline(a, 0.0).0, p, 3.0),
+                None => self.screen_rects(a).any(|r| r.expand(3.0).contains(p)),
+            })
+            .max_by_key(|a| a.index)
+    }
+
+    /// Where a comment's middle is on screen, which it turns about (see
+    /// `pdfcraft_annot::rotate_annotation`): a turned box's own centre, the middle of a line's or
+    /// polygon's points, otherwise of `/Rect`.
+    pub(super) fn turn_centre(&self, a: &Annotation) -> Pos2 {
+        if let Some((_, b)) = a.turn {
+            return self.to_screen([f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0]);
+        }
+        let points = a.points.iter().fold(None, |acc: Option<[f32; 4]>, q| match acc {
+            None => Some([q[0], q[1], q[0], q[1]]),
+            Some(r) => Some([r[0].min(q[0]), r[1].min(q[1]), r[2].max(q[0]), r[3].max(q[1])]),
+        });
+        match points {
+            Some(r) => self.to_screen([f64::from(r[0] + r[2]) / 2.0, f64::from(r[1] + r[3]) / 2.0]),
+            None => self.screen_rect(a).center(),
+        }
+    }
+
+    /// A comment's outline on screen turned by `extra` degrees more (counterclockwise) about its
+    /// middle, and whether it is closed: a turned box's own box as turned, a line's or connected
+    /// lines' points, a polygon's corners, otherwise `/Rect`'s corners.
+    pub(crate) fn outline(&self, a: &Annotation, extra: f64) -> (Vec<Pos2>, bool) {
+        let (points, closed, angle, c): (Vec<[f64; 2]>, bool, f64, [f64; 2]) = match a.turn {
+            Some((angle, b)) => {
+                let b = b.map(f64::from);
+                (vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]], true, f64::from(angle), [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0])
+            }
+            None if !a.points.is_empty() => {
+                let pts: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+                let c = self.to_user(self.turn_centre(a));
+                (pts, a.subtype == "Polygon", 0.0, c)
+            }
+            None => {
+                let r = a.rect.map(f64::from);
+                (vec![[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], true, 0.0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0])
+            }
+        };
+        let (s, k) = (angle + extra).to_radians().sin_cos();
+        let turn = |p: [f64; 2]| [c[0] + (p[0] - c[0]) * k - (p[1] - c[1]) * s, c[1] + (p[0] - c[0]) * s + (p[1] - c[1]) * k];
+        (points.into_iter().map(|p| self.to_screen(turn(p))).collect(), closed)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
