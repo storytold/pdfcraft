@@ -504,6 +504,82 @@ fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
     [x0, y1 - h, x0 + w, y1]
 }
 
+/// The status and checkmark replies of a document's comments, by the comment they are about.
+///
+/// A state is the author's own (ISO 32000-2 §12.5.6.3: a state reply updates "the state of the
+/// original annotation for the specified user", `/T`), and a later change replies to that
+/// author's previous state reply rather than to the comment, so a reply whose `/IRT` is another
+/// state reply belongs to the comment that chain starts from. Acrobat writes such chains and
+/// shows one status per reviewer, and a checkmark only for the reviewer who set it.
+pub struct ReviewStates<'a> {
+    by_target: HashMap<&'a str, Vec<&'a Annotation>>,
+}
+
+impl<'a> ReviewStates<'a> {
+    pub fn new(all: &'a [Annotation]) -> Self {
+        let by_name: HashMap<&str, &Annotation> = all.iter().filter_map(|a| Some((a.name.as_deref()?, a))).collect();
+        let mut by_target: HashMap<&str, Vec<&Annotation>> = HashMap::new();
+        for r in all.iter().filter(|a| a.state.is_some()) {
+            // Up the `/IRT` chain past earlier state replies; a loop or a chain longer than 64
+            // leaves the reply unfiled.
+            let mut parent = r.in_reply_to.as_deref();
+            for _ in 0..64 {
+                let Some(nm) = parent else { break };
+                match by_name.get(nm) {
+                    Some(p) if p.state.is_some() => parent = p.in_reply_to.as_deref(),
+                    _ => {
+                        by_target.entry(nm).or_default().push(r);
+                        break;
+                    }
+                }
+            }
+        }
+        Self { by_target }
+    }
+
+    /// Every status and checkmark reply about `target`, in document order.
+    pub fn history(&self, target: &Annotation) -> &[&'a Annotation] {
+        target.name.as_deref().and_then(|nm| self.by_target.get(nm)).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Each reviewer's review status on `target`: their latest, in the order they first set one.
+    /// Empty when nobody set one; a status set back to "None" stays listed, as in Acrobat.
+    pub fn statuses(&self, target: &Annotation) -> Vec<(&'a str, &'a str)> {
+        let mut out: Vec<(&str, &str)> = Vec::new();
+        for r in self.history(target).iter().filter(|r| !r.is_mark()) {
+            let (Some(state), who) = (r.state.as_deref(), r.author.as_deref().unwrap_or("")) else { continue };
+            match out.iter_mut().find(|(a, _)| *a == who) {
+                Some(slot) => slot.1 = state,
+                None => out.push((who, state)),
+            }
+        }
+        out
+    }
+
+    /// Whether `author`'s latest checkmark on `target` is "Marked". Checkmarks are each
+    /// reviewer's own: Acrobat shows only the current reviewer's.
+    pub fn marked_by(&self, target: &Annotation, author: &str) -> bool {
+        self.history(target)
+            .iter()
+            .rev()
+            .find(|r| r.is_mark() && r.author.as_deref().unwrap_or("") == author)
+            .is_some_and(|r| r.state.as_deref() == Some("Marked"))
+    }
+
+    /// The reviewers whose latest checkmark on `target` is "Marked".
+    pub fn marked(&self, target: &Annotation) -> Vec<&'a str> {
+        let mut out: Vec<&str> = Vec::new();
+        for r in self.history(target).iter().filter(|r| r.is_mark()) {
+            let who = r.author.as_deref().unwrap_or("");
+            out.retain(|a| *a != who);
+            if r.state.as_deref() == Some("Marked") {
+                out.push(who);
+            }
+        }
+        out
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldKind {
     Text,
@@ -2103,6 +2179,64 @@ fn xfa_config_dynamic_render(packet: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Annotation, ReviewStates};
+
+    fn note(nm: &str, irt: Option<&str>, author: &str, state: Option<&str>) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: Some(author.into()),
+            contents: None,
+            modified: None,
+            name: Some(nm.into()),
+            in_reply_to: irt.map(Into::into),
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: state.map(Into::into),
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+        }
+    }
+
+    /// The states Acrobat showed for the same replies (checked in Acrobat Pro): one status per
+    /// reviewer, their latest, whether or not their changes chain; "None" stays listed; a
+    /// checkmark only for the reviewer who set it.
+    #[test]
+    fn review_states_are_each_reviewers_latest_through_chains() {
+        let all = vec![
+            note("c", None, "Alice", None),
+            note("b1", Some("c"), "Bob", Some("Accepted")),
+            note("k1", Some("c"), "Carol", Some("Completed")),
+            note("b2", Some("b1"), "Bob", Some("Rejected")), // chained, as Acrobat writes it
+            note("r", Some("c"), "Dan", None),               // a reply, not a state
+            note("rs", Some("r"), "Dan", Some("Cancelled")), // a state on the reply, not on c
+            note("m1", Some("c"), "Bob", Some("Marked")),
+            note("m2", Some("m1"), "Bob", Some("Unmarked")),
+            note("m3", Some("c"), "Carol", Some("Marked")),
+            note("n", None, "Alice", None),
+            note("n1", Some("n"), "Bob", Some("Completed")),
+            note("n2", Some("n"), "Bob", Some("None")), // unchained, as PdfCraft wrote it before
+            // A loop of state replies belongs to nothing.
+            note("x", Some("y"), "Eve", Some("Accepted")),
+            note("y", Some("x"), "Eve", Some("Accepted")),
+        ];
+        let states = ReviewStates::new(&all);
+        assert_eq!(states.statuses(&all[0]), [("Bob", "Rejected"), ("Carol", "Completed")]);
+        assert_eq!(states.history(&all[0]).len(), 6, "every change, the checkmarks included");
+        assert_eq!(states.statuses(&all[4]), [("Dan", "Cancelled")]);
+        assert!(!states.marked_by(&all[0], "Bob"), "Bob took his off");
+        assert!(states.marked_by(&all[0], "Carol"));
+        assert!(!states.marked_by(&all[0], "Alice"), "nobody else's checkmark shows");
+        assert_eq!(states.marked(&all[0]), ["Carol"]);
+        assert_eq!(states.statuses(&all[9]), [("Bob", "None")], "a status set back to None stays listed");
+        assert!(states.statuses(&all[12]).is_empty() && states.history(&all[12]).is_empty());
+    }
+
     #[test]
     fn png_predictor_rows_longer_than_the_data_are_refused_before_allocating() {
         // Vendored lopdf patch: a fuzzed `/Columns 4294967295` allocated two 4 GiB rows before

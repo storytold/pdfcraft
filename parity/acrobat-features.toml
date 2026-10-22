@@ -3967,8 +3967,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_set_status"]
-evidence = ["crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent", "crates/engine/src/tests.rs::comments_are_added_drawn_threaded_and_undone"]
-notes = "status replies (/State, /StateModel Review), shown as a badge"
+evidence = ["crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent", "crates/engine/src/tests.rs::comments_are_added_drawn_threaded_and_undone", "crates/annot/src/tests.rs::status_and_checkmark_replies_are_hidden_and_chain_per_reviewer", "crates/render/src/inspect.rs::review_states_are_each_reviewers_latest_through_chains", "crates/automation/tests/it/automation.rs::review_statuses_are_per_reviewer_through_tools", "crates/ui-egui/tests/it/comments.rs::the_panel_shows_each_reviewers_status_and_only_my_checkmark"]
+notes = "Status replies (/State, /StateModel Review) are written Hidden, as Acrobat writes them (Acrobat ignores a state reply without the Hidden flag), and a reviewer's next change replies to their previous one (ISO 32000-2 12.5.6.3). Each reviewer's latest status shows as its own badge with their name, a status set back to None stays shown, and checkmarks (/StateModel Marked) show only for the current author, as in Acrobat; comment_list reports statuses and marked_by. Checked in Acrobat Pro with synthetic files. Still missing: the shared-review Resolve and Mark as Unread (Document Cloud); states are matched to comments by /NM, so a file that repeats /NM values can file a status under the wrong comment."
 
 [[feature]]
 id = "comment.checkmark"

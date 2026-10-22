@@ -212,6 +212,56 @@ fn replies_and_status_thread_onto_the_parent() {
     assert_eq!(text(&all[2], b"Contents"), "Accepted set by Bob");
 }
 
+/// Checked in Acrobat Pro: it ignores a state reply that isn't Hidden (no status, no reply, no
+/// review history), and it writes a reviewer's next change in reply to their previous state
+/// reply (ISO 32000-2 §12.5.6.3). Another reviewer's state, and another state model, start their
+/// own chain on the comment.
+#[test]
+fn status_and_checkmark_replies_are_hidden_and_chain_per_reviewer() {
+    let mut doc = fixture();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let carol = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Carol", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let mark = set_marked(&mut doc, 0, 0, true, "Bob", &meta("m1")).unwrap();
+    let unmark = set_marked(&mut doc, 0, 0, false, "Bob", &meta("m2")).unwrap();
+    let doc = reopen(&doc);
+    let p = page_refs(&doc).unwrap()[0];
+    let entries = annots(&doc, p);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    for i in [first, carol, second, mark, unmark] {
+        assert_eq!(all[i].int(b"F"), Some(30), "hidden, printable, no zoom, no rotate: {i}");
+    }
+    assert_eq!(all[first].reference(b"IRT"), Some(at(0)));
+    assert_eq!(all[carol].reference(b"IRT"), Some(at(0)), "another reviewer starts on the comment");
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "Bob's change replies to Bob's last status");
+    assert_eq!(all[mark].reference(b"IRT"), Some(at(0)), "a checkmark is its own chain");
+    assert_eq!(all[unmark].reference(b"IRT"), Some(at(mark)));
+    // A reply that isn't a state stays visible.
+    let mut doc = doc;
+    let r = add_reply(&mut doc, 0, 0, "Agreed", "Bob", &meta("r")).unwrap();
+    assert_eq!(list(&doc, 0)[r].int(b"F"), Some(28));
+}
+
+/// A third change replies to the second, not the first; and Bob's status on another comment
+/// is never the one his next change on this comment replies to.
+#[test]
+fn a_reviewers_chain_continues_from_their_latest_status_on_that_comment() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let first = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("s1")).unwrap();
+    let elsewhere = set_review_state(&mut doc, 0, note, ReviewState::Cancelled, "Bob", &meta("s2")).unwrap();
+    let second = set_review_state(&mut doc, 0, 0, ReviewState::Rejected, "Bob", &meta("s3")).unwrap();
+    let third = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("s4")).unwrap();
+    let doc = reopen(&doc);
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    let at = |i: usize| entries[i].as_ref().unwrap();
+    let all = list(&doc, 0);
+    assert_eq!(all[elsewhere].reference(b"IRT"), Some(at(note)));
+    assert_eq!(all[second].reference(b"IRT"), Some(at(first)), "not Bob's status on the note");
+    assert_eq!(all[third].reference(b"IRT"), Some(at(second)), "the latest, not the first");
+}
+
 #[test]
 fn delete_takes_popup_and_reply_chain() {
     let mut doc = fixture();
