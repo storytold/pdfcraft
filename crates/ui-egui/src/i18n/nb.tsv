@@ -2720,6 +2720,10 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Mellomrom
+	Fill & Sign: add another saved signature	Fyll ut og signer: legg til enda en lagret signatur
+	Signature {n}	Signatur {n}
+	Work, Personal, a name…	Jobb, Privat, et navn…
+	You can keep up to {n} signatures. Remove one to add another.	Du kan beholde opptil {n} signaturer. Fjern én for å legge til en ny.
 
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
