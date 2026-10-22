@@ -37,6 +37,8 @@ mod decorations;
 mod logging;
 #[cfg(target_os = "windows")]
 mod motion;
+#[cfg(target_os = "linux")]
+mod pen_display;
 mod reopen;
 mod settings;
 mod single_instance;
@@ -274,9 +276,14 @@ fn main() -> eframe::Result {
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    // Decided once, so a retry with OpenGL opens on the same display server.
+    #[cfg(target_os = "linux")]
+    let through_xwayland = pen_display::choose_for_launch() == pen_display::Choice::Xwayland;
+    #[cfg(not(target_os = "linux"))]
+    let through_xwayland = false;
     let result = eframe::run_native(
         "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
+        on_display(native_options(launch.integrated, launch.window_controls.is_some(), first), through_xwayland),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
@@ -294,7 +301,7 @@ fn main() -> eframe::Result {
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                on_display(native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow), through_xwayland),
                 app_creator(
                     launch,
                     started,
@@ -360,6 +367,24 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
+    native
+}
+
+/// Opens the window through Xwayland when `through_xwayland`, instead of on the display server
+/// winit would pick (src/pen_display.rs).
+#[cfg(target_os = "linux")]
+fn on_display(mut native: eframe::NativeOptions, through_xwayland: bool) -> eframe::NativeOptions {
+    use winit::platform::x11::EventLoopBuilderExtX11 as _;
+    if through_xwayland {
+        native.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
+    }
+    native
+}
+
+#[cfg(not(target_os = "linux"))]
+fn on_display(native: eframe::NativeOptions, _through_xwayland: bool) -> eframe::NativeOptions {
     native
 }
 
@@ -893,6 +918,15 @@ mod tests {
         // Each run states its renderer rather than relying on eframe's default.
         assert_eq!(native_options(false, false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
         assert_eq!(native_options(false, false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
+    }
+
+    #[test]
+    fn only_a_launch_through_xwayland_changes_the_event_loop() {
+        use super::{native_options, on_display};
+        let native = || native_options(false, false, eframe::Renderer::Glow);
+        assert!(on_display(native(), false).event_loop_builder.is_none());
+        // Elsewhere the choice is never true, and the event loop is left alone.
+        assert_eq!(on_display(native(), true).event_loop_builder.is_some(), cfg!(target_os = "linux"));
     }
 
     #[test]
