@@ -2881,3 +2881,9 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Täytä ja allekirjoita: lisää uusi tallennettu allekirjoitus
+	Signature {n}	Allekirjoitus {n}
+	Work, Personal, a name…	Työ, Henkilökohtainen, nimi…
+	You can keep up to {n} signatures. Remove one to add another.	Voit tallentaa enintään {n} allekirjoitusta. Poista yksi lisätäksesi uuden.

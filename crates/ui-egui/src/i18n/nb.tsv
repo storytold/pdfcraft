@@ -2720,6 +2720,7 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Mellomrom
+# Saved signature list (AI-assisted, not separately native-reviewed)
 	Fill & Sign: add another saved signature	Fyll ut og signer: legg til enda en lagret signatur
 	Signature {n}	Signatur {n}
 	Work, Personal, a name…	Jobb, Privat, et navn…

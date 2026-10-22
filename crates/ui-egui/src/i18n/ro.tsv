@@ -2872,3 +2872,9 @@ theme	Appearance	Aspect
 	No image on clipboard to paste	Nicio imagine în clipboard de lipit
 	Pinned {tool} to Home	{tool} fixat pe pagina principală
 	Unpinned {tool} from Home	{tool} desprins de pe pagina principală
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Completare și semnare: adăugare altă semnătură salvată
+	Signature {n}	Semnătură {n}
+	Work, Personal, a name…	Serviciu, Personal, un nume…
+	You can keep up to {n} signatures. Remove one to add another.	Puteți păstra cel mult {n} semnături. Eliminați una pentru a adăuga alta.

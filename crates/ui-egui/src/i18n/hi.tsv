@@ -2841,3 +2841,9 @@ theme	Appearance	स्वरूप
 	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
 	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
 	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	फ़िल और साइन: एक और सहेजा गया हस्ताक्षर जोड़ें
+	Signature {n}	हस्ताक्षर {n}
+	Work, Personal, a name…	कार्य, निजी, कोई नाम…
+	You can keep up to {n} signatures. Remove one to add another.	आप अधिकतम {n} हस्ताक्षर रख सकते हैं। दूसरा जोड़ने के लिए एक हटाएँ।
