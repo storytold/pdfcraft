@@ -133,8 +133,8 @@ impl SignatureLibrary {
 
     /// Select the first entry labelled `label`, ignoring case and surrounding spaces.
     pub fn select_label(&mut self, label: &str) -> bool {
-        let want = label.trim().to_lowercase();
-        match self.entries.iter().position(|e| e.label.to_lowercase() == want) {
+        let want = label.trim();
+        match self.entries.iter().position(|e| same_label(&e.label, want)) {
             Some(i) => self.select(i),
             None => false,
         }
@@ -146,7 +146,7 @@ impl SignatureLibrary {
         if self.is_full() {
             return false;
         }
-        let label = self.label_or_next(label);
+        let label = self.label_or_next(label, None);
         self.entries.push(LabelledSig { label, sig });
         self.active = self.entries.len().saturating_sub(1);
         true
@@ -154,7 +154,7 @@ impl SignatureLibrary {
 
     /// Replace the active entry's signature and label, or add the first one when none is saved.
     pub fn replace_active(&mut self, label: &str, sig: SavedSig) {
-        let label = self.label_or_next(label);
+        let label = self.label_or_next(label, Some(self.active));
         match self.entries.get_mut(self.active) {
             Some(e) => *e = LabelledSig { label, sig },
             None => {
@@ -189,15 +189,41 @@ impl SignatureLibrary {
         let template = tl!("Signature {n}");
         (1..=self.entries.len().saturating_add(1))
             .map(|n| crate::i18n::fmt(template, &[("n", &n.to_string())]))
-            .find(|l| !self.entries.iter().any(|e| e.label == *l))
+            .find(|l| !self.label_taken(l, None))
             .unwrap_or_else(|| tl!("Signature").to_string())
     }
 
-    /// `label` cleaned, or [`Self::next_label`] when nothing is left of it.
-    fn label_or_next(&self, label: &str) -> String {
+    /// `label` cleaned, or [`Self::next_label`] when nothing is left of it. A label another
+    /// entry (not `keep`, the one being replaced) already has gets the lowest free number, as
+    /// "Work (2)", so [`Self::select_label`] can reach every entry.
+    fn label_or_next(&self, label: &str, keep: Option<usize>) -> String {
         let label = clean_label(label);
-        if label.is_empty() { self.next_label() } else { label }
+        if label.is_empty() {
+            return self.next_label();
+        }
+        if !self.label_taken(&label, keep) {
+            return label;
+        }
+        (2..=self.entries.len().saturating_add(2))
+            .map(|n| {
+                let suffix = format!(" ({n})");
+                let room = MAX_SIGNATURE_LABEL_CHARS.saturating_sub(suffix.chars().count());
+                let base: String = label.chars().take(room).collect();
+                format!("{}{suffix}", base.trim_end())
+            })
+            .find(|l| !self.label_taken(l, keep))
+            .unwrap_or(label)
     }
+
+    /// Some entry other than `keep` is labelled `label`, compared as [`Self::select_label`] does.
+    fn label_taken(&self, label: &str, keep: Option<usize>) -> bool {
+        self.entries.iter().enumerate().any(|(i, e)| Some(i) != keep && same_label(&e.label, label))
+    }
+}
+
+/// Two labels name the same signature: equal ignoring case.
+fn same_label(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
 }
 
 /// A label on one line, trimmed, and at most [`MAX_SIGNATURE_LABEL_CHARS`] characters.
@@ -1223,6 +1249,33 @@ mod tests {
         l.add("", typed("Ada"));
         l.add("Signature 4", typed("Ada"));
         assert_eq!(l.next_label(), "Signature 3");
+    }
+
+    #[test]
+    fn every_label_names_one_signature() {
+        // CodeRabbit on #3876: `select_label` takes the first match, so a second "Work" could
+        // never be selected by label.
+        let mut l = SignatureLibrary::default();
+        l.add("Work", typed("Ada"));
+        l.add("work", typed("Ada L."));
+        l.add(" WORK ", typed("A. L."));
+        assert_eq!(labels(&l), ["Work", "work (2)", "WORK (3)"]);
+        assert!(l.select_label("work (2)"));
+        assert_eq!(l.active(), Some(&typed("Ada L.")));
+        // Keeping its own label is not a clash; taking another entry's is.
+        l.replace_active("Work (2)", typed("Ada K."));
+        assert_eq!(labels(&l), ["Work", "Work (2)", "WORK (3)"]);
+        l.replace_active("WORK", typed("Ada K."));
+        assert_eq!(labels(&l), ["Work", "WORK (2)", "WORK (3)"]);
+        // A numbered label still fits the length limit.
+        let long = "x".repeat(MAX_SIGNATURE_LABEL_CHARS);
+        l.add(&long, typed("Ada"));
+        l.add(&long, typed("Ada"));
+        assert_eq!(l.entries()[4].label, format!("{} (2)", "x".repeat(MAX_SIGNATURE_LABEL_CHARS - 4)));
+        // Restored settings with duplicates come back distinct too.
+        let dup = |label: &str| LabelledSig { label: label.into(), sig: typed("Ada") };
+        let restored = SignatureLibrary::new(vec![dup("Home"), dup("home"), dup("Signature 1"), dup("")], 0);
+        assert_eq!(labels(&restored), ["Home", "home (2)", "Signature 1", "Signature 2"]);
     }
 
     #[test]
