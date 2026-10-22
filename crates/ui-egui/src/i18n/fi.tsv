@@ -2881,3 +2881,17 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Tartu piirustukseen: käytössä
+	Snap to drawing: off	Tartu piirustukseen: ei käytössä
+	Snap targets	Tartuntakohteet
+	Centre points	Keskukset
+	Centre point	Keskus
+	Tab: the next target under the pointer	Sarkain: seuraava kohde osoittimen alla
+	Bottom left	Vasen alakulma
+	Top left	Vasen yläkulma
+	Top right	Oikea yläkulma
+	Bottom right	Oikea alakulma
+	Middle	Keskikohta
+	Vertex	Kärkipiste
+	Reference point: {point} (Tab: next)	Viitepiste: {point} (Sarkain: seuraava)
