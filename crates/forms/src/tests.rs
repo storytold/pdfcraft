@@ -2539,3 +2539,41 @@ fn thai_text_field_appearance_and_auto_fallback() {
     let base_font = thai_dict.get(b"BaseFont").and_then(|o| o.as_name()).unwrap();
     assert!(String::from_utf8_lossy(base_font).contains("Sarabun"));
 }
+
+#[test]
+fn thai_text_field_stacked_floating_marks_render_without_collision() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".into(),
+    ]);
+    let name = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 530.0], &NewField::Text { multiline: false }, Some("thai_field")).unwrap();
+    let text = "ตั้งแต่นี้เป็นต้นไป";
+    set_value(&mut doc, &name, &FieldValue::Text(text.into())).unwrap();
+    let f = fields(&doc).into_iter().find(|f| f.name == "thai_field").unwrap();
+    assert_eq!(f.value, vec![text.to_string()]);
+    let w = &f.widgets[0];
+    let w_obj = doc.get(w.obj);
+    let ap = w_obj.as_dict().unwrap().get(b"AP").unwrap();
+    let ap_obj = doc.resolve(ap);
+    let ap_dict = ap_obj.as_dict().unwrap();
+    let n_obj = ap_dict.get(b"N").unwrap();
+    let n_resolved = doc.resolve(n_obj);
+    let Object::Stream(n_stream) = &*n_resolved else { panic!("appearance stream") };
+    let res = n_stream.dict.get(b"Resources").unwrap();
+    let res_obj = doc.resolve(res);
+    let res_dict = res_obj.as_dict().unwrap();
+    let fonts_obj = doc.resolve(res_dict.get(b"Font").unwrap());
+    let fonts = fonts_obj.as_dict().unwrap();
+    let thai_font_obj = doc.resolve(fonts.get(b"Thai").unwrap());
+    let thai_font = thai_font_obj.as_dict().unwrap();
+    assert_eq!(thai_font.get(b"Subtype").and_then(|o| o.as_name()), Some(b"Type3".as_slice()));
+    let to_unicode_obj = doc.resolve(thai_font.get(b"ToUnicode").unwrap());
+    let Object::Stream(to_unicode) = &*to_unicode_obj else { panic!("ToUnicode") };
+    let cmap_bytes = to_unicode.decoded().unwrap();
+    let cmap_str = String::from_utf8_lossy(&cmap_bytes);
+    let hex_cluster: String = "ต\u{0e31}\u{e49}".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(cmap_str.contains(&hex_cluster), "ToUnicode CMap must contain cluster ต\u{0e31}\u{e49}: {cmap_str}");
+    let hex_cluster2: String = "น\u{0e35}\u{e49}".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(cmap_str.contains(&hex_cluster2), "ToUnicode CMap must contain cluster น\u{0e35}\u{e49}: {cmap_str}");
+}

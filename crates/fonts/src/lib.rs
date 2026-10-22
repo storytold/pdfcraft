@@ -17,6 +17,7 @@ mod shaping;
 pub mod source_shaping;
 mod std14;
 mod std14_metrics;
+pub mod type3;
 #[cfg(not(target_arch = "wasm32"))]
 pub use craft::load_custom_thai_font_file;
 pub use craft::{
@@ -34,6 +35,7 @@ pub use shaping::{
     ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
 };
 pub use std14::Std14;
+pub use type3::{ClusterKey, cluster_key, type3_for_clusters, type3_shaped};
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
 ///
@@ -195,6 +197,11 @@ impl UnicodeCMap {
         }
         out
     }
+}
+
+/// Whether `c` is in the Thai Unicode block (U+0E00..=U+0E7F).
+pub fn is_thai(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
 /// Whether [`win_ansi`] keeps `c` rather than writing `?` (a tab becomes a space).

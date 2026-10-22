@@ -190,6 +190,11 @@ impl FontText {
     }
 
     fn width(&self, s: &str, size: f64) -> f64 {
+        if s.chars().any(is_thai)
+            && let Ok(clusters) = pdfcraft_fonts::shape_thai(s)
+        {
+            return clusters.iter().map(|c| c.advance * size).sum();
+        }
         match self {
             Self::WinAnsi => helvetica_width(s, size),
             Self::Simple(metrics) => {
@@ -428,20 +433,20 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
 
 /// The appearance of a text or choice field's widget showing `values`. Characters its font can't
 /// hold come out as `?`; [`field_appearance_drawn`] says which.
-pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
+pub fn field_appearance(doc: &mut Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
     field_appearance_as(doc, f, w, values, true)
 }
 
 /// [`field_appearance`], where `format` false means `values` are already what to show (a
 /// custom Format script ran).
-pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
+pub fn field_appearance_as(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
     field_appearance_drawn(doc, f, w, values, format).0
 }
 
 /// [`field_appearance_as`] with the first character it drew as `?` because the field's font can't
 /// hold it: the form's font is a simple (WinAnsi) font, Helvetica stands in for one PdfCraft can't
 /// write with (an embedded subset, `Identity-H`), or a UCS-2 CMap meets a character beyond U+FFFF.
-pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
+pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -475,13 +480,62 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
             enc.can_encode(&text)
         }
     };
+    let has_thai = text.chars().any(is_thai) || f.options.iter().any(|(_, d)| d.chars().any(is_thai));
+    let mut keys: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
+    let mut cluster_map: std::collections::HashMap<(pdfcraft_fonts::ShapedScript, String, Vec<(u32, u64, u64)>, u64), usize> =
+        std::collections::HashMap::new();
+    if has_thai {
+        let mut sample_strings: Vec<&str> = Vec::new();
+        if f.kind == FieldKind::List {
+            sample_strings.extend(f.options.iter().map(|(_, d)| d.as_str()));
+        } else {
+            sample_strings.push(&text);
+        }
+        for s in sample_strings {
+            for line in s.split(['\n', '\r']) {
+                if line.chars().any(is_thai)
+                    && let Ok(clusters) = pdfcraft_fonts::shape_thai(line)
+                {
+                    for c in clusters {
+                        let key = (
+                            c.script,
+                            c.text.clone(),
+                            c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(),
+                            c.advance.to_bits(),
+                        );
+                        if !cluster_map.contains_key(&key) {
+                            cluster_map.insert(key, keys.len());
+                            keys.push(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let t3_font = if !keys.is_empty() {
+        let key_refs: Vec<&pdfcraft_fonts::ShapedCluster> = keys.iter().collect();
+        pdfcraft_fonts::type3_for_clusters(doc, &key_refs).ok()
+    } else {
+        None
+    };
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
-        Some((o, enc)) => (da.font.clone(), o, enc),
+        Some((o, enc)) => {
+            if let Some(t3) = t3_font {
+                (da.font.clone(), Object::Ref(t3), enc)
+            } else {
+                (da.font.clone(), o, enc)
+            }
+        }
         None => {
-            if text.chars().any(is_thai)
-                && let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc))
-            {
-                ("Thai".to_string(), o, enc)
+            if text.chars().any(is_thai) {
+                let fallback_enc = dr_font(doc, "Thai").map(|(_, enc)| enc).unwrap_or(FontText::WinAnsi);
+                if let Some(t3) = t3_font {
+                    ("Thai".to_string(), Object::Ref(t3), fallback_enc)
+                } else if let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc)) {
+                    ("Thai".to_string(), o, enc)
+                } else {
+                    ("Helv".to_string(), helvetica(), FontText::WinAnsi)
+                }
             } else {
                 ("Helv".to_string(), helvetica(), FontText::WinAnsi)
             }
@@ -495,15 +549,34 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
-    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
+    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str, size: f64| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
-        if unencodable.is_none() {
+        if unencodable.is_none() && t3_font.is_none() {
             unencodable = enc.first_unencodable(&text);
         }
-        body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&enc.encode(&text)));
-        body.extend_from_slice(b" Tj\n");
+        if t3_font.is_some() && text.chars().any(is_thai) && let Ok(clusters) = pdfcraft_fonts::shape_thai(&text) {
+            let mut pen = x;
+            for c in clusters {
+                let key = (
+                    c.script,
+                    c.text.clone(),
+                    c.glyphs.iter().map(|(id, [gx, gy])| (*id, gx.to_bits(), gy.to_bits())).collect(),
+                    c.advance.to_bits(),
+                );
+                if let Some(&k) = cluster_map.get(&key) {
+                    let code = (k % 240 + 1) as u8;
+                    body.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
+                    body.extend(literal(&[code]));
+                    body.extend_from_slice(b" Tj\n");
+                }
+                pen += c.advance * size;
+            }
+        } else {
+            body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
+            body.extend(literal(&enc.encode(&text)));
+            body.extend_from_slice(b" Tj\n");
+        }
     };
     let x_for = |text: &str, size: f64| -> f64 {
         let tw = width_of(text, size);
@@ -529,7 +602,7 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
                 if values.contains(export) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
-                show(&mut body, pad, y - line + size * 0.25, display);
+                show(&mut body, pad, y - line + size * 0.25, display, size);
                 y -= line;
             }
         }
@@ -544,7 +617,7 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
                     if y < -size {
                         break;
                     }
-                    show(&mut body, x_for(&line, size), y, &line);
+                    show(&mut body, x_for(&line, size), y, &line, size);
                     y -= size * 1.15;
                 }
             } else {
@@ -563,10 +636,10 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
                     let cell = width / cells as f64;
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
+                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s, size);
                     }
                 } else {
-                    show(&mut body, x_for(&text, size), y, &text);
+                    show(&mut body, x_for(&text, size), y, &text, size);
                 }
             }
         }

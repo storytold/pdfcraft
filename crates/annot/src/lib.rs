@@ -1327,8 +1327,8 @@ fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+fn build_appearance(doc: &mut Document, d: &Dict) -> Option<Stream> {
+    let mut stream = appearance::build_with_doc(Some(doc), d)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -1448,10 +1448,11 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
                 continue;
             }
-            let Some(stream) = build_appearance(doc, &d) else { continue };
+            let doc_mut = copy.get_or_insert_with(|| doc.clone());
+            let Some(stream) = build_appearance(doc_mut, &d) else { continue };
             cache.insert(r, &stream);
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
-            apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
+            apply_appearance(doc_mut, r, &d, stream).ok();
         }
     }
     copy
