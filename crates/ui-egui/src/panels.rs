@@ -547,6 +547,12 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ed.choose_family(family);
                 changed = true;
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(FontChoice::Thai(entry)) => {
+                app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[entry.path]);
+            }
+            #[cfg(target_arch = "wasm32")]
+            Some(FontChoice::Thai(_)) => {}
             Some(FontChoice::Load) => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
             #[cfg(not(target_arch = "wasm32"))]
             Some(FontChoice::Installed(path)) => app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[path]),
@@ -611,10 +617,38 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Format text for added text: the standard families, size, colour, style and alignment.
 fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText) {
-    let shown = style.family.label().to_string();
+    let font_choice_id = egui::Id::new("added_text_format_font_choice");
+    let chosen_name: Option<String> = ui.data(|d| d.get_temp(font_choice_id));
+    let shown = chosen_name.unwrap_or_else(|| style.family.label().to_string());
+
     let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
-    if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
-        style.family = family;
+    match out.font {
+        Some(crate::format_text_ui::FontChoice::Family(family)) => {
+            style.family = family;
+            ui.data_mut(|d| d.insert_temp(font_choice_id, family.label().to_string()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(crate::format_text_ui::FontChoice::Thai(entry)) => {
+            if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
+                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+            }
+            if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
+                style.family = pdfcraft_engine::FontFamily::Courier;
+            } else {
+                style.family = pdfcraft_engine::FontFamily::Helvetica;
+            }
+            ui.data_mut(|d| d.insert_temp(font_choice_id, entry.name.clone()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(crate::format_text_ui::FontChoice::Installed(path)) => {
+            if pdfcraft_fonts::set_active_thai_font_by_path(&path).is_ok() {
+                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+            }
+            if let Some(entry) = pdfcraft_fonts::active_thai_font_entry() {
+                ui.data_mut(|d| d.insert_temp(font_choice_id, entry.name.clone()));
+            }
+        }
+        _ => {}
     }
 }
 

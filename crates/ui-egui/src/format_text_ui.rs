@@ -28,6 +28,8 @@ pub(crate) enum FontChoice {
     Load,
     /// A font file installed on this computer.
     Installed(std::path::PathBuf),
+    /// A Thai / system font.
+    Thai(pdfcraft_fonts::ThaiFontEntry),
 }
 
 /// What the font list offers and shows.
@@ -92,34 +94,48 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                 }
                 ui.separator();
             }
+            ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
+                let selected = fonts.shown == f.label();
+                if ui.selectable_label(selected, f.label()).clicked() {
                     out.font = Some(FontChoice::Family(f));
                 }
             }
-            if fonts.sources.is_some() {
-                ui.separator();
-                if ui.selectable_label(false, tl!("Load font…")).clicked() {
-                    out.font = Some(FontChoice::Load);
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                ui.menu_button(tl!("Installed fonts…"), |ui| match crate::files::installed_font_files(ui.ctx()) {
-                    Some(list) if list.is_empty() => {
-                        ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                    }
-                    Some(list) => {
-                        for font in list {
-                            if ui.button(&font.face).clicked() {
-                                out.font = Some(FontChoice::Installed(font.path));
-                                ui.close();
-                            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let thai_fonts = pdfcraft_fonts::available_thai_fonts();
+                if !thai_fonts.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Thai / System fonts").small().color(t.text_muted));
+                    for entry in &thai_fonts {
+                        let selected = fonts.shown == entry.name;
+                        if ui.selectable_label(selected, &entry.name).clicked() {
+                            out.font = Some(FontChoice::Thai(entry.clone()));
                         }
                     }
-                    None => {
-                        ui.label(tl!("Finding document fonts…"));
-                    }
-                });
+                }
             }
+            ui.separator();
+            if ui.selectable_label(false, tl!("Load font…")).clicked() {
+                out.font = Some(FontChoice::Load);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.menu_button(tl!("Installed fonts…"), |ui| match crate::files::installed_font_files(ui.ctx()) {
+                Some(list) if list.is_empty() => {
+                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
+                }
+                Some(list) => {
+                    for font in list {
+                        if ui.button(&font.face).clicked() {
+                            out.font = Some(FontChoice::Installed(font.path));
+                            ui.close();
+                        }
+                    }
+                }
+                None => {
+                    ui.label(tl!("Finding document fonts…"));
+                }
+            });
         })
         .response
         .on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));

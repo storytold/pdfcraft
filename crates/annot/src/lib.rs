@@ -1994,6 +1994,46 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     result
 }
 
+/// Change the font of a text box, typewriter text or callout and redraw it.
+pub fn set_font(doc: &mut Document, page: usize, index: usize, font: &str, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font".into()));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        let (col, size) = appearance::parse_da(d);
+        let da_font = match font {
+            "Times" => "/Times",
+            "Courier" => "/Cour",
+            _ => "/Helv",
+        };
+        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg {} {} Tf", n(col[0]), n(col[1]), n(col[2]), da_font, n(size)).into_bytes()));
+        d.set(b"PCFont".to_vec(), PdfString::text(font));
+        rich_text(d);
+        touch(d, meta);
+    })?;
+    let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
+    let result = match fitted_box(doc, r, &text) {
+        Some(fit) => {
+            let cur = annot_dict(doc, r);
+            let nums: Vec<f64> = cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+            match four(&nums).map(normalize) {
+                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
+                _ => apply_text_box(doc, r, fit, meta, false),
+            }
+        }
+        None => redraw_or_restore(doc, r, before.clone()),
+    };
+    if result.is_err() {
+        doc.set(r, Object::Dict(before));
+    }
+    result
+}
+
 /// Whether a comment has a fill: `/IC` for shapes, `/C` for FreeText (§12.5.6).
 pub fn fillable(subtype: &str) -> bool {
     matches!(subtype, "Square" | "Circle" | "Polygon" | "FreeText")
@@ -2230,6 +2270,8 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Text boxes, typewriter text and callouts: the font name.
+    pub font: Option<String>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -2261,6 +2303,13 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        font: (subtype == "FreeText").then(|| {
+            d.get(b"PCFont")
+                .and_then(Object::as_string)
+                .map(PdfString::to_text)
+                .or_else(|| pdfcraft_fonts::active_thai_font_entry().map(|e| e.name))
+                .unwrap_or_else(|| "Sarabun".to_string())
+        }),
         subtype,
         endings: line_endings_of(d),
     })

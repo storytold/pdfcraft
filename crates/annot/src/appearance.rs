@@ -417,7 +417,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
 
 /// [`build`], optionally taking a mutable reference to `Document` to embed Type 3 fonts for
 /// shaped scripts (such as Thai).
-pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
+pub fn build_with_doc(doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
@@ -862,8 +862,17 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
             let owned_key = |c: &pdfcraft_fonts::ShapedCluster| -> OwnedClusterKey {
                 (c.script, c.text.clone(), c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(), c.advance.to_bits())
             };
+            let custom_font = d.get(b"PCFont").and_then(Object::as_string).map(PdfString::to_text);
+            if let Some(font_name) = &custom_font {
+                let _ = pdfcraft_fonts::set_active_thai_font_by_name(font_name);
+            }
+            let (font_alias, base_font) = match custom_font.as_deref() {
+                Some("Times") => ("Times", "Times-Roman"),
+                Some("Courier") => ("Cour", "Courier"),
+                _ => ("Helv", "Helvetica"),
+            };
             let mut t3_font = None;
-            if has_thai && let Some(doc) = doc.as_deref_mut() {
+            if has_thai && let Some(doc) = doc {
                 let mut unique_clusters = Vec::new();
                 let mut cluster_index: std::collections::HashMap<OwnedClusterKey, usize> = std::collections::HashMap::new();
                 for line in &lines {
@@ -872,8 +881,8 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
                     {
                         for c in clusters {
                             let key = owned_key(&c);
-                            if !cluster_index.contains_key(&key) {
-                                cluster_index.insert(key, unique_clusters.len());
+                            if let std::collections::hash_map::Entry::Vacant(e) = cluster_index.entry(key) {
+                                e.insert(unique_clusters.len());
                                 unique_clusters.push(c);
                             }
                         }
@@ -923,7 +932,7 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
                     }
                     out.extend_from_slice(b"\n");
                 } else {
-                    out.extend(format!("1 0 0 1 {} {} Tm /Helv {} Tf ", n(x), n(y), n(size)).bytes());
+                    out.extend(format!("1 0 0 1 {} {} Tm /{} {} Tf ", n(x), n(y), font_alias, n(size)).bytes());
                     out.extend(literal(&win_ansi(&line)));
                     out.extend_from_slice(b" Tj\n");
                 }
@@ -933,10 +942,10 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
             let mut font = Dict::new();
             font.set(b"Type".to_vec(), Object::name("Font"));
             font.set(b"Subtype".to_vec(), Object::name("Type1"));
-            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+            font.set(b"BaseFont".to_vec(), Object::name(base_font));
             font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
             let mut fonts = Dict::new();
-            fonts.set(b"Helv".to_vec(), Object::Dict(font));
+            fonts.set(font_alias.as_bytes().to_vec(), Object::Dict(font));
             if let Some((t3, _)) = &t3_font {
                 fonts.set(b"T3Thai".to_vec(), Object::Ref(*t3));
             }
