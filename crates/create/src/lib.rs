@@ -698,9 +698,16 @@ impl ImagePage {
         let Self::Fixed { width, height, turn } = self else { return ((w, h), (w, h, 0.0, 0.0)) };
         // A square image keeps the page as given; only a clear difference turns the sheet.
         let (pw, ph) = if turn && (w > h) != (width > height) && w != h { (height, width) } else { (width, height) };
-        // `w` and `h` come from a decoded image, so both are above zero; `max` keeps the
-        // division defined even if a future decoder ever reports an empty one.
-        let k = (pw / w.max(f64::MIN_POSITIVE)).min(ph / h.max(f64::MIN_POSITIVE)).min(MAX_SIDE);
+        // A scale is a ratio, not a length, so `MAX_SIDE` has no business capping it: it bounds
+        // a page side, which `ImagePage::check` has already applied. Capping the scale with it
+        // only shrank a small image on a large sheet (a 4 x 2 image at 1200 dpi covered 3456 pt
+        // of a 14400 pt page instead of all of it). The fit scale needs no cap of its own: it is
+        // `min(pw / w, ph / h)`, so the drawn size is the page's by construction.
+        //
+        // `w` and `h` are above zero, so the division is defined: a decoded image has at least
+        // one pixel, and every decoder here falls back to 72 dpi rather than pass on a
+        // non-positive resolution (`xppu > 0 && yppu > 0` for PNG, `> 1.0` for JPEG).
+        let k = (pw / w).min(ph / h);
         let (dw, dh) = (w * k, h * k);
         ((pw, ph), (dw, dh, (pw - dw) / 2.0, (ph - dh) / 2.0))
     }

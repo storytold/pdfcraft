@@ -2296,3 +2296,19 @@ fn an_unusable_page_size_is_refused_and_nothing_is_written() {
     // The largest page PDF allows is fine.
     assert!(from_images_with(&images, ImageResolution::Embedded, ImagePage::fixed((14_400.0, 14_400.0), true)).is_ok());
 }
+
+/// A fixed page is filled by the image whatever its resolution: a tiny image at a high dpi is
+/// enlarged to the sheet, not left small on it. `MAX_SIDE` bounds a page side, which
+/// `ImagePage::check` has already applied, so it must not also cap the fit scale.
+#[test]
+fn a_tiny_high_dpi_image_still_fills_its_fixed_page() {
+    let images = [("photo.png".into(), png_bytes(true))];
+    // 4 x 2 px at 1200 dpi is 0.24 x 0.12 pt: the fit scale is 60000, far past MAX_SIDE.
+    let page = ImagePage::fixed((MAX_SIDE, MAX_SIDE), false);
+    let doc = reopen(&from_images_with(&images, ImageResolution::Dpi(1200.0), page).unwrap());
+    let p = pages(&doc);
+    let c = doc.resolve(p[0].get(b"Contents").unwrap());
+    let Object::Stream(s) = &*c else { panic!("expected a content stream") };
+    let text = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(text.contains("14400.000 0 0 7200.000 0.000 3600.000 cm"), "the image should span the full 14400 pt page: {text}");
+}
