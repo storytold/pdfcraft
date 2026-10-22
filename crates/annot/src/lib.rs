@@ -1597,7 +1597,13 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
     let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let has_thai = text.chars().any(pdfcraft_fonts::is_thai);
+    let h = if has_thai {
+        (lines - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0
+    } else {
+        lines * size * 1.2 + 2.0 * pad + 2.0
+    };
+    Some([x0, top - h, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.

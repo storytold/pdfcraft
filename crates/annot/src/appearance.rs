@@ -886,16 +886,20 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
                     }
                 }
             }
-            c.push_str(&format!(
-                "{} {} {} {} re W n\nBT\n{}",
-                n(rect[0]),
-                n(rect[1]),
-                n(rect[2] - rect[0]),
-                n(rect[3] - rect[1]),
-                rg(text_color)
-            ));
+            if bw > 0.0 || bg.is_some() {
+                c.push_str(&format!(
+                    "{} {} {} {} re W n\n",
+                    n(rect[0]),
+                    n(rect[1]),
+                    n(rect[2] - rect[0]),
+                    n(rect[3] - rect[1])
+                ));
+            }
+            c.push_str(&format!("BT\n{}", rg(text_color)));
             let mut out = c.into_bytes();
-            let mut y = rect[3] - pad - size * 0.9;
+            let top_margin = if has_thai { size * 1.35 + pad } else { size * 0.9 + pad };
+            let line_step = if has_thai { size * 1.25 } else { size * 1.2 };
+            let mut y = rect[3] - top_margin;
             for line in lines {
                 if y < rect[1] - size {
                     break;
@@ -923,7 +927,7 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
                     out.extend(literal(&win_ansi(&line)));
                     out.extend_from_slice(b" Tj\n");
                 }
-                y -= size * 1.2;
+                y -= line_step;
             }
             out.extend_from_slice(b"ET\n");
             let mut font = Dict::new();
@@ -937,7 +941,12 @@ pub fn build_with_doc(mut doc: Option<&mut Document>, d: &Dict) -> Option<Stream
                 fonts.set(b"T3Thai".to_vec(), Object::Ref(*t3));
             }
             res.set(b"Font".to_vec(), Object::Dict(fonts));
-            let mut stream = form(full, &out, res);
+            let form_bbox = if has_thai && bw == 0.0 && bg.is_none() {
+                [full[0], full[1] - size * 0.5, full[2], full[3] + size * 0.5]
+            } else {
+                full
+            };
+            let mut stream = form(form_bbox, &out, res);
             if let Some(m) = matrix {
                 stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
             }
