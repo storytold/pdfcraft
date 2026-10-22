@@ -21,10 +21,14 @@ pub(super) fn turnable(a: &Annotation) -> bool {
         && !a.locked
 }
 
-/// The rotate handle above a selected comment's frame `r` (on screen).
+/// The rotate handle above a selected comment's frame `r` (on screen): the middle of a round
+/// button with a turning arrow, on a stem.
 pub(super) fn turn_handle(r: Rect) -> Pos2 {
-    pos2(r.center().x, r.top() - 22.0)
+    pos2(r.center().x, r.top() - 30.0)
 }
+
+/// How near the rotate handle's middle a press takes it.
+pub(super) const TURN_HANDLE_REACH: f32 = 12.0;
 
 /// How far a drag of the rotate handle turns, in degrees counterclockwise as displayed: from the
 /// press `from` to `to` about `centre`, between -180 and 180, in 15° steps with Shift. After Tab,
