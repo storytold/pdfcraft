@@ -204,6 +204,8 @@ impl SignatureLibrary {
         if !self.label_taken(&label, keep) {
             return label;
         }
+        // `len + 1` candidates, all different (each ends in its own number), against at most
+        // `len` labels: one is always free, so the fallback below is never reached.
         (2..=self.entries.len().saturating_add(2))
             .map(|n| {
                 let suffix = format!(" ({n})");
