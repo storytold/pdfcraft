@@ -2504,3 +2504,27 @@ animation effects	Off	关
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
 @plural	{n} reply|{n} replies	{n} 条回复
+	Window	窗口
+	Quit {app}	退出 {app}
+	About {app}	关于 {app}
+	Hide {app}	隐藏 {app}
+	Hide Others	隐藏其他
+	Show All	显示全部
+	Create PDF	创建 PDF
+	Export & Convert	导出与转换
+	Reduce & Optimize	缩减与优化
+	Password & Security	密码与安全性
+	Workspace modes	工作区模式
+	Comments & Markup	注释与标记
+	Edit Content	编辑内容
+	Sign & Certify	签名与验证
+	Bookmarks panel	书签面板
+	Page thumbnails panel	页面缩略图面板
+	Layers panel	图层面板
+	Attachments panel	附件面板
+	Accessibility panel	辅助功能面板
+	Search panel	搜索面板
+	Compare panel	比较面板
+	Edit mode	编辑模式
+	Convert mode	转换模式
+	Fill & sign mode	填写并签名模式

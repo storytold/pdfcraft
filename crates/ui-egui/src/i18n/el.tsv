@@ -2546,3 +2546,27 @@ animation effects	Off	Ανενεργά
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
 @plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
+	Window	Παράθυρο
+	Quit {app}	Έξοδος από το {app}
+	About {app}	Σχετικά με το {app}
+	Hide {app}	Απόκρυψη {app}
+	Hide Others	Απόκρυψη άλλων
+	Show All	Εμφάνιση όλων
+	Create PDF	Δημιουργία PDF
+	Export & Convert	Εξαγωγή & μετατροπή
+	Reduce & Optimize	Μείωση & βελτιστοποίηση
+	Password & Security	Κωδικός πρόσβασης & ασφάλεια
+	Workspace modes	Λειτουργίες χώρου εργασίας
+	Comments & Markup	Σχόλια & επισημάνσεις
+	Edit Content	Επεξεργασία περιεχομένου
+	Sign & Certify	Υπογραφή & πιστοποίηση
+	Bookmarks panel	Πίνακας σελιδοδεικτών
+	Page thumbnails panel	Πίνακας μικρογραφιών σελίδων
+	Layers panel	Πίνακας επιπέδων
+	Attachments panel	Πίνακας συνημμένων
+	Accessibility panel	Πίνακας προσβασιμότητας
+	Search panel	Πίνακας αναζήτησης
+	Compare panel	Πίνακας σύγκρισης
+	Edit mode	Λειτουργία επεξεργασίας
+	Convert mode	Λειτουργία μετατροπής
+	Fill & sign mode	Λειτουργία συμπλήρωσης & υπογραφής

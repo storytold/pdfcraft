@@ -2810,3 +2810,27 @@ theme	Appearance	Teema
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
 @plural	{n} reply|{n} replies	{n} vastaus|{n} vastausta
+	Window	Ikkuna
+	Quit {app}	Lopeta {app}
+	About {app}	Tietoja: {app}
+	Hide {app}	Kätke {app}
+	Hide Others	Kätke muut
+	Show All	Näytä kaikki
+	Create PDF	Luo PDF
+	Export & Convert	Vie ja muunna
+	Reduce & Optimize	Pienennä ja optimoi
+	Password & Security	Salasana ja suojaus
+	Workspace modes	Työtilan tilat
+	Comments & Markup	Kommentit ja merkinnät
+	Edit Content	Muokkaa sisältöä
+	Sign & Certify	Allekirjoita ja varmentaa
+	Bookmarks panel	Kirjanmerkkipaneeli
+	Page thumbnails panel	Sivujen pikkukuvapaneeli
+	Layers panel	Tasopaneeli
+	Attachments panel	Liitepaneeli
+	Accessibility panel	Helppokäyttöisyyspaneeli
+	Search panel	Hakupaneeli
+	Compare panel	Vertailupaneeli
+	Edit mode	Muokkaustila
+	Convert mode	Muunnostila
+	Fill & sign mode	Täytä ja allekirjoita -tila

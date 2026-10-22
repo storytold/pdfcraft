@@ -212,6 +212,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
     // View menu (where it would show twice). The palette and ⌘3 still run it.
     c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
+    c("view.actual_size", "Actual size", None, Some(Shortcut::cmd("1")), Document, "maximize-2"),
+    c("view.page_level", "Zoom to page level", None, Some(Shortcut::cmd("0")), Document, "file-text"),
+    c("view.fit_width", "Fit to width", None, Some(Shortcut::cmd("2")), Document, "arrow-left-right"),
+    c("view.fit_height", "Fit to height", None, None, Document, "arrow-up-down"),
+    c("view.zoom.in", "Zoom in", None, Some(Shortcut::cmd("+")), Document, "zoom-in"),
+    c("view.zoom.out", "Zoom out", None, Some(Shortcut::cmd("−")), Document, "zoom-out"),
+    c("view.rotate_cw", "Rotate view clockwise", None, Some(Shortcut::cmd_shift("+")), Document, "rotate-cw"),
+    c("view.rotate_ccw", "Rotate view counterclockwise", None, Some(Shortcut::cmd_shift("−")), Document, "rotate-ccw"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
     // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
     // drag with the Select tool does the same; this is the way in where the desktop takes
@@ -237,6 +245,17 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
     c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
+    c("panel.bookmarks", "Bookmarks panel", None, None, Document, "bookmark"),
+    c("panel.pages", "Page thumbnails panel", None, None, Document, "files"),
+    c("panel.layers", "Layers panel", None, None, Document, "layers"),
+    c("panel.attachments", "Attachments panel", None, None, Document, "paperclip"),
+    c("panel.accessibility", "Accessibility panel", None, None, Document, "accessibility"),
+    c("panel.search", "Search panel", None, None, Document, "search"),
+    c("panel.compare", "Compare panel", None, None, Document, "columns-2"),
+    c("mode.all_tools", "All tools", None, None, Nothing, "layout-grid"),
+    c("mode.edit", "Edit mode", None, None, Modification, "file-pen-line"),
+    c("mode.convert", "Convert mode", None, None, Nothing, "arrow-left-right"),
+    c("mode.sign", "Fill & sign mode", None, None, Nothing, "pen-tool"),
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),

@@ -2541,3 +2541,27 @@ animation effects	Off	Aus
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
 @plural	{n} reply|{n} replies	{n} Antwort|{n} Antworten
+	Window	Fenster
+	Quit {app}	{app} beenden
+	About {app}	Über {app}
+	Hide {app}	{app} ausblenden
+	Hide Others	Andere ausblenden
+	Show All	Alle einblenden
+	Create PDF	PDF erstellen
+	Export & Convert	Exportieren & Konvertieren
+	Reduce & Optimize	Reduzieren & Optimieren
+	Password & Security	Passwort & Sicherheit
+	Workspace modes	Arbeitsbereichsmodi
+	Comments & Markup	Kommentare & Markierungen
+	Edit Content	Inhalt bearbeiten
+	Sign & Certify	Unterschreiben & Zertifizieren
+	Bookmarks panel	Lesezeichenbereich
+	Page thumbnails panel	Seitenminiaturenbereich
+	Layers panel	Ebenenbereich
+	Attachments panel	Anhangsbereich
+	Accessibility panel	Barrierefreiheitsbereich
+	Search panel	Suchbereich
+	Compare panel	Vergleichsbereich
+	Edit mode	Bearbeitungsmodus
+	Convert mode	Konvertierungsmodus
+	Fill & sign mode	Ausfüll- & Unterschriftsmodus

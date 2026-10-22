@@ -2538,3 +2538,27 @@ animation effects	Off	Өшірулі
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
 @plural	{n} reply|{n} replies	{n} жауап|{n} жауап
+	Window	Терезе
+	Quit {app}	{app} бағдарламасынан шығу
+	About {app}	{app} туралы
+	Hide {app}	{app} жасыру
+	Hide Others	Басқаларын жасыру
+	Show All	Барлығын көрсету
+	Create PDF	PDF жасау
+	Export & Convert	Экспорттау және түрлендіру
+	Reduce & Optimize	Көлемін азайту және оңтайландыру
+	Password & Security	Құпиясөз және қауіпсіздік
+	Workspace modes	Жұмыс кеңістігінің режимдері
+	Comments & Markup	Түсініктемелер мен белгілер
+	Edit Content	Мазмұнды өңдеу
+	Sign & Certify	Қол қою және куәландыру
+	Bookmarks panel	Бетбелгілер панелі
+	Page thumbnails panel	Бет нобайлары панелі
+	Layers panel	Қабаттар панелі
+	Attachments panel	Тіркемелер панелі
+	Accessibility panel	Қолжетімділік панелі
+	Search panel	Іздеу панелі
+	Compare panel	Салыстыру панелі
+	Edit mode	Өңдеу режимі
+	Convert mode	Түрлендіру режимі
+	Fill & sign mode	Толтыру және қол қою режимі

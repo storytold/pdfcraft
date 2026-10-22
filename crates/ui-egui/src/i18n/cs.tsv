@@ -2847,3 +2847,27 @@ certificate	Version	Verze
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes
 @plural	{n} reply|{n} replies	{n} odpověď|{n} odpovědi|{n} odpovědí
+	Window	Okno
+	Quit {app}	Ukončit {app}
+	About {app}	O aplikaci {app}
+	Hide {app}	Skrýt {app}
+	Hide Others	Skrýt ostatní
+	Show All	Zobrazit vše
+	Create PDF	Vytvořit PDF
+	Export & Convert	Exportovat a převést
+	Reduce & Optimize	Zmenšit a optimalizovat
+	Password & Security	Heslo a zabezpečení
+	Workspace modes	Režimy pracovního prostoru
+	Comments & Markup	Komentáře a poznámky
+	Edit Content	Upravit obsah
+	Sign & Certify	Podepsat a certifikovat
+	Bookmarks panel	Panel záložek
+	Page thumbnails panel	Panel miniatur stránek
+	Layers panel	Panel vrstev
+	Attachments panel	Panel příloh
+	Accessibility panel	Panel přístupnosti
+	Search panel	Panel hledání
+	Compare panel	Panel porovnání
+	Edit mode	Režim úprav
+	Convert mode	Režim převodu
+	Fill & sign mode	Režim vyplnění a podpisu

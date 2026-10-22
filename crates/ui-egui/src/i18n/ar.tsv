@@ -2816,3 +2816,27 @@ certificate	Version	الإصدار
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم
 @plural	{n} reply|{n} replies	{n} رد|{n} رد|{n} ردّان|{n} ردود|{n} ردًا|{n} رد
+	Window	نافذة
+	Quit {app}	إنهاء {app}
+	About {app}	حول {app}
+	Hide {app}	إخفاء {app}
+	Hide Others	إخفاء الآخرين
+	Show All	إظهار الكل
+	Create PDF	إنشاء PDF
+	Export & Convert	تصدير وتحويل
+	Reduce & Optimize	تقليل الحجم وتحسينه
+	Password & Security	كلمة المرور والأمان
+	Workspace modes	أوضاع مساحة العمل
+	Comments & Markup	التعليقات والتحديدات
+	Edit Content	تحرير المحتوى
+	Sign & Certify	توقيع وتصديق
+	Bookmarks panel	لوحة الإشارات المرجعية
+	Page thumbnails panel	لوحة مصغرات الصفحات
+	Layers panel	لوحة الطبقات
+	Attachments panel	لوحة المرفقات
+	Accessibility panel	لوحة إمكانية الوصول
+	Search panel	لوحة البحث
+	Compare panel	لوحة المقارنة
+	Edit mode	وضع التحرير
+	Convert mode	وضع التحويل
+	Fill & sign mode	وضع التعبئة والتوقيع

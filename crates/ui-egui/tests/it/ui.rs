@@ -1133,6 +1133,18 @@ fn files_and_quit_from_the_operating_system() {
 }
 
 #[test]
+fn commands_from_the_operating_system() {
+    use pdfcraft_ui_egui::{OsEvent, theme::ThemePreference};
+    let queue = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    assert_eq!(h.state().theme_preference, ThemePreference::Light);
+    queue.borrow_mut().push(OsEvent::Command("view.theme.dark".to_string()));
+    h.step();
+    assert_eq!(h.state().theme_preference, ThemePreference::Dark);
+}
+
+#[test]
 fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
     use pdfcraft_ui_egui::Mode;
     for mode in [Mode::AllTools, Mode::Read, Mode::Edit, Mode::Convert, Mode::Sign] {

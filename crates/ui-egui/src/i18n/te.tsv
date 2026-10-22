@@ -2449,3 +2449,27 @@ animation effects	Off	ఆఫ్
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
 @plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు
+	Window	విండో
+	Quit {app}	{app} నుండి నిష్క్రమించు
+	About {app}	{app} గురించి
+	Hide {app}	{app} దాచు
+	Hide Others	ఇతరాలను దాచు
+	Show All	అన్నీ చూపించు
+	Create PDF	PDF సృష్టించండి
+	Export & Convert	ఎగుమతి & మార్చండి
+	Reduce & Optimize	పరిమాణం తగ్గించి & ఆప్టిమైజ్ చేయండి
+	Password & Security	పాస్‌వర్డ్ & భద్రత
+	Workspace modes	వర్క్‌స్పేస్ మోడ్‌లు
+	Comments & Markup	వ్యాఖ్యలు & మార్కప్
+	Edit Content	కంటెంట్‌ను సవరించండి
+	Sign & Certify	సంతకం & ధృవీకరించండి
+	Bookmarks panel	బుక్‌మార్క్‌ల ప్యానెల్
+	Page thumbnails panel	పేజీ సూక్ష్మచిత్రాల ప్యానెల్
+	Layers panel	పొరల ప్యానెల్
+	Attachments panel	జోడింపుల ప్యానెల్
+	Accessibility panel	సౌలభ్యత ప్యానెల్
+	Search panel	శోధన ప్యానెల్
+	Compare panel	పోలిక ప్యానెల్
+	Edit mode	సవరణ మోడ్
+	Convert mode	మార్పిడి మోడ్
+	Fill & sign mode	పూరించు & సంతకం మోడ్

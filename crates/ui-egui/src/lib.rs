@@ -538,6 +538,8 @@ pub enum OsEvent {
     Open(Vec<String>),
     /// Quit (the Dock's Quit, logging out), asking about unsaved changes first.
     Quit,
+    /// Execute a command by id (e.g. from the native OS menu bar).
+    Command(String),
 }
 
 /// Returns the [`OsEvent`]s that arrived since it was last called (set by the desktop app).
@@ -3591,6 +3593,9 @@ impl eframe::App for PdfCraftApp {
                 OsEvent::Open(_) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                OsEvent::Command(cmd) => {
+                    self.execute(&cmd);
+                }
             }
         }
         if let Some((_, id)) = self.active_ids() {

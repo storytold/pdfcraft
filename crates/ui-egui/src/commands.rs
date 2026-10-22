@@ -262,8 +262,7 @@ impl PdfCraftApp {
                 }
             }
             "view.layout.cover" => {
-                if let Some(i) = active {
-                    let v = &mut self.views[i];
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     v.set_cover(!v.cover);
                 }
             }
@@ -271,11 +270,63 @@ impl PdfCraftApp {
                 use crate::canvas::{Fit, PageLayout};
                 // Fit one full page shows a single page on its own; fit width scrolls it.
                 let (continuous, fit) = if id == "view.fit_one_page" { (false, Fit::Page) } else { (true, Fit::Width) };
-                if let Some(i) = active {
-                    self.views[i].set_display(PageLayout::Single, continuous);
-                    self.views[i].set_fit(fit);
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.set_display(PageLayout::Single, continuous);
+                    v.set_fit(fit);
                 }
             }
+            "view.actual_size" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.set_zoom(1.0);
+                }
+            }
+            "view.page_level" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.fit = crate::canvas::Fit::Page;
+                }
+            }
+            "view.fit_width" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.fit = crate::canvas::Fit::Width;
+                }
+            }
+            "view.fit_height" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.fit = crate::canvas::Fit::Height;
+                    v.goto = Some((v.current, 0.0));
+                }
+            }
+            "view.zoom.in" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.zoom_step(true);
+                }
+            }
+            "view.zoom.out" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.zoom_step(false);
+                }
+            }
+            "view.rotate_cw" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.rotate_view(true);
+                }
+            }
+            "view.rotate_ccw" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.rotate_view(false);
+                }
+            }
+            "panel.bookmarks" => self.choose_right_panel(Some(RightPanel::Bookmarks)),
+            "panel.pages" => self.choose_right_panel(Some(RightPanel::Pages)),
+            "panel.layers" => self.choose_right_panel(Some(RightPanel::Layers)),
+            "panel.attachments" => self.choose_right_panel(Some(RightPanel::Attachments)),
+            "panel.accessibility" => self.choose_right_panel(Some(RightPanel::Accessibility)),
+            "panel.search" => self.choose_right_panel(Some(RightPanel::Search)),
+            "panel.compare" => self.choose_right_panel(Some(RightPanel::Compare)),
+            "mode.all_tools" => self.switch_mode(Mode::AllTools, true),
+            "mode.edit" => self.switch_mode(Mode::Edit, true),
+            "mode.convert" => self.switch_mode(Mode::Convert, true),
+            "mode.sign" => self.switch_mode(Mode::Sign, true),
             "view.full_screen" => {
                 let on = !self.full_screen;
                 match self.ctx.clone() {

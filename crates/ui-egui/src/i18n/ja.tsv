@@ -2540,3 +2540,27 @@ animation effects	Off	オフ
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
 @plural	{n} reply|{n} replies	{n} 件の返信
+	Window	ウィンドウ
+	Quit {app}	{app}を終了
+	About {app}	{app}について
+	Hide {app}	{app}を非表示
+	Hide Others	ほかを非表示
+	Show All	すべて表示
+	Create PDF	PDFを作成
+	Export & Convert	書き出しと変換
+	Reduce & Optimize	縮小と最適化
+	Password & Security	パスワードとセキュリティ
+	Workspace modes	ワークスペースモード
+	Comments & Markup	注釈とマークアップ
+	Edit Content	コンテンツを編集
+	Sign & Certify	署名と証明
+	Bookmarks panel	しおりパネル
+	Page thumbnails panel	ページサムネイルパネル
+	Layers panel	レイヤーパネル
+	Attachments panel	添付ファイルパネル
+	Accessibility panel	アクセシビリティパネル
+	Search panel	検索パネル
+	Compare panel	比較パネル
+	Edit mode	編集モード
+	Convert mode	変換モード
+	Fill & sign mode	入力と署名モード

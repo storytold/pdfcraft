@@ -2807,3 +2807,27 @@ key	Space	Space
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
 @plural	{n} reply|{n} replies	{n} câu trả lời
+	Window	Cửa sổ
+	Quit {app}	Thoát {app}
+	About {app}	Giới thiệu về {app}
+	Hide {app}	Ẩn {app}
+	Hide Others	Ẩn mục khác
+	Show All	Hiển thị tất cả
+	Create PDF	Tạo PDF
+	Export & Convert	Xuất & Chuyển đổi
+	Reduce & Optimize	Giảm dung lượng & Tối ưu hóa
+	Password & Security	Mật khẩu & Bảo mật
+	Workspace modes	Chế độ không gian làm việc
+	Comments & Markup	Bình luận & Đánh dấu
+	Edit Content	Chỉnh sửa nội dung
+	Sign & Certify	Ký & Chứng nhận
+	Bookmarks panel	Bảng dấu trang
+	Page thumbnails panel	Bảng hình thu nhỏ trang
+	Layers panel	Bảng lớp
+	Attachments panel	Bảng tệp đính kèm
+	Accessibility panel	Bảng trợ năng
+	Search panel	Bảng tìm kiếm
+	Compare panel	Bảng so sánh
+	Edit mode	Chế độ chỉnh sửa
+	Convert mode	Chế độ chuyển đổi
+	Fill & sign mode	Chế độ điền & ký

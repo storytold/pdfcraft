@@ -2545,3 +2545,27 @@ animation effects	Off	Izklopljeni
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
 @plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovori|{n} odgovorov
+	Window	Okno
+	Quit {app}	Izhod iz {app}
+	About {app}	O programu {app}
+	Hide {app}	Skrij {app}
+	Hide Others	Skrij ostale
+	Show All	Pokaži vse
+	Create PDF	Ustvari PDF
+	Export & Convert	Izvozi in pretvori
+	Reduce & Optimize	Zmanjšaj in optimiziraj
+	Password & Security	Geslo in varnost
+	Workspace modes	Načini delovnega prostora
+	Comments & Markup	Komentarji in označbe
+	Edit Content	Uredi vsebino
+	Sign & Certify	Podpiši in potrdi
+	Bookmarks panel	Razdelek z zaznamki
+	Page thumbnails panel	Razdelek s sličicami strani
+	Layers panel	Razdelek s plastmi
+	Attachments panel	Razdelek s priponkami
+	Accessibility panel	Razdelek za dostopnost
+	Search panel	Razdelek za iskanje
+	Compare panel	Razdelek za primerjavo
+	Edit mode	Način urejanja
+	Convert mode	Način pretvorbe
+	Fill & sign mode	Način izpolnjevanja in podpisovanja
