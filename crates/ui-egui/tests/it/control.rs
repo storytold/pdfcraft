@@ -1392,12 +1392,20 @@ fn a_full_signature_list_says_why_a_new_signature_was_not_kept() {
     h.run_steps(3);
     h.state_mut().signature_draft.text = "Grace Hopper".into();
     h.run_steps(2);
+    let tool_before = ok(&mut h, &c, "ui.state", json!({}))["quick_tool"].clone();
     ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
     assert_eq!(h.state().signatures.len(), MAX_SAVED_SIGNATURES);
     let toast = h.state().toast.as_ref().map(|(t, _)| t.clone());
     assert_eq!(toast.as_deref(), Some("You can keep up to 20 signatures. Remove one to add another."));
+    // The pad stays open with what was typed, and no tool is armed to place the old active
+    // signature on the next click (CodeRabbit on #3876).
+    assert!(h.state().dialog.is_some(), "the pad stays open");
+    assert_eq!(h.state().signature_draft.text, "Grace Hopper");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], tool_before);
+    ok(&mut h, &c, "ui.click", json!({ "label": "Cancel" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
 }
 
 #[test]
