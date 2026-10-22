@@ -151,8 +151,16 @@ mod native {
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
             let dir = std::env::temp_dir().join(format!("pdfcraft-office-{}-{n}-{nanos}", std::process::id()));
-            // `create_dir`, not `create_dir_all`: a folder that already exists is not ours.
-            std::fs::create_dir(&dir)?;
+            // Not recursive: a folder that already exists is not ours. Owner-only on Unix, where the
+            // temporary folder is shared: the document and its PDF are not for other users.
+            #[cfg_attr(not(unix), allow(unused_mut))]
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder.create(&dir)?;
             Ok(Self(dir))
         }
     }
@@ -519,6 +527,17 @@ mod tests {
         #[test]
         fn a_folder_that_cannot_be_read_counts_as_empty() {
             assert_eq!(folder_size(&std::env::temp_dir().join("pdfcraft-no-such-folder")), 0);
+        }
+
+        /// The temporary folder holds a confidential document and its PDF: on Unix only the owner
+        /// may enter it.
+        #[cfg(unix)]
+        #[test]
+        fn the_temporary_folder_is_private_to_its_owner() {
+            use std::os::unix::fs::PermissionsExt;
+            let work = WorkDir::new().unwrap();
+            let mode = std::fs::metadata(&work.0).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{mode:o}");
         }
 
         #[test]
