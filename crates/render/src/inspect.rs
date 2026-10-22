@@ -601,6 +601,16 @@ fn latest<'b>(mine: &[&'b Annotation]) -> Option<&'b Annotation> {
     mine.iter().rev().find(|r| r.name.as_deref().is_none_or(|n| !answered.contains(n))).copied()
 }
 
+/// A reply's state: `/State`, or for a reply that gives only `/StateModel` the model's default
+/// (ISO 32000-2 Table 175: "Unmarked if StateModel is Marked; None if StateModel is Review").
+fn state_or_default(state: Option<String>, model: Option<&str>) -> Option<String> {
+    state.or_else(|| match model? {
+        "Marked" => Some("Unmarked".into()),
+        "Review" => Some("None".into()),
+        _ => None,
+    })
+}
+
 /// Who set a state: `/T`, trimmed (an author setting typed with spaces is the same reviewer).
 fn reviewer(r: &Annotation) -> &str {
     r.author.as_deref().unwrap_or("").trim()
@@ -1509,7 +1519,7 @@ impl<'a> Inspector<'a> {
                     rect,
                     color,
                     index,
-                    state: self.text(d, b"State"),
+                    state: state_or_default(self.text(d, b"State"), self.text(d, b"StateModel").as_deref()),
                     quads,
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
@@ -2261,6 +2271,87 @@ mod tests {
         assert_eq!(states.marked(&all[0]), ["Carol"]);
         assert_eq!(states.statuses(&all[9]), [("Bob", "None")], "a status set back to None stays listed");
         assert!(states.statuses(&all[12]).is_empty() && states.history(&all[12]).is_empty());
+    }
+
+    /// The inspector reads a `/StateModel`-only reply as the model's default state, so it counts
+    /// as Bob's status (None) on the note.
+    #[test]
+    fn the_inspector_reads_a_state_model_alone_as_its_default() {
+        let objs: Vec<&[u8]> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R] >>",
+            b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (note) /T (Ann) >>",
+            b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (bare) /T (Bob) /IRT 4 0 R /F 30 /StateModel (Review) >>",
+        ];
+        let mut out = b"%PDF-1.7
+"
+        .to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(
+                format!(
+                    "{} 0 obj
+",
+                    i + 1
+                )
+                .as_bytes(),
+            );
+            out.extend_from_slice(o);
+            out.extend_from_slice(
+                b"
+endobj
+",
+            );
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref
+0 {}
+0000000000 65535 f 
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        for o in offsets {
+            out.extend_from_slice(
+                format!(
+                    "{o:010} 00000 n 
+"
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer
+<< /Size {} /Root 1 0 R >>
+startxref
+{xref}
+%%EOF
+",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        let info = super::inspect(std::sync::Arc::new(out), None).expect("inspects");
+        let note = info.annotations.iter().find(|a| a.name.as_deref() == Some("note")).expect("the note");
+        assert_eq!(ReviewStates::new(&info.annotations).statuses(note), [("Bob", "None")]);
+    }
+
+    /// ISO 32000-2 Table 175: a missing `/State` is "Unmarked if StateModel is Marked; None if
+    /// StateModel is Review".
+    #[test]
+    fn a_state_model_alone_gives_its_default_state() {
+        use super::state_or_default;
+        assert_eq!(state_or_default(None, Some("Review")).as_deref(), Some("None"));
+        assert_eq!(state_or_default(None, Some("Marked")).as_deref(), Some("Unmarked"));
+        assert_eq!(state_or_default(None, Some("Other")), None);
+        assert_eq!(state_or_default(None, None), None);
+        assert_eq!(state_or_default(Some("Accepted".into()), Some("Review")).as_deref(), Some("Accepted"));
     }
 
     /// Review on #4126: a history has no length limit, and a reviewer's name is compared without

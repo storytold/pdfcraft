@@ -271,6 +271,38 @@ fn a_long_status_history_keeps_chaining_to_the_latest() {
     assert_eq!(list(&doc, 0)[next].reference(b"IRT"), latest);
 }
 
+/// Review on #4126: a reply with `/StateModel` but no `/State` has the model's default state
+/// (ISO 32000-2 Table 175), for the reader as for the writer: it is Bob's latest status, None,
+/// and his next change replies to it.
+#[test]
+fn a_state_model_without_a_state_is_the_default_state() {
+    let mut doc = fixture();
+    let bare = add_reply(&mut doc, 0, 0, "", "Bob", &meta("bare")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let r = annots(&doc, p)[bare].as_ref().unwrap();
+    doc.update_dict(r, |d| {
+        d.set(b"StateModel".to_vec(), PdfString::text("Review"));
+        d.set(b"F".to_vec(), Object::Int(30));
+    })
+    .unwrap();
+    let summary = summaries(&doc).into_iter().find(|s| s.index == bare).unwrap();
+    assert_eq!(summary.state.as_deref(), Some("None"));
+    let next = set_review_state(&mut doc, 0, 0, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), Some(r));
+
+    // A model PdfCraft doesn't know isn't a state: a status replying to such a reply is about
+    // that reply, not about the comment, so Bob's next change on the comment starts afresh.
+    let mut doc = fixture();
+    let other = add_reply(&mut doc, 0, 0, "", "Ann", &meta("other")).unwrap();
+    let p = page_refs(&doc).unwrap()[0];
+    let o = annots(&doc, p)[other].as_ref().unwrap();
+    doc.update_dict(o, |d| d.set(b"StateModel".to_vec(), PdfString::text("Other"))).unwrap();
+    assert_eq!(summaries(&doc).into_iter().find(|s| s.index == other).unwrap().state, None);
+    set_review_state(&mut doc, 0, other, ReviewState::Rejected, "Bob", &meta("on-other")).unwrap();
+    let fresh = set_review_state(&mut doc, 0, 0, ReviewState::Completed, "Bob", &meta("fresh")).unwrap();
+    assert_eq!(list(&doc, 0)[fresh].reference(b"IRT"), annots(&doc, p)[0].as_ref());
+}
+
 /// A third change replies to the second, not the first; and Bob's status on another comment
 /// is never the one his next change on this comment replies to.
 #[test]

@@ -1871,7 +1871,12 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
 /// reply's answer is kept, so a long history is walked once.
 fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, model: &str) -> Option<ObjRef> {
     use std::collections::{HashMap, HashSet};
-    let is_state = |r: ObjRef| doc.get(r).as_dict().is_some_and(|d| d.contains(b"State") || d.contains(b"StateModel"));
+    // As the readers see it: a `/State`, or a known `/StateModel` whose default state applies.
+    let is_state = |r: ObjRef| {
+        doc.get(r)
+            .as_dict()
+            .is_some_and(|d| d.contains(b"State") || matches!(text_value(doc, d, b"StateModel").as_deref(), Some("Marked" | "Review")))
+    };
     let irt = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref));
     let mut reaches: HashMap<ObjRef, Option<ObjRef>> = HashMap::new();
     let mut mine = Vec::new();
@@ -2409,7 +2414,13 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 in_reply_to,
                 rect,
                 color,
-                state: text_value(doc, d, b"State"),
+                // A reply that gives only `/StateModel` has the model's default state (ISO 32000-2
+                // Table 175), as `last_state_reply` and the inspector read it.
+                state: text_value(doc, d, b"State").or_else(|| match text_value(doc, d, b"StateModel").as_deref() {
+                    Some("Marked") => Some("Unmarked".into()),
+                    Some("Review") => Some("None".into()),
+                    _ => None,
+                }),
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
