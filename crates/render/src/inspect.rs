@@ -518,20 +518,35 @@ pub struct ReviewStates<'a> {
 impl<'a> ReviewStates<'a> {
     pub fn new(all: &'a [Annotation]) -> Self {
         let by_name: HashMap<&str, &Annotation> = all.iter().filter_map(|a| Some((a.name.as_deref()?, a))).collect();
+        // The comment each name's chain reaches past state replies, `None` for a loop or a dead
+        // end; filled in once per name, so a long history costs one walk, not one per reply.
+        let mut reaches: HashMap<&str, Option<&str>> = HashMap::new();
         let mut by_target: HashMap<&str, Vec<&Annotation>> = HashMap::new();
         for r in all.iter().filter(|a| a.state.is_some()) {
-            // Up the `/IRT` chain past earlier state replies; a loop or a chain longer than 64
-            // leaves the reply unfiled.
-            let mut parent = r.in_reply_to.as_deref();
-            for _ in 0..64 {
-                let Some(nm) = parent else { break };
-                match by_name.get(nm) {
-                    Some(p) if p.state.is_some() => parent = p.in_reply_to.as_deref(),
-                    _ => {
-                        by_target.entry(nm).or_default().push(r);
-                        break;
-                    }
+            let mut path: Vec<&str> = Vec::new();
+            let mut seen: HashSet<&str> = HashSet::new();
+            let mut at = r.in_reply_to.as_deref();
+            let target = loop {
+                let Some(nm) = at else { break None };
+                if let Some(&known) = reaches.get(nm) {
+                    break known;
                 }
+                if !seen.insert(nm) {
+                    break None;
+                }
+                match by_name.get(nm) {
+                    Some(p) if p.state.is_some() => {
+                        path.push(nm);
+                        at = p.in_reply_to.as_deref();
+                    }
+                    _ => break Some(nm),
+                }
+            };
+            for nm in path {
+                reaches.insert(nm, target);
+            }
+            if let Some(t) = target {
+                by_target.entry(t).or_default().push(r);
             }
         }
         Self { by_target }
@@ -545,39 +560,50 @@ impl<'a> ReviewStates<'a> {
     /// Each reviewer's review status on `target`: their latest, in the order they first set one.
     /// Empty when nobody set one; a status set back to "None" stays listed, as in Acrobat.
     pub fn statuses(&self, target: &Annotation) -> Vec<(&'a str, &'a str)> {
-        let mut out: Vec<(&str, &str)> = Vec::new();
-        for r in self.history(target).iter().filter(|r| !r.is_mark()) {
-            let (Some(state), who) = (r.state.as_deref(), r.author.as_deref().unwrap_or("")) else { continue };
-            match out.iter_mut().find(|(a, _)| *a == who) {
-                Some(slot) => slot.1 = state,
-                None => out.push((who, state)),
-            }
-        }
-        out
+        self.by_reviewer(target, false).into_iter().filter_map(|(who, mine)| Some((who, latest(&mine)?.state.as_deref()?))).collect()
     }
 
     /// Whether `author`'s latest checkmark on `target` is "Marked". Checkmarks are each
     /// reviewer's own: Acrobat shows only the current reviewer's.
     pub fn marked_by(&self, target: &Annotation, author: &str) -> bool {
-        self.history(target)
-            .iter()
-            .rev()
-            .find(|r| r.is_mark() && r.author.as_deref().unwrap_or("") == author)
-            .is_some_and(|r| r.state.as_deref() == Some("Marked"))
+        let mine: Vec<&Annotation> = self.history(target).iter().copied().filter(|r| r.is_mark() && reviewer(r) == author.trim()).collect();
+        latest(&mine).is_some_and(|r| r.state.as_deref() == Some("Marked"))
     }
 
     /// The reviewers whose latest checkmark on `target` is "Marked".
     pub fn marked(&self, target: &Annotation) -> Vec<&'a str> {
-        let mut out: Vec<&str> = Vec::new();
-        for r in self.history(target).iter().filter(|r| r.is_mark()) {
-            let who = r.author.as_deref().unwrap_or("");
-            out.retain(|a| *a != who);
-            if r.state.as_deref() == Some("Marked") {
-                out.push(who);
+        self.by_reviewer(target, true)
+            .into_iter()
+            .filter(|(_, mine)| latest(mine).is_some_and(|r| r.state.as_deref() == Some("Marked")))
+            .map(|(who, _)| who)
+            .collect()
+    }
+
+    /// The checkmark (`marks`) or status replies about `target`, by reviewer, in the order each
+    /// reviewer first set one.
+    fn by_reviewer(&self, target: &Annotation, marks: bool) -> Vec<(&'a str, Vec<&'a Annotation>)> {
+        let mut out: Vec<(&str, Vec<&Annotation>)> = Vec::new();
+        for &r in self.history(target).iter().filter(|r| r.is_mark() == marks) {
+            match out.iter_mut().find(|(who, _)| *who == reviewer(r)) {
+                Some((_, mine)) => mine.push(r),
+                None => out.push((reviewer(r), vec![r])),
             }
         }
         out
     }
+}
+
+/// Of one reviewer's replies in one state model, the latest: the end of their chain, a reply none
+/// of the others replies to, whatever order the file lists them in. Among several such (changes
+/// that don't chain), the last listed.
+fn latest<'b>(mine: &[&'b Annotation]) -> Option<&'b Annotation> {
+    let answered: HashSet<&str> = mine.iter().filter_map(|r| r.in_reply_to.as_deref()).collect();
+    mine.iter().rev().find(|r| r.name.as_deref().is_none_or(|n| !answered.contains(n))).copied()
+}
+
+/// Who set a state: `/T`, trimmed (an author setting typed with spaces is the same reviewer).
+fn reviewer(r: &Annotation) -> &str {
+    r.author.as_deref().unwrap_or("").trim()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2235,6 +2261,30 @@ mod tests {
         assert_eq!(states.marked(&all[0]), ["Carol"]);
         assert_eq!(states.statuses(&all[9]), [("Bob", "None")], "a status set back to None stays listed");
         assert!(states.statuses(&all[12]).is_empty() && states.history(&all[12]).is_empty());
+    }
+
+    /// Review on #4126: a history has no length limit, and a reviewer's name is compared without
+    /// surrounding spaces.
+    #[test]
+    fn a_long_chain_still_reaches_its_comment_and_names_are_trimmed() {
+        let mut all = vec![note("c", None, "Alice", None)];
+        for i in 0..200 {
+            let parent = if i == 0 { "c".to_string() } else { format!("s{}", i - 1) };
+            let state = if i == 199 { "Completed" } else { "Accepted" };
+            all.push(note(&format!("s{i}"), Some(&parent), "Bob", Some(state)));
+        }
+        all.push(note("m", Some("c"), " Carol ", Some("Marked")));
+        let states = ReviewStates::new(&all);
+        assert_eq!(states.history(&all[0]).len(), 201);
+        assert_eq!(states.statuses(&all[0]), [("Bob", "Completed")]);
+        assert!(states.marked_by(&all[0], "Carol") && states.marked_by(&all[0], "Carol "));
+        assert_eq!(states.marked(&all[0]), ["Carol"]);
+        // Listed newest first, the first reply read walks the whole chain at once.
+        all.reverse();
+        let states = ReviewStates::new(&all);
+        let c = all.iter().find(|a| a.name.as_deref() == Some("c")).unwrap();
+        assert_eq!(states.statuses(c), [("Bob", "Completed")]);
+        assert_eq!(states.history(c).len(), 201);
     }
 
     #[test]

@@ -243,6 +243,34 @@ fn status_and_checkmark_replies_are_hidden_and_chain_per_reviewer() {
     assert_eq!(list(&doc, 0)[r].int(b"F"), Some(28));
 }
 
+/// Review on #4126: a history has no length limit. The 70th change still replies to the 69th,
+/// and a reviewer whose name was typed with spaces continues their own chain.
+#[test]
+fn a_long_status_history_keeps_chaining_to_the_latest() {
+    let mut doc = fixture();
+    let mut prev: Option<usize> = None;
+    for i in 0..70 {
+        let state = if i % 2 == 0 { ReviewState::Accepted } else { ReviewState::Rejected };
+        let at = set_review_state(&mut doc, 0, 0, state, "Bob", &meta(&format!("s{i}"))).unwrap();
+        if let Some(p) = prev {
+            let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+            assert_eq!(list(&doc, 0)[at].reference(b"IRT"), entries[p].as_ref(), "change {i}");
+        }
+        prev = Some(at);
+    }
+    let padded = set_review_state(&mut doc, 0, 0, ReviewState::Completed, " Bob ", &meta("pad")).unwrap();
+    let entries = annots(&doc, page_refs(&doc).unwrap()[0]);
+    assert_eq!(list(&doc, 0)[padded].reference(b"IRT"), prev.and_then(|p| entries[p].as_ref()));
+    // Listed newest first, the first reply read walks the whole chain at once.
+    let latest = entries[padded].as_ref();
+    let p = page_refs(&doc).unwrap()[0];
+    let mut reversed = entries.clone();
+    reversed.reverse();
+    set_annots(&mut doc, p, reversed).unwrap();
+    let next = set_review_state(&mut doc, 0, 71, ReviewState::Accepted, "Bob", &meta("next")).unwrap();
+    assert_eq!(list(&doc, 0)[next].reference(b"IRT"), latest);
+}
+
 /// A third change replies to the second, not the first; and Bob's status on another comment
 /// is never the one his next change on this comment replies to.
 #[test]

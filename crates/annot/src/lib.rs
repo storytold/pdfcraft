@@ -1867,27 +1867,45 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
 /// `author`'s latest `model` state reply about `target` on page `p`, for the next change to reply
 /// to: ISO 32000-2 §12.5.6.3, "Additional state changes shall be made by adding text annotations
 /// in reply to the previous reply for a given user", as Acrobat does. A state reply is about the
-/// annotation its `/IRT` chain reaches past other state replies (at most 64 steps).
+/// annotation its `/IRT` chain reaches past other state replies; a loop reaches nothing. Each
+/// reply's answer is kept, so a long history is walked once.
 fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, model: &str) -> Option<ObjRef> {
+    use std::collections::{HashMap, HashSet};
     let is_state = |r: ObjRef| doc.get(r).as_dict().is_some_and(|d| d.contains(b"State") || d.contains(b"StateModel"));
-    let about = |r: ObjRef| -> Option<ObjRef> {
-        let mut at = r;
-        for _ in 0..64 {
-            let up = doc.get(at).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref))?;
-            if !is_state(up) {
-                return Some(up);
-            }
-            at = up;
-        }
-        None
-    };
-    annots(doc, p).iter().filter_map(Object::as_ref).filter(|&r| r != target).fold(None, |last, r| {
+    let irt = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"IRT").and_then(Object::as_ref));
+    let mut reaches: HashMap<ObjRef, Option<ObjRef>> = HashMap::new();
+    let mut mine = Vec::new();
+    for r in annots(doc, p).iter().filter_map(Object::as_ref).filter(|&r| r != target) {
         let d = annot_dict(doc, r);
-        let mine = text_value(doc, &d, b"StateModel").as_deref() == Some(model)
-            && text_value(doc, &d, b"T").unwrap_or_default() == author.trim()
-            && about(r) == Some(target);
-        if mine { Some(r) } else { last }
-    })
+        if text_value(doc, &d, b"StateModel").as_deref() != Some(model) || text_value(doc, &d, b"T").unwrap_or_default() != author.trim() {
+            continue;
+        }
+        let (mut path, mut seen, mut at) = (vec![r], HashSet::from([r]), irt(r));
+        let about = loop {
+            let Some(up) = at else { break None };
+            if let Some(&known) = reaches.get(&up) {
+                break known;
+            }
+            if !is_state(up) {
+                break Some(up);
+            }
+            if !seen.insert(up) {
+                break None;
+            }
+            path.push(up);
+            at = irt(up);
+        };
+        for x in path {
+            reaches.insert(x, about);
+        }
+        if about == Some(target) {
+            mine.push(r);
+        }
+    }
+    // The end of the chain, whatever order the page lists it in: a reply none of the others
+    // replies to; among several (changes that don't chain), the last listed.
+    let answered: HashSet<ObjRef> = mine.iter().filter_map(|&r| irt(r)).collect();
+    mine.iter().rev().copied().find(|r| !answered.contains(r))
 }
 
 /// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.
