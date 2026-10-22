@@ -2522,6 +2522,18 @@ adobe_data = true
 usage = "Glyph widths and encodings for non-embedded standard fonts. Non-visual data, allowed by AGENTS.md §1.1"
 sha256 = "2ec9e608573eda459de1e1d9bda3bb494315e36bee885acc88912a11fe0caa41"
 
+[[bundled]]
+crate = "icu_segmenter_data"
+version = "2.3.0"
+path = "data/segmenter_dictionary_extended_v1.rs.data"
+title = "Southeast Asian word dictionaries for line breaking (Thai, Lao, Khmer, Burmese)"
+author = "The ICU4X Project Developers; word lists from the ICU project (Unicode, Inc.)"
+source = "https://github.com/unicode-org/icu4x (via icu_segmenter_data)"
+licence = "Unicode-3.0"
+kind = "data"
+usage = "Word boundaries for wrapping Thai text in Edit text and Add text (crates/edit/src/linebreak.rs). Non-visual data; the line segmenter loads only these dictionaries, not the Chinese and Japanese one"
+sha256 = "cad3821ca44fdb88ed856ff3336444aa200afe7b9d19e34ac28ae6a4459d4c6d"
+
 [[fetched]]
 file = "PlayfairDisplay[wght].ttf"
 url = "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf"
