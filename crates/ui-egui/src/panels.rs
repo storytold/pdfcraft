@@ -1092,6 +1092,12 @@ pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) 
     }
 }
 
+/// Bookmark titles are stored in typing order. egui places Arabic words left to right unless
+/// the string is handed over in display order.
+fn bookmark_title_for_display(title: &str) -> std::borrow::Cow<'_, str> {
+    crate::bidi::visual_auto(title)
+}
+
 fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineItem, path: &[usize], siblings: usize, cx: &mut OutlineCtx<'_>) {
     if cx.searching && !cx.matches.contains(path) {
         return;
@@ -1147,7 +1153,8 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
         let font = if depth == 0 { theme::medium(13.0) } else { theme::regular(13.0) };
         let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
-        let galley = ui.fonts_mut(|f| f.layout(item.title.clone(), font, t.text, wrap_w));
+        let shown = bookmark_title_for_display(&item.title);
+        let galley = ui.fonts_mut(|f| f.layout(shown.into_owned(), font, t.text, wrap_w));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.title));
@@ -1858,6 +1865,18 @@ mod label_column {
         });
         assert!(calls <= super::LABEL_MEASURE_CHARS + 1, "{calls} measurements");
         assert!(shown.ends_with('\u{2026}') && label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
+    }
+}
+
+#[cfg(test)]
+mod bookmark_title {
+    use super::bookmark_title_for_display;
+
+    #[test]
+    fn arabic_bookmark_titles_are_shown_in_reading_order() {
+        assert_eq!(bookmark_title_for_display("واحد اثنين").as_ref(), "اثنين واحد");
+        assert_eq!(bookmark_title_for_display("Chapter 1").as_ref(), "Chapter 1");
+        assert!(matches!(bookmark_title_for_display("Chapter 1"), std::borrow::Cow::Borrowed(_)));
     }
 }
 

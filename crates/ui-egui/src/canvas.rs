@@ -411,6 +411,8 @@ pub struct DocView {
     pub snapshot: Option<Snapshot>,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
+    /// Two-page view places the earlier page of each pair on the right (#2339).
+    pub rtl_pages: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
@@ -748,6 +750,7 @@ impl DocView {
             close_requested: false,
             snapshot: None,
             cover: false,
+            rtl_pages: false,
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
@@ -906,6 +909,7 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        fresh.rtl_pages = self.rtl_pages;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);
@@ -1384,6 +1388,13 @@ impl DocView {
         }
     }
 
+    /// Whether the horizontal arrow named by `right` turns to the next page.
+    /// Right-to-left two-page view reads toward the left, so ← is next (#2339).
+    fn arrow_steps_forward(view: &DocView, right: bool) -> bool {
+        let rtl = view.rtl_pages && view.layout == PageLayout::TwoUp;
+        if right { !rtl } else { rtl }
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -1583,6 +1594,14 @@ impl DocView {
             self.cover = cover;
             self.goto = Some((self.current, 0.0));
             self.reset_coarse_state();
+        }
+    }
+
+    /// Put the earlier page of each two-page pair on the right. A no-op unless it changed.
+    pub fn set_rtl_pages(&mut self, rtl_pages: bool) {
+        if self.rtl_pages != rtl_pages {
+            self.rtl_pages = rtl_pages;
+            self.goto = Some((self.current, 0.0));
         }
     }
 
@@ -2222,10 +2241,23 @@ impl DocView {
                     let sizes: Vec<Vec2> = pair.iter().map(page_size).collect();
                     let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
-                    for size in sizes {
-                        rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + gap;
+                    let lone_on_the_right = (self.cover && ri == 0) || (self.rtl_pages && sizes.len() == 1);
+                    let row_left = if lone_on_the_right { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    if self.rtl_pages && sizes.len() == 2 {
+                        // The earlier page is the one a right-to-left reader meets first, so it
+                        // sits on the right. Widths can differ, so this is not a swap of origins.
+                        let right = sizes.first().copied().unwrap_or(Vec2::ZERO);
+                        let left = sizes.get(1).copied().unwrap_or(Vec2::ZERO);
+                        let x_left = row_left;
+                        let x_right = row_left + left.x + gap;
+                        rects.push(Rect::from_min_size(pos2(x_right, y + (row_h - right.y) / 2.0), right));
+                        rects.push(Rect::from_min_size(pos2(x_left, y + (row_h - left.y) / 2.0), left));
+                    } else {
+                        let mut x = row_left;
+                        for size in sizes {
+                            rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
+                            x += size.x + gap;
+                        }
                     }
                     y += row_h + gap;
                 }
@@ -2284,6 +2316,35 @@ fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
 fn anchored_scroll(point: Pos2, rel: Vec2, content: Vec2, viewport: Vec2) -> Vec2 {
     let max = vec2((content.x - viewport.x).max(0.0), (content.y - viewport.y).max(0.0));
     vec2((point.x - rel.x).clamp(0.0, max.x), (point.y - rel.y).clamp(0.0, max.y))
+}
+
+/// Lines of a hover popup in the order egui must be given so Arabic and Hebrew read right to left.
+/// Painting goes through [`crate::widgets::wrapped_text`], which uses the same wrap. This is the
+/// order the tests lock.
+#[cfg(test)]
+fn annotation_hover_display(text: &str) -> Vec<crate::bidi::Line> {
+    if crate::bidi::has_rtl(text) {
+        crate::bidi::wrap(text, |_| true)
+    } else {
+        text.lines().map(|line| crate::bidi::Line { text: line.to_owned(), rtl: false }).collect()
+    }
+}
+
+/// A plain label leaves Arabic in stored order. egui does not reorder a mixed line, and a
+/// Latin label in front of Arabic (`Note: واحد اثنين`) makes the paragraph left to right, so
+/// the paragraph direction is the wrong test.
+fn hover_paints_plain(text: &str) -> bool {
+    !crate::bidi::has_rtl(text)
+}
+
+fn paint_hover_text(ui: &mut egui::Ui, text: &str) {
+    if hover_paints_plain(text) {
+        ui.label(text);
+        return;
+    }
+    let font = egui::FontSelection::default().resolve(ui.style());
+    let color = ui.visuals().text_color();
+    crate::widgets::wrapped_text(ui, text, font, color, false);
 }
 
 /// The request tag for a raster at `scale`: equal tags mean the same scale (to 1/65536).
@@ -2544,12 +2605,19 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     }
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
+    // With right-to-left page order the next page is the one to the left, so the arrows swap (#2339).
     let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
-    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    if key(Key::ArrowRight) {
+        view.step_page(DocView::arrow_steps_forward(view, true));
+    }
+    if key(Key::ArrowLeft) {
+        view.step_page(DocView::arrow_steps_forward(view, false));
+    }
+    if key(Key::PageDown) && (command || !scrolls) {
         view.step_page(true);
     }
-    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    if key(Key::PageUp) && (command || !scrolls) {
         view.step_page(false);
     }
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In
@@ -4188,7 +4256,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
-                ui.label(text);
+                paint_hover_text(ui, &text);
             });
         });
     }
@@ -5752,6 +5820,81 @@ mod tests {
     fn hover_popup_skips_fill_and_sign_marks() {
         assert_eq!(annotation_hover_text(&annotation(false)).as_deref(), Some("FreeText\nHello"));
         assert_eq!(annotation_hover_text(&annotation(true)), None);
+    }
+
+    #[test]
+    fn arabic_comment_hover_reads_right_to_left() {
+        let lines = annotation_hover_display("Author\nواحد اثنين");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "Author");
+        assert!(!lines[0].rtl);
+        assert_eq!(lines[1].text, "اثنين واحد");
+        assert!(lines[1].rtl);
+        assert_eq!(annotation_hover_display("Hello").iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hello"]);
+        assert!(hover_paints_plain("Hello"));
+    }
+
+    #[test]
+    fn a_latin_note_with_arabic_is_not_painted_as_stored() {
+        let text = "Note: واحد اثنين";
+        let lines = annotation_hover_display(text);
+        let shown = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(lines.iter().all(|line| !line.rtl), "the paragraph starts with Latin, so its direction flag stays left to right");
+        assert_ne!(shown, text, "the hover string must not be the stored order: {shown:?}");
+        let second = shown.find("اثنين").expect("the second Arabic word");
+        let first = shown.find("واحد").expect("the first Arabic word");
+        assert!(second < first, "Arabic words stayed in stored order: {shown:?}");
+        assert!(!hover_paints_plain(text), "a mixed line was sent to a plain label");
+    }
+
+    #[test]
+    fn right_to_left_two_page_view_puts_the_earlier_page_on_the_right() {
+        let mut v = view(4, PageLayout::TwoUp, false);
+        v.zoom = 1.0;
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..4)
+                .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        let ltr = v.layout(&info, 1200.0, 1.0);
+        assert!(ltr[0].left() < ltr[1].left(), "left to right: {ltr:?}");
+        v.rtl_pages = true;
+        let rtl = v.layout(&info, 1200.0, 1.0);
+        assert!(rtl[0].left() > rtl[1].left(), "the first page is on the right: {rtl:?}");
+        assert!(rtl[2].left() > rtl[3].left(), "the next spread does the same: {rtl:?}");
+        assert!((rtl[0].width() - ltr[0].width()).abs() < 0.1);
+        assert!(!DocView::arrow_steps_forward(&v, true), "→ is previous when the next page is to the left");
+        assert!(DocView::arrow_steps_forward(&v, false));
+        v.rtl_pages = false;
+        assert!(DocView::arrow_steps_forward(&v, true));
+        assert!(!DocView::arrow_steps_forward(&v, false));
+    }
+
+    #[test]
+    fn replacing_the_document_keeps_right_to_left_page_order() {
+        let mut v = view(4, PageLayout::TwoUp, false);
+        v.rtl_pages = true;
+        v.cover = true;
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..4)
+                .map(|i| pdfcraft_render::PageInfo {
+                    width: 300.0,
+                    height: 400.0,
+                    label: (i + 1).to_string(),
+                    crop: [0.0, 0.0, 300.0, 400.0],
+                    rotation: 0,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        v.document_replaced(&info);
+        assert!(v.rtl_pages, "replacing the file switched the spread back to left to right");
+        assert!(v.cover);
+        assert_eq!(v.page_input, "1", "the page box names the right-hand page");
+        let rtl = v.layout(&info, 1200.0, 1.0);
+        // The cover sits alone. The next row is a pair: its earlier page stays on the right.
+        assert!(rtl.get(1).is_some_and(|right| rtl.get(2).is_some_and(|left| right.left() > left.left())), "the spread under the cover: {rtl:?}");
     }
 
     fn signature(signed: bool, visible: bool, page: Option<usize>, rect: Option<[f64; 4]>) -> pdfcraft_engine::SignatureInfo {
