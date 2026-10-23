@@ -2515,3 +2515,21 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	図面にスナップ: オン
+	Snap to drawing: off	図面にスナップ: オフ
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	スナップ対象
+	Centre points	中心点
+	Centre point	中心
+	Tab: the next target under the pointer	Tab: ポインター下の次の対象
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	左下
+	Top left	左上
+	Top right	右上
+	Bottom right	右下
+	Middle	中央
+	Vertex	頂点
+	Reference point: {point} (Tab: next)	基準点: {point}（Tab: 次へ）

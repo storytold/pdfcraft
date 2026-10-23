@@ -3032,6 +3032,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let allowed = doc.allows_annotation();
     let can_copy = doc.allows_copying();
     let mut copy_selected = false;
+    let mut comment_notice = None;
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
     let generation = doc.edit_generation();
@@ -3320,7 +3321,58 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
 
             // Comments: tools, selection, moving and resizing come before text selection.
-            let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+            // Snap to drawing (M5): the page's paths, for the drawing tools that set points and
+            // the tools that place text or a Fill & Sign mark, on the page the pointer is over
+            // (extracting a plan's paths takes up to a second).
+            // The Select tool too: a comment moved or resized snaps by its corners.
+            let snaps = match tool {
+                QuickTool::Comment(t) => t.snaps(),
+                QuickTool::Fill(t) => t.snaps(),
+                QuickTool::Select => true,
+                _ => false,
+            };
+            let snapping = prefs.snap && snaps && (resp.hovered() || resp.dragged());
+            let snap = if snapping {
+                let mut notice = None;
+                let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
+                if notice.is_some() {
+                    view.comments.notice = notice;
+                }
+                geometry
+            } else {
+                None
+            };
+            // The comments already drawn snap too (lines join at their ends), but not the one
+            // being moved or reshaped, which would hold on to where it was.
+            let snap_comments = if snapping && !comments_hidden {
+                let except: Vec<usize> = match &view.comments.gesture {
+                    Some(
+                        comments::Gesture::Move { page, index, .. }
+                        | comments::Gesture::Resize { page, index, .. }
+                        | comments::Gesture::Reshape { page, index, .. },
+                    ) if *page == i => {
+                        vec![*index]
+                    }
+                    _ => Vec::new(),
+                };
+                view.comments.snap_cache.comments(doc, i, &except)
+            } else {
+                None
+            };
+            let snap_cycle = view.comments.snap_cycle;
+            let pcx = comments::PageCx {
+                page: i,
+                xf: &xf,
+                info,
+                tool,
+                prefs,
+                allowed,
+                hidden: comments_hidden,
+                redact_mark,
+                snap,
+                snap_comments,
+                snap_cycle,
+            };
             if let QuickTool::Measure(measure_tool) = tool {
                 crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);
             }
@@ -3390,6 +3442,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     &mut app.signature_preview,
                     &author,
                     &date_text,
+                    &pcx,
                 ) {
                     Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
                     Some(crate::fill_sign::FillAction::Signature(e)) => {
@@ -4034,6 +4087,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             canvas_action = comments::context_menu(ui, view, info, prefs, allowed).or(copy_image);
         });
+        comment_notice = view.comments.notice.take();
         (wanted, visible_now)
     });
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
@@ -4405,6 +4459,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
@@ -5142,6 +5199,11 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         {
                             app.apply_edit(Edit::FontSizeAnnotation { page, index: annotation, size: app.fill_text_size });
                         }
+                    }
+                    // Snap to drawing (F3), as for the drawing tools: ticks and crosses into the
+                    // middle of a check box, text onto a line.
+                    if current_fill.is_some_and(crate::fill_sign::FillTool::snaps) {
+                        comments::snap_button(ui, &mut app.comment_prefs);
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());

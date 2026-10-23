@@ -8424,3 +8424,57 @@ fn bookmark_list_reports_colour_and_style() {
     let re = ok(&mut b, "doc_open", json!({ "path": "restyled.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }
+
+/// `comment_add` with `snap: true` moves a polyline's points onto the page's paths (an endpoint
+/// and an intersection here) and says how many moved; without it the points stay.
+#[test]
+fn comment_add_snaps_points_to_the_drawing_on_request() {
+    let dir = workdir("comment-snap");
+    let mut a = auto(&dir);
+    let source = String::from_utf8(fixture(1)).unwrap();
+    let old = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    let drawing = "10 20 m 110 20 l S 60 0 m 60 80 l S";
+    let source = source.replace(old, &format!("{drawing:<width$}", width = old.len()));
+    std::fs::write(dir.join("drawing.pdf"), source).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "drawing.pdf" }))["doc"].as_u64().unwrap();
+    // Display coordinates (top-left origin): the line's left end is at [10, 280], the crossing at [60, 280].
+    let r =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polyline", "points": [[12, 278], [58, 282], [150, 150]], "snap": true }));
+    assert_eq!(r["snapped"], 2, "{r}");
+    // The vertices, in user space: the endpoint (10, 20), the crossing (60, 20), the free point.
+    ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "out.xfdf", "what": "comments" }));
+    let xfdf = std::fs::read_to_string(dir.join("out.xfdf")).unwrap();
+    assert!(xfdf.contains("<vertices>10,20;60,20;150,150</vertices>"), "{xfdf}");
+    let plain = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282] }));
+    assert!(plain.get("snapped").is_none());
+    assert!(matches!(
+        a.call(
+            "comment_add",
+            &json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282], "snap": true, "snap_tolerance": -1 })
+        ),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// comment_add `snap` takes the comments already drawn as well as the page's paths: a second
+/// line started 3 pt off the first one's end begins exactly there; one started near nothing
+/// stays where it was asked to start.
+#[test]
+fn snap_takes_the_comments_already_drawn() {
+    let dir = workdir("snap-comments");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [120, 40] }));
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [123, 43], "to": [123, 140], "snap": true }));
+    assert_eq!(out["snapped"], 1, "{out}");
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 250], "to": [80, 250], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let mut lines = list["comments"].as_array().unwrap().clone();
+    lines.sort_by_key(|c| c["index"].as_u64());
+    let start = |c: &Value| [c["points"][0][0].as_f64().unwrap(), c["points"][0][1].as_f64().unwrap()];
+    let [x, y] = start(&lines[1]);
+    assert!((x - 120.0).abs() < 1e-3 && (y - 40.0).abs() < 1e-3, "{lines:?}");
+    assert_eq!(start(&lines[2]), [20.0, 250.0]);
+}

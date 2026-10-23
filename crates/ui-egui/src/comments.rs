@@ -13,7 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
+use pdfcraft_engine::{Document, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style, measure};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
 use crate::canvas::{DocView, PageXform};
@@ -186,6 +186,12 @@ impl CommentTool {
         matches!(self, Self::Polygon | Self::PolyLine | Self::Cloud)
     }
 
+    /// Tools whose points snap to the page's drawing when snapping is on (M5): the ones that
+    /// set points or corners, not freehand drawing.
+    pub fn snaps(self) -> bool {
+        self.clicks_points() || matches!(self, Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Note | Self::TextBox | Self::Callout)
+    }
+
     /// Whether the line-thickness control applies.
     pub fn has_width(self) -> bool {
         self.draws() || self.clicks_points() || matches!(self, Self::TextBox | Self::Callout)
@@ -257,6 +263,12 @@ pub struct CommentPrefs {
     pub group_tool: [CommentTool; 3],
     /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
     pub hide_empty_highlight_hover: bool,
+    /// Snap to drawing (F3): points of the drawing tools land on the page's own vector paths
+    /// (endpoints, midpoints, intersections, paths), as the measuring tools do and as CAD's
+    /// object snap does.
+    pub snap: bool,
+    /// Which targets snapping offers (CAD's object snap modes), for commenting and measuring.
+    pub snap_targets: measure::snap::SnapOptions,
 }
 
 impl Default for CommentPrefs {
@@ -267,7 +279,83 @@ impl Default for CommentPrefs {
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
+            snap: false,
+            snap_targets: measure::snap::SnapOptions::default(),
         }
+    }
+}
+
+/// Where something snapped to: the point in user space and what it is.
+pub(crate) type SnapHit = ([f64; 2], measure::snap::SnapKind);
+
+/// How close (screen points) the pointer must be to a path for a drawing tool's point to snap.
+pub const SNAP_SENSITIVITY: f64 = 6.0;
+
+/// How many pages' paths the snap cache keeps: enough for the pages on screen, few enough for
+/// a CAD plan's geometry (tens of MB a page).
+const SNAP_CACHE_PAGES: usize = 4;
+
+/// The pages' vector paths for snapping, kept per page for the current edit generation
+/// (extraction is bounded but not free: up to a second on an A0 plan), shared by every
+/// drawing tool. Several pages at a time, so two pages on screen don't throw each other out.
+#[derive(Clone, Debug, Default)]
+pub struct SnapCache {
+    /// Page, generation and its paths (`None` when the page can't be read), oldest first.
+    paths: Vec<(usize, u64, Option<std::sync::Arc<measure::snap::Geometry>>)>,
+    /// Pages (and generations) whose limit notice has been shown.
+    warned: Vec<(usize, u64)>,
+    /// The comments drawn on a page, by generation and the `/Annots` places left out.
+    comments: Vec<CommentPaths>,
+}
+
+/// A page, generation, the `/Annots` places left out, and the comments' snap geometry.
+type CommentPaths = (usize, u64, Vec<usize>, Option<std::sync::Arc<measure::snap::Geometry>>);
+
+impl SnapCache {
+    /// The paths of `page` as the document is now (`None` when the page can't be read). A page
+    /// whose extraction hit a limit says so once, through `notice`.
+    pub fn geometry(&mut self, doc: &Document, page: usize, notice: &mut Option<&'static str>) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        // An edit starts the document over.
+        self.paths.retain(|(_, g, _)| *g == generation);
+        self.warned.retain(|(_, g)| *g == generation);
+        if let Some((_, _, cached)) = self.paths.iter().find(|(p, _, _)| *p == page) {
+            return cached.clone();
+        }
+        let geometry = doc.measurement_paths(page).ok().map(std::sync::Arc::new);
+        if let Some(g) = &geometry
+            && (g.truncated || g.unreadable > 0)
+            && !self.warned.contains(&(page, generation))
+        {
+            *notice = Some(if g.truncated {
+                "This drawing exceeds the snapping limit; only the first paths are used."
+            } else {
+                "Some page content couldn't be read; snapping uses the rest."
+            });
+            self.warned.push((page, generation));
+        }
+        if self.paths.len() >= SNAP_CACHE_PAGES {
+            self.paths.remove(0);
+        }
+        self.paths.push((page, generation, geometry.clone()));
+        geometry
+    }
+
+    /// The comments drawn with lines on `page`, as the document is now, but those at the
+    /// `/Annots` places in `except` (`None` when the page can't be read). Built again after an
+    /// edit, or when what is left out changes.
+    pub fn comments(&mut self, doc: &Document, page: usize, except: &[usize]) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        self.comments.retain(|(_, g, _, _)| *g == generation);
+        if let Some((_, _, _, cached)) = self.comments.iter().find(|(p, _, e, _)| *p == page && e == except) {
+            return cached.clone();
+        }
+        let geometry = doc.comment_paths(page, except).ok().map(std::sync::Arc::new);
+        if self.comments.len() >= SNAP_CACHE_PAGES {
+            self.comments.remove(0);
+        }
+        self.comments.push((page, generation, except.to_vec(), geometry.clone()));
+        geometry
     }
 }
 
@@ -531,6 +619,27 @@ pub struct CommentView {
     pub tool_done: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
+    /// A notice for the app to show (the page input has no app).
+    pub notice: Option<&'static str>,
+    /// The page's paths for snapping (see [`SnapCache`]).
+    pub snap_cache: SnapCache,
+    /// Where the pointer would snap to right now: (page, point in user space, what it is), for
+    /// the marker on the page.
+    pub snap_hover: Option<(usize, [f64; 2], measure::snap::SnapKind)>,
+    /// The nearest snap target under the pointer (its first candidate) and its page, while there
+    /// is one: Tab cycles from it.
+    pub snap_first: Option<(usize, [f64; 2])>,
+    /// Tab's place among the candidates under the pointer: (their first one, presses forward).
+    /// Another set of candidates starts again from its first.
+    pub snap_cycle: Option<([f64; 2], isize)>,
+    /// The point of the comment being moved that goes onto a snap target, as an index into its
+    /// [`PageCx::move_anchors`]: `None` for whichever corner comes near a target. Tab and
+    /// Shift+Tab move on to the next or previous point, put where the one in use is.
+    pub move_anchor: Option<usize>,
+    /// Tab presses while a comment is moved, applied on its page (see [`Self::move_anchor`]).
+    pub anchor_steps: isize,
+    /// The moved comment's anchor, for its marker: (page, point in user space, name).
+    pub anchor_shown: Option<(usize, [f64; 2], &'static str)>,
 }
 
 /// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor
@@ -545,6 +654,17 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Tab (`step` 1) or Shift+Tab (-1) over a snap marker: the next or previous candidate under
+    /// the pointer. Returns whether there was a marker to cycle.
+    pub fn cycle_snap(&mut self, step: isize) -> bool {
+        let Some((_, first)) = self.snap_first else { return false };
+        self.snap_cycle = Some(match self.snap_cycle {
+            Some((f, n)) if measure::distance(f, first) <= 1e-6 => (f, n.saturating_add(step)),
+            _ => (first, step),
+        });
+        true
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -604,9 +724,124 @@ pub(crate) struct PageCx<'a> {
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
+    /// The page's paths, when the tool's points snap to the drawing (Snap to drawing is on and
+    /// the tool sets points or corners).
+    pub snap: Option<std::sync::Arc<measure::snap::Geometry>>,
+    /// The comments already drawn on the page with lines (lines, connected lines, polygons,
+    /// rectangles, ovals), which snap like the page's paths; not the one being moved or reshaped.
+    pub snap_comments: Option<std::sync::Arc<measure::snap::Geometry>>,
+    /// Tab's place among the snap candidates (see [`CommentView::snap_cycle`]).
+    pub snap_cycle: Option<([f64; 2], isize)>,
 }
 
 impl PageCx<'_> {
+    /// A pointer position as a point in user space, moved onto the page's drawing when snapping
+    /// is on and a path, endpoint, midpoint or intersection lies within reach; with what it
+    /// snapped to.
+    pub(crate) fn snapped(&self, p: Pos2) -> ([f64; 2], Option<measure::snap::SnapKind>) {
+        let u = self.to_user(p);
+        let all = self.snap_candidates(u);
+        let Some(first) = all.first() else { return (u, None) };
+        // Tab moves through the candidates; another set starts again from its first.
+        let step = match self.snap_cycle {
+            Some((f, n)) if measure::distance(f, first.point) <= 1e-6 => n,
+            _ => 0,
+        };
+        let i = usize::try_from(step.rem_euclid(all.len().max(1) as isize)).unwrap_or(0);
+        all.get(i).map_or((u, None), |hit| (hit.point, Some(hit.kind)))
+    }
+
+    /// Whether points snap: to the page's paths or to the comments drawn over it.
+    pub(crate) fn snapping(&self) -> bool {
+        self.snap.is_some() || self.snap_comments.is_some()
+    }
+
+    /// The snap targets the user's choice allows within the reach (6 screen points at this zoom)
+    /// of user point `u`, on the page's paths and the comments drawn over it, nearest first; none
+    /// without snapping.
+    pub(crate) fn snap_candidates(&self, u: [f64; 2]) -> Vec<measure::snap::Snap> {
+        if !self.snapping() {
+            return Vec::new();
+        }
+        // The reach in user units: the screen distance of one user unit, at this zoom.
+        let pixels_per_unit = self.to_screen([u[0] + 1.0, u[1]]).distance(self.to_screen(u)).max(1e-6);
+        let tolerance = (SNAP_SENSITIVITY / f64::from(pixels_per_unit)).min(10_000.0);
+        let mut all: Vec<measure::snap::Snap> = [&self.snap, &self.snap_comments]
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g.candidates(u, tolerance, self.prefs.snap_targets).unwrap_or_default())
+            .collect();
+        // As each geometry orders its own: points (ends, centres, middles, crossings) nearest
+        // first, then the nearest point on a path; one of each place.
+        let path = |s: &measure::snap::Snap| s.kind == measure::snap::SnapKind::Path;
+        all.sort_by(|a, b| path(a).cmp(&path(b)).then_with(|| measure::snap::candidate_order(a, b)));
+        let mut out: Vec<measure::snap::Snap> = Vec::with_capacity(all.len());
+        for s in all {
+            if !(path(&s) && out.iter().any(path)) && !out.iter().any(|o| measure::distance(o.point, s.point) <= 1e-6) {
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    /// The pointer `p` of a drag that started at `from`, moved so the first of `anchors` (screen
+    /// points that travel with the drag: a comment's corners, a handle) that comes within reach
+    /// of a snap target lands on it (a Fill & Sign mark `side` points across goes by its centre,
+    /// as when it is placed); with that target. Unchanged without snapping or a target in reach.
+    pub(crate) fn snap_drag(&self, anchors: &[Pos2], mark: Option<f64>, from: Pos2, p: Pos2) -> (Pos2, Option<SnapHit>) {
+        let (p, hit) = self.snap_drag_by(anchors, mark, from, p);
+        (p, hit.map(|(hit, _)| hit))
+    }
+
+    /// [`Self::snap_drag`], with which of `anchors` landed on the target.
+    fn snap_drag_by(&self, anchors: &[Pos2], mark: Option<f64>, from: Pos2, p: Pos2) -> (Pos2, Option<(SnapHit, usize)>) {
+        if !self.snapping() {
+            return (p, None);
+        }
+        let travel = p - from;
+        // A corner on a target point (an end, a centre…) beats one merely on a path, then the
+        // nearer one.
+        // (rank: a point target before a path, then the nearer; the pointer's shift; the hit and
+        // which anchor made it)
+        type Best = ((bool, f32), egui::Vec2, (SnapHit, usize));
+        let mut best: Option<Best> = None;
+        for (k, anchor) in anchors.iter().enumerate() {
+            let moved = *anchor + travel;
+            let (u, kind) = match mark {
+                Some(side) => self.snapped_mark(moved, side),
+                None => self.snapped(moved),
+            };
+            let Some(kind) = kind else { continue };
+            let shift = self.to_screen(u) - moved;
+            let rank = (kind == measure::snap::SnapKind::Path, shift.length());
+            if best.is_none_or(|b| rank < b.0) {
+                best = Some((rank, shift, ((u, kind), k)));
+            }
+        }
+        match best {
+            Some((_, shift, hit)) => (p + shift, Some(hit)),
+            None => (p, None),
+        }
+    }
+
+    /// Where a Fill & Sign mark `side` points across goes for the pointer at `p` when snapping is
+    /// on: the centre of the box drawn around it when that is a check box or a table cell (at
+    /// most ten marks long and three across, either way round: a protocol's "OK" column), else as
+    /// [`Self::snapped`] puts a point.
+    pub(crate) fn snapped_mark(&self, p: Pos2, side: f64) -> ([f64; 2], Option<measure::snap::SnapKind>) {
+        let u = self.to_user(p);
+        let (long, short) = (10.0 * side, 3.0 * side);
+        if let Some(geometry) = &self.snap
+            && self.prefs.snap_targets.centres
+            && let Some([x0, y0, x1, y1]) = geometry.enclosing_box(u, long)
+            && let (w, h) = (x1 - x0, y1 - y0)
+            && ((w <= long && h <= short) || (w <= short && h <= long))
+        {
+            return ([(x0 + x1) / 2.0, (y0 + y1) / 2.0], Some(measure::snap::SnapKind::Centre));
+        }
+        self.snapped(p)
+    }
+
     fn to_user(&self, p: Pos2) -> [f64; 2] {
         let (vx, vy) = self.xf.screen_to_view(p);
         let u = self.info.pages[self.page].view_to_user(vx, vy);
@@ -680,6 +915,7 @@ impl PageCx<'_> {
         &self,
         a: &Annotation,
         gesture: Option<&Gesture>,
+        anchor: Option<usize>,
         pointer: Option<Pos2>,
         shift: bool,
         pending: Option<&Edit>,
@@ -700,12 +936,101 @@ impl PageCx<'_> {
             );
         }
         match (gesture, pointer) {
-            (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
+            (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => {
+                r.translate(self.snap_move(a, *from, p, anchor).0 - *from)
+            }
             (Some(Gesture::Resize { page, index, handle, from, aspect_ratio }), Some(p)) if (*page, *index) == (self.page, a.index) => {
+                let p = self.snap_drag(&[handle_pos(r, *handle)], None, *from, p).0;
                 resized(r, *handle, p - *from, corner_ratio(r, *aspect_ratio, shift))
             }
             _ => r,
         }
+    }
+
+    /// The points of comment `a` that can go onto a snap target while it is moved, in the order
+    /// Tab steps through them, as displayed: its box's corners, the middles of its sides and its
+    /// centre, clockwise from the bottom left with the centre last; a line's ends and middle;
+    /// connected lines' and polygons' corners, then their box's centre. A Fill & Sign mark (a
+    /// tick, cross, dot or line) has its centre only, which goes where a new mark would (the
+    /// second value is its size).
+    pub(crate) fn move_anchors(&self, a: &Annotation) -> (Vec<Anchor>, Option<f64>) {
+        let r = self.screen_rect(a);
+        let anchor = |at: Pos2, name: &'static str, corner: bool| Anchor { at, name, corner };
+        let [x0, y0, x1, y1] = a.rect;
+        if a.fill_sign && a.subtype == "Stamp" && (x1 - x0).abs() <= 48.0 && (y1 - y0).abs() <= 48.0 {
+            return (vec![anchor(r.center(), "Middle", true)], Some(12.0));
+        }
+        if reshapable(a) {
+            let points: Vec<Pos2> = a.points.iter().map(|q| self.to_screen([f64::from(q[0]), f64::from(q[1])])).collect();
+            if let [from, to] = points[..] {
+                return (vec![anchor(from, "Endpoint", true), anchor(from.lerp(to, 0.5), "Midpoint", false), anchor(to, "Endpoint", true)], None);
+            }
+            let mut anchors: Vec<Anchor> = points.into_iter().map(|p| anchor(p, "Vertex", true)).collect();
+            anchors.push(anchor(r.center(), "Middle", false));
+            return (anchors, None);
+        }
+        let anchors = vec![
+            anchor(r.left_bottom(), "Bottom left", true),
+            anchor(r.left_center(), "Left", false),
+            anchor(r.left_top(), "Top left", true),
+            anchor(r.center_top(), "Top", false),
+            anchor(r.right_top(), "Top right", true),
+            anchor(r.right_center(), "Right", false),
+            anchor(r.right_bottom(), "Bottom right", true),
+            anchor(r.center_bottom(), "Bottom", false),
+            anchor(r.center(), "Middle", false),
+        ];
+        (anchors, None)
+    }
+
+    /// The pointer `p` of a move of comment `a` by a drag from `from`, moved so one of its
+    /// [`Self::move_anchors`] lands on a snap target in reach: `choice` (Tab's) only, else
+    /// whichever corner comes within reach (see [`Self::snap_drag`]). With that target, and the
+    /// anchor that is put on it (`choice`, else the corner that snapped).
+    pub(crate) fn snap_move(&self, a: &Annotation, from: Pos2, p: Pos2, choice: Option<usize>) -> (Pos2, Option<SnapHit>, Option<usize>) {
+        let (anchors, mark) = self.move_anchors(a);
+        let choice = choice.filter(|i| *i < anchors.len());
+        let candidates: Vec<usize> = match choice {
+            Some(i) => vec![i],
+            None => (0..anchors.len()).filter(|i| anchors[*i].corner).collect(),
+        };
+        let at: Vec<Pos2> = candidates.iter().map(|i| anchors[*i].at).collect();
+        let (p, hit) = self.snap_drag_by(&at, mark, from, p);
+        (p, hit.map(|(hit, _)| hit), hit.and_then(|(_, k)| candidates.get(k).copied()).or(choice))
+    }
+}
+
+/// The corner among `anchors` nearest `p` (the first anchor when there is none).
+fn nearest_corner(anchors: &[Anchor], p: Pos2) -> usize {
+    let corners = anchors.iter().enumerate().filter(|(_, c)| c.corner);
+    corners.min_by(|(_, a), (_, b)| a.at.distance(p).total_cmp(&b.at.distance(p))).map_or(0, |(i, _)| i)
+}
+
+/// A point of a comment that can go onto a snap target while the comment is moved (see
+/// [`PageCx::move_anchors`]): where it is on screen, and its name for the marker.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Anchor {
+    pub at: Pos2,
+    pub name: &'static str,
+    /// A corner, or a line's end: a move starts with the one nearest the pointer.
+    pub corner: bool,
+}
+
+/// An anchor's name as shown, in the reader's language.
+fn anchor_label(name: &str) -> &'static str {
+    match name {
+        "Bottom left" => tl!("Bottom left"),
+        "Left" => tl!("Left"),
+        "Top left" => tl!("Top left"),
+        "Top" => tl!("Top"),
+        "Top right" => tl!("Top right"),
+        "Right" => tl!("Right"),
+        "Bottom right" => tl!("Bottom right"),
+        "Bottom" => tl!("Bottom"),
+        "Endpoint" => tl!("Endpoint"),
+        "Midpoint" => tl!("Midpoint"),
+        "Vertex" => tl!("Vertex"),
+        _ => tl!("Middle"),
     }
 }
 
@@ -814,6 +1139,16 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let draw_grab = draw_grabs(ui, cx, view);
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
+    // (The Fill & Sign tools set their own, before this runs.)
+    if !matches!(cx.tool, QuickTool::Fill(_)) && cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
+        cv.snap_hover = None;
+    }
+    // The nearest target under the pointer, which Tab cycles from.
+    match pointer.filter(|_| over_page && cx.snapping()) {
+        Some(p) => cv.snap_first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point)),
+        None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
+        None => {}
+    }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
         cv.cancelled_drag = true;
@@ -839,11 +1174,20 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             if over_page {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
+            // Snapping (shapes and lines, not freehand): the marker shows where a point would
+            // land.
+            if tool.snaps()
+                && let Some(p) = pointer.filter(|_| over_page)
+                && let (u, Some(kind)) = cx.snapped(p)
+            {
+                cv.snap_hover = Some((cx.page, u, kind));
+            }
             if resp.drag_started()
                 && pressed_here
                 && let Some(o) = origin
             {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                let first = if tool.snaps() { cx.snapped(o).0 } else { cx.to_user(o) };
+                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![first] });
                 cv.selected = None;
             }
             if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
@@ -851,13 +1195,14 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 && let Some(p) = pointer
             {
                 let p = clamp_to(page_rect, p);
-                let u = cx.to_user(p);
                 if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
+                    let u = cx.to_user(p);
                     let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                     if last.distance(p) >= 1.5 {
                         points.push(u);
                     }
                 } else {
+                    let u = cx.snapped(p).0;
                     points.truncate(1);
                     points.push(u);
                 }
@@ -898,6 +1243,11 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             if over_page {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
+            if let Some(p) = pointer.filter(|_| over_page)
+                && let (u, Some(kind)) = cx.snapped(p)
+            {
+                cv.snap_hover = Some((cx.page, u, kind));
+            }
             let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
             // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
             // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
@@ -914,7 +1264,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 && over_page
                 && let Some(p) = pointer
             {
-                let u = cx.to_user(p);
+                let u = cx.snapped(p).0;
                 match cv.gesture.as_mut() {
                     Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                         // Clicking the first point again closes a polygon.
@@ -958,11 +1308,18 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             if over_page {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
+            // Snapping: what the callout points at goes onto the drawing.
+            if cv.gesture.is_none()
+                && let Some(p) = pointer.filter(|_| over_page)
+                && let (u, Some(kind)) = cx.snapped(p)
+            {
+                cv.snap_hover = Some((cx.page, u, kind));
+            }
             if resp.drag_started()
                 && pressed_here
                 && let Some(o) = origin
             {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
+                cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.snapped(o).0] });
                 cv.selected = None;
             }
             if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
@@ -1034,7 +1391,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                     && pressed_here
                     && let Some(o) = origin
                 {
-                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.snapped(o).0] });
                     cv.selected = None;
                 }
                 if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
@@ -1042,7 +1399,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                     && let Some(p) = pointer
                 {
                     points.truncate(1);
-                    points.push(cx.to_user(clamp_to(page_rect, p)));
+                    points.push(cx.snapped(clamp_to(page_rect, p)).0);
                 }
                 if resp.drag_stopped()
                     && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
@@ -1059,12 +1416,19 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                     }
                 }
             }
+            // Snapping: the note's or text box's corner goes onto the drawing, as a drawing
+            // tool's point does.
+            if let Some(p) = pointer.filter(|_| over_page)
+                && let (u, Some(kind)) = cx.snapped(p)
+            {
+                cv.snap_hover = Some((cx.page, u, kind));
+            }
             if resp.clicked()
                 && over_page
                 && let Some(p) = pointer
             {
                 let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-                cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+                cv.composer = Some(Composer { page: cx.page, at: cx.snapped(p).0, kind, text: String::new(), focus: true });
                 cv.selected = None;
             }
             true
@@ -1205,6 +1569,7 @@ fn select_input(
             cv.reveal = true;
             if cx.allowed {
                 cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
+                cv.move_anchor = None;
             }
             consumed = true;
         }
@@ -1212,12 +1577,71 @@ fn select_input(
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
+    // Tab while a comment is moved: its next anchor goes where this one is now (on its target,
+    // when it has one), so the target stays and the comment turns about it.
+    if cv.anchor_steps != 0
+        && cx.snapping()
+        && let Some(Gesture::Move { page, index, from }) = cv.gesture.as_mut()
+        && *page == cx.page
+        && let (Some(a), Some(p)) = (cx.get(*index), pointer)
+    {
+        // The anchor in use: Tab's, else the corner on a target, else the one nearest the grab.
+        let (moved, _, used) = cx.snap_move(a, *from, p, cv.move_anchor);
+        let (anchors, _) = cx.move_anchors(a);
+        let i = used.unwrap_or_else(|| nearest_corner(&anchors, *from));
+        if let Some(now) = anchors.get(i) {
+            let spot = now.at + (moved - *from);
+            let j = usize::try_from((i as isize).saturating_add(cv.anchor_steps).rem_euclid(anchors.len() as isize)).unwrap_or(0);
+            *from = anchors[j].at + (p - spot);
+            cv.move_anchor = Some(j);
+        }
+    }
+    if cv.gesture.as_ref().is_none_or(|g| matches!(g, Gesture::Move { page, .. } if *page == cx.page)) {
+        cv.anchor_steps = 0;
+    }
+    // Snapping while a comment is moved or resized: a corner (the anchor Tab chose, see
+    // [`PageCx::snap_move`]) or the resize handle lands on a target in reach, and the marker
+    // shows where.
+    let dragged = match (&cv.gesture, pointer) {
+        (Some(Gesture::Move { page, index, from }), Some(p)) if *page == cx.page => cx.get(*index).map(|a| {
+            let (p, hit, _) = cx.snap_move(a, *from, p, cv.move_anchor);
+            (p, hit)
+        }),
+        (Some(Gesture::Resize { page, index, handle, from, .. }), Some(p)) if *page == cx.page => {
+            cx.get(*index).map(|a| cx.snap_drag(&[handle_pos(cx.screen_rect(a), *handle)], None, *from, p))
+        }
+        // A line's end or a corner dragged: onto a target (Shift holds the angle instead).
+        (Some(Gesture::Reshape { page, .. }), Some(p)) if *page == cx.page && !ui.input(|i| i.modifiers.shift) => {
+            let (u, kind) = cx.snapped(p);
+            Some((cx.to_screen(u), kind.map(|k| (u, k))))
+        }
+        _ => None,
+    };
+    if let Some((_, Some((at, kind)))) = dragged {
+        cv.snap_hover = Some((cx.page, at, kind));
+    }
+    // The moved comment's anchor, named: the one on a target, or the one Tab chose.
+    if cv.anchor_shown.is_some_and(|(page, ..)| page == cx.page) {
+        cv.anchor_shown = None;
+    }
+    if let (Some(Gesture::Move { page, index, from }), Some(p)) = (&cv.gesture, pointer)
+        && *page == cx.page
+        && cx.snapping()
+        && let Some(a) = cx.get(*index)
+        && let (moved, _, Some(i)) = cx.snap_move(a, *from, p, cv.move_anchor)
+        && let Some(anchor) = cx.move_anchors(a).0.get(i)
+    {
+        cv.anchor_shown = Some((cx.page, cx.to_user(anchor.at + (moved - *from)), anchor.name));
+    }
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
+        let p = dragged.map_or(p, |(p, _)| p);
         match cv.gesture.clone() {
             Some(Gesture::Move { page, index, from }) if page == cx.page => {
                 cv.gesture = None;
+                cv.move_anchor = None;
+                cv.anchor_shown = None;
                 let (a, b) = (cx.to_user(from), cx.to_user(p));
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 if from.distance(p) >= 2.0 {
@@ -1240,8 +1664,13 @@ fn select_input(
                 cv.gesture = None;
                 let shift = ui.input(|i| i.modifiers.shift);
                 let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+                // The target itself when it snapped, not its round trip through the screen.
+                let to = match dragged {
+                    Some((_, Some((u, _)))) => u,
+                    _ => cx.to_user(p),
+                };
                 if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, to, shift) });
                 }
             }
             _ => {}
@@ -1357,7 +1786,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
-        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
+        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), cv.move_anchor, pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
             for h in HANDLES {
@@ -1366,6 +1795,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
+    paint_snap_marker(painter, cx, view);
     paint_gesture(painter, cx, view);
 }
 
@@ -1401,6 +1831,12 @@ fn changing_points(
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
     let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+    // As the release will have it: a dragged end onto a snap target, unless Shift holds the angle.
+    let pointer = match &cv.gesture {
+        Some(Gesture::Reshape { .. }) if !shift => pointer.map(|p| cx.to_screen(cx.snapped(p).0)),
+        Some(Gesture::Move { from, .. }) => pointer.map(|p| cx.snap_move(a, *from, p, cv.move_anchor).0),
+        _ => pointer,
+    };
     let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
     let changed = changing.is_some();
     let points = changing.unwrap_or(points);
@@ -1416,7 +1852,47 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
+    paint_snap_marker(painter, cx, view);
     paint_gesture(painter, cx, view);
+}
+
+/// Where a drawing tool's next point would snap to: a ring and the kind of target, as the
+/// measuring tools show it.
+fn paint_snap_marker(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+    // The anchor of a comment being moved: a square, named below it (Tab moves on).
+    if let Some((page, point, name)) = view.comments.anchor_shown
+        && page == cx.page
+    {
+        let at = cx.to_screen(point);
+        painter.rect_filled(Rect::from_center_size(at, vec2(7.0, 7.0)), CornerRadius::ZERO, SELECT_BLUE);
+        painter.text(
+            at + vec2(10.0, 10.0),
+            egui::Align2::LEFT_TOP,
+            crate::i18n::fmt(tl!("Reference point: {point} (Tab: next)"), &[("point", anchor_label(name))]),
+            crate::theme::regular(11.0),
+            SELECT_BLUE,
+        );
+    }
+    if let Some((page, point, kind)) = view.comments.snap_hover
+        && page == cx.page
+    {
+        let at = cx.to_screen(point);
+        let green = Color32::from_rgb(46, 158, 92);
+        painter.circle_stroke(at, 6.0, Stroke::new(1.5, green));
+        painter.text(
+            at + vec2(10.0, -10.0),
+            egui::Align2::LEFT_BOTTOM,
+            tl!(match kind {
+                measure::snap::SnapKind::Endpoint => "Endpoint",
+                measure::snap::SnapKind::Midpoint => "Midpoint",
+                measure::snap::SnapKind::Intersection => "Intersection",
+                measure::snap::SnapKind::Path => "Path",
+                measure::snap::SnapKind::Centre => "Centre point",
+            }),
+            crate::theme::regular(11.0),
+            green,
+        );
+    }
 }
 
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
@@ -1562,7 +2038,19 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         // Scrolled away: keep the draft until the page is back.
         return None;
     };
-    let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false, redact_mark: ([0.89, 0.13, 0.13], 1.0) };
+    let cx = PageCx {
+        page,
+        xf: &xf,
+        info,
+        tool: QuickTool::Select,
+        prefs,
+        allowed: true,
+        hidden: false,
+        snap: None,
+        snap_comments: None,
+        snap_cycle: None,
+        redact_mark: ([0.89, 0.13, 0.13], 1.0),
+    };
     let anchor = cx.to_screen(c.at);
     let t = Tokens::get(ctx);
     let mut post = false;
@@ -2081,12 +2569,63 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
+/// Takes Tab presses out of `events`, for cycling snap targets: +1 for each Tab, -1 for each
+/// Shift+Tab (their releases go too). Tabs with other modifiers stay.
+pub(crate) fn take_snap_tabs(events: &mut Vec<egui::Event>) -> isize {
+    let mut step = 0isize;
+    events.retain(|e| match e {
+        egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if modifiers.is_none() || modifiers.shift_only() => {
+            if *pressed {
+                step += if modifiers.shift { -1 } else { 1 };
+            }
+            false
+        }
+        _ => true,
+    });
+    step
+}
+
+/// The quick bar's Snap to drawing switch (F3), for the tools whose points snap.
+pub(crate) fn snap_button(ui: &mut egui::Ui, prefs: &mut CommentPrefs) {
+    let key = crate::commands::command_shortcut_label(ui.ctx(), "comment.snap");
+    let tip = format!("{} ({key})", tl!(if prefs.snap { "Snap to drawing: on" } else { "Snap to drawing" }));
+    if icons::button(ui, "circle-dot", 32.0, prefs.snap, &tip).clicked() {
+        prefs.snap = !prefs.snap;
+    }
+    // What snaps (CAD's object snap modes), for commenting and measuring alike.
+    let resp = icons::button(ui, "chevron-down", 32.0, false, tl!("Snap targets"));
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        snap_target_boxes(ui, &mut prefs.snap_targets, false);
+    });
+}
+
+/// The snap targets as check boxes: a list with the Tab hint (the quick bar's menu), or side by
+/// side as space allows (`compact`, the measuring panel).
+pub(crate) fn snap_target_boxes(ui: &mut egui::Ui, targets: &mut measure::snap::SnapOptions, compact: bool) {
+    let mut boxes = |ui: &mut egui::Ui| {
+        ui.add(crate::widgets::checkbox(&mut targets.endpoints, tl!("Endpoints")));
+        ui.add(crate::widgets::checkbox(&mut targets.midpoints, tl!("Midpoints")));
+        ui.add(crate::widgets::checkbox(&mut targets.centres, tl!("Centre points")));
+        ui.add(crate::widgets::checkbox(&mut targets.intersections, tl!("Intersections")));
+        ui.add(crate::widgets::checkbox(&mut targets.paths, tl!("Paths")));
+    };
+    if compact {
+        ui.horizontal_wrapped(boxes);
+    } else {
+        boxes(ui);
+        ui.label(egui::RichText::new(tl!("Tab: the next target under the pointer")).small());
+    }
+}
+
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
     let style = prefs.style(tool);
     let mut selected_color = None;
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
+    }
+    if tool.snaps() {
+        snap_button(ui, prefs);
     }
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
@@ -2496,6 +3035,30 @@ mod tests {
             drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
             Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
         ));
+    }
+
+    #[test]
+    fn tab_presses_are_taken_for_cycling_snap_targets() {
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+        let mut events = vec![
+            key(egui::Key::Tab, true, egui::Modifiers::NONE),
+            key(egui::Key::Tab, false, egui::Modifiers::NONE),
+            key(egui::Key::A, true, egui::Modifiers::NONE),
+            key(egui::Key::Tab, true, egui::Modifiers::NONE),
+            key(egui::Key::Tab, true, egui::Modifiers::SHIFT),
+            key(egui::Key::Tab, true, egui::Modifiers::COMMAND),
+        ];
+        assert_eq!(take_snap_tabs(&mut events), 1, "two forward, one back");
+        assert_eq!(events.len(), 2, "the A and the ⌘Tab stay: {events:?}");
+        let mut cv = CommentView::default();
+        assert!(!cv.cycle_snap(1), "no marker: nothing to cycle");
+        cv.snap_first = Some((0, [1.0, 2.0]));
+        assert!(cv.cycle_snap(1) && cv.cycle_snap(1));
+        assert_eq!(cv.snap_cycle, Some(([1.0, 2.0], 2)));
+        // Elsewhere, another set of targets: counting starts again.
+        cv.snap_first = Some((0, [5.0, 5.0]));
+        cv.cycle_snap(-1);
+        assert_eq!(cv.snap_cycle, Some(([5.0, 5.0], -1)));
     }
 
     #[test]

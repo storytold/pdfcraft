@@ -2800,3 +2800,21 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Ajustar ao desenho: ligado
+	Snap to drawing: off	Ajustar ao desenho: desligado
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Pontos de encaixe
+	Centre points	Centros
+	Centre point	Centro
+	Tab: the next target under the pointer	Tab: o próximo ponto sob o ponteiro
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Inferior esquerdo
+	Top left	Superior esquerdo
+	Top right	Superior direito
+	Bottom right	Inferior direito
+	Middle	Centro
+	Vertex	Vértice
+	Reference point: {point} (Tab: next)	Ponto de referência: {point} (Tab: próximo)

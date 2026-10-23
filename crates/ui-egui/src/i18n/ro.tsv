@@ -2774,3 +2774,18 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Aliniere la desen: activat
+	Snap to drawing: off	Aliniere la desen: dezactivat
+	Snap targets	Ținte de aliniere
+	Centre points	Puncte centrale
+	Centre point	Punct central
+	Tab: the next target under the pointer	Tab: următoarea țintă de sub indicator
+	Bottom left	Stânga jos
+	Top left	Stânga sus
+	Top right	Dreapta sus
+	Bottom right	Dreapta jos
+	Middle	Centru
+	Vertex	Vârf
+	Reference point: {point} (Tab: next)	Punct de referință: {point} (Tab: următorul)

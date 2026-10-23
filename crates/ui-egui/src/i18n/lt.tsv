@@ -2776,3 +2776,21 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Pritraukimas prie brėžinio: įjungtas
+	Snap to drawing: off	Pritraukimas prie brėžinio: išjungtas
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Pritraukimo taškai
+	Centre points	Centrai
+	Centre point	Centras
+	Tab: the next target under the pointer	Tab: kitas taškas po žymekliu
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Apačioje kairėje
+	Top left	Viršuje kairėje
+	Top right	Viršuje dešinėje
+	Bottom right	Apačioje dešinėje
+	Middle	Vidurys
+	Vertex	Viršūnė
+	Reference point: {point} (Tab: next)	Atskaitos taškas: {point} (Tab: kitas)

@@ -187,7 +187,7 @@ impl SignatureDrag {
             return;
         }
         let (pointer, shift) = painter.ctx().input(|i| (i.pointer.hover_pos(), i.modifiers.shift));
-        let rect = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, pending);
+        let rect = cx.adjusted_rect(a, cv.gesture.as_ref(), cv.move_anchor, pointer, shift, pending);
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(cx.xf.rect));
         cx.xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
         match &layers.front {

@@ -2516,3 +2516,21 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	An Zeichnung einrasten: an
+	Snap to drawing: off	An Zeichnung einrasten: aus
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Fangpunkte
+	Centre points	Zentren
+	Centre point	Zentrum
+	Tab: the next target under the pointer	Tab: nächster Fangpunkt unter dem Mauszeiger
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Unten links
+	Top left	Oben links
+	Top right	Oben rechts
+	Bottom right	Unten rechts
+	Middle	Mitte
+	Vertex	Eckpunkt
+	Reference point: {point} (Tab: next)	Bezugspunkt: {point} (Tab: nächster)

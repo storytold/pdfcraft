@@ -2750,3 +2750,18 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	도면에 스냅: 켬
+	Snap to drawing: off	도면에 스냅: 끔
+	Snap targets	스냅 대상
+	Centre points	중심점
+	Centre point	중심점
+	Tab: the next target under the pointer	Tab: 포인터 아래의 다음 대상
+	Bottom left	왼쪽 아래
+	Top left	왼쪽 위
+	Top right	오른쪽 위
+	Bottom right	오른쪽 아래
+	Middle	가운데
+	Vertex	꼭짓점
+	Reference point: {point} (Tab: next)	기준점: {point} (Tab: 다음)

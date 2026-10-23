@@ -2822,3 +2822,21 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Přichytávání ke kresbě: zapnuto
+	Snap to drawing: off	Přichytávání ke kresbě: vypnuto
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Cíle přichytávání
+	Centre points	Středy
+	Centre point	Střed
+	Tab: the next target under the pointer	Tab: další cíl pod ukazatelem
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Vlevo dole
+	Top left	Vlevo nahoře
+	Top right	Vpravo nahoře
+	Bottom right	Vpravo dole
+	Middle	Střed
+	Vertex	Vrchol
+	Reference point: {point} (Tab: next)	Referenční bod: {point} (Tab: další)

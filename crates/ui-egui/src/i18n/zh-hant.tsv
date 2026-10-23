@@ -2465,3 +2465,21 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	吸附至圖形：開
+	Snap to drawing: off	吸附至圖形：關
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	鎖點目標
+	Centre points	中心點
+	Centre point	中心
+	Tab: the next target under the pointer	Tab：指標下的下一個目標
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	左下
+	Top left	左上
+	Top right	右上
+	Bottom right	右下
+	Middle	中心
+	Vertex	頂點
+	Reference point: {point} (Tab: next)	參考點：{point}（Tab：下一個）

@@ -4,20 +4,252 @@ use pdfcraft_content::{Matrix, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use serde::Serialize;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
-const MAX_SEGMENTS: usize = 20_000;
-/// Endpoints and midpoints together, across the whole page.
-const MAX_TARGETS: usize = 2 * MAX_SEGMENTS;
-const MAX_BYTES: usize = 16 * 1024 * 1024;
-#[derive(Clone, Debug, Default)]
+/// Room for a CAD plan: an A0 floor plan holds up to a million segments.
+const MAX_SEGMENTS: usize = 2_000_000;
+const MAX_BYTES: usize = 256 * 1024 * 1024;
+/// Grid cells per side at most (the grid is square, over the geometry's extent).
+const GRID_SIDE: usize = 512;
+/// A segment whose box covers more cells than this (a page frame, an axis) is kept in a list
+/// looked at on every query instead of being filed under each cell.
+const LONG_SPAN: usize = 16;
+
+/// Where path extraction stops: the segments kept (endpoints and midpoints follow, at most
+/// three targets per segment) and the decoded content bytes read. The defaults take a CAD
+/// plan; tests use smaller ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    pub segments: usize,
+    pub bytes: usize,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self { segments: MAX_SEGMENTS, bytes: MAX_BYTES }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Geometry {
     pub segments: Vec<[Point; 2]>,
     pub endpoints: Vec<Point>,
     pub midpoints: Vec<Point>,
-    /// A limit stopped extraction early (segments, targets, bytes, streams, nesting).
+    /// The centres of closed figures: rectangles, circles (four curves round), closed polygons
+    /// and every filled subpath, each its box's centre.
+    pub centres: Vec<Point>,
+    /// A limit stopped extraction early (segments, bytes, streams, nesting).
     pub truncated: bool,
     /// Content streams that couldn't be decoded and were skipped.
     pub unreadable: usize,
+    /// The segment cap this geometry is extracted under.
+    cap: usize,
+    /// Cells over the geometry, built on the first query (the vectors above are complete by
+    /// then and don't change afterwards).
+    grid: OnceLock<Grid>,
+}
+impl Default for Geometry {
+    fn default() -> Self {
+        Self::with_limits(Limits::default())
+    }
+}
+impl Geometry {
+    fn with_limits(limits: Limits) -> Self {
+        Self {
+            segments: Vec::new(),
+            endpoints: Vec::new(),
+            midpoints: Vec::new(),
+            centres: Vec::new(),
+            truncated: false,
+            unreadable: 0,
+            cap: limits.segments,
+            grid: OnceLock::new(),
+        }
+    }
+}
+
+/// Which targets and segments lie in each cell of a square grid over the geometry's extent,
+/// so a query looks at the pointer's neighbourhood instead of the whole page (a plan's
+/// million segments took 27 ms a query). Each list is cell offsets into one items vector.
+#[derive(Clone, Debug)]
+struct Grid {
+    origin: Point,
+    cell: f64,
+    side: usize,
+    /// Targets by index: the endpoints, then the midpoints, then the centres.
+    point_offsets: Vec<u32>,
+    point_items: Vec<u32>,
+    segment_offsets: Vec<u32>,
+    segment_items: Vec<u32>,
+    /// Segments spanning more than `LONG_SPAN` cells, ascending.
+    long: Vec<u32>,
+}
+impl Grid {
+    fn build(g: &Geometry) -> Self {
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in g.segments.iter().flatten().chain(&g.endpoints).chain(&g.midpoints).chain(&g.centres) {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        if lo[0] > hi[0] || lo[1] > hi[1] {
+            (lo, hi) = ([0.0, 0.0], [0.0, 0.0]);
+        }
+        let points = g.endpoints.len().saturating_add(g.midpoints.len()).saturating_add(g.centres.len());
+        let side = ((g.segments.len().max(points) as f64).sqrt().ceil() as usize).clamp(1, GRID_SIDE);
+        let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+        let cell = if extent > 0.0 && extent.is_finite() { extent / side as f64 } else { 1.0 };
+        let mut grid = Self {
+            origin: lo,
+            cell,
+            side,
+            point_offsets: Vec::new(),
+            point_items: Vec::new(),
+            segment_offsets: Vec::new(),
+            segment_items: Vec::new(),
+            long: Vec::new(),
+        };
+        let cells = side * side;
+        let point = |i: usize| g.target_at(i).map(|(p, _)| p);
+        (grid.point_offsets, grid.point_items) = csr(cells, points, |i, put| {
+            if let Some(p) = point(i) {
+                put(grid.cell_of(p));
+            }
+        });
+        let mut long = Vec::new();
+        let span = |s: &[Point; 2]| {
+            let lo = [s[0][0].min(s[1][0]), s[0][1].min(s[1][1])];
+            let hi = [s[0][0].max(s[1][0]), s[0][1].max(s[1][1])];
+            grid.cells_over(lo, hi).filter(|(x0, y0, x1, y1)| (x1 - x0 + 1) * (y1 - y0 + 1) <= LONG_SPAN)
+        };
+        for (i, s) in g.segments.iter().enumerate() {
+            if span(s).is_none() {
+                long.push(i as u32);
+            }
+        }
+        (grid.segment_offsets, grid.segment_items) = csr(cells, g.segments.len(), |i, put| {
+            if let Some((x0, y0, x1, y1)) = g.segments.get(i).and_then(span) {
+                for y in y0..=y1 {
+                    for x in x0..=x1 {
+                        put(y * side + x);
+                    }
+                }
+            }
+        });
+        grid.long = long;
+        grid
+    }
+    fn axis(&self, value: f64, origin: f64) -> f64 {
+        ((value - origin) / self.cell).floor()
+    }
+    fn cell_of(&self, p: Point) -> usize {
+        let last = (self.side - 1) as f64;
+        let x = self.axis(p[0], self.origin[0]).clamp(0.0, last) as usize;
+        let y = self.axis(p[1], self.origin[1]).clamp(0.0, last) as usize;
+        y * self.side + x
+    }
+    /// The cells the box `lo`..`hi` overlaps, as x0, y0, x1, y1; None when it misses the grid.
+    fn cells_over(&self, lo: Point, hi: Point) -> Option<(usize, usize, usize, usize)> {
+        let last = (self.side - 1) as f64;
+        let (x0, y0) = (self.axis(lo[0], self.origin[0]), self.axis(lo[1], self.origin[1]));
+        let (x1, y1) = (self.axis(hi[0], self.origin[0]), self.axis(hi[1], self.origin[1]));
+        if [x0, y0, x1, y1].iter().any(|v| v.is_nan()) || x1 < 0.0 || y1 < 0.0 || x0 > last || y0 > last {
+            return None;
+        }
+        Some((x0.clamp(0.0, last) as usize, y0.clamp(0.0, last) as usize, x1.clamp(0.0, last) as usize, y1.clamp(0.0, last) as usize))
+    }
+    fn items_in<'a>(&self, offsets: &'a [u32], items: &'a [u32], cell: usize) -> &'a [u32] {
+        match (offsets.get(cell), offsets.get(cell + 1)) {
+            (Some(&from), Some(&to)) => items.get(from as usize..to as usize).unwrap_or(&[]),
+            _ => &[],
+        }
+    }
+    /// The targets in the cells within `tolerance` of `at`, by index, ascending.
+    fn points_near(&self, at: Point, tolerance: f64) -> Vec<u32> {
+        let mut near = Vec::new();
+        if let Some((x0, y0, x1, y1)) = self.cells_over([at[0] - tolerance, at[1] - tolerance], [at[0] + tolerance, at[1] + tolerance]) {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    near.extend_from_slice(self.items_in(&self.point_offsets, &self.point_items, y * self.side + x));
+                }
+            }
+        }
+        near.sort_unstable();
+        near
+    }
+    /// The segments that may lie within `tolerance` of `at`, by index, ascending: those filed
+    /// under the cells the tolerance box overlaps, and the long ones.
+    fn segments_near(&self, at: Point, tolerance: f64) -> Vec<u32> {
+        let mut filed = Vec::new();
+        if let Some((x0, y0, x1, y1)) = self.cells_over([at[0] - tolerance, at[1] - tolerance], [at[0] + tolerance, at[1] + tolerance]) {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    filed.extend_from_slice(self.items_in(&self.segment_offsets, &self.segment_items, y * self.side + x));
+                }
+            }
+        }
+        filed.sort_unstable();
+        filed.dedup();
+        // Merged with the long segments (ascending too), without duplicates.
+        let mut near = Vec::with_capacity(filed.len() + self.long.len());
+        let (mut a, mut b) = (filed.iter().peekable(), self.long.iter().peekable());
+        loop {
+            match (a.peek(), b.peek()) {
+                (Some(&&x), Some(&&y)) if x == y => {
+                    near.push(x);
+                    a.next();
+                    b.next();
+                }
+                (Some(&&x), Some(&&y)) if x < y => {
+                    near.push(x);
+                    a.next();
+                }
+                (Some(_), Some(&&y)) => {
+                    near.push(y);
+                    b.next();
+                }
+                (Some(&&x), None) => {
+                    near.push(x);
+                    a.next();
+                }
+                (None, Some(&&y)) => {
+                    near.push(y);
+                    b.next();
+                }
+                (None, None) => break,
+            }
+        }
+        near
+    }
+}
+/// Items filed under cells, as offsets per cell into one list; `cells_of` names an item's
+/// cells and runs twice, to count and to place.
+fn csr(cells: usize, count: usize, cells_of: impl Fn(usize, &mut dyn FnMut(usize))) -> (Vec<u32>, Vec<u32>) {
+    let mut offsets = vec![0u32; cells + 1];
+    for i in 0..count {
+        cells_of(i, &mut |c| {
+            if let Some(n) = offsets.get_mut(c + 1) {
+                *n = n.saturating_add(1);
+            }
+        });
+    }
+    for c in 1..=cells {
+        let before = offsets.get(c - 1).copied().unwrap_or(0);
+        if let Some(n) = offsets.get_mut(c) {
+            *n = n.saturating_add(before);
+        }
+    }
+    let mut cursor = offsets.clone();
+    let mut items = vec![0u32; offsets.last().copied().unwrap_or(0) as usize];
+    for i in 0..count {
+        cells_of(i, &mut |c| {
+            if let Some(at) = cursor.get_mut(c)
+                && let Some(slot) = items.get_mut(*at as usize)
+            {
+                *slot = i as u32;
+                *at += 1;
+            }
+        });
+    }
+    (offsets, items)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +258,10 @@ pub enum SnapKind {
     Midpoint,
     Intersection,
     Path,
+    /// The centre of a closed figure (a rectangle, a circle, a closed or filled polygon) or of the
+    /// small box drawn around the point (a check box, a table cell, [`Geometry::enclosing_box`]):
+    /// where a Fill & Sign mark goes.
+    Centre,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Snap {
@@ -39,12 +275,18 @@ pub struct SnapOptions {
     pub midpoints: bool,
     pub intersections: bool,
     pub paths: bool,
+    /// The centres of closed figures and of the table cell or box around the point.
+    pub centres: bool,
 }
 impl Default for SnapOptions {
     fn default() -> Self {
-        Self { endpoints: true, midpoints: true, intersections: true, paths: true }
+        Self { endpoints: true, midpoints: true, intersections: true, paths: true, centres: true }
     }
 }
+/// How far a table cell's sides may be from the point for its centre to be a snap target.
+const CELL_REACH: f64 = 60.0;
+/// At most this many candidates are offered at one point.
+const MAX_CANDIDATES: usize = 32;
 fn dot(a: Point, b: Point) -> f64 {
     a[0] * b[0] + a[1] * b[1]
 }
@@ -74,6 +316,56 @@ fn nearest(p: Point, a: Point, b: Point) -> Point {
     let t = (dot(sub(p, a), v) / length).clamp(0.0, 1.0);
     [a[0] + v[0] * t, a[1] + v[1] * t]
 }
+/// The order [`Geometry::candidates`] offers its targets in: nearest first and, at the same
+/// distance to a billionth of a unit, the discrete kinds before the others (endpoint, centre,
+/// midpoint, intersection, path). A total order, as `sort_by` requires: "nearly the same"
+/// compared pairwise is not transitive, and since Rust 1.81 a sort may panic on such an order.
+pub fn candidate_order(a: &Snap, b: &Snap) -> std::cmp::Ordering {
+    let rank = |k: SnapKind| match k {
+        SnapKind::Endpoint => 0,
+        SnapKind::Centre => 1,
+        SnapKind::Midpoint => 2,
+        SnapKind::Intersection => 3,
+        SnapKind::Path => 4,
+    };
+    // Candidates are within the tolerance (at most 10,000 units), so the steps fit an i64.
+    let key = |s: &Snap| ((s.distance * 1e9).round() as i64, rank(s.kind));
+    key(a).cmp(&key(b)).then(a.distance.total_cmp(&b.distance))
+}
+
+/// A subpath's box and corners so far, for its centre once it is known to be closed.
+#[derive(Clone, Copy, Debug)]
+struct Subpath {
+    lo: Point,
+    hi: Point,
+    start: Point,
+    end: Point,
+    /// Points that shape it (corners, curve ends).
+    points: usize,
+    closed: bool,
+}
+impl Subpath {
+    fn new(p: Point) -> Self {
+        Self { lo: p, hi: p, start: p, end: p, points: 1, closed: false }
+    }
+    fn add(&mut self, p: Point) {
+        self.lo = [self.lo[0].min(p[0]), self.lo[1].min(p[1])];
+        self.hi = [self.hi[0].max(p[0]), self.hi[1].max(p[1])];
+        self.end = p;
+        self.points = self.points.saturating_add(1);
+    }
+    /// The centre of its box when it is a closed figure (closed by `h`, a rectangle, ending where
+    /// it began, or `filled`) of three points or more with some extent.
+    fn centre(&self, filled: bool) -> Option<Point> {
+        let closed = filled || self.closed || distance(self.start, self.end) <= 1e-6;
+        let extent = (self.hi[0] - self.lo[0]).max(self.hi[1] - self.lo[1]);
+        let c = [(self.lo[0] + self.hi[0]) / 2.0, (self.lo[1] + self.hi[1]) / 2.0];
+        // As every other target: finite and within the coordinate range (a huge `cm` can make a
+        // corner infinite, and one infinite centre would spread the grid over the whole page).
+        (closed && self.points >= 3 && extent > 1e-3 && check_points(&[c]).is_ok()).then_some(c)
+    }
+}
+
 /// Save a subpath's implicit closing edge for fill operations. An unpainted or
 /// stroke-only open path must not gain that edge.
 fn remember_close(closures: &mut Vec<[Point; 2]>, current: Option<Point>, start: Option<Point>) -> bool {
@@ -89,58 +381,143 @@ fn remember_close(closures: &mut Vec<[Point; 2]>, current: Option<Point>, start:
 }
 
 impl Geometry {
+    fn grid(&self) -> &Grid {
+        self.grid.get_or_init(|| Grid::build(self))
+    }
     /// Dense intersection searches are capped independently from path extraction.
     pub fn intersection_limited(&self, at: Point, tolerance: f64) -> bool {
-        self.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(257).count() > 256
+        let near = self.grid().segments_near(at, tolerance);
+        near.iter().filter_map(|i| self.segments.get(*i as usize)).filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(257).count()
+            > 256
     }
+    /// The snap for `at`: the first of [`Self::candidates`].
     pub fn snap(&self, at: Point, tolerance: f64, options: SnapOptions) -> Result<Option<Snap>> {
+        Ok(self.candidates(at, tolerance, options)?.into_iter().next())
+    }
+    /// Every target within `tolerance` of `at` that `options` allows, nearest first (at the same
+    /// distance: endpoint, centre, midpoint, intersection), each point once, at most 32; then the
+    /// nearest point on a path, which comes first only when nothing else is in reach. What a
+    /// snap marker offers, and what Tab cycles through.
+    pub fn candidates(&self, at: Point, tolerance: f64, options: SnapOptions) -> Result<Vec<Snap>> {
         check_points(&[at])?;
         if !tolerance.is_finite() || !(0.0..=10_000.0).contains(&tolerance) {
             return Err(invalid("snap tolerance must be between 0 and 10000 user units"));
         }
-        let mut best: Option<Snap> = None;
-        let consider = |best: &mut Option<Snap>, p: Point, kind: SnapKind| {
+        let grid = self.grid();
+        let mut found: Vec<Snap> = Vec::new();
+        let mut consider = |p: Point, kind: SnapKind| {
             let distance = distance(at, p);
-            // Discrete targets take precedence over projections at the same distance.
-            if distance <= tolerance && best.is_none_or(|b| distance < b.distance - 1e-9) {
-                *best = Some(Snap { point: p, kind, distance });
+            if distance <= tolerance {
+                found.push(Snap { point: p, kind, distance });
             }
         };
-        if options.endpoints {
-            for &p in &self.endpoints {
-                consider(&mut best, p, SnapKind::Endpoint);
+        for i in grid.points_near(at, tolerance) {
+            if let Some((p, kind)) = self.target_at(i as usize)
+                && match kind {
+                    SnapKind::Endpoint => options.endpoints,
+                    SnapKind::Midpoint => options.midpoints,
+                    SnapKind::Centre => options.centres,
+                    _ => false,
+                }
+            {
+                consider(p, kind);
             }
         }
-        if options.midpoints {
-            for &p in &self.midpoints {
-                consider(&mut best, p, SnapKind::Midpoint);
-            }
+        // The middle of the table cell (or box drawn of separate lines) around the point.
+        if options.centres
+            && let Some([x0, y0, x1, y1]) = self.enclosing_box(at, CELL_REACH.max(tolerance))
+        {
+            consider([(x0 + x1) / 2.0, (y0 + y1) / 2.0], SnapKind::Centre);
         }
         // Only segments in the pointer's neighbourhood participate in intersection tests.
         // Cap the local quadratic work even on a malicious densely overlapping drawing.
-        let local: Vec<_> = self.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
+        let near = grid.segments_near(at, tolerance);
+        let segment = |i: &u32| self.segments.get(*i as usize);
+        let local: Vec<_> = near.iter().filter_map(segment).filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
         if options.intersections {
             for (i, s) in local.iter().enumerate() {
                 for t in local.iter().skip(i + 1) {
                     if let Some(p) = intersection(s[0], s[1], t[0], t[1]) {
-                        consider(&mut best, p, SnapKind::Intersection);
+                        consider(p, SnapKind::Intersection);
                     }
                 }
             }
         }
-        if options.paths && best.is_none() {
-            for [a, b] in &self.segments {
-                consider(&mut best, nearest(at, *a, *b), SnapKind::Path);
+        found.sort_by(candidate_order);
+        let mut out: Vec<Snap> = Vec::new();
+        for s in found {
+            if out.len() >= MAX_CANDIDATES {
+                break;
+            }
+            if !out.iter().any(|o| distance(o.point, s.point) <= 1e-6) {
+                out.push(s);
             }
         }
-        Ok(best)
+        if options.paths {
+            let path = near
+                .iter()
+                .filter_map(segment)
+                .map(|[a, b]| nearest(at, *a, *b))
+                .map(|p| (distance(at, p), p))
+                .filter(|(d, _)| *d <= tolerance)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((d, p)) = path
+                && !out.iter().any(|o| distance(o.point, p) <= 1e-6)
+            {
+                out.push(Snap { point: p, kind: SnapKind::Path, distance: d });
+            }
+        }
+        Ok(out)
     }
-    fn targets(&self) -> usize {
-        self.endpoints.len().saturating_add(self.midpoints.len())
+    /// Target `i` of the grid's numbering (endpoints, midpoints, centres) and its kind.
+    fn target_at(&self, i: usize) -> Option<(Point, SnapKind)> {
+        let (e, m) = (self.endpoints.len(), self.midpoints.len());
+        if i < e {
+            self.endpoints.get(i).map(|p| (*p, SnapKind::Endpoint))
+        } else if i < e.saturating_add(m) {
+            self.midpoints.get(i - e).map(|p| (*p, SnapKind::Midpoint))
+        } else {
+            self.centres.get(i - e - m).map(|p| (*p, SnapKind::Centre))
+        }
+    }
+    /// The box drawn around `at`: the nearest horizontal segment above and below it and vertical
+    /// segment left and right of it that pass `at` on their axis, each within `reach`, as
+    /// `[left, bottom, right, top]` in user space. A check box or a table cell; `None` when a
+    /// side is missing (or the point is on a side).
+    pub fn enclosing_box(&self, at: Point, reach: f64) -> Option<[f64; 4]> {
+        if check_points(&[at]).is_err() || !reach.is_finite() || !(0.0..=10_000.0).contains(&reach) {
+            return None;
+        }
+        // Nearest side in each direction, as a distance from `at`.
+        let (mut left, mut right, mut below, mut above) = (f64::MAX, f64::MAX, f64::MAX, f64::MAX);
+        let near = self.grid().segments_near(at, reach);
+        for [a, b] in near.iter().filter_map(|i| self.segments.get(*i as usize)) {
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let length = dx.hypot(dy);
+            // Within half a degree of the axis.
+            let level = dy.abs() <= length * 0.01;
+            let upright = dx.abs() <= length * 0.01;
+            if level && at[0] >= a[0].min(b[0]) && at[0] <= a[0].max(b[0]) {
+                let d = (a[1] + b[1]) / 2.0 - at[1];
+                if d > 1e-9 {
+                    above = above.min(d);
+                } else if d < -1e-9 {
+                    below = below.min(-d);
+                }
+            } else if upright && at[1] >= a[1].min(b[1]) && at[1] <= a[1].max(b[1]) {
+                let d = (a[0] + b[0]) / 2.0 - at[0];
+                if d > 1e-9 {
+                    right = right.min(d);
+                } else if d < -1e-9 {
+                    left = left.min(-d);
+                }
+            }
+        }
+        [left, right, below, above].iter().all(|d| *d <= reach).then(|| [at[0] - left, at[1] - below, at[0] + right, at[1] + above])
     }
     /// Whether the segment was accepted (finite, non-degenerate and within the cap).
     fn segment(&mut self, a: Point, b: Point) -> bool {
-        if self.segments.len() >= MAX_SEGMENTS {
+        if self.segments.len() >= self.cap {
             self.truncated = true;
             return false;
         }
@@ -150,12 +527,8 @@ impl Geometry {
         }
         false
     }
-    /// Snap targets are recorded only for accepted geometry, and are capped.
+    /// Snap targets are recorded only for accepted geometry (so they follow its cap).
     fn target(&mut self, ends: [Point; 2], mid: Point) {
-        if self.targets() >= MAX_TARGETS {
-            self.truncated = true;
-            return;
-        }
         self.endpoints.extend(ends);
         self.midpoints.push(mid);
     }
@@ -166,7 +539,7 @@ impl Geometry {
     }
     fn curve(&mut self, points: [Point; 4], depth: usize) {
         let [a, b, c, d] = points;
-        if self.segments.len() >= MAX_SEGMENTS {
+        if self.segments.len() >= self.cap {
             self.truncated = true;
             return;
         }
@@ -195,6 +568,7 @@ struct Walker<'a> {
     seen: HashSet<ObjRef>,
     bytes: usize,
     streams: usize,
+    limits: Limits,
 }
 impl Walker<'_> {
     fn walk(&mut self, object: &Object, resources: &Dict, initial: Matrix, depth: usize) -> Result<()> {
@@ -209,7 +583,7 @@ impl Walker<'_> {
             for part in arr {
                 let s = self.doc.resolve(part);
                 if let Object::Stream(s) = s.as_ref() {
-                    let remaining = MAX_BYTES.saturating_sub(self.bytes).saturating_sub(joined.len());
+                    let remaining = self.limits.bytes.saturating_sub(self.bytes).saturating_sub(joined.len());
                     if remaining == 0 {
                         self.geometry.truncated = true;
                         break;
@@ -228,7 +602,7 @@ impl Walker<'_> {
             return self.ops(&joined, resources, initial, depth);
         }
         let Object::Stream(stream) = o.as_ref() else { return Ok(()) };
-        let remaining = MAX_BYTES.saturating_sub(self.bytes);
+        let remaining = self.limits.bytes.saturating_sub(self.bytes);
         if remaining == 0 {
             self.geometry.truncated = true;
             return Ok(());
@@ -255,17 +629,18 @@ impl Walker<'_> {
         let mut start = None;
         let mut current = None;
         let mut closures = Vec::new();
-        let mut path = Geometry::default();
         // Read on the first `Do` and kept: resolving a direct dictionary copies it.
         let mut xobjects = None;
+
+        // The subpaths of the path being built (the last one still open), for their centres.
+        let mut subpaths: Vec<Subpath> = Vec::new();
+        let mut path = Geometry::with_limits(self.limits);
         let point = |m: Matrix, x: f64, y: f64| {
             let (x, y) = m.apply(x, y);
             [x, y]
         };
         for op in parse(data).ops {
-            if self.geometry.segments.len().saturating_add(path.segments.len()) >= MAX_SEGMENTS
-                || self.geometry.targets().saturating_add(path.targets()) >= MAX_TARGETS
-            {
+            if self.geometry.segments.len().saturating_add(path.segments.len()) >= self.geometry.cap {
                 self.geometry.truncated = true;
                 break;
             }
@@ -296,6 +671,11 @@ impl Walker<'_> {
                         let p = point(matrix, x, y);
                         current = Some(p);
                         start = Some(p);
+                        if subpaths.len() >= MAX_SEGMENTS {
+                            self.geometry.truncated = true;
+                            break;
+                        }
+                        subpaths.push(Subpath::new(p));
                     }
                 }
                 "l" => {
@@ -303,6 +683,9 @@ impl Walker<'_> {
                         let b = point(matrix, x, y);
                         path.edge(a, b);
                         current = Some(b);
+                        if let Some(sp) = subpaths.last_mut() {
+                            sp.add(b);
+                        }
                     }
                 }
                 "c" | "v" | "y" => {
@@ -326,6 +709,12 @@ impl Walker<'_> {
                                 path.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
                             }
                             current = Some(d);
+                            // The curve's middle stands for its bulge in the box (a circle's four
+                            // quarters reach its full extent there).
+                            if let Some(sp) = subpaths.last_mut() {
+                                sp.add([(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
+                                sp.add(d);
+                            }
                         }
                     }
                 }
@@ -333,6 +722,9 @@ impl Walker<'_> {
                     if let (Some(a), Some(b)) = (current, start) {
                         path.edge(a, b);
                         current = Some(b);
+                    }
+                    if let Some(sp) = subpaths.last_mut() {
+                        sp.closed = true;
                     }
                 }
                 "re" => {
@@ -350,6 +742,16 @@ impl Walker<'_> {
                         }
                         current = Some(a);
                         start = Some(a);
+                        if subpaths.len() >= MAX_SEGMENTS {
+                            self.geometry.truncated = true;
+                            break;
+                        }
+                        let mut sp = Subpath::new(a);
+                        for p in [b, c, d] {
+                            sp.add(p);
+                        }
+                        sp.closed = true;
+                        subpaths.push(sp);
                     }
                 }
                 "S" | "s" | "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" => {
@@ -362,9 +764,7 @@ impl Walker<'_> {
                         // Filling implicitly closes every open subpath, not just the last one.
                         // Stroke-only S leaves its open subpaths unchanged.
                         for [a, b] in closures.drain(..) {
-                            if self.geometry.segments.len().saturating_add(path.segments.len()) >= MAX_SEGMENTS
-                                || self.geometry.targets().saturating_add(path.targets()) >= MAX_TARGETS
-                            {
+                            if self.geometry.segments.len().saturating_add(path.segments.len()) >= self.geometry.cap {
                                 path.truncated = true;
                                 break;
                             }
@@ -375,9 +775,19 @@ impl Walker<'_> {
                     {
                         path.edge(a, b);
                     }
+                    let filled = !matches!(paint.as_ref(), "S" | "s");
+                    let closes_last = paint == "s";
+                    let count = subpaths.len();
+                    for (i, sp) in subpaths.drain(..).enumerate() {
+                        let sp = if closes_last && i + 1 == count { Subpath { closed: true, ..sp } } else { sp };
+                        if let Some(c) = sp.centre(filled) {
+                            path.centres.push(c);
+                        }
+                    }
                     self.geometry.segments.append(&mut path.segments);
                     self.geometry.endpoints.append(&mut path.endpoints);
                     self.geometry.midpoints.append(&mut path.midpoints);
+                    self.geometry.centres.append(&mut path.centres);
                     self.geometry.truncated |= path.truncated;
                     closures.clear();
                     current = None;
@@ -385,8 +795,9 @@ impl Walker<'_> {
                 }
                 "n" => {
                     self.geometry.truncated |= path.truncated;
-                    path = Geometry::default();
+                    path = Geometry::with_limits(self.limits);
                     closures.clear();
+                    subpaths.clear();
                     current = None;
                     start = None;
                 }
@@ -438,12 +849,135 @@ thread_local! {
     pub(crate) static XOBJECT_DICT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// What a comment drawn over the page snaps by, in user space.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outline {
+    /// A line's ends, or the corners of connected lines, a polygon or a rectangle; `closed` joins
+    /// the last corner to the first.
+    Path { points: Vec<Point>, closed: bool },
+    /// An oval in its box.
+    Ellipse { rect: [f64; 4] },
+}
+
+/// At most this many comments of a page snap.
+const MAX_OUTLINES: usize = 10_000;
+
+/// The outlines of the comments on a page drawn with lines (lines and arrows, connected lines,
+/// polygons and clouds, rectangles, ovals), each with its place in the page's `/Annots`, where
+/// they are drawn: inside `/RD` and half the border width in from `/Rect` for a rectangle or an
+/// oval. Hidden comments, freehand drawing and malformed entries are left out.
+pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize, Outline)>> {
+    let p = crate::page(doc, page_index)?;
+    let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
+    let list = annots.as_ref().and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    let nums = |d: &Dict, key: &[u8]| -> Vec<f64> {
+        d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for (i, entry) in list.iter().enumerate() {
+        if out.len() >= MAX_OUTLINES {
+            break;
+        }
+        let o = doc.resolve(entry);
+        let Some(d) = o.as_dict() else { continue };
+        // Hidden (ISO 32000-2 Table 167).
+        if d.get(b"F").and_then(Object::as_int).unwrap_or(0) & 2 != 0 {
+            continue;
+        }
+        let pairs = |v: Vec<f64>| -> Vec<Point> { v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect() };
+        let outline = match d.name(b"Subtype").unwrap_or_default() {
+            b"Line" => Some(nums(d, b"L")).filter(|l| l.len() == 4).map(|l| Outline::Path { points: pairs(l), closed: false }),
+            b"PolyLine" => Some(pairs(nums(d, b"Vertices"))).filter(|v| v.len() >= 2).map(|points| Outline::Path { points, closed: false }),
+            b"Polygon" => Some(pairs(nums(d, b"Vertices"))).filter(|v| v.len() >= 2).map(|points| Outline::Path { points, closed: true }),
+            kind @ (b"Square" | b"Circle") => {
+                let r = nums(d, b"Rect");
+                let rd = Some(nums(d, b"RD")).filter(|r| r.len() == 4 && r.iter().all(|v| *v >= 0.0)).unwrap_or(vec![0.0; 4]);
+                let w = d
+                    .get(b"BS")
+                    .map(|b| doc.resolve(b))
+                    .and_then(|b| b.as_dict().and_then(|b| b.get(b"W").and_then(Object::as_f64)))
+                    .or_else(|| Some(nums(d, b"Border")).filter(|b| b.len() >= 3).map(|b| b[2]))
+                    .unwrap_or(1.0)
+                    .max(0.0);
+                <[f64; 4]>::try_from(r).ok().map(|r| {
+                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
+                    let h = w / 2.0;
+                    let rect = [x0 + rd[0] + h, y0 + rd[1] + h, x1 - rd[2] - h, y1 - rd[3] - h];
+                    if kind == b"Square" {
+                        let [a, b, c, e] = rect;
+                        Outline::Path { points: vec![[a, b], [c, b], [c, e], [a, e]], closed: true }
+                    } else {
+                        Outline::Ellipse { rect }
+                    }
+                })
+            }
+            _ => None,
+        };
+        if let Some(outline) = outline.filter(|o| match o {
+            Outline::Path { points, .. } => check_points(points).is_ok(),
+            Outline::Ellipse { rect } => rect.iter().all(|v| v.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1],
+        }) {
+            out.push((i, outline));
+        }
+    }
+    Ok(out)
+}
+
+/// The snap geometry of comments drawn over the page: their sides, with their ends and middles,
+/// and the centres of closed ones (an oval's four quarter points are its ends, as on the page).
+pub fn outline_geometry<'a>(outlines: impl IntoIterator<Item = &'a Outline>) -> Geometry {
+    let mut g = Geometry::with_limits(Limits::default());
+    for o in outlines {
+        match o {
+            Outline::Path { points, closed } => {
+                for w in points.windows(2) {
+                    g.edge(w[0], w[1]);
+                }
+                if *closed && points.len() > 2 {
+                    if let (Some(last), Some(first)) = (points.last(), points.first()) {
+                        g.edge(*last, *first);
+                    }
+                    let (lo, hi) = points
+                        .iter()
+                        .fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+                    g.centres.push([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]);
+                }
+            }
+            Outline::Ellipse { rect } => {
+                let k = 0.552_284_75;
+                let [x0, y0, x1, y1] = *rect;
+                let (cx, cy, rx, ry) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+                let (ox, oy) = (rx * k, ry * k);
+                let mut a = [cx + rx, cy];
+                for [b, c, d] in [
+                    [[cx + rx, cy + oy], [cx + ox, cy + ry], [cx, cy + ry]],
+                    [[cx - ox, cy + ry], [cx - rx, cy + oy], [cx - rx, cy]],
+                    [[cx - rx, cy - oy], [cx - ox, cy - ry], [cx, cy - ry]],
+                    [[cx + ox, cy - ry], [cx + rx, cy - oy], [cx + rx, cy]],
+                ] {
+                    g.curve([a, b, c, d], 0);
+                    // The quarter's ends, and its middle (the 45 degree point), as for a curve on the page.
+                    g.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
+                    a = d;
+                }
+                g.centres.push([cx, cy]);
+            }
+        }
+    }
+    g
+}
+
+/// The page's painted vector geometry, within the default [`Limits`].
 pub fn geometry(doc: &Document, page_index: usize) -> Result<Geometry> {
+    geometry_within(doc, page_index, Limits::default())
+}
+/// [`geometry`] within the given limits.
+pub fn geometry_within(doc: &Document, page_index: usize, limits: Limits) -> Result<Geometry> {
     let p = crate::page(doc, page_index)?;
     let resources = p.dict.get(b"Resources").map(|o| doc.resolve(o));
     let empty = Dict::new();
     let resources = resources.as_ref().and_then(|o| o.as_dict()).unwrap_or(&empty);
-    let mut walker = Walker { doc, geometry: Geometry::default(), seen: HashSet::new(), bytes: 0, streams: 0 };
+    let mut walker = Walker { doc, geometry: Geometry::with_limits(limits), seen: HashSet::new(), bytes: 0, streams: 0, limits };
     // Extraction is lenient: limits and unreadable streams are reported in the geometry.
     if let Some(contents) = p.dict.get(b"Contents") {
         walker.walk(contents, resources, Matrix::IDENTITY, 0)?;

@@ -2428,3 +2428,21 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Привязка к чертежу: вкл.
+	Snap to drawing: off	Привязка к чертежу: выкл.
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Точки привязки
+	Centre points	Центры
+	Centre point	Центр
+	Tab: the next target under the pointer	Tab: следующая точка под указателем
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Внизу слева
+	Top left	Вверху слева
+	Top right	Вверху справа
+	Bottom right	Внизу справа
+	Middle	Середина
+	Vertex	Вершина
+	Reference point: {point} (Tab: next)	Опорная точка: {point} (Tab: следующая)

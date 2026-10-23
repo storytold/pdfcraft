@@ -2783,3 +2783,18 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Tartu piirustukseen: käytössä
+	Snap to drawing: off	Tartu piirustukseen: ei käytössä
+	Snap targets	Tartuntakohteet
+	Centre points	Keskukset
+	Centre point	Keskus
+	Tab: the next target under the pointer	Sarkain: seuraava kohde osoittimen alla
+	Bottom left	Vasen alakulma
+	Top left	Vasen yläkulma
+	Top right	Oikea yläkulma
+	Bottom right	Oikea alakulma
+	Middle	Keskikohta
+	Vertex	Kärkipiste
+	Reference point: {point} (Tab: next)	Viitepiste: {point} (Sarkain: seuraava)

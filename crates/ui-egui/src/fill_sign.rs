@@ -386,6 +386,12 @@ impl FillTool {
         }
     }
 
+    /// Where this tool's text or mark goes snaps to the drawing when Snap to drawing is on (not
+    /// signatures and initials, which go where they are put).
+    pub fn snaps(self) -> bool {
+        !matches!(self, FillTool::Signature | FillTool::Initials)
+    }
+
     fn mark(self) -> Option<FillMark> {
         match self {
             FillTool::Check => Some(FillMark::Check),
@@ -636,13 +642,26 @@ pub(crate) fn page_input(
     preview: &mut Option<(SavedSig, egui::TextureHandle)>,
     author: &str,
     date_text: &Result<String, String>,
+    cx: &crate::comments::PageCx<'_>,
 ) -> Option<FillAction> {
+    if view.comments.snap_hover.is_some_and(|(p, _, _)| p == page) {
+        view.comments.snap_hover = None;
+    }
     let pointer = ui.input(|i| i.pointer.hover_pos())?;
     if !resp.contains_pointer() || !xf.rect.contains(pointer) {
         return None;
     }
     let p = info.pages.get(page)?;
-    let at = to_user(xf, info, page, pointer);
+    // Snap to drawing: a tick, cross or dot goes to the centre of a small box drawn around the
+    // pointer (a check box, a table cell), else onto the drawing as a point does; text and the
+    // line mark go onto the drawing.
+    let (at, snapped) = match tool.mark() {
+        Some(FillMark::Line) => cx.snapped(pointer),
+        Some(_) => cx.snapped_mark(pointer, MARK_SIDE),
+        None if tool.snaps() => cx.snapped(pointer),
+        None => (to_user(xf, info, page, pointer), None),
+    };
+    view.comments.snap_hover = snapped.map(|kind| (page, at, kind));
     let saved = match tool {
         FillTool::Signature => signature,
         FillTool::Initials => initials,
@@ -691,6 +710,9 @@ pub(crate) fn page_input(
         }
     }
 }
+
+/// A tick, cross or dot is this many points across.
+const MARK_SIDE: f64 = 12.0;
 
 /// What a Fill & Sign click asks the app to do.
 #[derive(Clone, Debug, PartialEq)]

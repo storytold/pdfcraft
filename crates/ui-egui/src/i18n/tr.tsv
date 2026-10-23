@@ -2511,3 +2511,21 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Çizime yapıştır: açık
+	Snap to drawing: off	Çizime yapıştır: kapalı
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Yakalama noktaları
+	Centre points	Merkezler
+	Centre point	Merkez
+	Tab: the next target under the pointer	Tab: işaretçinin altındaki sonraki nokta
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Sol alt
+	Top left	Sol üst
+	Top right	Sağ üst
+	Bottom right	Sağ alt
+	Middle	Orta
+	Vertex	Köşe
+	Reference point: {point} (Tab: next)	Referans noktası: {point} (Tab: sonraki)

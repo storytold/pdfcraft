@@ -2521,3 +2521,21 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Προσκόλληση στο σχέδιο: ενεργή
+	Snap to drawing: off	Προσκόλληση στο σχέδιο: ανενεργή
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Στόχοι έλξης
+	Centre points	Κέντρα
+	Centre point	Κέντρο
+	Tab: the next target under the pointer	Tab: ο επόμενος στόχος κάτω από τον δείκτη
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Κάτω αριστερά
+	Top left	Πάνω αριστερά
+	Top right	Πάνω δεξιά
+	Bottom right	Κάτω δεξιά
+	Middle	Μέση
+	Vertex	Κορυφή
+	Reference point: {point} (Tab: next)	Σημείο αναφοράς: {point} (Tab: επόμενο)

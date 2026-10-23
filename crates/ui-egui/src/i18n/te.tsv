@@ -2424,3 +2424,21 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	డ్రాయింగ్‌కు స్నాప్: ఆన్
+	Snap to drawing: off	డ్రాయింగ్‌కు స్నాప్: ఆఫ్
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	స్నాప్ లక్ష్యాలు
+	Centre points	కేంద్ర బిందువులు
+	Centre point	కేంద్రం
+	Tab: the next target under the pointer	Tab: పాయింటర్ కింద తదుపరి లక్ష్యం
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	దిగువ ఎడమ
+	Top left	ఎగువ ఎడమ
+	Top right	ఎగువ కుడి
+	Bottom right	దిగువ కుడి
+	Middle	మధ్య
+	Vertex	శీర్షం
+	Reference point: {point} (Tab: next)	సూచన బిందువు: {point} (Tab: తదుపరి)

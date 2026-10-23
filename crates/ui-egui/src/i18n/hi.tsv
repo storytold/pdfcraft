@@ -2750,3 +2750,18 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	रेखाचित्र से स्नैप करें: चालू
+	Snap to drawing: off	रेखाचित्र से स्नैप करें: बंद
+	Snap targets	स्नैप लक्ष्य
+	Centre points	केंद्र बिंदु
+	Centre point	केंद्र बिंदु
+	Tab: the next target under the pointer	Tab: पॉइंटर के नीचे अगला लक्ष्य
+	Bottom left	नीचे बाएँ
+	Top left	ऊपर बाएँ
+	Top right	ऊपर दाएँ
+	Bottom right	नीचे दाएँ
+	Middle	बीच
+	Vertex	शीर्ष बिंदु
+	Reference point: {point} (Tab: next)	संदर्भ बिंदु: {point} (Tab: अगला)

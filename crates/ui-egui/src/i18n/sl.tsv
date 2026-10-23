@@ -2520,3 +2520,21 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Pripenjanje na risbo: vklopljeno
+	Snap to drawing: off	Pripenjanje na risbo: izklopljeno
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Točke pripenjanja
+	Centre points	Središča
+	Centre point	Središče
+	Tab: the next target under the pointer	Tab: naslednja točka pod kazalcem
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Spodaj levo
+	Top left	Zgoraj levo
+	Top right	Zgoraj desno
+	Bottom right	Spodaj desno
+	Middle	Sredina
+	Vertex	Oglišče
+	Reference point: {point} (Tab: next)	Referenčna točka: {point} (Tab: naslednja)

@@ -2304,3 +2304,412 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+/// A page with a horizontal line (50,50)–(250,50) and a vertical one (150,20)–(150,180), in
+/// user space: endpoints, a midpoint and an intersection at (150, 50) to snap to.
+const DRAWING_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 44 >> stream
+50 50 m 250 50 l S 150 20 m 150 180 l S
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With Snap to drawing on (F3), the points of connected lines land on the page's paths: an
+/// endpoint and the intersection here; off, they stay where they were clicked.
+#[test]
+fn drawing_tools_snap_to_the_pages_paths_with_f3() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("drawing.pdf", None, DRAWING_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("quick", "polyline").unwrap();
+        // At 100 % a user unit is a screen point, so the 6-point reach is 6 units here.
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    assert!(!h.state().comment_prefs.snap, "off until asked for");
+    // Off: the clicks land where they were made (a little off the drawing).
+    for p in [(53.0, 47.0), (147.0, 53.0)] {
+        click_pt(&mut h, p);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let free = comments(&h);
+    assert_eq!(free.len(), 1);
+    assert_eq!(free[0].subtype, "PolyLine");
+    // (A polyline's rect is its points padded by the line width's 2 pt.)
+    assert!((free[0].rect[0] + 2.0 - 53.0).abs() < 1.5 && (free[0].rect[1] + 2.0 - 47.0).abs() < 1.5, "unsnapped: {:?}", free[0].rect);
+    // Taken back: the comments drawn snap too, and its corners sit right where the clicks go.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(comments(&h).is_empty());
+    // F3 turns snapping on (and says so); the same clicks now land on the endpoint and the
+    // intersection, with the marker showing the target under the pointer.
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    h.hover_at(at(&h, 53.0, 47.0));
+    h.run_steps(2);
+    assert!(
+        matches!(h.state().views[0].comments.snap_hover, Some((0, p, pdfcraft_engine::measure::snap::SnapKind::Endpoint)) if (p[0] - 50.0).abs() < 0.01 && (p[1] - 50.0).abs() < 0.01),
+        "{:?}",
+        h.state().views[0].comments.snap_hover
+    );
+    for p in [(53.0, 47.0), (147.0, 53.0)] {
+        click_pt(&mut h, p);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let snapped = comments(&h);
+    assert_eq!(snapped.len(), 1, "{snapped:?}");
+    let line = &snapped[0];
+    assert_eq!(line.subtype, "PolyLine");
+    assert!(
+        (line.rect[0] + 2.0 - 50.0).abs() < 0.5 && (line.rect[1] + 2.0 - 50.0).abs() < 0.5 && (line.rect[2] - 2.0 - 150.0).abs() < 0.5,
+        "snapped to the drawing: {:?}",
+        line.rect
+    );
+    // Away from any path nothing snaps, and the marker is gone.
+    h.hover_at(at(&h, 280.0, 180.0));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.snap_hover.is_none());
+    // The setting is remembered across starts.
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(restored.comment_prefs.snap);
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(!h.state().comment_prefs.snap);
+}
+
+/// The snap cache keeps several pages' paths for the current edit generation: a second page on
+/// screen doesn't throw the first out (extraction takes up to a second on a plan), and an
+/// edit starts over.
+#[test]
+fn snap_paths_stay_cached_per_page_until_an_edit() {
+    let h = harness(|_| {});
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.info.pages.len() >= 2, "{}", doc.info.pages.len());
+    let mut cache = pdfcraft_ui_egui::comments::SnapCache::default();
+    let mut notice = None;
+    let first = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    let second = cache.geometry(doc, 1, &mut notice).expect("page 1 reads");
+    let again = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "page 0 stays cached while page 1 is in use");
+    assert!(std::sync::Arc::ptr_eq(&second, &cache.geometry(doc, 1, &mut notice).unwrap()));
+    assert!(notice.is_none(), "{notice:?}");
+    drop((first, second, again));
+    // An edit (even to a comment) is a new generation: the paths are read again.
+    let mut h = h;
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Box".into(),
+        author: "Tester".into(),
+    })));
+    let doc = h.state().session.get(id).unwrap();
+    let before = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    let after = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    assert!(std::sync::Arc::ptr_eq(&before, &after), "read once for the new generation");
+}
+
+/// A page with a 10 pt check box at (100, 100), a line (20, 50)–(280, 50) and, ruled as a
+/// table, a 49 × 18 pt cell (180, 150)–(229, 168) like a protocol's "OK" column, in user space.
+const CHECK_BOX_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 125 >> stream
+100 100 10 10 re S 20 50 m 280 50 l S 150 150 m 280 150 l S 150 168 m 280 168 l S 180 140 m 180 180 l S 229 140 m 229 180 l S
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With Snap to drawing on, a Fill & Sign cross clicked inside a check box or a table cell lands
+/// in its middle, and a text box's corner lands on a line, as the drawing tools' points do; off, both stay
+/// where they were clicked.
+#[test]
+fn marks_and_text_boxes_snap_with_f3() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let centre = |a: &Annotation| ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    assert!(h.state_mut().execute("sign.fill.cross"));
+    h.run_steps(2);
+    // Off: where it is clicked (beside the box, so the next click doesn't pick this one up).
+    click_pt(&mut h, (60.0, 120.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    let (x, y) = centre(&c[0]);
+    assert!((x - 60.0).abs() < 0.5 && (y - 120.0).abs() < 0.5, "unsnapped: {:?}", c[0].rect);
+    // On: in the middle of the box, with the marker saying so.
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    h.hover_at(at(&h, 107.0, 102.0));
+    h.run_steps(2);
+    assert!(
+        matches!(h.state().views[0].comments.snap_hover, Some((0, p, pdfcraft_engine::measure::snap::SnapKind::Centre)) if (p[0] - 105.0).abs() < 0.01 && (p[1] - 105.0).abs() < 0.01),
+        "{:?}",
+        h.state().views[0].comments.snap_hover
+    );
+    click_pt(&mut h, (107.0, 102.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    let (x, y) = centre(&c[1]);
+    assert!((x - 105.0).abs() < 0.01 && (y - 105.0).abs() < 0.01, "in the middle of the box: {:?}", c[1].rect);
+    // A table cell between ruled lines: its middle too.
+    click_pt(&mut h, (215.0, 163.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 3);
+    let (x, y) = c.iter().map(centre).find(|(x, _)| *x > 150.0).expect("the third cross");
+    assert!((x - 204.5).abs() < 0.01 && (y - 159.0).abs() < 0.01, "in the middle of the cell: {x}, {y}");
+    // A text box's corner goes onto the line.
+    h.state_mut().set_option("quick", "freetext").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (60.0, 53.0));
+    let at_ = h.state().views[0].comments.composer.as_ref().map(|c| c.at).expect("the composer opened");
+    assert!((at_[1] - 50.0).abs() < 0.01 && (at_[0] - 60.0).abs() < 0.5, "on the line: {at_:?}");
+}
+
+/// With Snap to drawing on, the Select tool snaps comments that are moved: a Fill & Sign cross by
+/// its centre (into the middle of a table cell), a rectangle by its corner nearest a target (onto
+/// a line's end). Tab moves on to the next target under the pointer; the snap targets are the
+/// user's choice (centres off: no middle of a cell), and they are remembered.
+#[test]
+fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    // A cross beside the table and a rectangle below the line's left end.
+    assert!(h.state_mut().execute("sign.fill.cross"));
+    h.run_steps(2);
+    click_pt(&mut h, (60.0, 120.0));
+    let rect = Shape::Rectangle { rect: [30.0, 10.0, 60.0, 30.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&rect),
+        shape: rect,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    let cross = |h: &Harness<'static, PdfCraftApp>| comments(h).into_iter().find(|a| a.subtype == "Stamp").expect("the cross");
+    let centre = |a: &Annotation| ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    // The cross dragged into the cell lands in its middle.
+    drag_pt(&mut h, (60.0, 120.0), (214.0, 163.0));
+    let (x, y) = centre(&cross(&h));
+    assert!((x - 204.5).abs() < 0.01 && (y - 159.0).abs() < 0.01, "in the middle of the cell: {x}, {y}");
+    // The rectangle dragged so its top-left corner (30, 30) comes near the line's left end
+    // (20, 50): it lands there exactly, though its top-right corner is nearer the line itself.
+    drag_pt(&mut h, (45.0, 20.0), (37.0, 41.0));
+    let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    assert!((r[0] - 20.0).abs() < 0.01 && (r[3] - 50.0).abs() < 0.01, "its corner on the line's end: {r:?}");
+    // Tab over a marker moves on to the next target under the pointer.
+    h.hover_at(at(&h, 101.0, 101.0));
+    h.run_steps(2);
+    let first = h.state().views[0].comments.snap_first.expect("a target under the pointer");
+    assert_eq!(first.1, [100.0, 100.0], "the box's corner first");
+    assert!(h.state_mut().views[0].comments.cycle_snap(1));
+    // (With the Select tool the marker shows only while dragging; a drawing tool shows it.)
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.run_steps(2);
+    h.hover_at(at(&h, 101.0, 101.0));
+    h.run_steps(2);
+    let shown = h.state().views[0].comments.snap_hover.map(|(_, p, _)| p);
+    assert!(shown.is_some_and(|p| p != [100.0, 100.0]), "the next one: {shown:?}");
+    // Centres off: the cross keeps its place inside the cell.
+    h.state_mut().comment_prefs.snap_targets.centres = false;
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    let before = centre(&cross(&h));
+    drag_pt(&mut h, (before.0, before.1), (before.0 + 6.0, before.1 + 2.0));
+    let (x, y) = centre(&cross(&h));
+    assert!((x - before.0 - 6.0).abs() < 0.5 && (y - before.1 - 2.0).abs() < 0.5, "moved as dragged: {x}, {y}");
+    // Remembered across starts.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(!restored.comment_prefs.snap_targets.centres && restored.comment_prefs.snap_targets.endpoints);
+}
+
+/// Moving a comment with snapping on, Tab picks which of its points goes onto the target: the
+/// next one (clockwise from the bottom left, the centre last) goes where the one on the target
+/// is, so the target stays and the comment moves about it; Shift+Tab goes back. The point in use
+/// is named on the page.
+#[test]
+fn tab_picks_the_point_of_a_moved_comment_that_goes_onto_the_target() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "select").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let rect = Shape::Rectangle { rect: [30.0, 10.0, 60.0, 30.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&rect),
+        shape: rect,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    let shown = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].comments.anchor_shown.map(|(_, p, name)| (p, name));
+    let on_the_end = |h: &Harness<'static, PdfCraftApp>, want: &str| {
+        let (p, name) = shown(h).expect("a point named");
+        assert!((p[0] - 20.0).abs() < 0.01 && (p[1] - 50.0).abs() < 0.01 && name == want, "{want}: {p:?} {name}");
+    };
+    // Grabbed in its middle and brought so its top-left corner nears the line's left end (20, 50).
+    let (a, b) = (at(&h, 45.0, 20.0), at(&h, 37.0, 41.0));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    on_the_end(&h, "Top left");
+    // Tab: the middle of its top side goes onto the end instead, then its top-right corner.
+    h.state_mut().views[0].comments.anchor_steps = 1;
+    h.run_steps(2);
+    on_the_end(&h, "Top");
+    h.state_mut().views[0].comments.anchor_steps = 1;
+    h.run_steps(2);
+    on_the_end(&h, "Top right");
+    // Shift+Tab: back to the middle of the top side, where it is dropped.
+    h.state_mut().views[0].comments.anchor_steps = -1;
+    h.run_steps(2);
+    on_the_end(&h, "Top");
+    h.drop_at(b);
+    h.run_steps(3);
+    let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    assert!((r[0] - 5.0).abs() < 0.01 && (r[2] - 35.0).abs() < 0.01 && (r[1] - 30.0).abs() < 0.01 && (r[3] - 50.0).abs() < 0.01, "{r:?}");
+    assert_eq!(shown(&h), None, "nothing named once it is dropped");
+    assert_eq!(h.state().views[0].comments.move_anchor, None, "the next move starts afresh");
+}
+
+/// Snapping and line handles together: a line's end dragged near the check box's corner lands
+/// on it, and the whole line moved so an end comes near the long line's end lands there too.
+#[test]
+fn line_ends_snap_when_dragged_and_lines_by_their_ends_when_moved() {
+    use pdfcraft_engine::{Edit, LineEnding, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "select").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let shape = Shape::Line { from: [40.0, 80.0], to: [80.0, 80.0], start: LineEnding::None, end: LineEnding::None };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    let ends = |h: &Harness<'static, PdfCraftApp>| comments(h).into_iter().find(|a| a.subtype == "Line").expect("the line").points;
+    click_pt(&mut h, (60.0, 80.0));
+    // The right end dragged near the box's corner (100, 100): on it.
+    drag_pt(&mut h, (80.0, 80.0), (102.0, 98.0));
+    let p = ends(&h);
+    assert_eq!((p[1][0], p[1][1]), (100.0, 100.0), "{p:?}");
+    // The whole line moved so its left end (40, 80) comes near the long line's end (20, 50).
+    drag_pt(&mut h, (70.0, 90.0), (52.0, 62.0));
+    let p = ends(&h);
+    assert!((p[0][0] - 20.0).abs() < 0.01 && (p[0][1] - 50.0).abs() < 0.01, "{p:?}");
+}
+
+/// With Snap to drawing on, the comments already drawn snap like the page's paths: a new line
+/// starts exactly at the end of the one before, or at its middle. A comment being changed
+/// doesn't snap to itself: a rectangle's corner dragged 4 pt down keeps those 4 pt instead of
+/// clinging to its own top side.
+#[test]
+fn new_lines_snap_to_the_comments_already_drawn() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|app| {
+        app.set_option("quick", "line").unwrap();
+        // At 100 % a user unit is a screen point, so the 6-point reach is 6 units here.
+        app.set_option("zoom", "100").unwrap();
+    });
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    let lines = |h: &Harness<'static, PdfCraftApp>| {
+        let mut l: Vec<_> = comments(h).into_iter().filter(|a| a.subtype == "Line").collect();
+        l.sort_by_key(|a| a.index);
+        l.into_iter().map(|a| a.points).collect::<Vec<_>>()
+    };
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 100.0));
+    // Started 3 pt off the first line's end, and near its middle.
+    drag_pt(&mut h, (143.0, 103.0), (143.0, 40.0));
+    drag_pt(&mut h, (92.0, 103.0), (60.0, 160.0));
+    let l = lines(&h);
+    assert_eq!(l.len(), 3, "{l:?}");
+    let on = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1e-3 && (p[1] - q[1]).abs() < 1e-3;
+    assert!(on(l[1][0], l[0][1]), "on the first line's end: {l:?}");
+    assert!(on(l[2][0], [(l[0][0][0] + l[0][1][0]) / 2.0, 100.0]), "on its middle: {l:?}");
+    // A rectangle, selected; its top-right corner dragged 20 pt left and 4 pt down.
+    let shape = Shape::Rectangle { rect: [180.0, 60.0, 280.0, 140.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    let square = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle");
+    click_pt(&mut h, (square.rect[0] + 1.0, (square.rect[1] + square.rect[3]) / 2.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, square.index)));
+    let corner = (square.rect[2], square.rect[3]);
+    drag_pt(&mut h, corner, (corner.0 - 20.0, corner.1 - 4.0));
+    let after = comments(&h).into_iter().find(|a| a.subtype == "Square").unwrap().rect;
+    assert!((after[3] - (square.rect[3] - 4.0)).abs() < 0.6 && (after[2] - (square.rect[2] - 20.0)).abs() < 0.6, "{:?} → {after:?}", square.rect);
+}

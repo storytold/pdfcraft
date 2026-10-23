@@ -2751,3 +2751,18 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Tempel ke gambar: aktif
+	Snap to drawing: off	Tempel ke gambar: nonaktif
+	Snap targets	Target tempel
+	Centre points	Titik pusat
+	Centre point	Titik pusat
+	Tab: the next target under the pointer	Tab: target berikutnya di bawah penunjuk
+	Bottom left	Kiri bawah
+	Top left	Kiri atas
+	Top right	Kanan atas
+	Bottom right	Kanan bawah
+	Middle	Tengah
+	Vertex	Verteks
+	Reference point: {point} (Tab: next)	Titik acuan: {point} (Tab: berikutnya)

@@ -2500,3 +2500,18 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Ngjit te vizatimi: aktiv
+	Snap to drawing: off	Ngjit te vizatimi: joaktiv
+	Snap targets	Objektivat e ngjitjes
+	Centre points	Pikat qendrore
+	Centre point	Pika qendrore
+	Tab: the next target under the pointer	Tab: objektivi tjetër nën tregues
+	Bottom left	Poshtë majtas
+	Top left	Lart majtas
+	Top right	Lart djathtas
+	Bottom right	Poshtë djathtas
+	Middle	Mesi
+	Vertex	Kulm
+	Reference point: {point} (Tab: next)	Pika e referencës: {point} (Tab: tjetra)

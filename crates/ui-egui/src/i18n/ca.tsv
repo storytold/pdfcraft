@@ -2774,3 +2774,18 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Snap to drawing for commenting (M5).
+	Snap to drawing: on	Ajusta al dibuix: activat
+	Snap to drawing: off	Ajusta al dibuix: desactivat
+	Snap targets	Objectius d'ajust
+	Centre points	Punts centrals
+	Centre point	Punt central
+	Tab: the next target under the pointer	Tab: el següent objectiu sota el punter
+	Bottom left	A baix a l'esquerra
+	Top left	A dalt a l'esquerra
+	Top right	A dalt a la dreta
+	Bottom right	A baix a la dreta
+	Middle	Mig
+	Vertex	Vèrtex
+	Reference point: {point} (Tab: next)	Punt de referència: {point} (Tab: següent)

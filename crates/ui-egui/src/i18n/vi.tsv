@@ -2780,3 +2780,21 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Bắt dính vào bản vẽ: bật
+	Snap to drawing: off	Bắt dính vào bản vẽ: tắt
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Điểm bắt dính
+	Centre points	Các tâm
+	Centre point	Tâm
+	Tab: the next target under the pointer	Tab: điểm tiếp theo dưới con trỏ
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Dưới bên trái
+	Top left	Trên bên trái
+	Top right	Trên bên phải
+	Bottom right	Dưới bên phải
+	Middle	Giữa
+	Vertex	Đỉnh
+	Reference point: {point} (Tab: next)	Điểm tham chiếu: {point} (Tab: tiếp theo)

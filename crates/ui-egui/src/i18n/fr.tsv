@@ -2781,3 +2781,21 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Accrochage au dessin : activé
+	Snap to drawing: off	Accrochage au dessin : désactivé
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Cibles d’accrochage
+	Centre points	Centres
+	Centre point	Centre
+	Tab: the next target under the pointer	Tab : la cible suivante sous le pointeur
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	En bas à gauche
+	Top left	En haut à gauche
+	Top right	En haut à droite
+	Bottom right	En bas à droite
+	Middle	Milieu
+	Vertex	Sommet
+	Reference point: {point} (Tab: next)	Point de référence : {point} (Tab : suivant)

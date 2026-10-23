@@ -2478,3 +2478,21 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+
+# Snap to drawing for the drawing tools (M5).
+	Snap to drawing: on	Прилепване към чертежа: включено
+	Snap to drawing: off	Прилепване към чертежа: изключено
+# Snap targets chosen for commenting and measuring, centres, Tab through the targets (M5).
+	Snap targets	Цели за прихващане
+	Centre points	Центрове
+	Centre point	Център
+	Tab: the next target under the pointer	Tab: следващата цел под показалеца
+
+# Moving a comment with snapping on: its reference point, which Tab moves on (M5).
+	Bottom left	Долу вляво
+	Top left	Горе вляво
+	Top right	Горе вдясно
+	Bottom right	Долу вдясно
+	Middle	Среда
+	Vertex	Връх
+	Reference point: {point} (Tab: next)	Опорна точка: {point} (Tab: следваща)

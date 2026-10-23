@@ -150,7 +150,7 @@ fn filled_open_subpath_offers_the_same_snap_edges_as_explicit_close() {
     assert_eq!(filled.segments, explicit.segments);
     assert_eq!(filled.segments.len(), 3);
     assert_eq!(stroked.segments.len(), 2);
-    let paths_only = snap::SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true };
+    let paths_only = snap::SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true, centres: false };
     let hit = filled.snap([55.0, 80.0], 5.0, paths_only).unwrap().unwrap();
     assert_eq!(hit.kind, snap::SnapKind::Path);
     assert_eq!(hit.point, [55.0, 80.0]);
@@ -185,7 +185,107 @@ fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     assert!(geometry.midpoints.contains(&[110.0, 222.5]));
     assert!(geometry.segments.len() > 4 && geometry.segments.len() < 200);
     let d = fixture(&"0 0 m 1 1 l S ".repeat(20_001), "", &[]);
-    assert!(snap::geometry(&d, 0).unwrap().truncated);
+    let small = snap::Limits { segments: 20_000, ..snap::Limits::default() };
+    assert!(snap::geometry_within(&d, 0, small).unwrap().truncated);
+    assert!(!snap::geometry(&d, 0).unwrap().truncated, "the default cap has room for a CAD plan");
+}
+
+/// A query looks at the pointer's neighbourhood through the grid; its answers are the ones a
+/// search over every target and segment gives, long segments (frame, axes) and all.
+#[test]
+fn grid_queries_match_a_search_over_everything() {
+    use snap::{Snap, SnapKind, SnapOptions};
+    fn nearest(p: Point, a: Point, b: Point) -> Point {
+        let v = [b[0] - a[0], b[1] - a[1]];
+        let length = v[0] * v[0] + v[1] * v[1];
+        if length < 1e-18 {
+            return a;
+        }
+        let t = (((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / length).clamp(0.0, 1.0);
+        [a[0] + v[0] * t, a[1] + v[1] * t]
+    }
+    fn everything(g: &snap::Geometry, at: Point, tolerance: f64, options: SnapOptions) -> Option<Snap> {
+        let mut best: Option<Snap> = None;
+        let consider = |best: &mut Option<Snap>, p: Point, kind: SnapKind| {
+            let distance = distance(at, p);
+            if distance <= tolerance && best.is_none_or(|b| distance < b.distance - 1e-9) {
+                *best = Some(Snap { point: p, kind, distance });
+            }
+        };
+        if options.endpoints {
+            g.endpoints.iter().for_each(|&p| consider(&mut best, p, SnapKind::Endpoint));
+        }
+        if options.midpoints {
+            g.midpoints.iter().for_each(|&p| consider(&mut best, p, SnapKind::Midpoint));
+        }
+        let local: Vec<_> = g.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
+        if options.intersections {
+            for (i, s) in local.iter().enumerate() {
+                for t in local.iter().skip(i + 1) {
+                    if let Some(p) = snap::intersection(s[0], s[1], t[0], t[1]) {
+                        consider(&mut best, p, SnapKind::Intersection);
+                    }
+                }
+            }
+        }
+        if options.paths && best.is_none() {
+            g.segments.iter().for_each(|[a, b]| consider(&mut best, nearest(at, *a, *b), SnapKind::Path));
+        }
+        best
+    }
+    // A page frame and axes (long segments), a hatch, scattered short lines, a few curves.
+    let mut content = String::from("10 10 3800 2400 re S 0 1200 m 3820 1200 l S 1900 0 m 1900 2420 l S ");
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % 10_000) as f64 / 10_000.0
+    };
+    for i in 0..400 {
+        let x = 200.0 + f64::from(i) * 3.0;
+        content += &format!("{x} 300 m {} 700 l S ", x + 120.0);
+    }
+    for _ in 0..1500 {
+        let (x, y) = (next() * 3800.0, next() * 2400.0);
+        let (dx, dy) = ((next() - 0.5) * 60.0, (next() - 0.5) * 60.0);
+        content += &format!("{x:.2} {y:.2} m {:.2} {:.2} l S ", x + dx, y + dy);
+    }
+    for _ in 0..30 {
+        let (x, y) = (next() * 3600.0, next() * 2200.0);
+        content += &format!("{x:.1} {y:.1} m {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} c S ", x + 50.0, y + 120.0, x + 150.0, y - 80.0, x + 200.0, y);
+    }
+    let d = fixture(&content, "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert!(!g.truncated && g.segments.len() > 2000, "{}", g.segments.len());
+    // (Centres have a test of their own: the search over everything here doesn't know them.)
+    let options = [
+        SnapOptions { centres: false, ..SnapOptions::default() },
+        SnapOptions { intersections: false, centres: false, ..SnapOptions::default() },
+        SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true, centres: false },
+        SnapOptions { endpoints: true, midpoints: false, intersections: true, paths: false, centres: false },
+    ];
+    let mut hits = 0;
+    for k in 0..300 {
+        let at = [next() * 4000.0 - 100.0, next() * 2600.0 - 100.0];
+        for tolerance in [0.5, 4.0, 25.0] {
+            for o in options {
+                let found = g.snap(at, tolerance, o).unwrap();
+                assert_eq!(found, everything(&g, at, tolerance, o), "query {k} at {at:?} within {tolerance}, {o:?}");
+                hits += usize::from(found.is_some());
+            }
+            let dense = g.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(257).count() > 256;
+            assert_eq!(g.intersection_limited(at, tolerance), dense);
+        }
+    }
+    assert!(hits > 100, "the queries hit something: {hits}");
+    // Far off the page: nothing, and no panic.
+    assert_eq!(g.snap([1e6, -1e6], 25.0, SnapOptions::default()).unwrap(), None);
+    assert_eq!(
+        g.snap([-50.0, 1200.0], 60.0, SnapOptions::default()).unwrap().map(|s| s.kind),
+        Some(SnapKind::Endpoint),
+        "the axis' end, a long segment"
+    );
 }
 #[test]
 fn measurement_csv_quotes_newlines_and_blocks_formula_cells() {
@@ -249,14 +349,15 @@ fn degenerate_and_dense_paths_keep_snap_targets_bounded() {
     let g = snap::geometry(&d, 0).unwrap();
     assert!(g.segments.is_empty() && g.endpoints.is_empty() && g.midpoints.is_empty(), "{} {}", g.endpoints.len(), g.midpoints.len());
     // Every paint drains into the page geometry; the page-wide target cap still holds.
+    let small = snap::Limits { segments: 20_000, ..snap::Limits::default() };
     let d = fixture(&"0 0 1 1 re f ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_within(&d, 0, small).unwrap();
     assert!(g.truncated);
-    assert!(g.endpoints.len() + g.midpoints.len() <= 40_000 + 12, "{}", g.endpoints.len() + g.midpoints.len());
+    assert!(g.endpoints.len() + g.midpoints.len() <= 3 * 20_000 + 12, "{}", g.endpoints.len() + g.midpoints.len());
     assert!(g.segments.len() <= 20_000 + 4);
     // Unpainted curves and lines are capped too.
     let d = fixture(&"0 0 m 5 9 1 9 7 0 c 0 3 l ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_within(&d, 0, small).unwrap();
     assert!(g.truncated && g.endpoints.is_empty());
 }
 #[test]
@@ -460,4 +561,128 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     assert_eq!(g.unreadable, 1);
     assert!(g.truncated);
     assert_eq!(g.segments.len(), 1, "the parts before it still snap");
+}
+
+/// The box drawn around a point: a check box from `re`, a table cell between ruled lines (the
+/// nearest line on each side), and nothing where a side is missing or out of reach.
+#[test]
+fn the_box_around_a_point_is_found_for_check_boxes_and_cells() {
+    // A 10 pt check box, and a table of two cells 60 × 20 with its rules drawn as lines.
+    let d = fixture(
+        "100 100 10 10 re S 200 100 m 320 100 l S 200 120 m 320 120 l S 200 100 m 200 120 l S 260 100 m 260 120 l S 320 100 m 320 120 l S",
+        "",
+        &[],
+    );
+    let g = snap::geometry(&d, 0).unwrap();
+    assert_eq!(g.enclosing_box([103.0, 108.0], 30.0), Some([100.0, 100.0, 110.0, 110.0]));
+    assert_eq!(g.enclosing_box([290.0, 105.0], 40.0), Some([260.0, 100.0, 320.0, 120.0]), "the nearer rule on each side");
+    assert_eq!(g.enclosing_box([290.0, 105.0], 20.0), None, "a side farther than the reach");
+    assert_eq!(g.enclosing_box([150.0, 150.0], 30.0), None, "outside every box");
+    assert_eq!(g.enclosing_box([105.0, 100.0], 30.0), None, "on a side");
+    assert_eq!(g.enclosing_box([f64::NAN, 0.0], 30.0), None);
+}
+
+/// Centres as snap targets: of a rectangle, a closed polygon, a circle drawn as four curves and
+/// a filled open path, and of a table cell between ruled lines; not of an open stroked line.
+/// Every target within reach is offered, nearest first, each point once.
+#[test]
+fn centres_of_closed_figures_and_cells_are_snap_targets() {
+    let circle =
+        "300 200 m 300 227.6 277.6 250 250 250 c 222.4 250 200 227.6 200 200 c 200 172.4 222.4 150 250 150 c 277.6 150 300 172.4 300 200 c S";
+    let content = format!(
+        "100 100 40 20 re S 400 100 m 440 100 l 420 140 l h S 500 100 m 540 100 l 520 140 l f {circle} 20 300 m 80 300 l S 20 400 m 80 400 l S 600 400 m 700 400 l S 600 430 m 700 430 l S 600 380 m 600 450 l S 700 380 m 700 450 l S"
+    );
+    let d = fixture(&content, "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    let centre = |at: Point| g.snap(at, 3.0, snap::SnapOptions::default()).unwrap().filter(|s| s.kind == snap::SnapKind::Centre).map(|s| s.point);
+    assert_eq!(centre([121.0, 111.0]), Some([120.0, 110.0]), "the rectangle's");
+    assert_eq!(centre([420.0, 121.0]), Some([420.0, 120.0]), "the closed triangle's box");
+    assert_eq!(centre([520.0, 121.0]), Some([520.0, 120.0]), "a filled open path closes");
+    let c = centre([251.0, 199.0]).expect("the circle's");
+    assert!(distance(c, [250.0, 200.0]) < 0.5, "{c:?}");
+    assert_eq!(centre([50.0, 351.0]), None, "two open lines are no figure");
+    assert_eq!(centre([651.0, 414.0]), Some([650.0, 415.0]), "the cell between the rules");
+    // Switched off: none.
+    let off = snap::SnapOptions { centres: false, ..snap::SnapOptions::default() };
+    assert!(g.snap([121.0, 111.0], 3.0, off).unwrap().is_none_or(|s| s.kind != snap::SnapKind::Centre));
+    // All candidates near a corner: the corner first (endpoint before the intersection there),
+    // then whatever else is within reach, each point once.
+    let all = g.candidates([101.0, 101.0], 12.0, snap::SnapOptions::default()).unwrap();
+    assert_eq!((all[0].point, all[0].kind), ([100.0, 100.0], snap::SnapKind::Endpoint));
+    assert!(all.iter().any(|s| s.kind == snap::SnapKind::Midpoint), "{all:?}");
+    for (i, a) in all.iter().enumerate() {
+        assert!(all.iter().skip(i + 1).all(|b| distance(a.point, b.point) > 1e-6), "each point once: {all:?}");
+        assert!(all.get(i + 1).is_none_or(|b| b.kind == snap::SnapKind::Path || b.distance >= a.distance - 1e-9), "nearest first: {all:?}");
+    }
+}
+
+#[test]
+fn candidate_order_is_total_at_nearly_the_same_distance() {
+    use snap::{Snap, SnapKind, candidate_order};
+    let s = |kind, distance| Snap { point: [0.0, 0.0], kind, distance };
+    // "Within 1e-9 counts as the same distance", compared pair by pair, made these three a cycle
+    // (b before a, c before b, a before c); since Rust 1.81 a sort may panic on such an order.
+    let all = [s(SnapKind::Intersection, 0.0), s(SnapKind::Midpoint, 0.6e-9), s(SnapKind::Centre, 1.2e-9)];
+    for x in &all {
+        for y in &all {
+            for z in &all {
+                if candidate_order(x, y).is_lt() && candidate_order(y, z).is_lt() {
+                    assert!(candidate_order(x, z).is_lt(), "{x:?} < {y:?} < {z:?} but not {x:?} < {z:?}");
+                }
+            }
+        }
+    }
+    // Many near-coincident targets of every kind (a crafted drawing) sort in that order.
+    let kinds = [SnapKind::Path, SnapKind::Intersection, SnapKind::Midpoint, SnapKind::Centre, SnapKind::Endpoint];
+    let mut many: Vec<Snap> = (0..500).map(|i| s(kinds[i % kinds.len()], (i % 7) as f64 * 0.4e-9 + (i / 7) as f64 * 1e-3)).collect();
+    many.sort_by(candidate_order);
+    assert!(many.windows(2).all(|w| candidate_order(&w[0], &w[1]).is_le()));
+    // At one distance the discrete kinds come first.
+    assert!(candidate_order(&s(SnapKind::Endpoint, 1.0), &s(SnapKind::Path, 1.0)).is_lt());
+    assert!(candidate_order(&s(SnapKind::Path, 1.0), &s(SnapKind::Endpoint, 1.1)).is_lt(), "nearer wins");
+}
+
+#[test]
+fn a_centre_out_of_range_is_no_snap_target() {
+    // A rectangle far beyond the coordinate range (its corners are no targets): its centre isn't
+    // one either, or it would spread the snap grid over everything. Only the first one counts.
+    let big = format!("1{}.0", "0".repeat(300));
+    let content = format!("0 0 10 10 re S 0 0 {big} {big} re S");
+    let d = fixture(&content, "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert!(g.centres.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1e9), "{:?}", g.centres);
+    assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
+}
+#[test]
+fn comments_drawn_with_lines_snap_by_their_ends_middles_and_centres() {
+    let annots = "/Annots [\
+        << /Subtype /Line /L [100 100 200 100] /Rect [99 99 201 101] >> \
+        << /Subtype /Text /Rect [0 0 20 20] >> \
+        << /Subtype /PolyLine /Vertices [300 100 350 150 400 100] >> \
+        << /Subtype /Polygon /Vertices [100 300 200 300 150 380] >> \
+        << /Subtype /Square /Rect [300 300 400 360] /BS << /W 4 >> >> \
+        << /Subtype /Circle /Rect [100 500 200 560] /RD [5 5 5 5] /BS << /W 2 >> >> \
+        << /Subtype /Ink /InkList [[10 10 20 20]] /Rect [10 10 20 20] >> \
+        << /Subtype /Line /L [0 700 50 700] /F 2 >> \
+        << /Subtype /Line /L [0 0 1 /x] >> ]";
+    let d = fixture("", annots, &[]);
+    let outlines = snap::comment_outlines(&d, 0).unwrap();
+    let places: Vec<usize> = outlines.iter().map(|(i, _)| *i).collect();
+    assert_eq!(places, [0, 2, 3, 4, 5], "a note, freehand, a hidden and a malformed one are left out");
+    let square = snap::Outline::Path { points: vec![[302.0, 302.0], [398.0, 302.0], [398.0, 358.0], [302.0, 358.0]], closed: true };
+    assert_eq!(outlines[3].1, square, "half the 4 pt border in from /Rect");
+    assert_eq!(outlines[4].1, snap::Outline::Ellipse { rect: [106.0, 506.0, 194.0, 554.0] }, "inside /RD, then half the border");
+    let g = snap::outline_geometry(outlines.iter().map(|(_, o)| o));
+    let opts = snap::SnapOptions::default();
+    let hit = |at: Point| g.snap(at, 4.0, opts).unwrap().map(|s| (s.point, s.kind));
+    use snap::SnapKind::*;
+    assert_eq!(hit([201.0, 102.0]), Some(([200.0, 100.0], Endpoint)), "a line's end");
+    assert_eq!(hit([151.0, 101.0]), Some(([150.0, 100.0], Midpoint)), "its middle");
+    assert_eq!(hit([351.0, 152.0]), Some(([350.0, 150.0], Endpoint)), "a corner of connected lines");
+    assert_eq!(hit([126.0, 341.0]), Some(([125.0, 340.0], Midpoint)), "the polygon's closing side");
+    assert_eq!(hit([351.0, 331.0]), Some(([350.0, 330.0], Centre)), "the rectangle's centre");
+    assert_eq!(hit([151.0, 555.0]), Some(([150.0, 554.0], Endpoint)), "the oval's top");
+    assert_eq!(hit([151.0, 531.0]), Some(([150.0, 530.0], Centre)), "and its centre");
+    assert_eq!(hit([10.0, 700.0]), None, "the hidden line doesn't snap");
+    assert!(snap::outline_geometry(std::iter::empty()).segments.is_empty());
 }
