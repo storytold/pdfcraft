@@ -40,7 +40,7 @@ const PAGE: &str = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
 
 /// `fixture` protected with user password "user" and owner password "owner", allowing nothing,
 /// so copying its text needs the owner password.
-fn protected(algorithm: Algorithm) -> Vec<u8> {
+pub(crate) fn protected(algorithm: Algorithm) -> Vec<u8> {
     protected_with(algorithm, PAGE)
 }
 
@@ -64,7 +64,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
     d.join(name)
 }
 
-const ALGORITHMS: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];
+pub(crate) const ALGORITHMS: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];
 
 #[test]
 fn info_accepts_the_owner_password() {

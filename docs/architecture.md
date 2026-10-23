@@ -16,7 +16,7 @@ handwritten JS/TS, in the product or the build.
 | Binary | What it is |
 |---|---|
 | `apps/pdfcraft` | The desktop app (macOS, Windows, Linux, FreeBSD): eframe/egui on wgpu, single instance, Apple events, update check on request |
-| `apps/pdfcraft-cli` | `inspect`, `edit`, `combine`, `extract`, `split`, `run` (any automation tool or a JSON script), `tools`, `ui` (drive the running app), and the opt-in `mcp` server |
+| `apps/pdfcraft-cli` | `inspect`, `edit`, `combine`, `extract`, `split`, `run` (any automation tool or a JSON script), `tools`, `ui` (drive the running app), `view` (pages in the terminal, `src/view/README.md`), and the opt-in `mcp` server |
 | `apps/pdfcraft-web` | The same egui shell compiled to WebAssembly |
 
 ## Layers
