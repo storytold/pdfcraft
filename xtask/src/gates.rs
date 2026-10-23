@@ -131,6 +131,40 @@ pub fn deny(_: &[String]) -> anyhow::Result<()> {
     run_args(&["deny", "--log-level", "error", "check"])
 }
 
+/// Line coverage for one crate. Fails under 80% unless `--fail-under-lines N` says otherwise.
+///
+/// The percentage is the whole crate. This does not compare it with an earlier run and does
+/// not measure only the lines a change added. Needs `cargo install cargo-llvm-cov` once.
+/// This is the check in `docs/developing.md`.
+pub fn cover(args: &[String]) -> anyhow::Result<()> {
+    let mut package = None;
+    let mut under = 80u32;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "-p" | "--package" => package = rest.next().map(String::as_str),
+            "--fail-under-lines" => {
+                let value = rest.next().context("--fail-under-lines needs a number")?;
+                under = value.parse().with_context(|| format!("--fail-under-lines {value}"))?;
+            }
+            "-h" | "--help" => {
+                println!("Usage: cargo xtask cover -p <crate> [--fail-under-lines 80]");
+                return Ok(());
+            }
+            other => bail!("unknown argument {other} (cargo xtask cover -p <crate>)"),
+        }
+    }
+    let Some(package) = package else { bail!("cargo xtask cover -p <crate>") };
+    let threshold = under.to_string();
+    let installed = Command::new("cargo-llvm-cov").arg("--version").output().is_ok_and(|o| o.status.success());
+    if !installed {
+        bail!("cargo-llvm-cov is not installed: cargo install cargo-llvm-cov");
+    }
+    // The threshold covers the whole crate. A lower `--fail-under-lines` does not
+    // by itself show which new lines are covered.
+    run_args(&["llvm-cov", "-p", package, "--fail-under-lines", &threshold])
+}
+
 fn run_args(args: &[&str]) -> anyhow::Result<()> {
     let mut c = cargo();
     c.args(args);
@@ -542,6 +576,12 @@ mod tests {
         let long: Vec<String> = (0..super::MAX_ORDER_WORDS + 10).map(|i| i.to_string()).collect();
         let (s, cut) = order_score(&long, &long);
         assert!((s - 1.0).abs() < 1e-9 && cut, "{s} {cut}");
+    }
+
+    #[test]
+    fn cover_requires_a_crate_name() {
+        let err = super::cover(&[]).unwrap_err().to_string();
+        assert!(err.contains("-p"), "{err}");
     }
 
     // Issue #211: Finder lists the app under Open With > Recommended only when the

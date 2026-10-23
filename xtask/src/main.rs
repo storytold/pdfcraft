@@ -22,6 +22,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
+    ("cover", "Line coverage for one crate (cargo llvm-cov); fails under 80% unless --fail-under-lines N", gates::cover),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),

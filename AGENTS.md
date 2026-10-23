@@ -115,7 +115,18 @@ PdfCraft opens files from strangers, and people trust it with their work. A malf
 - **Prove it.** Every crash fix comes with a small synthetic regression test that panicked before the fix. Turn fuzzer findings (`cargo xtask fuzz`) into such tests before fixing them.
 - **Enforced by clippy.** Root `clippy.toml` lets tests use `unwrap`/`expect`/`panic!`. A crate that is clean carries `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]`; new crates start with it.
 
-## 5. Everything else
+## 5. How to write and test a change
+
+`docs/developing.md` is the procedure for a change. The rules below are the ones that bind.
+
+- Reproduce the bug with a small synthetic input before changing code.
+- A new behaviour and a bug fix each get a unit test. A command or a saved file also gets a tool or crate integration test. A click, typed edit, or drag gets a session in `crates/ui-egui/tests/play/`.
+- Watch the new test fail on the code without the fix, and keep that failure. Then make it pass. A test that was never seen to fail does not prove the fix.
+- Run the older tests in the same area in the same run.
+- `cargo xtask cover -p <crate>` must report at least 80% line coverage for the crate you changed. If the crate is already below that, do not lower it, and cover the lines the change adds.
+- Run another open issue's steps before saying this change closes it. A similar title is not enough.
+
+## 6. Everything else
 
 
 Follow `CLAUDE.md`. It covers quality gates, layering, commit rules and how to run and look at the app.
