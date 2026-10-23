@@ -1866,6 +1866,9 @@ action wizard	Start	Iniciar
 	Cut	Cortar
 	Copy	Copiar
 	Paste after	Pegar después
+	Select a text box or an image first	Selecciona primero un cuadro de texto o una imagen
+	Select text, a text box or an image first	Selecciona primero texto, un cuadro de texto o una imagen
+	Copy a text box or an image first	Copia primero un cuadro de texto o una imagen
 	Rename	Cambiar nombre
 	Set to current page ({n})	Asignar a la página actual ({n})
 	Move up	Subir

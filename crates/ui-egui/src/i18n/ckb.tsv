@@ -1817,6 +1817,9 @@
 	Cut	بڕین
 	Copy	کۆپیکردن
 	Paste after	لکاندن دوای
+	Select a text box or an image first	سەرەتا سندووقی دەق یان وێنەیەک هەڵبژێرە
+	Select text, a text box or an image first	سەرەتا دەق، سندووقی دەق یان وێنەیەک هەڵبژێرە
+	Copy a text box or an image first	سەرەتا سندووقی دەق یان وێنەیەک کۆپی بکە
 	Rename	ناونانەوە
 	Set to current page ({n})	دانان بە پەڕەی ئێستا ({n})
 	Move up	گواستنەوە بۆ سەرەوە

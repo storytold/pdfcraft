@@ -71,8 +71,9 @@ const PICKERS: &[&str] = &[
 #[test]
 fn every_registered_command_is_implemented() {
     for spec in COMMANDS {
-        // Page-text Copy needs a loaded view and egui context, covered by text_select.
-        if PICKERS.contains(&spec.id) || spec.id == "edit.copy" {
+        // Page-text Copy needs a loaded view and egui context, covered by text_select; Cut, Copy
+        // and Paste of added content need a selection or a copy, covered by content_clipboard.
+        if PICKERS.contains(&spec.id) || matches!(spec.id, "edit.copy" | "edit.cut" | "edit.paste") {
             continue;
         }
         let mut app = PdfCraftApp::new();

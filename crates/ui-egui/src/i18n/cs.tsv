@@ -1900,6 +1900,9 @@ key	Space	Mezerník
 	Cut	Vyjmout
 	Copy	Kopírovat
 	Paste after	Vložit za
+	Select a text box or an image first	Nejdřív vyberte textový rámeček nebo obrázek
+	Select text, a text box or an image first	Nejdřív vyberte text, textový rámeček nebo obrázek
+	Copy a text box or an image first	Nejdřív zkopírujte textový rámeček nebo obrázek
 	Rename	Přejmenovat
 	Set to current page ({n})	Nastavit na aktuální stránku ({n})
 	Move up	Posunout nahoru

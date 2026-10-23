@@ -4271,6 +4271,91 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
+/// page beside it, onto a point, and into another document.
+#[test]
+fn copying_added_content_through_tools() {
+    let dir = workdir("content-copy");
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[90u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let other = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({ "doc": doc, "page": 1, "text": "Approved", "at": [20, 20], "width": 100, "size": 18, "bold": true, "font": "times", "color": "red", "align": "center" }),
+    );
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "rotate": 90, "flip_h": true }));
+    let original = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    // Beside itself on its own page: 18 points down and to the right, with the style content_list
+    // shows (the engine test checks colour, alignment and the image transforms).
+    let r = ok(&mut a, "content_copy", json!({ "doc": doc, "page": 1, "index": 1 }));
+    assert_eq!((r["page"].as_u64(), r["index"].as_u64()), (Some(1), Some(3)));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    let (from, to) = (&original[0], &items[2]);
+    for key in ["type", "text", "font", "size", "bold", "italic"] {
+        assert_eq!(from[key], to[key], "{key}");
+    }
+    let shifted: Vec<f64> = from["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() + 18.0).collect();
+    assert_eq!(to["rect"], json!(shifted));
+    assert_eq!(r["rect"], to["rect"]);
+    // An image onto another page at a point, and into another document where it was.
+    let r = ok(&mut a, "content_copy", json!({ "doc": doc, "page": 1, "index": 2, "to_page": 2, "at": [10, 30] }));
+    assert_eq!((r["page"].as_u64(), r["index"].as_u64()), (Some(2), Some(1)));
+    assert_eq!(r["rect"][0].as_f64().zip(r["rect"][1].as_f64()), Some((10.0, 30.0)), "its top-left at the point");
+    let r = ok(&mut a, "content_copy", json!({ "doc": doc, "page": 1, "index": 2, "to_doc": other }));
+    assert_eq!(r["rect"], original[1]["rect"], "in the same place");
+    let theirs = ok(&mut a, "content_list", json!({ "doc": other }));
+    assert_eq!((theirs["count"].as_u64(), theirs["items"][0]["type"].as_str()), (Some(1), Some("image")));
+    // Copied there again: it steps past the first copy, whose picture that document stores itself.
+    let r = ok(&mut a, "content_copy", json!({ "doc": doc, "page": 1, "index": 2, "to_doc": other }));
+    let stepped: Vec<f64> = original[1]["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() + 18.0).collect();
+    assert_eq!(r["rect"], json!(stepped), "beside the first copy, not on it");
+    // Each paste is one undo step in the document it went into.
+    ok(&mut a, "edit_undo", json!({ "doc": other }));
+    ok(&mut a, "edit_undo", json!({ "doc": other }));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": other }))["count"], 0);
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 4);
+    // Out of range: a readable failure.
+    assert!(matches!(a.call("content_copy", &json!({ "doc": doc, "page": 1, "index": 9 })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("content_copy", &json!({ "doc": doc, "page": 1, "index": 1, "to_page": 9 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("content_copy", &json!({ "doc": doc, "page": 1, "index": 1, "to_doc": 999 })), Err(ToolError::Failed(_))));
+    for at in [json!([1]), json!([10, "x", 30]), json!("10, 30")] {
+        assert!(matches!(a.call("content_copy", &json!({ "doc": doc, "page": 1, "index": 1, "at": at })), Err(ToolError::InvalidArgs(_))), "{at}");
+    }
+    // A second copy onto its own page steps past the first.
+    let r = ok(&mut a, "content_copy", json!({ "doc": doc, "page": 1, "index": 1 }));
+    let twice: Vec<f64> = from["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() + 36.0).collect();
+    assert_eq!(r["rect"], json!(twice));
+
+    // A document that doesn't allow copying keeps its content in, even with changes allowed.
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    std::fs::write(dir.join("no-copy.pdf"), pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()).unwrap();
+    let locked = ok(&mut a, "doc_open", json!({ "path": "no-copy.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": locked, "page": 1, "text": "Secret", "at": [20, 20], "width": 100 }));
+    for to in [locked, other] {
+        let refused = a.call("content_copy", &json!({ "doc": locked, "page": 1, "index": 1, "to_doc": to }));
+        assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("copying")), "{refused:?}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": locked }))["count"], 1);
+}
+
 /// An out-of-range `index` (including `i64::MIN`, which overflowed `index - 1`) is a readable
 /// failure for `content_update` and `content_delete`, not a panic.
 #[test]

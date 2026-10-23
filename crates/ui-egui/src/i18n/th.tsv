@@ -1798,6 +1798,9 @@
 	Cut	ตัด
 	Copy	คัดลอก
 	Paste after	วางต่อท้าย
+	Select a text box or an image first	เลือกกล่องข้อความหรือรูปภาพก่อน
+	Select text, a text box or an image first	เลือกข้อความ กล่องข้อความ หรือรูปภาพก่อน
+	Copy a text box or an image first	คัดลอกกล่องข้อความหรือรูปภาพก่อน
 	Rename	เปลี่ยนชื่อ
 	Set to current page ({n})	ตั้งเป็นหน้าปัจจุบัน ({n})
 	Move up	ย้ายขึ้น

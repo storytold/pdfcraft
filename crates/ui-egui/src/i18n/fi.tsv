@@ -1792,6 +1792,9 @@
 	Cut	Leikkaa
 	Copy	Kopioi
 	Paste after	Liitä jälkeen
+	Select a text box or an image first	Valitse ensin tekstiruutu tai kuva
+	Select text, a text box or an image first	Valitse ensin tekstiä, tekstiruutu tai kuva
+	Copy a text box or an image first	Kopioi ensin tekstiruutu tai kuva
 	Rename	Nimeä uudelleen
 	Set to current page ({n})	Aseta nykyiseksi sivuksi ({n})
 	Move up	Siirrä ylös

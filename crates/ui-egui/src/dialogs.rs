@@ -1110,8 +1110,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
                 ui.add_space(8.0);
                 use crate::commands::{
-                    ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN,
-                    ZOOM_OUT,
+                    ACTUAL_SIZE, COPY, CUT, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, PASTE, ROTATE_CCW, ROTATE_CW,
+                    SELECT_ALL, ZOOM_IN, ZOOM_OUT,
                 };
                 // Registered commands first (always in sync with the real bindings), then the
                 // keys the document view handles itself.
@@ -1132,6 +1132,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 for (k, v) in [
                     (pair(FIND_NEXT, FIND_PREV), tl!("Next / previous match").to_string()),
                     (key(COPY), tl!("Copy selected text").to_string()),
+                    // Edit a PDF: the selected added text box or image.
+                    (key(CUT), tl!("Cut").to_string()),
+                    (key(PASTE), tl!("Paste").to_string()),
                     (named("Double-click"), tl!("Select a word").to_string()),
                     (crate::i18n::key_name("Esc").to_string(), tl!("Clear selection / close find").to_string()),
                     (key(ACTUAL_SIZE), tl!("Actual size").to_string()),

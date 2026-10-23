@@ -1827,6 +1827,10 @@
 	Cut	ຕັດ
 	Copy	ສຳເນົາ
 	Paste after	ວາງຕໍ່ທ້າຍ
+	Paste	ວາງ
+	Select a text box or an image first	ເລືອກກ່ອງຂໍ້ຄວາມ ຫຼື ຮູບພາບກ່ອນ
+	Select text, a text box or an image first	ເລືອກຂໍ້ຄວາມ, ກ່ອງຂໍ້ຄວາມ ຫຼື ຮູບພາບກ່ອນ
+	Copy a text box or an image first	ສຳເນົາກ່ອງຂໍ້ຄວາມ ຫຼື ຮູບພາບກ່ອນ
 	Rename	ປ່ຽນຊື່
 	Set to current page ({n})	ກຳນົດເປັນໜ້າປະຈຸບັນ ({n})
 	Move up	ຍ້າຍຂຶ້ນ

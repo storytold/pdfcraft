@@ -144,6 +144,7 @@ impl PdfCraftApp {
             arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
         }
         self.last_snapshot = Some((w, h, out.rgba));
+        self.content_clipboard = None;
         Ok((w, h))
     }
 }

@@ -31,6 +31,7 @@ mod commands;
 mod comments;
 mod compare;
 mod content;
+mod content_clipboard;
 mod control;
 mod create;
 mod date_format;

@@ -2074,6 +2074,18 @@ evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_delet
 notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only)"
 
 [[feature]]
+id = "edit.cut-copy-paste-objects"
+title = "Cut, copy and paste text boxes and images"
+area = "C"
+tier = "P1"
+milestone = "M7"
+status = "partial"
+commands = ["edit.cut", "edit.copy", "edit.paste"]
+tools = ["content_copy"]
+evidence = ["crates/ui-egui/tests/it/content_clipboard.rs::a_text_box_is_copied_cut_and_pasted_with_its_style", "crates/ui-egui/tests/it/content_clipboard.rs::an_image_is_pasted_with_its_picture_turns_flips_and_crop", "crates/ui-egui/tests/it/content_clipboard.rs::copy_takes_the_newest_selection", "crates/ui-egui/tests/it/content_clipboard.rs::copy_takes_the_newest_of_an_item_and_a_page_picture", "crates/ui-egui/tests/it/content_clipboard.rs::a_newer_system_clipboard_wins_over_the_copied_item", "crates/ui-egui/tests/it/content_clipboard.rs::edit_menu_cut_copy_and_paste_act_on_added_content", "crates/ui-egui/tests/it/content_clipboard.rs::copying_honours_the_documents_copy_permission", "crates/ui-egui/tests/it/content_clipboard.rs::cut_honours_the_documents_change_permission", "crates/ui-egui/tests/it/content_clipboard.rs::copying_page_text_replaces_the_copied_item", "crates/ui-egui/tests/it/content_clipboard.rs::a_paste_mid_drag_is_ignored", "crates/automation/tests/it/automation.rs::copying_added_content_through_tools", "crates/engine/src/tests.rs::pasted_added_content_keeps_its_style_and_picture", "crates/engine/src/tests.rs::an_added_jpeg_2000_image_is_copied_as_its_file", "crates/edit/src/tests.rs::a_paste_lands_where_the_copy_was_offset_per_paste_and_stays_on_the_page", "crates/edit/src/tests.rs::a_paste_steps_past_copies_of_itself_only"]
+notes = "Issue #2636. Text boxes and images added with Add content: ⌘X / ⌘C / ⌘V and Edit ▸ Cut, Copy and Paste in Edit a PDF, and the `content_copy` tool. A copy keeps a text box's text, font, size, colour, alignment and box, and an image's picture, box, turns, flips and crop, and pastes into any open document as one undo step. It lands where the item was, stepped 18 pt down and to the right past each copy already on the page, or at a given point (the tool), and stays on the page. The newest selection wins: page text or a page picture selected after an item is what ⌘C copies, and selecting an item drops them. The copy's text or pixels also go on the system clipboard, and anything copied since wins on ⌘V (a picture is pasted instead). Within a document a pasted image draws the same image object; into another document its picture goes as its JPEG or JPEG 2000 file, or else a PNG, so a colour profile is dropped and CMYK colours in a PNG are turned to RGB, and later pastes there reuse the first one's picture. The copy and change permissions are honoured. Missing: the item's right-click menu (follow-up PR), the original document's paragraphs and images (open PRs #1625 and #2251), several items at once, pasting plain text from other apps as a new text box, and a check of Acrobat's own clipboard format (not observed)."
+
+[[feature]]
 id = "edit.image-replace"
 title = "Replace an image (keep position and size)"
 area = "C"

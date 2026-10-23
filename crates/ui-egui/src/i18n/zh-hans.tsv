@@ -1823,6 +1823,10 @@
 	Cut	剪切
 	Copy	复制
 	Paste after	在后面粘贴
+	Paste	粘贴
+	Select a text box or an image first	请先选择一个文本框或图像
+	Select text, a text box or an image first	请先选择文本、文本框或图像
+	Copy a text box or an image first	请先复制一个文本框或图像
 	Rename	重命名
 	Set to current page ({n})	设为当前页（第 {n} 页）
 	Move up	上移
