@@ -150,6 +150,7 @@ impl PdfCraftApp {
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["auto_ocr"] = self.auto_ocr.into();
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -243,6 +244,9 @@ impl PdfCraftApp {
         }
         if let Some(invert) = v["invert_middle_drag"].as_bool() {
             self.invert_middle_drag = invert;
+        }
+        if let Some(enabled) = v["auto_ocr"].as_bool() {
+            self.auto_ocr = enabled;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;

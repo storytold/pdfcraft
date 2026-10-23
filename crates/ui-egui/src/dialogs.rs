@@ -62,6 +62,7 @@ struct Pending {
     open_revision: Option<usize>,
     a11y_now: bool,
     ocr_now: bool,
+    scan_ocr_now: Option<(pdfcraft_engine::DocId, usize, u64, bool)>,
     compare_now: bool,
     images_now: bool,
     stamp_now: bool,
@@ -386,6 +387,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             if !dialog_preferences(ui, app, req) {
                 return false;
             }
+        }
+        Dialog::RecognizeScan { doc, page, generation } => {
+            let (all, cancel) = crate::ocr_ui::scan_prompt_body(ui, app);
+            req.scan_ocr_now = all.map(|all| (doc, page, generation, all));
+            req.close = all.is_some() || cancel;
         }
         Dialog::RecognizeText => {
             let (go, cancel) = crate::ocr_ui::body(ui, app, &t);
@@ -1991,6 +1997,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.finish_image_import();
     } else if dialog == Dialog::CreateImages && app.dialog != Some(Dialog::CreateImages) {
         app.image_import = None;
+    }
+    if let Some((doc, page, generation, all)) = req.scan_ocr_now {
+        app.recognize_scan(doc, page, generation, all);
     }
     if req.ocr_now {
         app.start_ocr();

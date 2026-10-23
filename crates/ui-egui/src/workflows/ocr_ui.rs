@@ -171,6 +171,40 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     (go, cancel)
 }
 
+pub(crate) fn toggle(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
+    let mut enabled = app.auto_ocr;
+    if ui
+        .add(widgets::checkbox(&mut enabled, tl!("Recognize scanned text automatically")))
+        .on_hover_text(tl!("Ask whether to recognize the current page or all pages when editing a scan."))
+        .changed()
+    {
+        app.set_auto_ocr(enabled);
+    }
+}
+
+pub(crate) fn scan_prompt_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (Option<bool>, bool) {
+    ui.label(egui::RichText::new(tl!("Scanned text detected")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!("Recognize text on this page or throughout the document?"));
+    ui.add_space(8.0);
+    toggle(ui, app);
+    ui.add_space(8.0);
+    let mut all = None;
+    let mut cancel = false;
+    ui.horizontal(|ui| {
+        if widgets::pill_button(ui, tl!("Current page"), true).clicked() {
+            all = Some(false);
+        }
+        if widgets::pill_button(ui, tl!("All pages"), false).clicked() {
+            all = Some(true);
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            cancel = true;
+        }
+    });
+    (all, cancel)
+}
+
 impl PdfCraftApp {
     /// Recognize text on the pages chosen in the dialog, in the background.
     pub fn start_ocr(&mut self) {
@@ -193,30 +227,57 @@ impl PdfCraftApp {
         self.start_ocr_pages(id, &pages, settings, false);
     }
 
-    /// Edit on a scanned page: like Acrobat's "Converting scanned page to Editable Text and
-    /// Images", the page's words are recognized first, so that they open for editing (Edit text &
-    /// images groups the recognised words into phrases). Runs once per page, for the page in view
-    /// while Edit is on (its tab, or the Edit text & images or Add text tool). The page must be a
-    /// picture (an image covering at least half of it) with no text of its own: comments and text
-    /// boxes over it do not count as text, but real page text does, and such a page (a flyer with a
-    /// background picture) is left alone, and is judged again only when the document changes. It
-    /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
-    pub(crate) fn auto_ocr_scanned_page(&mut self) {
+    pub(crate) fn set_auto_ocr(&mut self, enabled: bool) {
+        if enabled && !self.auto_ocr {
+            for view in &mut self.views {
+                view.auto_ocr_tried.clear();
+                view.auto_ocr_skipped.clear();
+            }
+        }
+        self.auto_ocr = enabled;
+    }
+
+    /// Ask for a page scope before Edit changes a scanned page.
+    pub(crate) fn prompt_scan_ocr(&mut self) {
+        if !self.auto_ocr || self.palette_open {
+            return;
+        }
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available() {
+        if !pdfcraft_engine::ocr::available()
+            || self.session.get(scan.doc).is_none_or(|d| !d.text_blocks(scan.page).is_empty())
+        {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
+        if self.views[scan.view].line_editor.is_some()
+            || self.views[scan.view].pending_edit.is_some()
+            || self.views[scan.view].snapshot.is_some()
+        {
+            return;
+        }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
-        // Only a page with no text of its own is read. Comments and text boxes over the picture do
-        // not count as its text (a scan with a few comments is still a scan, as in Acrobat), but
-        // a page with real text and a background picture is left alone.
+        self.dialog = Some(crate::Dialog::RecognizeScan { doc: scan.doc, page: scan.page, generation: scan.generation });
+    }
+
+    pub(crate) fn recognize_scan(&mut self, doc: DocId, page: usize, generation: u64, all: bool) {
+        if self.active_ids().map(|(_, id)| id) != Some(doc) || self.session.get(doc).is_none_or(|d| d.edit_generation() != generation) {
+            self.notify_tr("The document changed while text was being recognized, so the result was discarded. Run Recognize text again.");
+            return;
+        }
         let mut settings = self.ocr_draft.settings();
         settings.skip_text_pages = true;
         settings.native_text_only = true;
-        self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
+        if all {
+            if let Some((view, _)) = self.active_ids()
+                && let Some(document) = self.session.get(doc)
+            {
+                self.views[view].auto_ocr_tried.extend(0..document.info.pages.len());
+            }
+            self.start_ocr_pages(doc, &[], settings, false);
+        } else {
+            self.start_ocr_pages(doc, &[page], settings, false);
+        }
     }
-
     /// The page Edit should read now, if there is one: Edit is on outside Read mode with no dialog
     /// open, nothing else is being recognized, the document may be changed, the page in view has
     /// not been read before (nor been found no scan since the document last changed), and an image
@@ -404,6 +465,40 @@ fn recognize_files(
         msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
     }
     msg
+}
+
+pub(crate) fn toggle(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
+    let mut enabled = app.auto_ocr;
+    if ui
+        .add(widgets::checkbox(&mut enabled, tl!("Recognize scanned text automatically")))
+        .on_hover_text(tl!("Ask whether to recognize the current page or all pages when editing a scan."))
+        .changed()
+    {
+        app.set_auto_ocr(enabled);
+    }
+}
+
+pub(crate) fn scan_prompt_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (Option<bool>, bool) {
+    ui.label(egui::RichText::new(tl!("Scanned text detected")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!("Recognize text on this page or throughout the document?"));
+    ui.add_space(8.0);
+    toggle(ui, app);
+    ui.add_space(8.0);
+    let mut all = None;
+    let mut cancel = false;
+    ui.horizontal(|ui| {
+        if widgets::pill_button(ui, tl!("Current page"), true).clicked() {
+            all = Some(false);
+        }
+        if widgets::pill_button(ui, tl!("All pages"), false).clicked() {
+            all = Some(true);
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            cancel = true;
+        }
+    });
+    (all, cancel)
 }
 
 impl PdfCraftApp {
@@ -747,7 +842,7 @@ mod stale_manual_result_tests {
 
     /// An app with a one-page document and a finished recognition run captured at that state.
     fn app_with_finished_run() -> Option<(PdfCraftApp, DocId)> {
-        let mut s = Session::new();
+        let s = Session::new();
         let bytes = s.create_from_text("t", "Some text").ok()?;
         let mut app = PdfCraftApp::new();
         app.open_bytes("t.pdf", None, bytes.to_vec()).ok()?;
@@ -756,7 +851,7 @@ mod stale_manual_result_tests {
         let word = PlacedWord { text: "scanned".into(), origin: [50.0, 700.0], across: [40.0, 0.0], up: [0.0, 12.0] };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, generation, progress });
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: None });
         Some((app, id))
     }
 
