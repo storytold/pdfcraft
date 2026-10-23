@@ -1961,3 +1961,22 @@ fn a_cloudy_square_follows_rd_left_top_right_bottom() {
         assert!(ops.contains(corner), "corner {corner} in {ops}");
     }
 }
+
+/// Review on #4195: without `/RD`, a small cloudy square still keeps its bumps inside `/Rect`.
+/// Its edges are short enough that each rounds to a single bump about three radii long, which
+/// bulges further than one radius; a valid `/RD` is used exactly as given.
+#[test]
+fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
+    for side in [20.0, 24.4, 30.0, 41.0] {
+        let ops = drawn(&format!(
+            "<< /Type /Annot /Subtype /Square /Rect [100 100 {x} {x}] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> >>",
+            x = 100.0 + side
+        ))
+        .unwrap_or_else(|| panic!("side {side} is drawn"));
+        let e = extent(&ops);
+        assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 101.0 + side && e[3] <= 101.0 + side, "side {side}: {e:?}");
+    }
+    let small_rd =
+        drawn("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
+    assert!(small_rd.contains("101 101"), "the inner square starts where /RD says: {small_rd}");
+}

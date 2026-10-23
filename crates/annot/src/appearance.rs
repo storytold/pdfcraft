@@ -144,15 +144,18 @@ fn cloud_bump(w: f64, intensity: f64) -> f64 {
 
 /// The shape a cloudy square, circle or text box draws its bumps around: `/Rect` less `/RD`
 /// (Table 180: the differences between "the left, top, right, and bottom coordinates of Rect and
-/// those of the square or circle, respectively"), or, without a
-/// usable `/RD`, less the bumps' own height and half the line, so they stay inside `/Rect`.
+/// those of the square or circle, respectively"), kept as given; or, without a usable `/RD`,
+/// less the bumps' greatest reach and half the line, so they stay inside `/Rect`.
 fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<[f64; 4]> {
     let rd = nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite() && *x >= 0.0));
     let inner = match rd {
         // Left, top, right, bottom.
         Some(rd) => [rect[0] + rd[0], rect[1] + rd[3], rect[2] - rd[2], rect[3] - rd[1]],
         None => {
-            let m = bump + w / 2.0;
+            // `cloud_path` rounds each edge to whole bumps, so one may span up to three radii
+            // and bulge 1.5 radii; it also grows the radius to keep within its bump budget.
+            let perimeter = 2.0 * ((rect[2] - rect[0]) + (rect[3] - rect[1]));
+            let m = 1.5 * bump.max(perimeter / (2.0 * MAX_CLOUD_BUMPS as f64)) + w / 2.0;
             [rect[0] + m, rect[1] + m, rect[2] - m, rect[3] - m]
         }
     };
