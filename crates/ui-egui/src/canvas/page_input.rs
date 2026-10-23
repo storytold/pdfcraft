@@ -73,6 +73,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         hidden: comments_hidden,
         redact_mark,
         snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
         snap_cycle: view.comments.snap_cycle,
     };
     let (lines, images) =
@@ -760,6 +761,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         hidden: comments_hidden,
         redact_mark,
         snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
         snap_cycle: view.comments.snap_cycle,
     };
     if tool == QuickTool::Select && !input.consumed {

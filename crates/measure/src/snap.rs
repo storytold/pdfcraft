@@ -320,7 +320,7 @@ fn nearest(p: Point, a: Point, b: Point) -> Point {
 /// distance to a billionth of a unit, the discrete kinds before the others (endpoint, centre,
 /// midpoint, intersection, path). A total order, as `sort_by` requires: "nearly the same"
 /// compared pairwise is not transitive, and since Rust 1.81 a sort may panic on such an order.
-pub(crate) fn candidate_order(a: &Snap, b: &Snap) -> std::cmp::Ordering {
+pub fn candidate_order(a: &Snap, b: &Snap) -> std::cmp::Ordering {
     let rank = |k: SnapKind| match k {
         SnapKind::Endpoint => 0,
         SnapKind::Centre => 1,
@@ -847,6 +847,124 @@ impl Walker<'_> {
 thread_local! {
     /// Times a content stream's `/XObject` resources were read.
     pub(crate) static XOBJECT_DICT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What a comment drawn over the page snaps by, in user space.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outline {
+    /// A line's ends, or the corners of connected lines, a polygon or a rectangle; `closed` joins
+    /// the last corner to the first.
+    Path { points: Vec<Point>, closed: bool },
+    /// An oval in its box.
+    Ellipse { rect: [f64; 4] },
+}
+
+/// At most this many comments of a page snap.
+const MAX_OUTLINES: usize = 10_000;
+
+/// The outlines of the comments on a page drawn with lines (lines and arrows, connected lines,
+/// polygons and clouds, rectangles, ovals), each with its place in the page's `/Annots`, where
+/// they are drawn: inside `/RD` and half the border width in from `/Rect` for a rectangle or an
+/// oval. Hidden comments, freehand drawing and malformed entries are left out.
+pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize, Outline)>> {
+    let p = crate::page(doc, page_index)?;
+    let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
+    let list = annots.as_ref().and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    let nums = |d: &Dict, key: &[u8]| -> Vec<f64> {
+        d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for (i, entry) in list.iter().enumerate() {
+        if out.len() >= MAX_OUTLINES {
+            break;
+        }
+        let o = doc.resolve(entry);
+        let Some(d) = o.as_dict() else { continue };
+        // Hidden (ISO 32000-2 Table 167).
+        if d.get(b"F").and_then(Object::as_int).unwrap_or(0) & 2 != 0 {
+            continue;
+        }
+        let pairs = |v: Vec<f64>| -> Vec<Point> { v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect() };
+        let outline = match d.name(b"Subtype").unwrap_or_default() {
+            b"Line" => Some(nums(d, b"L")).filter(|l| l.len() == 4).map(|l| Outline::Path { points: pairs(l), closed: false }),
+            b"PolyLine" => Some(pairs(nums(d, b"Vertices"))).filter(|v| v.len() >= 2).map(|points| Outline::Path { points, closed: false }),
+            b"Polygon" => Some(pairs(nums(d, b"Vertices"))).filter(|v| v.len() >= 2).map(|points| Outline::Path { points, closed: true }),
+            kind @ (b"Square" | b"Circle") => {
+                let r = nums(d, b"Rect");
+                let rd = Some(nums(d, b"RD")).filter(|r| r.len() == 4 && r.iter().all(|v| *v >= 0.0)).unwrap_or(vec![0.0; 4]);
+                let w = d
+                    .get(b"BS")
+                    .map(|b| doc.resolve(b))
+                    .and_then(|b| b.as_dict().and_then(|b| b.get(b"W").and_then(Object::as_f64)))
+                    .or_else(|| Some(nums(d, b"Border")).filter(|b| b.len() >= 3).map(|b| b[2]))
+                    .unwrap_or(1.0)
+                    .max(0.0);
+                <[f64; 4]>::try_from(r).ok().map(|r| {
+                    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
+                    let h = w / 2.0;
+                    let rect = [x0 + rd[0] + h, y0 + rd[1] + h, x1 - rd[2] - h, y1 - rd[3] - h];
+                    if kind == b"Square" {
+                        let [a, b, c, e] = rect;
+                        Outline::Path { points: vec![[a, b], [c, b], [c, e], [a, e]], closed: true }
+                    } else {
+                        Outline::Ellipse { rect }
+                    }
+                })
+            }
+            _ => None,
+        };
+        if let Some(outline) = outline.filter(|o| match o {
+            Outline::Path { points, .. } => check_points(points).is_ok(),
+            Outline::Ellipse { rect } => rect.iter().all(|v| v.is_finite()) && rect[2] > rect[0] && rect[3] > rect[1],
+        }) {
+            out.push((i, outline));
+        }
+    }
+    Ok(out)
+}
+
+/// The snap geometry of comments drawn over the page: their sides, with their ends and middles,
+/// and the centres of closed ones (an oval's four quarter points are its ends, as on the page).
+pub fn outline_geometry<'a>(outlines: impl IntoIterator<Item = &'a Outline>) -> Geometry {
+    let mut g = Geometry::with_limits(Limits::default());
+    for o in outlines {
+        match o {
+            Outline::Path { points, closed } => {
+                for w in points.windows(2) {
+                    g.edge(w[0], w[1]);
+                }
+                if *closed && points.len() > 2 {
+                    if let (Some(last), Some(first)) = (points.last(), points.first()) {
+                        g.edge(*last, *first);
+                    }
+                    let (lo, hi) = points
+                        .iter()
+                        .fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+                    g.centres.push([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]);
+                }
+            }
+            Outline::Ellipse { rect } => {
+                let k = 0.552_284_75;
+                let [x0, y0, x1, y1] = *rect;
+                let (cx, cy, rx, ry) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0);
+                let (ox, oy) = (rx * k, ry * k);
+                let mut a = [cx + rx, cy];
+                for [b, c, d] in [
+                    [[cx + rx, cy + oy], [cx + ox, cy + ry], [cx, cy + ry]],
+                    [[cx - ox, cy + ry], [cx - rx, cy + oy], [cx - rx, cy]],
+                    [[cx - rx, cy - oy], [cx - ox, cy - ry], [cx, cy - ry]],
+                    [[cx + ox, cy - ry], [cx + rx, cy - oy], [cx + rx, cy]],
+                ] {
+                    g.curve([a, b, c, d], 0);
+                    // The quarter's ends, and its middle (the 45 degree point), as for a curve on the page.
+                    g.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
+                    a = d;
+                }
+                g.centres.push([cx, cy]);
+            }
+        }
+    }
+    g
 }
 
 /// The page's painted vector geometry, within the default [`Limits`].

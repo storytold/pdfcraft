@@ -1238,6 +1238,8 @@ struct PageFrame<'a> {
     calc_hover: Option<crate::calc_order_ui::Focus>,
     /// Snap to drawing (M5): the paths of the page being drawn, when its tool snaps.
     snap: Option<std::sync::Arc<pdfcraft_measure::snap::Geometry>>,
+    /// The comments already drawn on that page, as snap targets.
+    snap_comments: Option<std::sync::Arc<pdfcraft_measure::snap::Geometry>>,
     /// A page took this frame's right-click.
     right_clicked: bool,
 }
@@ -1562,13 +1564,31 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         QuickTool::Select => true,
         _ => false,
     };
-    frame.snap = if prefs.snap && snaps && here {
+    let snapping = prefs.snap && snaps && here;
+    frame.snap = if snapping {
         let mut notice = None;
         let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
         if notice.is_some() {
             view.comments.notice = notice;
         }
         geometry
+    } else {
+        None
+    };
+    // The comments already drawn snap too (lines join at their ends), but not the one being
+    // moved or reshaped, which would hold on to where it was.
+    frame.snap_comments = if snapping && !comments_hidden {
+        let except: Vec<usize> = match &view.comments.gesture {
+            Some(
+                comments::Gesture::Move { page, index, .. }
+                | comments::Gesture::Resize { page, index, .. }
+                | comments::Gesture::Reshape { page, index, .. },
+            ) if *page == i => {
+                vec![*index]
+            }
+            _ => Vec::new(),
+        };
+        view.comments.snap_cache.comments(doc, i, &except)
     } else {
         None
     };
@@ -1584,6 +1604,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         hidden: comments_hidden,
         redact_mark,
         snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
         snap_cycle: view.comments.snap_cycle,
     };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
@@ -1789,6 +1810,7 @@ fn draw_pages(
         calc_hover: None,
         right_clicked: false,
         snap: None,
+        snap_comments: None,
     };
     for &i in visible_pages {
         draw_page(ui, view, &mut frame, i);
