@@ -10641,4 +10641,33 @@ fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
     assert_eq!(re.session().get(pdfcraft_engine::DocId(reopened)).unwrap().info.annotations[0].contents.as_deref(), Some(text));
     assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
     std::fs::remove_dir_all(dir).unwrap();
+#[test]
+fn object_delete_is_atomic_undoable_and_rejects_stale_references() {
+    let dir = workdir("object-delete");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Delete this note","rect":[20,20,130,45]}));
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let objects: Vec<_> = before["objects"].as_array().unwrap().iter().map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    for invalid in [
+        json!([]),
+        json!([{"kind":"text","index":0}]),
+        json!([{"kind":"text","index":1},{"kind":"image","index":999}]),
+        json!([{"kind":"text","index":1},{"kind":"text","index":1}]),
+        json!([{"kind":"text","index":1,"extra":true}]),
+    ] {
+        assert!(a.call("object_delete", &json!({"doc":doc,"page":1,"objects":invalid})).is_err());
+        assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before);
+    }
+    let deleted = ok(&mut a, "object_delete", json!({"doc":doc,"page":1,"generation":before["generation"],"objects":objects}));
+    assert_eq!(deleted["deleted"], 2);
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["count"], 0);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], before["objects"]);
+    assert!(a.call("object_delete", &json!({"doc":doc,"page":1,"generation":before["generation"],"objects":objects})).is_err());
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"deleted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"deleted.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["count"], 0);
+    assert!(page_text(&mut a, reopened)[1].contains("Page 2"));
 }

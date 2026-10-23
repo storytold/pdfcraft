@@ -10267,4 +10267,17 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     let again = reopened.open("multiline.pdf", None, bytes, None).unwrap();
     assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
     assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
+#[test]
+fn deleting_objects_respects_modification_permissions() {
+    let mut session = Session::new();
+    let id = session.open("locked.pdf", None, protected("", "owner", !(1 << 3)), None).unwrap();
+    let before = session.get(id).unwrap().editable_objects(0).unwrap();
+    assert!(matches!(
+        session.apply(id, Edit::DeleteObjects { page: 0, objects: before.iter().map(|o| o.target).collect() }),
+        Err(EditError::NotPermitted(_))
+    ));
+    let doc = session.get(id).unwrap();
+    assert_eq!(doc.editable_objects(0).unwrap(), before);
+    assert!(doc.can_undo().is_none());
+    assert!(!doc.dirty);
 }

@@ -156,6 +156,36 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     Ok(())
 }
 
+/// Delete a mixed selection atomically. Each kind resolves against its original source inventory;
+/// all selected paragraphs are cleared together without regrouping or reflowing their neighbours.
+pub fn delete_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget]) -> Result<(), EditError> {
+    if targets.is_empty() || targets.len() > MAX_MOVE_OBJECTS {
+        return Err(EditError::Invalid("select between 1 and 1000 objects to delete".into()));
+    }
+    let inventory: BTreeSet<_> = editable_objects(doc, page)?.into_iter().map(|o| o.target).collect();
+    let mut unique = BTreeSet::new();
+    for target in targets {
+        if !inventory.contains(target) || !unique.insert(*target) {
+            return Err(EditError::Invalid("a selected object is missing or repeated; select the objects again".into()));
+        }
+    }
+    let indexes = |kind| unique.iter().rev().filter(|t| t.kind == kind).map(|t| t.index).collect::<Vec<_>>();
+    let mut work = doc.clone();
+    let paths = indexes(ObjectKind::Path);
+    if !paths.is_empty() {
+        crate::paths::delete_paths(&mut work, page, &paths)?;
+    }
+    crate::text::clear_blocks(&mut work, page, &indexes(ObjectKind::Text))?;
+    for index in indexes(ObjectKind::Image) {
+        crate::change_image(&mut work, page, index, &crate::ImageChange::Delete)?;
+    }
+    for index in indexes(ObjectKind::Added) {
+        crate::delete_content(&mut work, page, index)?;
+    }
+    *doc = work;
+    Ok(())
+}
+
 struct AddedGeometry {
     rect: [f64; 4],
     local_rect: [f64; 4],

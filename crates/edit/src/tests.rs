@@ -10486,6 +10486,33 @@ fn review_repeated_gs_keeps_alpha_vs_luminosity_mask_chronology() {
         assert!(before.as_chunks::<4>().0.iter().any(|p| p[0] == p[1] && p[1] == p[2] && p[0] < 230), "the masked image is visible");
         arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
         assert_eq!(review_state_raster(&reopen(&doc)), before, "mask application order must survive: {states}");
+fn mixed_object_delete_removes_native_image_text_and_added_content() {
+    let mut doc = image_page();
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "Added label".into(), rect: [50.0, 350.0, 200.0, 380.0], ..Default::default() }))
+        .unwrap();
+    let targets = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect::<Vec<_>>();
+    assert_eq!(targets.len(), 3);
+    delete_objects(&mut doc, 0, &targets).unwrap();
+    let doc = reopen(&doc);
+    assert!(editable_objects(&doc, 0).unwrap().is_empty());
+    assert!(text_lines(&doc, 0).unwrap().is_empty());
+    assert!(page_images(&doc, 0).unwrap().is_empty());
+    assert!(list_added(&doc).is_empty());
+}
+
+#[test]
+fn deleting_several_paragraphs_preserves_unselected_text_advance() {
+    for show in ["(Hello) Tj", "[(He) -20 (llo)] TJ", "(Hello) '", "2 1 (Hello) \""] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 14 TL 72 700 Td {show} [-3000] TJ /F2 12 Tf (ab) Tj [-3000] TJ /F1 12 Tf (Last) Tj ET"));
+        let before = text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "ab").unwrap();
+        let targets =
+            editable_objects(&doc, 0).unwrap().into_iter().filter(|o| o.text.as_deref() != Some("ab")).map(|o| o.target).collect::<Vec<_>>();
+        assert_eq!(targets.len(), 2);
+        delete_objects(&mut doc, 0, &targets).unwrap();
+        let after = text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), 1, "{show}");
+        assert_eq!(after[0].text, "ab");
+        assert!(after[0].rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 1e-6), "{show}: the neighbour stayed in place");
     }
 }
 
@@ -10562,5 +10589,31 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
                 "group and direct transforms must agree, preserving other artwork"
             );
         }
+fn deleting_tagged_text_removes_it_from_the_page_text_inventory() {
+    let mut doc = text_page("/Span << /ActualText (Logical text) >> BDC BT /F1 12 Tf 72 700 Td (Glyph text) Tj ET EMC");
+    let objects = editable_objects(&doc, 0).unwrap();
+    assert_eq!(objects.len(), 1);
+    assert_eq!(objects[0].text.as_deref(), Some("Logical text"));
+    delete_objects(&mut doc, 0, &[objects[0].target]).unwrap();
+    let doc = reopen(&doc);
+    assert!(editable_objects(&doc, 0).unwrap().is_empty());
+    assert!(text_lines(&doc, 0).unwrap().is_empty());
+}
+
+#[test]
+fn mixed_object_delete_refuses_invalid_targets_and_rolls_back_a_late_refusal() {
+    let mut doc = text_page("0 0 30 40 re f BT /F1 12 Tf 4 Tr 50 400 Td (Clipping) Tj ET");
+    let targets = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect::<Vec<_>>();
+    assert_eq!(targets.len(), 2);
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    for selection in [
+        targets.clone(),
+        vec![],
+        vec![targets[0], targets[0]],
+        vec![targets[0], ObjectTarget { kind: ObjectKind::Image, index: usize::MAX }],
+        vec![targets[0]; MAX_MOVE_OBJECTS + 1],
+    ] {
+        assert!(delete_objects(&mut doc, 0, &selection).is_err());
+        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }

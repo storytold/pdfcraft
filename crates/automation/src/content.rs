@@ -324,9 +324,8 @@ impl Automation {
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
     }
 
-    pub(crate) fn object_move(&mut self, a: &Args) -> Result<Value> {
+    fn object_targets(&self, a: &Args) -> Result<Vec<pdfcraft_engine::ObjectTarget>> {
         use pdfcraft_engine::{MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
-        let page = self.page(a)?;
         let rows = a
             .get("objects")
             .and_then(Value::as_array)
@@ -353,6 +352,28 @@ impl Automation {
                 .ok_or_else(|| bad("object index must be a positive integer from object_list"))?;
             targets.push(ObjectTarget { kind, index });
         }
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before editing"));
+            }
+        }
+        Ok(targets)
+    }
+
+    pub(crate) fn object_delete(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let objects = self.object_targets(a)?;
+        let count = objects.len();
+        let mut result = self.apply(a, Edit::DeleteObjects { page, objects })?;
+        result["deleted"] = json!(count);
+        Ok(result)
+    }
+
+    pub(crate) fn object_move(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let targets = self.object_targets(a)?;
         let delta = a
             .get("offset")
             .and_then(Value::as_array)
@@ -361,12 +382,6 @@ impl Automation {
             .filter(|v| v.iter().all(|n| n.is_finite() && n.abs() <= 1e9))
             .ok_or_else(|| bad("offset must contain two finite numbers [dx, dy] in displayed points"))?;
         let doc = self.doc(a)?;
-        if let Some(g) = a.get("generation") {
-            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
-            if g != doc.edit_generation() {
-                return Err(failed("the document changed; call object_list again before moving"));
-            }
-        }
         let offset = doc.object_move_offset(page, delta).map_err(failed)?;
         let count = targets.len();
         let mut result = self.apply(a, Edit::MoveObjects { page, objects: targets, offset })?;

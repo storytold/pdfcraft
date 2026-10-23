@@ -70,7 +70,7 @@ impl ObjectSelection {
         }
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.page = None;
         self.selected.clear();
         self.gesture = None;
@@ -597,47 +597,37 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
 /// Delete (or Backspace) removes the selected objects, as in Acrobat: a paragraph selected by its
 /// frame, or everything an area selection took, goes at once instead of one typed character at a
 /// time.
-pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
-    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() || view.objects.vertex.is_some() {
+pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
+    if ctx.egui_wants_keyboard_input()
+        || view.pending_edit.is_some()
+        || view.objects.input_blocked
+        || view.objects.gesture.is_some()
+        || view.objects.vertex.is_some()
+    {
         return;
     }
-    let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };
+    let selection = view
+        .objects
+        .page
+        .filter(|_| !view.objects.selected.is_empty())
+        .map(|page| (page, view.objects.selected.iter().map(|o| o.target).collect()))
+        .or_else(|| {
+            view.image_selection
+                .as_ref()
+                .filter(|s| s.crop.is_none() && !s.dragging())
+                .map(|s| (s.page, vec![ObjectTarget { kind: ObjectKind::Image, index: s.index }]))
+        });
+    let Some((page, targets)) = selection else { return };
     use egui::{Key, Modifiers};
     if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
         return;
     }
-    // The selection stays until the edit applies: `prepare` clears it when the document changes,
-    // and a refused delete (text used as a clipping path) leaves it selected.
-    view.pending_edit = delete_edit(page, view.objects.selected.iter().map(|o| o.target).collect());
-}
-
-/// The edit that deletes `targets` (indexes into one inventory of `page`) as one undo step.
-/// Each deletion renumbers only what follows it in its own inventory, so paragraphs and images
-/// go from the last to the first, and added content, which the source inventories leave out,
-/// after them.
-fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
-    targets.sort_by_key(|t| (t.kind == ObjectKind::Added, t.kind, std::cmp::Reverse(t.index)));
-    targets.dedup();
-    let paths = targets.iter().filter(|t| t.kind == ObjectKind::Path).map(|t| t.index).collect::<Vec<_>>();
-    let mut edits: Vec<Edit> = targets
-        .into_iter()
-        .filter(|t| t.kind != ObjectKind::Path)
-        .map(|t| match t.kind {
-            ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() },
-            ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete },
-            ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
-            ObjectKind::Path => Edit::DeletePaths { page, paths: vec![t.index] },
-        })
-        .collect();
-    if !paths.is_empty() {
-        edits.insert(0, Edit::DeletePaths { page, paths });
+    if view.objects.page.is_some() && view.objects.generation != Some(doc.edit_generation()) {
+        view.objects.clear();
+        return;
     }
-    if edits.len() > 1 {
-        // "Delete content" is an edit label already, so the history reads the same in every language.
-        Some(Edit::Batch { label: "Delete content".into(), edits })
-    } else {
-        edits.pop()
-    }
+    // apply_edit clears the selection only after success; a refusal leaves it selected.
+    view.pending_edit = Some(Edit::DeleteObjects { page, objects: targets });
 }
 
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
@@ -730,39 +720,3 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn t(kind: ObjectKind, index: usize) -> ObjectTarget {
-        ObjectTarget { kind, index }
-    }
-
-    /// Deleting renumbers what follows in the same inventory, so the batch takes each inventory
-    /// from its last item to its first, and added content (outside the source inventories) last.
-    #[test]
-    fn several_objects_delete_last_first_in_one_step() {
-        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 3), t(ObjectKind::Added, 2)];
-        let Some(Edit::Batch { label, edits }) = delete_edit(0, targets) else { panic!("several objects make one batch") };
-        assert_eq!(label, "Delete content");
-        let order: Vec<(char, usize)> = edits
-            .iter()
-            .map(|e| match e {
-                Edit::EditTextBlock { block, text, .. } => {
-                    assert!(text.is_empty());
-                    ('t', *block)
-                }
-                Edit::EditPageImage { index, change: pdfcraft_engine::ImageEdit::Delete, .. } => ('i', *index),
-                Edit::DeleteContent { index, .. } => ('a', *index),
-                other => panic!("unexpected {}", other.label().wording),
-            })
-            .collect();
-        assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
-    }
-
-    #[test]
-    fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
-        assert!(matches!(delete_edit(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
-        assert!(delete_edit(0, Vec::new()).is_none());
-    }
-}

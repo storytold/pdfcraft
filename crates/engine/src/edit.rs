@@ -406,6 +406,8 @@ pub enum Edit {
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
     },
+    /// Delete a mixed selection as one atomic undo step.
+    DeleteObjects { page: usize, objects: Vec<ObjectTarget> },
     /// Delete vector paths on `page` (indexes of `ObjectKind::Path` objects from `Document::editable_objects`).
     DeletePaths {
         page: usize,

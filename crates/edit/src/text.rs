@@ -311,3 +311,5 @@ mod tests {
         assert!(!is_type3_fallback(&other));
     }
 }
+
+pub(crate) use blocks::clear_blocks;
