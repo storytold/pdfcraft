@@ -731,7 +731,7 @@ mod tests {
                 show_query(ui, &mut query, QueryField::FindBar);
                 show_query(ui, &mut query, QueryField::SearchPanel);
                 let ptr = ui
-                    .data(|d| d.get_temp::<UndoSnapshots>(egui::Id::new("find-input").with("rtl-undo")))
+                    .data(|d| d.get_temp::<UndoSnapshots>(egui::Id::unique("find-input").with("rtl-undo")))
                     .map(|history| std::sync::Arc::as_ptr(&history) as usize)
                     .unwrap_or(0);
                 seen.push(ptr);
@@ -742,6 +742,108 @@ mod tests {
         assert_ne!(seen[0], 0, "the find field stored no undo history");
         assert_eq!(seen[0], seen[1], "the second frame copied the undo history");
         assert_eq!(query, "page");
+    }
+
+    /// Backspace, Delete, and an undo of a blank field must not invent text. An Arabic string
+    /// egui did not snapshot must not become the query either.
+    #[test]
+    fn an_empty_field_ignores_backspace_delete_and_a_reversed_undo() {
+        let mut field = edit("");
+        let cursor = CCursor::default();
+        assert_eq!(field.delete_previous_char(cursor).index.0, 0);
+        assert_eq!(field.delete_next_char(cursor).index.0, 0);
+        assert_eq!(field.logical.borrow().as_str(), "");
+        field.replace_with("");
+        assert_eq!(field.logical.borrow().as_str(), "");
+        field.replace_with("مر");
+        assert_eq!(field.logical.borrow().as_str(), "", "an unknown Arabic snapshot became the query");
+    }
+
+    /// Undo then redo walks the stored texts, not the on-screen order.
+    #[test]
+    fn redo_puts_back_the_later_typed_text() {
+        let mut field = edit("");
+        let mut cursor = CCursor::default();
+        for ch in "مر".chars() {
+            field.insert_text_at(&mut cursor, &ch.to_string(), usize::MAX);
+        }
+        let early_screen = field.as_str().to_owned();
+        let early = field.logical.borrow().clone();
+        field.insert_text_at(&mut cursor, "ا", usize::MAX);
+        let later_screen = field.as_str().to_owned();
+        let later = field.logical.borrow().clone();
+        assert_ne!(early_screen, early);
+        field.replace_with(&early_screen);
+        assert_eq!(field.logical.borrow().as_str(), early);
+        field.replace_with(&later_screen);
+        assert_eq!(field.logical.borrow().as_str(), later, "redo stored the on-screen order");
+    }
+
+    /// The bar and the Search panel share the query string and keep separate undo maps.
+    #[test]
+    fn the_find_bar_and_the_search_panel_do_not_share_undo_history() {
+        let ctx = egui::Context::default();
+        let mut find = String::from("page");
+        let mut search = String::from("other");
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show_query(ui, &mut find, QueryField::FindBar);
+            show_query(ui, &mut search, QueryField::SearchPanel);
+        });
+        output.drop_without_applying_deltas();
+        find.push('X');
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            show_query(ui, &mut find, QueryField::FindBar);
+            show_query(ui, &mut search, QueryField::SearchPanel);
+        });
+        output.drop_without_applying_deltas();
+        let mut found = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let find_history = ui.data(|d| d.get_temp::<UndoSnapshots>(egui::Id::unique("find-input").with("rtl-undo")));
+            let search_history = ui.data(|d| d.get_temp::<UndoSnapshots>(egui::Id::unique("search-panel-input").with("rtl-undo")));
+            found = Some((find_history, search_history));
+        });
+        output.drop_without_applying_deltas();
+        let (find_history, search_history) = found.expect("histories");
+        let find_history = find_history.expect("find history");
+        let search_history = search_history.expect("search history");
+        assert!(!std::sync::Arc::ptr_eq(&find_history, &search_history));
+        assert!(find_history.iter().any(|(_, stored)| stored == "pageX"), "find undo lost the edit");
+        assert!(search_history.iter().all(|(_, stored)| stored == "other"), "search undo took the find bar's text");
+    }
+
+    /// Past the cap, the oldest screen is gone and is not written into the query. A later
+    /// screen from the same burst still restores the typed text.
+    #[test]
+    fn the_undo_cap_drops_only_the_oldest_snapshot() {
+        let mut field = edit("");
+        let mut cursor = CCursor::default();
+        field.insert_text_at(&mut cursor, "م", usize::MAX);
+        let dropped_screen = field.as_str().to_owned();
+        // The empty field is the oldest entry. One full cap of later edits drops that and `م`.
+        for _ in 0..SNAPSHOT_CAP {
+            field.insert_text_at(&mut cursor, "ا", usize::MAX);
+        }
+        let kept_screen = field.as_str().to_owned();
+        let kept_stored = field.logical.borrow().clone();
+        field.insert_text_at(&mut cursor, "ا", usize::MAX);
+        assert_eq!(field.snapshots.len(), SNAPSHOT_CAP);
+        let current = field.logical.borrow().clone();
+        field.replace_with(&dropped_screen);
+        assert_eq!(field.logical.borrow().as_str(), current, "a dropped snapshot was applied");
+        field.replace_with(&kept_screen);
+        assert_eq!(field.logical.borrow().as_str(), kept_stored, "a snapshot inside the cap was lost");
+    }
+
+    /// A mixed line is not pure right-to-left, so word delete follows the shown word.
+    /// Using the stored edge here would remove "See" and leave the Arabic word.
+    #[test]
+    fn a_mixed_line_word_delete_removes_the_shown_word() {
+        let mut field = edit("See واحد");
+        let end = field.as_str().chars().count();
+        field.delete_previous_word(CCursor { index: CharIndex(end), prefer_next_row: false });
+        let left = field.logical.borrow().clone();
+        assert!(left.contains("See"), "word delete used the stored edge: {left:?}");
+        assert!(!left.contains('و'), "the shown Arabic word stayed: {left:?}");
     }
 
     /// Alt+Backspace deletes the previous word in typing order. On a pure right-to-left line
