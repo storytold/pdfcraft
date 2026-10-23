@@ -26,6 +26,7 @@ pub struct OcrDraft {
     pub from: usize,
     pub to: usize,
     pub language: String,
+    pub lang_picked: bool,
     /// "Downsample to" resolution.
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
@@ -34,7 +35,8 @@ pub struct OcrDraft {
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        let language = if crate::i18n::current().code() == "he" { "he" } else { "en" };
+        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: language.into(), lang_picked: false, dpi: 300, text_pages: false }
     }
 }
 
@@ -71,6 +73,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
     let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
+    if !d.lang_picked {
+        d.language = if crate::i18n::current().code() == "he" { "he".into() } else { "en".into() };
+    }
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
     ui.label(egui::RichText::new(tl!("Recognize Text")).font(theme::semibold(18.0)));
@@ -100,7 +105,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
             egui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    if ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name)).clicked() {
+                        d.lang_picked = true;
+                    }
                 }
             });
             ui.end_row();

@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 34] = [
+pub static DATE_LANGUAGES: [DateLanguage; 35] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -564,6 +564,28 @@ pub static DATE_LANGUAGES: [DateLanguage; 34] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    DateLanguage {
+        code: "he",
+        name: "עברית",
+        months: ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"],
+        months_with_day: Some([
+            "בינואר",
+            "בפברואר",
+            "במרץ",
+            "באפריל",
+            "במאי",
+            "ביוני",
+            "ביולי",
+            "באוגוסט",
+            "בספטמבר",
+            "באוקטובר",
+            "בנובמבר",
+            "בדצמבר",
+        ]),
+        months_short: ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"],
+        days: ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "יום שבת"],
+        days_short: ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -987,6 +1009,19 @@ mod tests {
         let e = s.today_text_for_pdf(Some("dddd d mmmm yyyy"), Some("vi")).unwrap_err();
         assert!(e.contains("can't be written into the PDF yet") && e.contains("dd.mm.yyyy"), "{e}");
         assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("vi")).is_ok());
+    }
+
+    #[test]
+    fn hebrew_month_and_weekday_names() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_date_language(Some("HE")).unwrap();
+        assert_eq!(s.date_language(), Some("he"));
+        s.set_date_format("d mmmm yyyy").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("14 בנובמבר 2023"));
+        s.set_date_format("mmmm yyyy").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("נובמבר 2023"));
+        s.set_date_format("dddd, d mmm").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("יום שלישי, 14 נוב׳"));
     }
 
     #[test]

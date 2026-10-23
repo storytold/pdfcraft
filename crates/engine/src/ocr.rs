@@ -130,7 +130,7 @@ impl OcrJob {
                 out.push(skip(&e));
                 continue;
             }
-            let lines = match ocr.recognize(&shot.rgba, shot.width, shot.height) {
+            let lines = match ocr.recognize_lang(&shot.rgba, shot.width, shot.height, &self.settings.language) {
                 Ok(l) => l,
                 Err(e) => {
                     out.push(skip(&e.to_string()));

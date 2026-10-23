@@ -307,6 +307,17 @@ usage = "Finnish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
 sha256 = "609efa92054aa76de4bb6062c0fcc0a8b450519f4b253b4c0f395b3cbb34d2ba"
 
 [[asset]]
+path = "crates/ui-egui/src/i18n/he.tsv"
+title = "Hebrew interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Hebrew UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "3123ce56cd9367355c9c8c25c01e73ac50022ea7441209bfbd2521ddbab9cc55"
+
+[[asset]]
 path = "assets/icons/accessibility.svg"
 title = "Lucide icon \"accessibility\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

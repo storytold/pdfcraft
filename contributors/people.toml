@@ -154,6 +154,10 @@ sync_github_name = false
 display_name = "Netter"
 sync_github_name = false
 
+[people.ronnieba]
+sync_github_name = true
+
+
 [people.MortenHusted]
 sync_github_name = true
 
