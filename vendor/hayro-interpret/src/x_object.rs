@@ -386,10 +386,7 @@ impl<'a> ImageXObject<'a> {
     ) -> Option<Self> {
         let dict = stream.dict();
 
-        let is_stencil_mask = dict
-            .get::<bool>(IM)
-            .or_else(|| dict.get::<bool>(IMAGE_MASK))
-            .unwrap_or(false);
+        let is_stencil_mask = is_stencil_mask(stream);
         is_mask |= is_stencil_mask;
 
         let mut default_space = None;
@@ -699,6 +696,17 @@ fn decode_context<'a>(
     })
 }
 
+/// Whether a mask stream is a stencil mask (an image with `/ImageMask true`).
+///
+/// PdfCraft patch: a stencil mask says *where* an image is painted, while a soft mask says how
+/// opaque it is; the two are not interchangeable when the mask cannot be read.
+fn is_stencil_mask(stream: &Stream<'_>) -> bool {
+    let dict = stream.dict();
+    dict.get::<bool>(IM)
+        .or_else(|| dict.get::<bool>(IMAGE_MASK))
+        .unwrap_or(false)
+}
+
 fn decode_mask(
     obj: &ImageXObject<'_>,
     target_dimension: Option<(u32, u32)>,
@@ -879,7 +887,7 @@ fn decode_raster(
     } else {
         // Use flatten here, so in case the alpha channel is invalid we can still
         // return the main image (see PDFJS-19611).
-        resolve_alpha(
+        match resolve_alpha(
             obj,
             &mut ctx.decoded,
             Some(&image),
@@ -889,8 +897,17 @@ fn decode_raster(
             &mut height,
             ctx.scale_factors,
             target_dimension,
-        )
-        .flatten()
+        ) {
+            Some(Alpha::Decoded(alpha)) => Some(alpha),
+            // PdfCraft patch: a stencil mask that could not be read is not the same as no mask:
+            // the mask says where the image is painted, and without it the image covers the page.
+            // The image is skipped, the way an image whose own data cannot be decoded is skipped.
+            Some(Alpha::UnreadableStencil) => {
+                (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+                return None;
+            }
+            Some(Alpha::None) | None => None,
+        }
     };
 
     Some(DecodedRaster { image, alpha })
@@ -905,6 +922,19 @@ fn decode_mask_bytes(
     decode_arr: &[(f32, f32)],
     invert: bool,
 ) -> Option<Vec<u8>> {
+    // PdfCraft patch: a stencil mask has to cover the image it masks. A stream that decoded to
+    // less data than that cannot say where the image is painted: the samples `get_components`
+    // would invent for the missing bytes are zero, which paints. A lenient filter (Flate keeps
+    // what it could decode) therefore looks like a mask that covers everything. Treat it as
+    // unreadable, the way a mask whose decode failed outright is treated.
+    if invert {
+        let row_bits = u64::from(width) * u64::from(bits_per_component);
+        let expected = row_bits.div_ceil(8).saturating_mul(u64::from(*height));
+        if (decoded_data.len() as u64) < expected {
+            return None;
+        }
+    }
+
     let default_decode = color_space.default_decode_arr(bits_per_component as f32);
     let inverted_default = color_space.inverted_default_decode_arr(bits_per_component as f32);
     let fast_path = bits_per_component == 8
@@ -949,6 +979,22 @@ fn decode_mask_bytes(
     Some(data)
 }
 
+/// The alpha channel of an image.
+enum Alpha {
+    /// The image has no mask.
+    None,
+    /// The mask was decoded.
+    Decoded(LumaData),
+    /// The image declares a stencil mask whose data could not be decoded.
+    ///
+    /// PdfCraft patch: a stencil mask says *where* the image is painted, not how opaque it is.
+    /// Without it the image covers far more of the page than the document says, which is a
+    /// different picture: the index page of a book whose pages carry a light and a dark layer
+    /// drew the dark one over the light one. The image is skipped instead, the way an image
+    /// whose own data cannot be decoded is skipped.
+    UnreadableStencil,
+}
+
 fn resolve_alpha(
     obj: &ImageXObject<'_>,
     decoded: &mut FilterResult<'_>,
@@ -959,7 +1005,7 @@ fn resolve_alpha(
     height: &mut u32,
     scale_factors: (f32, f32),
     target_dimension: Option<(u32, u32)>,
-) -> Option<Option<LumaData>> {
+) -> Option<Alpha> {
     let dict = obj.stream.dict();
 
     let alpha = if let Some(1) = dict.get::<u8>(SMASK_IN_DATA) {
@@ -968,7 +1014,7 @@ fn resolve_alpha(
         if let Some(mut data) = smask_data {
             fix_image_length(&mut data, width, height, 0, &ColorSpace::device_gray())?;
 
-            Some(LumaData {
+            Alpha::Decoded(LumaData {
                 data,
                 width,
                 height: *height,
@@ -976,16 +1022,28 @@ fn resolve_alpha(
                 scale_factors,
             })
         } else {
-            None
+            Alpha::None
         }
-        // Note: `SMASK` field takes precedence over `MASK`, so order matters here.
+        // Note: `SMask` field takes precedence over `Mask`, so order matters here.
     } else if let Some(s_mask) = dict
         .get::<Stream<'_>>(SMASK)
         .or_else(|| dict.get::<Stream<'_>>(MASK))
     {
-        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
+        // PdfCraft patch: a stencil mask that cannot be decoded is not the same as no mask. A
+        // stream that decoded to less data than its width x height cannot say where the image is
+        // painted: the samples `get_components` would invent for the missing bytes are zero, which
+        // paints. A lenient filter (Flate keeps what it could decode) therefore looks like a mask
+        // that covers everything, and the image covered the page with its dark layer over its
+        // light one. Report it and skip the image, the way an image whose own data cannot be
+        // decoded is skipped.
+        let stencil = is_stencil_mask(&s_mask);
+        let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None);
 
-        decode_mask(&obj, target_dimension).map(|decoded| decoded.luma)
+        match mask_obj.and_then(|m| decode_mask(&m, target_dimension)) {
+            Some(decoded) => Alpha::Decoded(decoded.luma),
+            None if stencil => Alpha::UnreadableStencil,
+            None => Alpha::None,
+        }
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
         let mut mask_data = vec![];
 
@@ -1011,7 +1069,7 @@ fn resolve_alpha(
 
         fix_image_length(&mut mask_data, width, height, 0, &ColorSpace::device_gray())?;
 
-        Some(LumaData {
+        Alpha::Decoded(LumaData {
             data: mask_data,
             width,
             height: *height,
@@ -1019,7 +1077,7 @@ fn resolve_alpha(
             scale_factors,
         })
     } else {
-        None
+        Alpha::None
     };
 
     Some(alpha)

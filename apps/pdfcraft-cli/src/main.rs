@@ -688,6 +688,10 @@ fn render(args: &[String]) -> Result<(), CliError> {
             pdfcraft_render::RenderWarning::ContentTruncated => {
                 let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: content past the page's safety budget was skipped");
             }
+            pdfcraft_render::RenderWarning::ImageDecodeFailure => {
+                let _ =
+                    writeln!(std::io::stderr().lock(), "warning: page {page}: an image, or the mask of one, could not be decoded and was left out");
+            }
         }
     }
     Ok(())

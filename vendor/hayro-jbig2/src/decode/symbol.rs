@@ -397,6 +397,8 @@ fn decode_aggregation_bitmap(
         refinement_at_pixels: ctx.header.refinement_at_pixels.clone(),
         num_instances: aggregation_instance_count,
         symbol_id_table,
+        // Upstream (LaurenzV/hayro#1278): the data of the region the instances are read from.
+        segment_data_len: ctx.header.data.len(),
         data: &[], // Data comes from parent decoder context, not the header.
     };
 

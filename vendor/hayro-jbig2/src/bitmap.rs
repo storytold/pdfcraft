@@ -148,24 +148,24 @@ impl Bitmap {
     pub(crate) fn combine(&mut self, other: &Self, x: i32, y: i32, operator: CombinationOperator) {
         // TODO: Figure out how we can optimize this, especially since this is a
         // bottleneck for symbols/patterns.
-        let dest_x_start = x.max(0);
-        let dest_x_end = (x + other.width as i32).min(self.width as i32);
+        // PdfCraft patch: the bounds are computed in i64, because `x + other.width` overflows i32
+        // for a placement near the end of the coordinate space. Rows that miss the destination are
+        // clipped up front instead of scanned and skipped one by one.
+        let dest_x_start = i64::from(x).max(0);
+        let dest_x_end = (i64::from(x) + i64::from(other.width)).min(i64::from(self.width));
+        let dest_y_start = i64::from(y).max(0);
+        let dest_y_end = (i64::from(y) + i64::from(other.height)).min(i64::from(self.height));
 
-        if dest_x_start >= dest_x_end {
+        if dest_x_start >= dest_x_end || dest_y_start >= dest_y_end {
             return;
         }
 
-        let src_x_start = (dest_x_start - x) as u32;
+        let src_x_start = (dest_x_start - i64::from(x)) as u32;
         let dest_x_start = dest_x_start as u32;
         let dest_x_end = dest_x_end as u32;
 
-        for src_y in 0..other.height {
-            let dest_y = y + src_y as i32;
-            if dest_y < 0 || dest_y >= self.height as i32 {
-                continue;
-            }
-
-            let dest_y = dest_y as u32;
+        for dest_y in dest_y_start as u32..dest_y_end as u32 {
+            let src_y = (i64::from(dest_y) - i64::from(y)) as u32;
 
             let first_word = dest_x_start / WORD_BITS;
             let last_word = (dest_x_end - 1) / WORD_BITS;
@@ -223,5 +223,30 @@ impl Bitmap {
         }
 
         self.data[(row * self.stride + word_idx) as usize]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PdfCraft patch: a placement at the far end of the coordinate space misses the destination.
+    /// Adding its symbol's size to it used to overflow i32, which panics when overflow checks are
+    /// on; the rows it misses are now clipped away before they are walked.
+    #[test]
+    fn placements_past_the_coordinate_space_combine_nothing() {
+        let mut dest = Bitmap::new(8, 2).unwrap();
+        let src = Bitmap::new(8, 2).unwrap();
+
+        for (x, y) in [
+            (i32::MAX - 1, 0),
+            (0, i32::MAX - 1),
+            (i32::MIN, i32::MIN),
+            (i32::MAX - 1, i32::MAX - 1),
+        ] {
+            dest.combine(&src, x, y, CombinationOperator::Or);
+        }
+
+        assert!(dest.data.iter().all(|word| *word == 0));
     }
 }

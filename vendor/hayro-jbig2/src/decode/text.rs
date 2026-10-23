@@ -91,10 +91,22 @@ pub(crate) fn decode_with(
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
-    // Arbitrarily chosen, but we need some limit to prevent timeouts.
-    const MAX_INSTANCES: u32 = 10_000;
+    // PdfCraft patch: the most pixels the placements of one text region may write.
+    //
+    // Every placement copies its symbol into the region, so a region that places a large symbol
+    // many times takes minutes. The limit on the number of instances does not bound that: 32
+    // times the data of a megabyte is 32 million placements, of a symbol of up to 2^26 pixels.
+    // 2^30 pixels is about two hundred times what a dense page of text writes (a book's index
+    // page places 10,870 symbols and writes five million pixels), and a second or two of work.
+    const MAX_INSTANCE_PIXELS: u64 = 1 << 30;
 
-    if header.num_instances > MAX_INSTANCES {
+    // Upstream (LaurenzV/hayro#1278, "Use heuristic for maximum symbol instances"): a region may
+    // place as many instances as its data can hold, as in PDFium. The fixed cap of 10,000 that
+    // this replaces refused the index page of a 296-page book, which places 10,870 of them: the
+    // region was dropped, its stencil mask with it, and the page drew the book's dark layer over
+    // its light one.
+    let max_instances = header.segment_data_len.saturating_mul(32);
+    if header.num_instances as usize > max_instances {
         bail!(SymbolError::TooManyInstances);
     }
 
@@ -104,6 +116,8 @@ pub(crate) fn decode_with(
         .ok_or(OverflowError::PlacementCoordinate)?;
     let mut first_s: i32 = 0;
     let mut instance_count = 0;
+    // PdfCraft patch: the pixels the placements have written so far (see `MAX_INSTANCE_PIXELS`).
+    let mut written_pixels: u64 = 0;
 
     while instance_count < header.num_instances {
         let delta_t = ctx.read_strip_delta_t(strip_size)?;
@@ -193,6 +207,24 @@ pub(crate) fn decode_with(
                     }
                 }
             };
+
+            // PdfCraft patch: the work a placement costs is the part of its symbol that lands in
+            // the region; the placements of one region share `MAX_INSTANCE_PIXELS`. The bounds
+            // are computed in i64: a placement can sit anywhere in the i32 coordinate space, and
+            // adding a symbol's size to it overflows i32 near its ends.
+            let dest_x_start = i64::from(x).max(0);
+            let dest_x_end = (i64::from(x) + i64::from(symbol_width)).min(i64::from(region.width));
+            let dest_y_start = i64::from(y).max(0);
+            let dest_y_end = (i64::from(y) + i64::from(symbol_height)).min(i64::from(region.height));
+            if dest_x_start < dest_x_end && dest_y_start < dest_y_end {
+                // Both differences fit in u32 (the region's dimensions), and their product in u64.
+                written_pixels = written_pixels.saturating_add(
+                    (dest_x_end - dest_x_start) as u64 * (dest_y_end - dest_y_start) as u64,
+                );
+                if written_pixels > MAX_INSTANCE_PIXELS {
+                    bail!(SymbolError::TooManyInstancePixels);
+                }
+            }
 
             region.combine(symbol_bitmap_ref, x, y, header.flags.combination_operator);
 
@@ -797,6 +829,9 @@ pub(crate) struct TextRegionHeader<'a> {
     pub(crate) refinement_at_pixels: Vec<AdaptiveTemplatePixel>,
     pub(crate) num_instances: u32,
     pub(crate) symbol_id_table: Option<HuffmanTable>,
+    /// Upstream (LaurenzV/hayro#1278): the length of the segment's data, which bounds how many
+    /// symbol instances the region may place.
+    pub(crate) segment_data_len: usize,
     pub(crate) data: &'a [u8],
 }
 
@@ -866,6 +901,9 @@ fn parse_text_region_huffman_flags(reader: &mut Reader<'_>) -> Result<TextRegion
 
 /// Parse a text region segment header (7.4.3.1).
 pub(crate) fn parse<'a>(reader: &mut Reader<'a>, num_symbols: u32) -> Result<TextRegionHeader<'a>> {
+    // Upstream (LaurenzV/hayro#1278): the length of the segment's data bounds how many symbol
+    // instances the region may place.
+    let segment_data_len = reader.tail().ok_or(ParseError::UnexpectedEof)?.len();
     let region_info = parse_region_segment_info(reader)?;
     let flags = parse_text_region_flags(reader)?;
     let huffman_flags = if flags.use_huffman {
@@ -898,6 +936,105 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>, num_symbols: u32) -> Result<Tex
         refinement_at_pixels,
         num_instances,
         symbol_id_table,
+        segment_data_len,
         data,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Decoder;
+    use crate::error::DecodeError;
+
+    /// A decoder that counts the pixels it is handed.
+    #[derive(Default)]
+    struct Counter {
+        pixels: u64,
+    }
+
+    impl Decoder for Counter {
+        fn push_pixel(&mut self, _black: bool) {
+            self.pixels += 1;
+        }
+
+        fn push_pixel_chunk(&mut self, _black: bool, chunk_count: u32) {
+            self.pixels += u64::from(chunk_count) * 8;
+        }
+
+        fn next_line(&mut self) {}
+    }
+
+    /// A JBIG2 stream with a page information segment, a symbol dictionary without symbols and
+    /// an immediate text region that places `instances` symbol instances.
+    fn text_region_stream(instances: u32) -> Vec<u8> {
+        fn segment(out: &mut Vec<u8>, number: u32, kind: u8, referred: Option<u32>, page: u8, data: &[u8]) {
+            out.extend_from_slice(&number.to_be_bytes());
+            out.push(kind);
+            // The referred-to segment count sits in the top three bits of this byte.
+            out.push(u8::from(referred.is_some()) << 5);
+            if let Some(referred) = referred {
+                out.push(referred as u8);
+            }
+            out.push(page);
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(data);
+        }
+
+        let mut out = Vec::new();
+
+        // Page information (7.4.8): width, height, x, y, resolution, striping, flags.
+        let mut page = Vec::new();
+        for value in [100_u32, 100, 0, 0, 0, 0] {
+            page.extend_from_slice(&value.to_be_bytes());
+        }
+        page.push(0);
+        page.extend_from_slice(&0_u16.to_be_bytes());
+        segment(&mut out, 0, 48, None, 1, &page);
+
+        // Symbol dictionary (7.4.2): flags, the default adaptive template pixels, and no
+        // symbols at all.
+        let mut dictionary = Vec::new();
+        dictionary.extend_from_slice(&0_u16.to_be_bytes());
+        for pixel in [(3_i8, -1_i8), (-3, -1), (2, -2), (-2, -2)] {
+            dictionary.push(pixel.0 as u8);
+            dictionary.push(pixel.1 as u8);
+        }
+        dictionary.extend_from_slice(&0_u32.to_be_bytes());
+        dictionary.extend_from_slice(&0_u32.to_be_bytes());
+        segment(&mut out, 1, 0, None, 1, &dictionary);
+
+        // Text region (7.4.3): the region, the region flags, the number of instances, and the
+        // data the placements are read from. The data is what bounds the number of instances
+        // (upstream, LaurenzV/hayro#1278), so it is long enough for the count asked for.
+        let mut region = Vec::new();
+        for value in [100_u32, 100, 0, 0] {
+            region.extend_from_slice(&value.to_be_bytes());
+        }
+        region.push(0);
+        region.extend_from_slice(&0_u16.to_be_bytes());
+        region.extend_from_slice(&instances.to_be_bytes());
+        region.extend_from_slice(&[0_u8; 512]);
+        segment(&mut out, 2, 6, Some(1), 1, &region);
+
+        out
+    }
+
+    /// PdfCraft patch: a text region that places more than 10,000 symbol instances was refused
+    /// for its count. The index page of a 296-page book places 10,870 of them, and the refusal
+    /// dropped the region's stencil mask, so the page drew the book's dark layer over its light
+    /// one. The count is no longer refused; only the work the placements cost is bounded.
+    #[test]
+    fn a_text_region_with_more_than_ten_thousand_instances_is_not_refused_for_its_count() {
+        let stream = text_region_stream(10_870);
+        let image = crate::Image::new_embedded(&stream, None).expect("the stream parses");
+        let mut counter = Counter::default();
+        let error = image
+            .decode(&mut counter)
+            .expect_err("the dictionary holds no symbol to place");
+        assert!(
+            matches!(error, DecodeError::Symbol(SymbolError::OutOfRange)),
+            "a region with 10,870 instances must be placed, not refused for its count: {error:?}"
+        );
+    }
 }

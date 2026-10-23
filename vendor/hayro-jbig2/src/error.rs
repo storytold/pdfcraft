@@ -118,6 +118,11 @@ pub enum SymbolError {
     InvalidStripDelta,
     /// Too many symbol instances in a text region.
     TooManyInstances,
+    /// The symbol placements of a text region write too many pixels.
+    ///
+    /// PdfCraft patch: the count of instances is bounded, but the work they cost is the pixels
+    /// they write, and that is what a runaway region needs a limit for.
+    TooManyInstancePixels,
 }
 
 /// Arithmetic overflow errors.
@@ -241,6 +246,7 @@ impl fmt::Display for SymbolError {
             Self::Invalid => write!(f, "invalid symbol encountered"),
             Self::InvalidStripDelta => write!(f, "strip delta overflow"),
             Self::TooManyInstances => write!(f, "too many symbol instances"),
+            Self::TooManyInstancePixels => write!(f, "too many symbol instance pixels"),
         }
     }
 }

@@ -220,6 +220,12 @@ pub struct RenderedPage {
 pub enum RenderWarning {
     /// Content was skipped after the per-page decoded-content budget was exhausted.
     ContentTruncated,
+    /// An image, or the mask of one, could not be decoded and was left out.
+    ///
+    /// An image whose stencil mask cannot be read is left out rather than painted without its
+    /// mask: the mask says where the image is painted, and without it the image covers far more
+    /// of the page than the document says, which is a different picture.
+    ImageDecodeFailure,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -407,6 +413,13 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
                 let mut warnings = lock(&target);
                 if !warnings.contains(&RenderWarning::ContentTruncated) {
                     warnings.push(RenderWarning::ContentTruncated);
+                }
+            }
+            // A page may hold many images that cannot be decoded; one report per page is enough.
+            if matches!(warning, InterpreterWarning::ImageDecodeFailure) {
+                let mut warnings = lock(&target);
+                if !warnings.contains(&RenderWarning::ImageDecodeFailure) {
+                    warnings.push(RenderWarning::ImageDecodeFailure);
                 }
             }
         }),
@@ -2465,6 +2478,76 @@ mod tests {
         assert_eq!(pixel(3), &[255, 128, 128, 255]);
         assert_eq!(pixel(17), &[255, 128, 128, 255]);
         assert_eq!(pixel(19), &[255, 255, 255, 255]);
+    }
+
+    /// A page with a red image whose stencil mask is `mask`: the mask is a 1-bit `/ImageMask`
+    /// image of the image's own size. `broken_filter` gives it a decoder and two bytes that
+    /// decoder cannot read.
+    fn stencil_masked_image_pdf(mask: &str, broken_filter: Option<&str>) -> Vec<u8> {
+        let body = "q 8 0 0 1 0 0 cm /Im0 Do Q\n";
+        let image = "ff0000".repeat(8);
+        let (filter, mask_stream, mask_len) = match broken_filter {
+            // Two bytes are not a JBIG2 or a Flate stream.
+            Some(filter) => (filter, "00".to_string(), 2),
+            None => ("/ASCIIHexDecode", format!("{mask}>"), mask.len() + 1),
+        };
+        format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 8 1] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{body}endstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Mask 6 0 R /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             6 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true /BitsPerComponent 1 /Filter {filter} /Length {mask_len} >> stream\n{mask_stream}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            body.len(),
+            image.len() + 1,
+        )
+        .into_bytes()
+    }
+
+    /// A stencil mask says *where* an image is painted. A mask that cannot be decoded is not the
+    /// same as no mask: without it the image covers the page, which is a different picture. The
+    /// index page of a book whose pages carry a light and a dark layer drew the dark one over the
+    /// light one that way. The image is left out instead, and the failure is reported.
+    #[test]
+    fn an_image_whose_stencil_mask_cannot_be_decoded_is_not_painted() {
+        let pdf = stencil_masked_image_pdf("00", Some("/JBIG2Decode"));
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (8, 1));
+        assert_eq!(&page.rgba[..4], &[255, 255, 255, 255], "the image was painted without its mask");
+        assert!(page.warnings.contains(&RenderWarning::ImageDecodeFailure), "the lost mask is reported");
+    }
+
+    /// A filter that is lenient about its errors is not a mask either. Flate keeps the bytes it
+    /// could inflate, and the samples it did not produce would be read as zero, which paints:
+    /// the image would cover the page as if it had no mask. Such an image is left out too.
+    #[test]
+    fn a_stencil_mask_whose_flate_data_cannot_be_decoded_is_not_painted() {
+        let pdf = stencil_masked_image_pdf("00", Some("/FlateDecode"));
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (8, 1));
+        assert_eq!(&page.rgba[..4], &[255, 255, 255, 255], "the image was painted without its mask");
+        assert!(page.warnings.contains(&RenderWarning::ImageDecodeFailure), "the lost mask is reported");
+    }
+
+    /// A stencil mask that can be read still says where the image is painted: a stencil mask
+    /// paints where its samples are 0.
+    #[test]
+    fn a_stencil_mask_that_decodes_still_masks_the_image() {
+        for (mask, painted) in [("00", true), ("ff", false)] {
+            let pdf = stencil_masked_image_pdf(mask, None);
+            let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+            assert!(page.error.is_none(), "{:?}", page.error);
+            assert_eq!((page.width, page.height), (8, 1));
+            let expected = if painted { [255, 0, 0, 255] } else { [255, 255, 255, 255] };
+            assert_eq!(&page.rgba[..4], &expected, "mask {mask}");
+            assert!(!page.warnings.contains(&RenderWarning::ImageDecodeFailure), "mask {mask}: nothing failed");
+        }
     }
     // GREEN-only integration: the original renderer would attempt GiB buffers. The source is
     // only 96 KiB, and the fixed guard rejects the target before the resampling plan/allocation.

@@ -64,8 +64,8 @@ update the numbers.
 
 - **Missing:** our own renderer (M2: `model` crate, font engine, DisplayList devices, ADR-0004), or
   an owner decision to adopt another engine; and any measurement of rendering against Acrobat.
-- **Evidence:** pages are drawn by vendored `hayro` 0.7 with 26 local patches to `hayro-interpret`,
-  15 to `hayro`, 3 to `hayro-jbig2` and 17 to `hayro-syntax` (`vendor/README.md`); `lopdf` still
+- **Evidence:** pages are drawn by vendored `hayro` 0.7 with 34 local patches to `hayro-interpret`,
+  18 to `hayro`, 5 to `hayro-jbig2` and 17 to `hayro-syntax` (`vendor/README.md`); `lopdf` still
   backs document inspection. All 7 rendering P0 features are `partial`. User reports: TikZ pattern
   fills drawn wrong ([#794](https://github.com/storytold/pdfcraft/issues/794)), blurry text at
   1080p/1440p ([#730](https://github.com/storytold/pdfcraft/issues/730)), fixed zoom sizes differ
@@ -240,7 +240,7 @@ update the numbers.
   `pixels`). **First reading, 250 files at 72 dpi, tolerance 8: 229 compared, median 0.89%, mean
   2.16%, p90 5.35%, 25 within 0.1%.** It reports rather than gates — the corpus is not fetched on
   CI, and a first reading of a borrowed renderer is a baseline to improve on, not a bar to clear.
-  The worst results cluster on JBIG2 `bitmap-*` files (`hayro-jbig2` carries 3 local patches) and
+  The worst results cluster on JBIG2 `bitmap-*` files (`hayro-jbig2` carries 5 local patches) and
   on ZapfDingbats, which points the renderer work at something specific for the first time.
 - **Read the score as a disagreement, not a verdict (2026-10-14).** The worst file of the 250,
   `bug1552113.pdf` at 84%, turned out to be Poppler's defect: it paints the link's `/Border [0 0
