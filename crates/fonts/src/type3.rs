@@ -111,6 +111,9 @@ pub fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &
 
 /// Convenience helper to create a Type 3 font for `clusters`, resolving glyph outlines via [`shaped_glyph`].
 pub fn type3_for_clusters(doc: &mut Document, clusters: &[&ShapedCluster]) -> Result<ObjRef, GlyphError> {
+    if clusters.len() > 240 {
+        return Err(GlyphError::TooComplex);
+    }
     let mut outlines = HashMap::new();
     for c in clusters {
         for (id, _) in &c.glyphs {

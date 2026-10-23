@@ -150,14 +150,6 @@ pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
         fonts.set(name.as_bytes().to_vec(), Object::Dict(f));
         added = true;
     }
-    if !fonts.contains(b"Thai")
-        && let Some(thai_font) = pdfcraft_fonts::document_thai_font()
-        && let Ok(res) = pdfcraft_fonts::embedding::embed(doc, &mut fonts, thai_font.bytes, thai_font.family)
-        && let Some(obj) = fonts.get(res.as_bytes()).cloned()
-    {
-        fonts.set(b"Thai".to_vec(), obj);
-        added = true;
-    }
     if added {
         dr.set(b"Font".to_vec(), Object::Dict(fonts));
         af.set(b"DR".to_vec(), Object::Dict(dr));

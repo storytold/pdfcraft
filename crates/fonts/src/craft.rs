@@ -102,6 +102,7 @@ static ACTIVE_THAI_FONT: std::sync::RwLock<Option<&'static CraftFont>> = std::sy
 static ACTIVE_THAI_ENTRY: std::sync::RwLock<Option<ThaiFontEntry>> = std::sync::RwLock::new(None);
 static LOADED_THAI_CACHE: std::sync::RwLock<Option<std::collections::HashMap<std::path::PathBuf, &'static CraftFont>>> = std::sync::RwLock::new(None);
 static DISCOVERED_THAI_FONTS: std::sync::RwLock<Option<Vec<ThaiFontEntry>>> = std::sync::RwLock::new(None);
+static THAI_DISCOVERY_ATTEMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn get_active_thai_font() -> Option<&'static CraftFont> {
     *ACTIVE_THAI_FONT.read().unwrap_or_else(|e| e.into_inner())
@@ -646,14 +647,21 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if THAI_DISCOVERY_ATTEMPTED.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
         static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _init_guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(f) = get_active_thai_font() {
             return Some(f);
         }
+        if THAI_DISCOVERY_ATTEMPTED.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
         if let Some(f) = auto_init_thai_font() {
             return Some(f);
         }
+        THAI_DISCOVERY_ATTEMPTED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     None
 }

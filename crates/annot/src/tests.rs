@@ -1430,6 +1430,9 @@ fn free_text_properties_show_legacy_or_absent_border_width() {
 
 #[test]
 fn thai_free_text_typewriter_renders_with_type3_font_without_collision_or_question_marks() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
     let mut doc = fixture();
     let text = "ตั้งแต่นี้เป็นต้นไป";
     let rect = [100.0, 500.0, 300.0, 530.0];

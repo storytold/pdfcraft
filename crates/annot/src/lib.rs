@@ -1554,7 +1554,15 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
             }
             let doc_mut = copy.get_or_insert_with(|| doc.clone());
             let Some(stream) = build_appearance(doc_mut, &d) else { continue };
-            cache.insert(r, &stream);
+            let has_t3 = stream
+                .dict
+                .get(b"Resources")
+                .and_then(|r| doc_mut.resolve(r).as_dict().cloned())
+                .and_then(|res| res.get(b"Font").and_then(|f| doc_mut.resolve(f).as_dict().cloned()))
+                .is_some_and(|fonts| fonts.contains(b"T3Thai"));
+            if !has_t3 {
+                cache.insert(r, &stream);
+            }
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
             apply_appearance(doc_mut, r, &d, stream).ok();
         }

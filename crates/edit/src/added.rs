@@ -655,6 +655,7 @@ pub(crate) fn draw_watermark_shaped(
     page_w: f64,
     page_h: f64,
     opacity: f64,
+    taken: &Dict,
 ) -> Result<(Vec<u8>, Dict), EditError> {
     let dummy = AddedText {
         text: String::new(),
@@ -704,10 +705,17 @@ pub(crate) fn draw_watermark_shaped(
     }
 
     let mut fonts = Dict::new();
+    let mut taken_names: HashSet<Vec<u8>> = taken.iter().map(|(name, _)| name.clone()).collect();
     let mut names = Vec::new();
     for chunk in keys.chunks(GLYPHS_PER_FONT) {
         let font = type3_shaped(doc, chunk, &outlines);
-        let name = format!("PCTh{}", font.num);
+        let mut name = format!("PCTh{}", font.num);
+        let mut suffix = 0usize;
+        while taken_names.contains(name.as_bytes()) {
+            suffix = suffix.saturating_add(1);
+            name = format!("PCTh{}_{suffix}", font.num);
+        }
+        taken_names.insert(name.clone().into_bytes());
         fonts.set(name.clone().into_bytes(), Object::Ref(font));
         names.push(name);
     }
@@ -774,6 +782,7 @@ pub(crate) fn draw_header_footer_shaped(
     expanded: &[(usize, Vec<String>)],
     page_w: f64,
     page_h: f64,
+    taken: &Dict,
 ) -> Result<(Vec<u8>, Dict), EditError> {
     let dummy = AddedText {
         text: String::new(),
@@ -827,10 +836,17 @@ pub(crate) fn draw_header_footer_shaped(
     }
 
     let mut fonts = Dict::new();
+    let mut taken_names: HashSet<Vec<u8>> = taken.iter().map(|(name, _)| name.clone()).collect();
     let mut names = Vec::new();
     for chunk in keys.chunks(GLYPHS_PER_FONT) {
         let font = type3_shaped(doc, chunk, &outlines);
-        let name = format!("PCTh{}", font.num);
+        let mut name = format!("PCTh{}", font.num);
+        let mut suffix = 0usize;
+        while taken_names.contains(name.as_bytes()) {
+            suffix = suffix.saturating_add(1);
+            name = format!("PCTh{}_{suffix}", font.num);
+        }
+        taken_names.insert(name.clone().into_bytes());
         fonts.set(name.clone().into_bytes(), Object::Ref(font));
         names.push(name);
     }

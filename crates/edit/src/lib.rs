@@ -854,7 +854,8 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
 
         let page_has_thai = expanded.iter().any(|(_, lines)| lines.iter().any(|l| l.chars().any(added::is_thai)));
         if page_has_thai {
-            let (body, extra_fonts) = added::draw_header_footer_shaped(doc, hf, &expanded, w, h)?;
+            let taken = page_fonts(doc, page);
+            let (body, extra_fonts) = added::draw_header_footer_shaped(doc, hf, &expanded, w, h, &taken)?;
             let mut content = begin(MarkKind::HeaderFooter, "Header", page.view_matrix(doc)).into_bytes();
             content.extend(body);
             content.extend_from_slice(END.as_bytes());
@@ -960,7 +961,8 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
             continue;
         }
         if has_thai {
-            let (body, extra_fonts) = added::draw_watermark_shaped(doc, &lines, wm, w, h, opacity)?;
+            let taken = page_fonts(doc, &page);
+            let (body, extra_fonts) = added::draw_watermark_shaped(doc, &lines, wm, w, h, opacity, &taken)?;
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc)).into_bytes();
             content.extend(body);
             content.extend_from_slice(END.as_bytes());

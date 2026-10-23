@@ -874,9 +874,6 @@ pub fn build_with_doc(doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
                 (c.script, c.text.clone(), c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(), c.advance.to_bits())
             };
             let custom_font = d.get(b"PCFont").and_then(Object::as_string).map(PdfString::to_text);
-            if let Some(font_name) = &custom_font {
-                let _ = pdfcraft_fonts::set_active_thai_font_by_name(font_name);
-            }
             let (font_alias, base_font) = match custom_font.as_deref() {
                 Some("Times") => ("Times", "Times-Roman"),
                 Some("Courier") => ("Cour", "Courier"),

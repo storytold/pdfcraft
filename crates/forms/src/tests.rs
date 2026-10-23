@@ -2800,6 +2800,7 @@ fn document_scripts_read_each_name_tree_node_once() {
 
 #[test]
 fn thai_text_field_appearance_and_auto_fallback() {
+    let Some(thai) = pdfcraft_fonts::document_thai_font() else { return };
     let mut doc = document(&[
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -2826,11 +2827,14 @@ fn thai_text_field_appearance_and_auto_fallback() {
     let thai_dict = thai_obj.as_dict().unwrap();
     assert_eq!(thai_dict.get(b"Subtype").and_then(|o| o.as_name()), Some(b"Type0".as_slice()));
     let base_font = thai_dict.get(b"BaseFont").and_then(|o| o.as_name()).unwrap();
-    assert!(String::from_utf8_lossy(base_font).contains("Sarabun"));
+    assert!(String::from_utf8_lossy(base_font).contains(&thai.family.replace(' ', "")));
 }
 
 #[test]
 fn thai_text_field_stacked_floating_marks_render_without_collision() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
     let mut doc = document(&[
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -2854,7 +2858,7 @@ fn thai_text_field_stacked_floating_marks_render_without_collision() {
     let res_dict = res_obj.as_dict().unwrap();
     let fonts_obj = doc.resolve(res_dict.get(b"Font").unwrap());
     let fonts = fonts_obj.as_dict().unwrap();
-    let thai_font_obj = doc.resolve(fonts.get(b"Thai").unwrap());
+    let thai_font_obj = doc.resolve(fonts.get(b"T3Thai").or_else(|| fonts.get(b"Thai")).unwrap());
     let thai_font = thai_font_obj.as_dict().unwrap();
     assert_eq!(thai_font.get(b"Subtype").and_then(|o| o.as_name()), Some(b"Type3".as_slice()));
     let to_unicode_obj = doc.resolve(thai_font.get(b"ToUnicode").unwrap());

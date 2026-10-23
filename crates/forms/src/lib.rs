@@ -1260,7 +1260,11 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             .and_then(|o| o.as_string().map(|s| s.to_text()))
             .unwrap_or_else(|| f.da.clone());
         let parsed = appearance::parse_da(&da_str);
-        if matches!(parsed.font.as_str(), "Helv" | "TiRo" | "Cour") {
+        let has_thai_resource = acroform(doc)
+            .and_then(|af| af.get(b"DR").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+            .and_then(|dr| dr.get(b"Font").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+            .is_some_and(|f| f.contains(b"Thai"));
+        if has_thai_resource && matches!(parsed.font.as_str(), "Helv" | "TiRo" | "Cour") {
             let new_da = format!("/Thai {} Tf {}", appearance::fmt(parsed.size), parsed.color);
             let _ = doc.update_dict(f.obj, |d| d.set(b"DA".to_vec(), PdfString::literal(new_da.as_bytes().to_vec())));
             for w in &f.widgets {
@@ -1353,7 +1357,22 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 None => {
                     let target = copy.get_or_insert_with(|| doc.clone());
                     let (stream, _) = appearance::field_appearance_drawn(target, f, w, &f.value, true);
-                    cache.insert(w.obj, inputs, &stream);
+                    let has_t3 = stream
+                        .dict
+                        .get(b"Resources")
+                        .and_then(|r| target.resolve(r).as_dict().cloned())
+                        .and_then(|res| res.get(b"Font").and_then(|f| target.resolve(f).as_dict().cloned()))
+                        .is_some_and(|fonts| {
+                            fonts.iter().any(|(_, obj)| {
+                                target
+                                    .resolve(obj)
+                                    .as_dict()
+                                    .is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))
+                            })
+                        });
+                    if !has_t3 {
+                        cache.insert(w.obj, inputs, &stream);
+                    }
                     stream
                 }
             };

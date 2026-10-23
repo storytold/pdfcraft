@@ -505,8 +505,15 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
         std::collections::HashMap::new();
     if has_thai {
         let mut sample_strings: Vec<&str> = Vec::new();
+        let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
+        let comb_cells: Vec<String>;
         if f.kind == FieldKind::List {
             sample_strings.extend(f.options.iter().map(|(_, d)| d.as_str()));
+        } else if comb {
+            let cells = f.max_len.unwrap_or(1).max(1);
+            comb_cells = text.chars().take(cells).map(|c| c.to_string()).collect();
+            sample_strings.extend(comb_cells.iter().map(|s| s.as_str()));
+            sample_strings.push(&text);
         } else {
             sample_strings.push(&text);
         }
@@ -538,19 +545,10 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
         None
     };
     let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
-        Some((o, enc)) => {
-            if let Some(t3) = t3_font {
-                (da.font.clone(), Object::Ref(t3), enc)
-            } else {
-                (da.font.clone(), o, enc)
-            }
-        }
+        Some((o, enc)) => (da.font.clone(), o, enc),
         None => {
             if text.chars().any(is_thai) {
-                let fallback_enc = dr_font(doc, "Thai").map(|(_, enc)| enc).unwrap_or(FontText::WinAnsi);
-                if let Some(t3) = t3_font {
-                    ("Thai".to_string(), Object::Ref(t3), fallback_enc)
-                } else if let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc)) {
+                if let Some((o, enc)) = dr_font(doc, "Thai").filter(|(_, enc)| can_show(enc)) {
                     ("Thai".to_string(), o, enc)
                 } else {
                     ("Helv".to_string(), helvetica(), FontText::WinAnsi)
@@ -568,14 +566,13 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
+    let thai_font_res_name = if font_name == "Thai" { "T3Thai" } else { "Thai" };
     let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str, size: f64| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
-        if unencodable.is_none() && t3_font.is_none() {
-            unencodable = enc.first_unencodable(&text);
-        }
         if t3_font.is_some() && text.chars().any(is_thai) && let Ok(clusters) = pdfcraft_fonts::shape_thai(&text) {
             let mut pen = x;
+            body.extend(format!("/{} {} Tf ", thai_font_res_name, n(size)).bytes());
             for c in clusters {
                 let key = (
                     c.script,
@@ -591,7 +588,11 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
                 }
                 pen += c.advance * size;
             }
+            body.extend(format!("/{} {} Tf ", font_name, n(size)).bytes());
         } else {
+            if unencodable.is_none() {
+                unencodable = enc.first_unencodable(&text);
+            }
             body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
             body.extend(literal(&enc.encode(&text)));
             body.extend_from_slice(b" Tj\n");
@@ -681,6 +682,9 @@ pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values:
     content.extend_from_slice(b"ET\nQ\nEMC\n");
     let mut fonts = Dict::new();
     fonts.set(font_name.into_bytes(), font_obj);
+    if let Some(t3) = t3_font {
+        fonts.set(thai_font_res_name.as_bytes().to_vec(), Object::Ref(t3));
+    }
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     let mut d = Dict::new();

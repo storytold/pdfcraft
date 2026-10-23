@@ -335,7 +335,6 @@ fn thai_candidates() -> Vec<PathBuf> {
         }
         paths
     } else if cfg!(target_os = "macos") {
-        let mut paths = Vec::new();
         if let Some(font_path) = std::env::var_os("PDFCRAFT_THAI_FONT").map(PathBuf::from) {
             paths.push(font_path);
         }
@@ -352,7 +351,7 @@ fn thai_candidates() -> Vec<PathBuf> {
         }
         paths
     } else {
-        unix_fonts(&[
+        paths.extend(unix_fonts(&[
             "truetype/noto/NotoSansThai-Regular.ttf",
             "noto/NotoSansThai-Regular.ttf",
             "google-noto/NotoSansThai-Regular.ttf",
@@ -361,7 +360,8 @@ fn thai_candidates() -> Vec<PathBuf> {
             "truetype/tlwg/Waree.ttf",
             "truetype/tlwg/Garuda.ttf",
             "truetype/thai/Sarabun-Regular.ttf",
-        ])
+        ]));
+        paths
     }
 }
 
@@ -637,7 +637,7 @@ mod tests {
         {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || p.starts_with("assets") || p.starts_with("../assets") || cfg!(windows)), "{list:?}");
-            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc"))), "{list:?}");
+            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc") || e.eq_ignore_ascii_case("otf"))), "{list:?}");
         }
     }
 

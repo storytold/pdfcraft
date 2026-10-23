@@ -69,19 +69,24 @@ try {
 Start-Sleep -Seconds 1
 
 # 2. Package using package.ps1 with -SkipBuild
-$env:PDFCRAFT_VERSION = $Version
-& (Join-Path $PSScriptRoot 'package.ps1') -Arch x64 -SkipBuild
-if ($LASTEXITCODE -ne 0) { throw "package.ps1 failed with exit code $LASTEXITCODE" }
+$prevVersion = $env:PDFCRAFT_VERSION
+try {
+  $env:PDFCRAFT_VERSION = $Version
+  & (Join-Path $PSScriptRoot 'package.ps1') -Arch x64 -SkipBuild
+  if ($LASTEXITCODE -ne 0) { throw "package.ps1 failed with exit code $LASTEXITCODE" }
 
-# 3. Copy the portable zip to target with the x86_64 naming convention
-$Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
-$BuiltZip = Join-Path $Dist "pdfcraft-$Version-windows-x64-portable.zip"
+  # 3. Copy the portable zip to target with the x86_64 naming convention
+  $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
+  $BuiltZip = Join-Path $Dist "pdfcraft-$Version-windows-x64-portable.zip"
 
-if (Test-Path $BuiltZip) {
-  Copy-Item -Force $BuiltZip $FinalZip
-  Write-Output "==> Successfully created $FinalZip ($(Get-Item $FinalZip).Length bytes)"
-} else {
-  throw "Expected built zip not found at $BuiltZip"
+  if (Test-Path $BuiltZip) {
+    Copy-Item -Force $BuiltZip $FinalZip
+    Write-Output "==> Successfully created $FinalZip ($(Get-Item $FinalZip).Length bytes)"
+  } else {
+    throw "Expected built zip not found at $BuiltZip"
+  }
+} finally {
+  $env:PDFCRAFT_VERSION = $prevVersion
 }
 
 Get-Item $FinalZip | Format-Table FullName, Length, LastWriteTime
