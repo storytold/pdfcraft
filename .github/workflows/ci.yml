@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   test:
+    timeout-minutes: 90
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
@@ -104,6 +105,7 @@ jobs:
         run: cargo check -p pdfcraft-cli --no-default-features
 
   wasm:
+    timeout-minutes: 30
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
@@ -119,6 +121,7 @@ jobs:
         run: cargo xtask wasm
 
   deny:
+    timeout-minutes: 15
     name: dependency licences and advisories
     runs-on: ubuntu-latest
     steps:
@@ -128,6 +131,7 @@ jobs:
           command: check
 
   fuzz:
+    timeout-minutes: 60
     name: fuzz (mutation, 15 min)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
