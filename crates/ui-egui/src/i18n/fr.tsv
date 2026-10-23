@@ -2781,3 +2781,7 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+	Recognize scanned text automatically	Reconnaître automatiquement le texte numérisé
+	Ask whether to recognize the current page or all pages when editing a scan.	Lors de la modification d'un document numérisé, demander s'il faut reconnaître la page actuelle ou toutes les pages.
+	Scanned text detected	Texte numérisé détecté
+	Recognize text on this page or throughout the document?	Reconnaître le texte de cette page ou de l'ensemble du document ?

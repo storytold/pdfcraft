@@ -2822,3 +2822,7 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+	Recognize scanned text automatically	Automaticky rozpoznávat naskenovaný text
+	Ask whether to recognize the current page or all pages when editing a scan.	Při úpravě skenu se zeptat, zda rozpoznat aktuální stránku, nebo všechny stránky.
+	Scanned text detected	Byl zjištěn naskenovaný text
+	Recognize text on this page or throughout the document?	Rozpoznat text na této stránce, nebo v celém dokumentu?

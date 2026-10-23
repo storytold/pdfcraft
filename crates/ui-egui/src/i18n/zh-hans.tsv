@@ -2479,3 +2479,7 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+	Recognize scanned text automatically	自动识别扫描文本
+	Ask whether to recognize the current page or all pages when editing a scan.	编辑扫描文档时，询问是识别当前页还是所有页面。
+	Scanned text detected	检测到扫描文本
+	Recognize text on this page or throughout the document?	识别此页还是整个文档中的文本？

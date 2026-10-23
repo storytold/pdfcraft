@@ -3542,6 +3542,7 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        app.set_option("auto_ocr", "off").unwrap();
         app.open_bytes(name, None, bytes.clone()).expect("opens");
         app
     });

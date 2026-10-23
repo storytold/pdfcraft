@@ -2516,3 +2516,7 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Recognize scanned text automatically	Gescannten Text automatisch erkennen
+	Ask whether to recognize the current page or all pages when editing a scan.	Beim Bearbeiten eines Scans fragen, ob die aktuelle Seite oder alle Seiten erkannt werden sollen.
+	Scanned text detected	Gescannter Text erkannt
+	Recognize text on this page or throughout the document?	Text auf dieser Seite oder im gesamten Dokument erkennen?

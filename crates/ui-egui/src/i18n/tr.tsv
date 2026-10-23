@@ -2511,3 +2511,7 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+	Recognize scanned text automatically	Taranmış metni otomatik tanı
+	Ask whether to recognize the current page or all pages when editing a scan.	Taranmış bir belge düzenlenirken geçerli sayfanın mı yoksa tüm sayfaların mı tanınacağını sor.
+	Scanned text detected	Taranmış metin algılandı
+	Recognize text on this page or throughout the document?	Bu sayfadaki metin mi yoksa belgenin tamamındaki metin mi tanınsın?

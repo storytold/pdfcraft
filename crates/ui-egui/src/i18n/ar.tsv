@@ -2791,3 +2791,7 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Recognize scanned text automatically	التعرّف تلقائيًا على النص الممسوح ضوئيًا
+	Ask whether to recognize the current page or all pages when editing a scan.	السؤال عمّا إذا كان ينبغي التعرّف على الصفحة الحالية أو جميع الصفحات عند تحرير مستند ممسوح ضوئيًا.
+	Scanned text detected	تم اكتشاف نص ممسوح ضوئيًا
+	Recognize text on this page or throughout the document?	هل تريد التعرّف على النص في هذه الصفحة أم في المستند بأكمله؟

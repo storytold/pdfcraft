@@ -429,9 +429,9 @@ pub fn semibold(size: f32) -> FontId {
 }
 
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
-    // Keep the native window inherited. A concrete egui theme pins macOS's
-    // NSWindow appearance and prevents winit from delivering ThemeChanged.
-    // Our saved choice owns the palette; both egui branches receive it below.
+    // macOS must inherit appearance to keep receiving ThemeChanged; Windows
+    // follows the saved preference in sync_theme. Both style branches share our palette.
+    #[cfg(not(target_os = "windows"))]
     ctx.set_theme(egui::ThemePreference::System);
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));

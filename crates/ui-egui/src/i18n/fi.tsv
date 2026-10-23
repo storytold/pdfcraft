@@ -2783,3 +2783,7 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Recognize scanned text automatically	Tunnista skannattu teksti automaattisesti
+	Ask whether to recognize the current page or all pages when editing a scan.	Kysy skannattua asiakirjaa muokattaessa, tunnistetaanko nykyinen sivu vai kaikki sivut.
+	Scanned text detected	Skannattua tekstiä havaittu
+	Recognize text on this page or throughout the document?	Tunnistetaanko teksti tältä sivulta vai koko asiakirjasta?

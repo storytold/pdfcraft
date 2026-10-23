@@ -393,6 +393,9 @@ pub struct DocView {
     /// View rotation in degrees clockwise (0, 90, 180, 270); display only, never saved.
     pub rotation: u16,
     pub current: usize,
+    /// Scan prompts are offered once per page, including after Cancel or Undo.
+    pub(crate) ocr_prompted: HashSet<usize>,
+    pub(crate) ocr_checked: HashMap<usize, u64>,
     pub organize: bool,
     pub highlight_fields: bool,
     pub page_input: String,
@@ -738,6 +741,8 @@ impl DocView {
             show_page_gaps: defaults.show_page_gaps,
             rotation: 0,
             current: 0,
+            ocr_prompted: HashSet::new(),
+            ocr_checked: HashMap::new(),
             organize: false,
             highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),

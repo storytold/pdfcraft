@@ -326,6 +326,7 @@ fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static 
     }
     // Format text at the top while text is selected or being added.
     format_section(app, ui, t);
+    crate::ocr_ui::toggle(ui, app);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         widgets::section_title(ui, tl!("Modify page"));
         ui.horizontal(|ui| {

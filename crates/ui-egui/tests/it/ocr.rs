@@ -8,11 +8,148 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A one-page PDF that is only a picture of a sentence.
 fn scan() -> Vec<u8> {
+    scan_pages(1)
+}
+
+fn scan_pages(count: usize) -> Vec<u8> {
     let mut s = Session::new();
     let text = s.create_from_text("t", "Recognize these scanned words").unwrap();
     let id = s.open("text.pdf", None, text, None).unwrap();
     let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
-    s.create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
+    let images = (0..count).map(|i| (format!("scan-{i}.png"), png.clone())).collect::<Vec<_>>();
+    s.create_from_images(&images).unwrap().to_vec()
+}
+
+fn scan_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, bytes).unwrap();
+        app.run_inline = true;
+        app
+    })
+}
+
+#[test]
+fn scan_text_prompt_waits_for_a_page_choice() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut h = scan_harness(scan());
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(4);
+    h.get_by_label("Scanned text detected");
+    h.get_by_label("Current page");
+    h.get_by_label("All pages");
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state().session.get(id).unwrap().text_blocks(0).is_empty());
+    assert!(!h.state().session.get(id).unwrap().dirty);
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "cancel does not reopen the prompt");
+    assert!(!h.state().session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn scan_text_prompt_respects_current_and_all_pages_and_undo() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    for all in [false, true] {
+        let mut h = scan_harness(scan_pages(2));
+        h.run_steps(4);
+        h.state_mut().execute("edit.edit_text");
+        h.run_steps(4);
+        h.get_by_label(if all { "All pages" } else { "Current page" }).click();
+        h.run_steps(4);
+        let id = h.state().active_ids().unwrap().1;
+        let doc = h.state().session.get(id).unwrap();
+        assert!(!doc.text_blocks(0).is_empty());
+        assert_eq!(!doc.text_blocks(1).is_empty(), all, "only the chosen pages are recognized");
+        assert_eq!(doc.can_undo(), Some("Recognize text"));
+        let saved = h.state_mut().session.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let copy = reopened.open("recognized.pdf", None, saved, None).unwrap();
+        assert!(!reopened.get(copy).unwrap().text_blocks(0).is_empty());
+        assert_eq!(!reopened.get(copy).unwrap().text_blocks(1).is_empty(), all);
+        h.state_mut().execute("edit.undo");
+        h.run_steps(4);
+        assert!(h.state().dialog.is_none(), "undo does not immediately offer OCR again");
+        let doc = h.state().session.get(id).unwrap();
+        assert!(doc.text_blocks(0).is_empty() && doc.text_blocks(1).is_empty());
+    }
+}
+
+#[test]
+fn scan_text_toggle_is_persisted_and_reenabling_offers_the_prompt() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("auto_ocr", "off").unwrap();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert!(!restored.auto_ocr);
+    assert!(restored.set_option("auto_ocr", "sometimes").is_err());
+    assert!(!restored.auto_ocr);
+    if !pdfcraft_engine::ocr::available() {
+        return;
+    }
+    let mut h = scan_harness(scan());
+    h.state_mut().set_option("auto_ocr", "off").unwrap();
+    h.state_mut().execute("edit.edit_text");
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none());
+    h.get_by_label("Recognize scanned text automatically").click();
+    h.run_steps(4);
+    h.get_by_label("Scanned text detected");
+}
+
+#[test]
+fn scan_text_prompt_refuses_a_document_changed_before_the_page_choice() {
+    if !pdfcraft_engine::ocr::available() {
+        return;
+    }
+    let mut h = scan_harness(scan());
+    h.state_mut().execute("edit.edit_text");
+    h.run_steps(4);
+    let id = h.state().active_ids().unwrap().1;
+    let note = AddedText { rect: [20.0, 20.0, 220.0, 60.0], text: "Keep this note".into(), ..Default::default() };
+    h.state_mut().session.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.get_by_label("Current page").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert!(h.state().toast.as_ref().unwrap().0.contains("result was discarded"));
+}
+
+#[test]
+fn scan_text_prompt_defers_for_dialogs_and_ignores_native_text_and_read_mode() {
+    if !pdfcraft_engine::ocr::available() {
+        return;
+    }
+    let mut h = scan_harness(scan());
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.state_mut().execute("edit.edit_text");
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::About));
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    h.get_by_label("Scanned text detected");
+
+    let native = Session::new().create_from_text("text", "This text is already searchable").unwrap();
+    let mut h = scan_harness(native.to_vec());
+    h.state_mut().execute("edit.edit_text");
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none());
+
+    let mut h = scan_harness(scan());
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().execute("edit.edit_text");
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none());
+    assert!(!h.state().session.get(id).unwrap().dirty);
 }
 
 #[test]

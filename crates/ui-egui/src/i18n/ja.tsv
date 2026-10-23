@@ -2515,3 +2515,7 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Recognize scanned text automatically	スキャンしたテキストを自動認識
+	Ask whether to recognize the current page or all pages when editing a scan.	スキャンした文書の編集時に、現在のページとすべてのページのどちらを認識するか確認します。
+	Scanned text detected	スキャンしたテキストを検出しました
+	Recognize text on this page or throughout the document?	このページのテキストを認識しますか、それとも文書全体を認識しますか？

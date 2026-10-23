@@ -2537,3 +2537,7 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Recognize scanned text automatically	Автоматично розпізнавати сканований текст
+	Ask whether to recognize the current page or all pages when editing a scan.	Під час редагування сканованого документа запитувати, чи розпізнати поточну сторінку або всі сторінки.
+	Scanned text detected	Виявлено сканований текст
+	Recognize text on this page or throughout the document?	Розпізнати текст на цій сторінці чи в усьому документі?

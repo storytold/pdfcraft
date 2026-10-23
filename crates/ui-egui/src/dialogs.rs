@@ -80,6 +80,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut open_revision: Option<usize> = None;
     let mut a11y_now = false;
     let mut ocr_now = false;
+    let mut scan_ocr_now = None;
     let mut compare_now = false;
     let mut images_now = false;
     let mut stamp_now = false;
@@ -996,6 +997,13 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = go || cancel;
                 return;
             }
+            Dialog::RecognizeScan { doc, page, generation } => {
+                ui.set_width(380.0);
+                let (all, cancel) = crate::ocr_ui::scan_prompt_body(ui, app);
+                scan_ocr_now = all.map(|all| (doc, page, generation, all));
+                close = all.is_some() || cancel;
+                return;
+            }
             Dialog::AccessibilityOptions => {
                 let (start, cancel) = crate::a11y_ui::options_body(ui, app, &t);
                 a11y_now = start;
@@ -1448,6 +1456,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if ocr_now {
         app.start_ocr();
+    }
+    if let Some((doc, page, generation, all)) = scan_ocr_now {
+        app.recognize_scan(doc, page, generation, all);
     }
     if compare_now {
         app.run_compare();

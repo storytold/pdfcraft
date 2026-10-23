@@ -2611,3 +2611,7 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+	Recognize scanned text automatically	Automatycznie rozpoznawaj zeskanowany tekst
+	Ask whether to recognize the current page or all pages when editing a scan.	Podczas edycji skanu pytaj, czy rozpoznać bieżącą stronę, czy wszystkie strony.
+	Scanned text detected	Wykryto zeskanowany tekst
+	Recognize text on this page or throughout the document?	Rozpoznać tekst na tej stronie czy w całym dokumencie?

@@ -2520,3 +2520,7 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	Recognize scanned text automatically	Samodejno prepoznaj optično prebrano besedilo
+	Ask whether to recognize the current page or all pages when editing a scan.	Pri urejanju optično prebranega dokumenta vprašaj, ali prepoznati trenutno stran ali vse strani.
+	Scanned text detected	Zaznano je optično prebrano besedilo
+	Recognize text on this page or throughout the document?	Prepoznati besedilo na tej strani ali v celotnem dokumentu?

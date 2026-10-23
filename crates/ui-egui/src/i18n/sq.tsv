@@ -2500,3 +2500,7 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Recognize scanned text automatically	Njih automatikisht tekstin e skanuar
+	Ask whether to recognize the current page or all pages when editing a scan.	Gjatë redaktimit të një dokumenti të skanuar, pyet nëse duhet njohur faqja aktuale apo të gjitha faqet.
+	Scanned text detected	U zbulua tekst i skanuar
+	Recognize text on this page or throughout the document?	Të njihet teksti në këtë faqe apo në të gjithë dokumentin?

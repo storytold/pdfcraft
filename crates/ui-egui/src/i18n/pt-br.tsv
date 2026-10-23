@@ -2800,3 +2800,7 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+	Recognize scanned text automatically	Reconhecer automaticamente o texto digitalizado
+	Ask whether to recognize the current page or all pages when editing a scan.	Ao editar um documento digitalizado, perguntar se deve reconhecer a página atual ou todas as páginas.
+	Scanned text detected	Texto digitalizado detectado
+	Recognize text on this page or throughout the document?	Reconhecer o texto desta página ou de todo o documento?

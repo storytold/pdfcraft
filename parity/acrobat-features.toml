@@ -6501,6 +6501,18 @@ evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_sea
 notes = "ocrs engine (MIT/Apache) with CC-BY-SA models fetched by `cargo xtask models`; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
+id = "ocr.auto-recognize-on-edit"
+title = "Offer OCR automatically when editing a scanned page"
+area = "I"
+tier = "P1"
+milestone = "M10"
+status = "partial"
+commands = ["edit.edit_text", "ocr.recognize"]
+tools = ["ocr_recognize", "ocr_status"]
+evidence = ["crates/ui-egui/tests/it/ocr.rs::scan_text_prompt_waits_for_a_page_choice", "crates/ui-egui/tests/it/ocr.rs::scan_text_prompt_respects_current_and_all_pages_and_undo", "crates/ui-egui/tests/it/ocr.rs::scan_text_toggle_is_persisted_and_reenabling_offers_the_prompt", "crates/ui-egui/tests/it/ocr.rs::scan_text_prompt_refuses_a_document_changed_before_the_page_choice", "crates/ui-egui/src/ocr_ui.rs::result_is_refused_when_the_document_changed_meanwhile"]
+notes = "Local candidate building on #1609 and #1876: a remembered, default-on Edit-panel toggle offers Current page / All pages / Cancel for pages with no text and an image covering at least half the page. No OCR starts until a page choice. One undo step; Cancel and Undo do not repeat the offer; Read mode, modals, read-only files and existing recognition are respected. Stale prompt and worker results are rejected. Existing ocr_recognize handles the same page scopes headlessly; ui.set auto_ocr controls the preference. Missing: automatic detection of vector-only outlined text and mixed native-text scans, non-Latin models and full editable-page reconstruction. See docs/scan-ocr.md."
+
+[[feature]]
 id = "ocr.recognize-range"
 title = "Recognize text in the current page or a range"
 area = "I"

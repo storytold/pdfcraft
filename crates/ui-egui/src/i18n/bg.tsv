@@ -2478,3 +2478,7 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+	Recognize scanned text automatically	Автоматично разпознаване на сканиран текст
+	Ask whether to recognize the current page or all pages when editing a scan.	При редактиране на сканиран документ да се пита дали да се разпознае текущата страница или всички страници.
+	Scanned text detected	Открит е сканиран текст
+	Recognize text on this page or throughout the document?	Да се разпознае ли текстът на тази страница или в целия документ?
