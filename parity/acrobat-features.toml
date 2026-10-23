@@ -9024,9 +9024,9 @@ tier = "P2"
 milestone = "M12"
 status = "planned"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["accessibility_layout_table_to_blocks"]
+evidence = ["crates/a11y/src/layout_table.rs::a_label_and_value_table_becomes_divs_and_paragraphs", "crates/a11y/src/layout_table.rs::what_the_cells_hold_stays_and_a_table_in_a_cell_stays_a_table", "crates/a11y/src/layout_table.rs::direct_rows_and_cells_are_converted_in_place", "crates/automation/tests/it/automation.rs::a_layout_table_becomes_blocks_through_automation"]
+notes = "Headless only so far: accessibility_layout_table_to_blocks turns a layout table into Div and P tags in one undoable step (cells holding tags become Div, nested tables stay, Table attributes go). The editor itself (header cells, Scope, Headers/IDs, spans) and a Tags panel command remain planned."
 
 [[feature]]
 id = "a11y.alt-text-workflow"

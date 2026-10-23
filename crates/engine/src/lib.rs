@@ -1645,6 +1645,11 @@ pub enum Edit {
     MarkTagArtifact {
         object: pdfcraft_cos::ObjRef,
     },
+    /// A layout table as plain blocks: the table, its row groups and rows become Div tags and its
+    /// cells P tags (Div when they hold tags), without their Table attributes.
+    LayoutTableToBlocks {
+        object: pdfcraft_cos::ObjRef,
+    },
     /// Document JavaScripts: add, replace (`script`) or remove (`None`) the document-level
     /// script `name`.
     SetDocumentScript {
@@ -2142,6 +2147,7 @@ impl Edit {
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
+            Edit::LayoutTableToBlocks { .. } => Label::of("Change tag properties"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),
@@ -2353,6 +2359,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
+        | Edit::LayoutTableToBlocks { .. }
         | Edit::AddOcrText { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
@@ -2732,6 +2739,9 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::MarkTagArtifact { object } => {
             a11y::mark_tag_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::LayoutTableToBlocks { object } => {
+            a11y::layout_table_to_blocks(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
