@@ -62,6 +62,12 @@ fn push_line(out: &mut String, text: &str, info: &BidiInfo<'_>, para: &Paragraph
 /// each such stretch goes back to logical order. What lies between them (spaces, punctuation,
 /// Latin) is drawn by the Latin face left to right and stays as it is. The stretches include
 /// Persian and Arabic-Indic digits: Arabic script to the shaper, though they read left to right.
+pub(crate) fn for_shaper(shown: &str) -> String {
+    let mut out = String::with_capacity(shown.len());
+    push_for_shaper(&mut out, shown);
+    out
+}
+
 fn push_for_shaper(out: &mut String, shown: &str) {
     let mut stretch: Vec<char> = Vec::new();
     for c in shown.chars() {
@@ -329,7 +335,7 @@ fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
-fn mirrored(c: char) -> char {
+pub(crate) fn mirrored(c: char) -> char {
     match c {
         '(' => ')',
         ')' => '(',

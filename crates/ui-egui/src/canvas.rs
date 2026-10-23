@@ -4661,12 +4661,9 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
-                        let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::new("find-input"))
-                            .hint_text(tl!("Find text"))
-                            .desired_width(220.0)
-                            .frame(egui::Frame::NONE);
-                        let r = ui.add(edit);
+                        // Typing order stays in `query` (search matches that). The field draws
+                        // Arabic and Hebrew in reading order and keeps the caret on the leading edge.
+                        let r = crate::rtl_input::show_query(ui, &mut find.query, crate::rtl_input::QueryField::FindBar);
                         if find.focus {
                             r.request_focus();
                             find.focus = false;
