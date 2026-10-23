@@ -22,3 +22,16 @@ thumbnailers, so there the crate is only the shared rendering function.
 
 This is the one crate where `unsafe` is allowed, and only in `src/windows.rs`: a COM server's
 exported entry points take raw pointers, and the bitmap is filled through one.
+
+The Windows provider skips files over 64 MiB, uses shared input bytes rather than cloning the
+whole PDF on each thumbnail request, and clears output handles before extraction. Initialization
+and rendering are guarded at the COM boundary. A failed or password-required file falls back to the
+normal document icon. It does not implement Explorer's separate side preview pane.
+
+This experimental integration builds on [upstream PR #1370](https://github.com/storytold/pdfcraft/pull/1370).
+The Windows-only unsafe module has been authorized for this local build; upstream acceptance
+of that exception remains the maintainers' decision.
+
+Local verification: the compiled MSI passes its database checks; installation and Windows Shell
+extraction pass, and three existing PDFs display their page thumbnails in Explorer with large
+icons. Process isolation stays enabled. The preview is unsigned.

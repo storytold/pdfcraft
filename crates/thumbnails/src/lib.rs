@@ -31,13 +31,14 @@ pub struct Thumbnail {
 /// Renders the first page of the PDF in `bytes`, fitted into a `side` × `side` square (at least
 /// 1, at most [`MAX_SIDE`]), onto white paper. Never panics; an unreadable, password-protected or
 /// empty document is an error.
-pub fn render_thumbnail(bytes: Vec<u8>, side: u32) -> Result<Thumbnail, String> {
+pub fn render_thumbnail(bytes: impl Into<Arc<Vec<u8>>>, side: u32) -> Result<Thumbnail, String> {
     let side = side.clamp(1, MAX_SIDE);
+    let bytes = bytes.into();
     catch_unwind(AssertUnwindSafe(|| render(bytes, side))).unwrap_or_else(|_| Err("the renderer crashed".into()))
 }
 
-fn render(bytes: Vec<u8>, side: u32) -> Result<Thumbnail, String> {
-    let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+fn render(bytes: Arc<Vec<u8>>, side: u32) -> Result<Thumbnail, String> {
+    let mut renderer = PageRenderer::new(bytes, RenderConfig::default());
     if renderer.page_count() == 0 {
         return Err("the document could not be opened or has no pages".into());
     }

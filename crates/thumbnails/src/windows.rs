@@ -11,7 +11,8 @@
 //! passes in, and the bitmap's pixels are written through the pointer `CreateDIBSection` returns.
 
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, Mutex};
 
 use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, ERROR_ALREADY_INITIALIZED, S_FALSE,
@@ -19,7 +20,7 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Gdi::{BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, HBITMAP};
 use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl, IStream, STATFLAG_NONAME, STATSTG};
 use windows::Win32::UI::Shell::PropertiesSystem::{IInitializeWithStream, IInitializeWithStream_Impl};
-use windows::Win32::UI::Shell::{IThumbnailProvider, IThumbnailProvider_Impl, WTS_ALPHATYPE, WTS_E_FAILEDEXTRACTION, WTSAT_RGB};
+use windows::Win32::UI::Shell::{IThumbnailProvider, IThumbnailProvider_Impl, WTS_ALPHATYPE, WTS_E_FAILEDEXTRACTION, WTSAT_RGB, WTSAT_UNKNOWN};
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, Ref, implement};
 
 use crate::{Thumbnail, render_thumbnail};
@@ -28,26 +29,29 @@ use crate::{Thumbnail, render_thumbnail};
 pub const CLSID: GUID = GUID::from_u128(0x68e114f4_eb01_42a6_bd92_1695f3711cd1);
 
 /// Files larger than this aren't read for a thumbnail (the whole file is parsed in memory).
-pub const MAX_FILE_BYTES: u64 = 1 << 30;
+pub const MAX_FILE_BYTES: u64 = 64 << 20;
 
 /// The document's bytes, read when Explorer initializes the handler.
 #[implement(IInitializeWithStream, IThumbnailProvider)]
 #[derive(Default)]
 struct Provider {
-    bytes: Mutex<Option<Vec<u8>>>,
+    bytes: Mutex<Option<Arc<Vec<u8>>>>,
+}
+
+fn guarded(f: impl FnOnce() -> windows_core::Result<()>) -> windows_core::Result<()> {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err(WTS_E_FAILEDEXTRACTION.into()))
 }
 
 impl IInitializeWithStream_Impl for Provider_Impl {
     fn Initialize(&self, stream: Ref<IStream>, _mode: u32) -> windows_core::Result<()> {
-        let stream = stream.ok()?;
-        let bytes = read_all(stream)?;
-        let mut slot = self.bytes.lock().unwrap_or_else(|p| p.into_inner());
-        // Initialize is called once per handler; a second call is a caller error.
-        if slot.is_some() {
-            return Err(ERROR_ALREADY_INITIALIZED.to_hresult().into());
-        }
-        *slot = Some(bytes);
-        Ok(())
+        guarded(|| {
+            let mut slot = self.bytes.lock().unwrap_or_else(|p| p.into_inner());
+            if slot.is_some() {
+                return Err(ERROR_ALREADY_INITIALIZED.to_hresult().into());
+            }
+            *slot = Some(Arc::new(read_all(stream.ok()?)?));
+            Ok(())
+        })
     }
 }
 
@@ -56,16 +60,22 @@ impl IThumbnailProvider_Impl for Provider_Impl {
         if phbmp.is_null() || pdwalpha.is_null() {
             return Err(E_POINTER.into());
         }
-        let bytes = self.bytes.lock().unwrap_or_else(|p| p.into_inner()).clone().ok_or(windows_core::Error::from(E_INVALIDARG))?;
-        let thumbnail = render_thumbnail(bytes, cx).map_err(|_| windows_core::Error::from(WTS_E_FAILEDEXTRACTION))?;
-        let bitmap = bitmap(&thumbnail)?;
-        // SAFETY: both pointers were checked to be non-null, and COM guarantees they point to
-        // writable out-parameters of these types for the duration of the call.
+        // SAFETY: COM supplies valid writable out-parameters; both were checked for null.
         unsafe {
-            *phbmp = bitmap;
-            *pdwalpha = WTSAT_RGB;
+            *phbmp = HBITMAP::default();
+            *pdwalpha = WTSAT_UNKNOWN;
         }
-        Ok(())
+        guarded(|| {
+            let bytes = self.bytes.lock().unwrap_or_else(|p| p.into_inner()).clone().ok_or(windows_core::Error::from(E_INVALIDARG))?;
+            let thumbnail = render_thumbnail(bytes, cx).map_err(|_| windows_core::Error::from(WTS_E_FAILEDEXTRACTION))?;
+            let bitmap = bitmap(&thumbnail)?;
+            // SAFETY: the same checked COM out-parameters remain valid for this call.
+            unsafe {
+                *phbmp = bitmap;
+                *pdwalpha = WTSAT_RGB;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -86,10 +96,11 @@ fn read_all(stream: &IStream) -> windows_core::Result<Vec<u8>> {
         // SAFETY: `chunk` is a writable buffer of exactly the length passed, and `read` a valid u32.
         let hr = unsafe { stream.Read(chunk.as_mut_ptr().cast(), chunk.len() as u32, Some(&mut read)) };
         hr.ok()?;
-        let got = chunk.get(..read as usize).unwrap_or_default();
+        let got = chunk.get(..read as usize).ok_or(windows_core::Error::from(WTS_E_FAILEDEXTRACTION))?;
         if bytes.len().saturating_add(got.len()) as u64 > MAX_FILE_BYTES {
             return Err(WTS_E_FAILEDEXTRACTION.into());
         }
+        bytes.try_reserve(got.len()).map_err(|_| windows_core::Error::from(E_OUTOFMEMORY))?;
         bytes.extend_from_slice(got);
         if read == 0 || hr == S_FALSE {
             return Ok(bytes);
@@ -145,9 +156,11 @@ impl IClassFactory_Impl for Factory_Impl {
         if outer.is_some() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let provider: IUnknown = Provider::default().into();
-        // SAFETY: `riid` and `ppv` are non-null and valid for the call (checked above).
-        unsafe { provider.query(riid, ppv) }.ok()
+        guarded(|| {
+            let provider: IUnknown = Provider::default().into();
+            // SAFETY: `riid` and `ppv` are non-null and valid for the call (checked above).
+            unsafe { provider.query(riid, ppv) }.ok()
+        })
     }
 
     fn LockServer(&self, _lock: BOOL) -> windows_core::Result<()> {
@@ -164,14 +177,19 @@ pub unsafe extern "system" fn DllGetClassObject(rclsid: *const GUID, riid: *cons
     if rclsid.is_null() || riid.is_null() || ppv.is_null() {
         return E_POINTER;
     }
-    // SAFETY: all three pointers are non-null and, per the COM contract, valid for this call.
-    unsafe {
-        *ppv = std::ptr::null_mut();
-        if *rclsid != CLSID {
-            return CLASS_E_CLASSNOTAVAILABLE;
+    match guarded(|| {
+        // SAFETY: all three pointers are non-null and, per the COM contract, valid for this call.
+        unsafe {
+            *ppv = std::ptr::null_mut();
+            if *rclsid != CLSID {
+                return Err(CLASS_E_CLASSNOTAVAILABLE.into());
+            }
+            let factory: IClassFactory = Factory.into();
+            factory.query(riid, ppv).ok()
         }
-        let factory: IClassFactory = Factory.into();
-        factory.query(riid, ppv)
+    }) {
+        Ok(()) => HRESULT(0),
+        Err(error) => error.code(),
     }
 }
 
@@ -233,5 +251,27 @@ mod tests {
             assert_eq!(DllGetClassObject(&CLSID, &IClassFactory::IID, std::ptr::null_mut()), E_POINTER);
         }
         assert_eq!(DllCanUnloadNow(), S_FALSE);
+    }
+    #[test]
+    fn failed_calls_clear_outputs_and_reinitialization_is_refused() {
+        unsafe {
+            let init: IInitializeWithStream = Provider::default().into();
+            let provider: IThumbnailProvider = init.cast().unwrap();
+            let mut bitmap = HBITMAP(std::ptr::dangling_mut::<c_void>());
+            let mut alpha = WTSAT_RGB;
+            assert!(provider.GetThumbnail(256, &mut bitmap, &mut alpha).is_err());
+            assert!(bitmap.is_invalid());
+            assert_eq!(alpha, WTSAT_UNKNOWN);
+            assert_eq!(provider.GetThumbnail(256, std::ptr::null_mut(), &mut alpha).unwrap_err().code(), E_POINTER);
+            let bytes = crate::tests::pdf(200, 100, "");
+            let stream = SHCreateMemStream(Some(&bytes)).unwrap();
+            init.Initialize(&stream, 0).unwrap();
+            assert_eq!(init.Initialize(&stream, 0).unwrap_err().code(), ERROR_ALREADY_INITIALIZED.to_hresult());
+        }
+    }
+
+    #[test]
+    fn com_guard_turns_an_escaped_panic_into_an_extraction_error() {
+        assert_eq!(guarded(|| panic!("synthetic COM failure")).unwrap_err().code(), WTS_E_FAILEDEXTRACTION);
     }
 }

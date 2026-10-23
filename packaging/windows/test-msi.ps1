@@ -266,6 +266,7 @@ foreach ($value in @(
   Assert-Equal $row[2] '2' "Thumbnail handler $($value[0]) HKLM root"
 }
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}''' '.pdf thumbnail handler'
+Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Name` = ''DisableProcessIsolation''' 'thumbnail process-isolation opt-out'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
 
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
