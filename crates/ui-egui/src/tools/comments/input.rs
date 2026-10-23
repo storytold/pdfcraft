@@ -21,6 +21,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let free = press == PagePress::Free;
     let pressed_here = free && origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
+    // Shift holds a line, or the next side of connected lines, a polygon or a cloud, level or
+    // plumb (ortho).
+    let shift = ui.input(|i| i.modifiers.shift);
     let owned = match press {
         PagePress::Mine(Owner::Comment { index, part }) => Some((index, part)),
         _ => None,
@@ -370,7 +373,8 @@ impl Gestures<'_> {
             if matches!(*tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
-                    points.push(u);
+                    let line = matches!(*tool, CommentTool::Line | CommentTool::Arrow);
+                    points.push(held(points.first(), u, line && shift));
                 }
             } else {
                 points.truncate(1);
@@ -435,7 +439,8 @@ impl Gestures<'_> {
                 Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
                     let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
-                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(p) < 2.0);
+                    let u = held(points.last(), u, shift);
+                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(cx.to_screen(u)) < 2.0);
                     if closes {
                         let pts = std::mem::take(points);
                         cv.gesture = None;

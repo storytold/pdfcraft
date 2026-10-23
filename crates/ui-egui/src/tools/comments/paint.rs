@@ -165,10 +165,11 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 painter.add(egui::Shape::ellipse_stroke(r.center(), r.size() / 2.0, stroke));
             }
             CommentTool::Polygon | CommentTool::PolyLine | CommentTool::Cloud => {
-                // The vertices so far, and a rubber band to the pointer.
+                // The vertices so far, and a rubber band to where a click would put the next one.
                 let mut line = pts.clone();
                 if let Some(p) = cx.ptr.pos {
-                    line.push(p);
+                    let shift = painter.ctx().input(|i| i.modifiers.shift);
+                    line.push(cx.to_screen(held(points.last(), cx.to_user(p), shift)));
                 }
                 painter.add(egui::Shape::line(line, stroke));
                 if let Some(first) = pts.first().filter(|_| *tool != CommentTool::PolyLine && pts.len() >= 3) {
