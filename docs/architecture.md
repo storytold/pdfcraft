@@ -1,6 +1,6 @@
 # PdfCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (shared print spooler; Windows CI passes) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (SVG export listed among the output formats; shared print spooler; Windows CI passes) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft is built today. The design rationale and the planned crates live in
 `plan/architecture.md` and `plan/adr/` (local-only); this file describes what is on `main`. Each
@@ -75,7 +75,7 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
   the bootstrap renderer.
 - PDF out: incremental or full saves, object streams, re-encryption, resource de-duplication when
   combining.
-- Other formats: images and text in (`create`); PNG/JPEG/TIFF, text, RTF, Word and HTML out
+- Other formats: images and text in (`create`); PNG/JPEG/TIFF/SVG, text, RTF, Word and HTML out
   (`export`, `render`); FDF/XFDF/XML/CSV/TXT form and comment data (`xfdf`); PKCS #12, X.509,
   PEM/DER certificates (`sign`). Full matrix: [file-format-parity.md](file-format-parity.md).
 
@@ -110,4 +110,5 @@ built by `.github/workflows/release.yml` ([releasing.md](releasing.md)).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | File I/O: SVG added to the output formats (one SVG per page, drawn with `hayro-svg` by `pdfcraft-render`) |
 | 2026-10-10 | major | Created from the code on main (crate list, `xtask/src/layers.rs`, crate READMEs, `vendor/README.md`) |

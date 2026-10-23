@@ -116,6 +116,7 @@ hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
+hayro-svg = { path = "vendor/hayro-svg" }
 lopdf = { path = "vendor/lopdf" }
 winit = { path = "vendor/winit" }
 egui-wgpu = { path = "vendor/egui-wgpu" }

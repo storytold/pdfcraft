@@ -1,5 +1,6 @@
 # File format parity
 
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-16 · **Change:** minor (SVG export shipped, one file per page) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-19 · **Change:** patch (`.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
@@ -92,7 +93,7 @@ features total).
 | JPEG 2000 | yes | no | none | `create.export-jpeg2000` planned |
 | All embedded images | yes | yes | good | `create.export-all-images` |
 | XML 1.0 | yes | no | none | `create.export-xml` planned |
-| SVG | no (dropped by Adobe) | no | none | `create.export-svg` planned |
+| SVG | no (dropped by Adobe) | one file per page: paths, fills, strokes, clips, shadings and images as SVG, text as glyph outlines (not selectable or searchable); no layers as groups, no multi-page file, no import | basic (structure tested; not yet compared with the raster render or another SVG renderer) | `create.export-svg` |
 | PostScript, EPS | yes | no | none | `create.export-ps`, `create.export-eps` planned |
 
 ## OCR (scans to searchable PDF)
@@ -110,6 +111,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | SVG export (#2879): one SVG per page from Export to Image… and `doc_export_images`, text as glyph outlines; the row goes from none to basic. Acrobat dropped SVG export, so this is beyond parity. The conversion estimate is unchanged. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |
