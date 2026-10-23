@@ -2478,3 +2478,7 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+	Lines	Линии
+	Line colour	Цвят на линията
+	Drag a point to reshape the line. Delete removes it.	Плъзнете точка, за да промените формата на линията. Delete я премахва.
+	This point could not be moved. Try a smaller move.	Тази точка не можа да бъде преместена. Опитайте с по-малко преместване.

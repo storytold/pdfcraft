@@ -2515,3 +2515,7 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Lines	複数の線
+	Line colour	線の色
+	Drag a point to reshape the line. Delete removes it.	点をドラッグして線の形を変更します。Delete キーで削除します。
+	This point could not be moved. Try a smaller move.	この点を移動できませんでした。移動量を小さくして再試行してください。

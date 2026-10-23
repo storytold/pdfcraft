@@ -2791,3 +2791,7 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Lines	خطوط
+	Line colour	لون الخط
+	Drag a point to reshape the line. Delete removes it.	اسحب نقطة لتغيير شكل الخط. يحذفه مفتاح Delete.
+	This point could not be moved. Try a smaller move.	تعذّر نقل هذه النقطة. جرّب إزاحة أصغر.

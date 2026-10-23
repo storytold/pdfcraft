@@ -2822,3 +2822,7 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+	Lines	Čáry
+	Line colour	Barva čáry
+	Drag a point to reshape the line. Delete removes it.	Přetažením bodu změníte tvar čáry. Klávesa Delete ji odstraní.
+	This point could not be moved. Try a smaller move.	Tento bod se nepodařilo přesunout. Zkuste menší posun.

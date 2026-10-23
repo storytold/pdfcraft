@@ -4219,6 +4219,30 @@ fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     assert!(h.state().toast.as_ref().unwrap().0.contains("Text used as a clipping path cannot be moved with this selection."));
 }
 
+/// A delete the engine refuses (text used as a clipping path) leaves the document as it was and
+/// keeps the selection, so the user can still move or nudge what they had selected.
+#[test]
+fn a_refused_delete_keeps_the_object_selection() {
+    let content = "q BT 4 Tr /F1 12 Tf 60 320 Td (Clipping text) Tj ET Q";
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture(content, 0, 1), 0);
+    let id = h.state().views[0].id;
+    let (generation, bytes) = {
+        let doc = h.state().session.get(id).unwrap();
+        (doc.edit_generation(), doc.bytes.clone())
+    };
+    // An area selection from empty page space around the paragraph.
+    let (center, _) = paragraph_drag_points(&h, "Clipping text", [0.0, 0.0]);
+    drag(&mut h, center - egui::vec2(60.0, 25.0), center + egui::vec2(60.0, 25.0));
+    h.get_by_label("1 object selected");
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!((doc.edit_generation(), &doc.bytes), (generation, &bytes), "the refused delete changed nothing");
+    assert!(doc.can_undo().is_none());
+    assert!(h.state().toast.is_some(), "the refusal is reported");
+    h.get_by_label("1 object selected");
+}
+
 #[test]
 fn an_ordinary_paragraph_drag_cannot_reuse_an_index_after_an_edit() {
     let content = "BT /F1 12 Tf 60 120 Td (Discard) Tj ET BT /F1 12 Tf 60 320 Td (Moving alpha) Tj ET BT /F1 12 Tf 60 220 Td (Keep here) Tj ET";
@@ -5979,4 +6003,34 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     h.run_steps(4);
     click_at(&mut h, convert);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the paragraph's editor");
+}
+
+/// A paragraph selected by its frame goes with one Delete (or Backspace), as in Acrobat, instead
+/// of being emptied a typed character at a time, and undo brings it back.
+#[test]
+fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
+    for key in [Key::Delete, Key::Backspace] {
+        let mut h = harness(2, |_| {});
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        let blocks = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().text_blocks(0);
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 200.0;
+        let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+        let b = blocks(&h)[0].clone();
+        click_at(&mut h, screen((b.rect[0] + b.rect[2]) / 2.0, (b.rect[1] + b.rect[3]) / 2.0));
+        assert!(h.state().views[0].line_editor.is_some(), "a click on the text opens it for typing");
+        click_at(&mut h, screen((b.rect[0] + b.rect[2]) / 2.0, b.rect[3]) - egui::vec2(0.0, 4.0));
+        assert!(h.state().views[0].line_editor.is_none(), "the frame selects the box");
+        press(&mut h, Modifiers::NONE, key);
+        assert!(blocks(&h).is_empty(), "{key:?} deletes the whole paragraph: {:?}", blocks(&h));
+        assert!(h.state().views[0].line_editor.is_none(), "no empty editor is left behind");
+        assert!(h.query_all_by_label_contains("object selected").next().is_none(), "the deleted paragraph is no longer selected");
+        assert_eq!(h.state().session.get(id).unwrap().text_blocks(1)[0].text, "Page 2", "the next page keeps its text");
+        assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "Delete removed the paragraph, not a page");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(2);
+        assert_eq!(blocks(&h).iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Page 1"], "undo restores it");
+    }
 }

@@ -57,6 +57,13 @@ impl PdfCraftApp {
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
                 view.picked_image = None;
+                if matches!(edit, Edit::DeleteObjects { .. }) {
+                    view.objects.clear();
+                    view.image_selection = None;
+                    view.content.selected = None;
+                    view.line_editor = None;
+                    view.block_drag = None;
+                }
                 if let Some(ctx) = &self.ctx {
                     ctx.request_repaint();
                 }
@@ -967,6 +974,10 @@ impl PdfCraftApp {
 fn content_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::MoveObjects { page, .. }
+        | Edit::DeleteObjects { page, .. }
+        | Edit::DeletePaths { page, .. }
+        | Edit::StylePaths { page, .. }
+        | Edit::MovePathPoint { page, .. }
         | Edit::EditTextLine { page, .. }
         | Edit::EditTextBlock { page, .. }
         | Edit::EditPageImage { page, .. }
@@ -1621,6 +1632,7 @@ mod content_page_tests {
     fn single_page_content_edits_map_to_their_page() {
         let moved = Edit::MoveObjects { page: 3, objects: vec![ObjectTarget { kind: ObjectKind::Text, index: 0 }], offset: [1.0, 0.0] };
         assert_eq!(content_page(&moved), Some(3));
+        assert_eq!(content_page(&Edit::DeleteObjects { page: 3, objects: vec![] }), Some(3));
         assert_eq!(content_page(&Edit::RotatePages { pages: vec![0], degrees: 90 }), None);
         assert_eq!(content_page(&Edit::SetInfo { key: "Title".into(), value: "x".into() }), None);
     }

@@ -2511,3 +2511,7 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+	Lines	Çizgiler
+	Line colour	Çizgi rengi
+	Drag a point to reshape the line. Delete removes it.	Çizginin şeklini değiştirmek için bir noktayı sürükleyin. Delete tuşu çizgiyi kaldırır.
+	This point could not be moved. Try a smaller move.	Bu nokta taşınamadı. Daha küçük bir kaydırma deneyin.

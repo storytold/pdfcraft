@@ -2537,3 +2537,12 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Lines	Лінії
+	Line colour	Колір лінії
+	Delete line	Видалити лінію
+	Delete lines	Видалити лінії
+	Format line	Форматувати лінію
+	Format lines	Форматувати лінії
+	Move line point	Перемістити точку лінії
+	Drag a point to reshape the line. Delete removes it.	Перетягніть точку, щоб змінити форму лінії. Delete видаляє її.
+	This point could not be moved. Try a smaller move.	Цю точку не вдалося перемістити. Спробуйте менше зміщення.

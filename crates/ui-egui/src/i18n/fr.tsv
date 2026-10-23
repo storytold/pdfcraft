@@ -2781,3 +2781,7 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+	Lines	Lignes
+	Line colour	Couleur de ligne
+	Drag a point to reshape the line. Delete removes it.	Faites glisser un point pour modifier la forme de la ligne. La touche Suppr la supprime.
+	This point could not be moved. Try a smaller move.	Impossible de déplacer ce point. Essayez un déplacement plus petit.

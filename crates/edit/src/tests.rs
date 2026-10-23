@@ -934,6 +934,104 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+/// A page whose drawing is three paths: a stroked line, a filled triangle under a translation,
+/// and a stroked rectangle.
+const PATHS: &str = "0 0 1 RG 2 w 100 100 m 200 100 l S\n1 0 0 rg 50 50 m 60 50 l 55 60 l h f\nq 1 0 0 1 10 20 cm 0 0 30 40 re S Q\n";
+
+fn path_objects(doc: &Document) -> Vec<EditableObject> {
+    editable_objects(doc, 0).unwrap().into_iter().filter(|o| o.target.kind == ObjectKind::Path).collect()
+}
+
+fn page_content(doc: &Document) -> String {
+    streams(doc, 0).join("\n")
+}
+
+#[test]
+fn vector_paths_are_objects_with_their_shape() {
+    let doc = page_with_forms(PATHS, &[]);
+    let paths = path_objects(&doc);
+    assert_eq!(paths.len(), 3);
+    let line = paths[0].outline.as_ref().unwrap();
+    assert_eq!(line.points, [[100.0, 100.0], [200.0, 100.0]]);
+    assert!(line.stroked && !line.filled && !line.closed);
+    assert_eq!((line.width, line.stroke), (2.0, Some([0.0, 0.0, 1.0])));
+    // A horizontal line still has a frame to select it by: its width above and below.
+    assert_eq!(paths[0].rect, [99.0, 99.0, 201.0, 101.0]);
+    let triangle = paths[1].outline.as_ref().unwrap();
+    assert!(triangle.filled && !triangle.stroked && triangle.closed);
+    assert_eq!(triangle.fill, Some([1.0, 0.0, 0.0]));
+    // The rectangle is four corners, in page space (after the translation).
+    assert_eq!(paths[2].outline.as_ref().unwrap().points, [[10.0, 20.0], [40.0, 20.0], [40.0, 60.0], [10.0, 60.0]]);
+    // A path that only sets a clip is not an object.
+    let clipped = page_with_forms("0 0 50 50 re W n 10 10 m 20 20 l S", &[]);
+    assert_eq!(path_objects(&clipped).len(), 1);
+}
+
+#[test]
+fn vector_paths_move_with_the_objects_and_in_their_own_space() {
+    let mut doc = page_with_forms(PATHS, &[]);
+    let targets = |indexes: &[usize]| indexes.iter().map(|&index| ObjectTarget { kind: ObjectKind::Path, index }).collect::<Vec<_>>();
+    move_objects(&mut doc, 0, &targets(&[0, 2]), [5.0, 7.0]).unwrap();
+    let s = page_content(&reopen(&doc));
+    assert!(s.contains("105 107 m") && s.contains("205 107 l"), "{s}");
+    assert!(s.contains("50 50 m"), "the triangle was not selected\n{s}");
+    // The rectangle sits under `1 0 0 1 10 20 cm`: the shift goes into its own coordinates.
+    assert!(s.contains("5 7 30 40 re"), "{s}");
+    let moved = path_objects(&reopen(&doc));
+    assert_eq!(moved[2].outline.as_ref().unwrap().points[0], [15.0, 27.0]);
+    // A scaled space: 1 point of the page is 0.5 of its own units.
+    let mut scaled = page_with_forms("q 2 0 0 2 0 0 cm 10 10 m 20 10 l S Q", &[]);
+    move_objects(&mut scaled, 0, &targets(&[0]), [10.0, 4.0]).unwrap();
+    assert!(page_content(&scaled).contains("15 12 m 25 12 l"), "{}", page_content(&scaled));
+    assert!(move_objects(&mut scaled, 0, &targets(&[9]), [1.0, 1.0]).is_err(), "no such path");
+}
+
+#[test]
+fn vector_paths_can_be_deleted_and_restyled() {
+    let mut doc = page_with_forms(PATHS, &[]);
+    delete_paths(&mut doc, 0, &[1]).unwrap();
+    let s = page_content(&doc);
+    assert!(!s.contains("50 50 m") && s.contains("100 100 m") && s.contains("30 40 re"), "{s}");
+    assert_eq!(path_objects(&doc).len(), 2);
+
+    // Colour and width: a stroked line takes the stroke colour, inside its own q … Q.
+    let mut doc = page_with_forms(PATHS, &[]);
+    style_paths(&mut doc, 0, &[0], PathStyle { color: Some([1.0, 0.0, 0.0]), width: Some(4.0) }).unwrap();
+    let doc = reopen(&doc);
+    let s = page_content(&doc);
+    assert!(s.contains("q\n4 w\n1 0 0 RG\n100 100 m") && s.contains("S\nQ"), "{s}");
+    let line = path_objects(&doc)[0].outline.clone().unwrap();
+    assert_eq!((line.width, line.stroke), (4.0, Some([1.0, 0.0, 0.0])));
+    assert_eq!(path_objects(&doc).len(), 3, "the wrapper adds no path");
+    // A filled path takes the fill colour; the width is in the path's own units (a 2× space).
+    let mut scaled = page_with_forms("q 2 0 0 2 0 0 cm 0 0 10 10 re B Q", &[]);
+    style_paths(&mut scaled, 0, &[0], PathStyle { color: Some([0.0, 1.0, 0.0]), width: Some(6.0) }).unwrap();
+    let s = page_content(&scaled);
+    assert!(s.contains("3 w\n0 1 0 RG\n0 1 0 rg\n0 0 10 10 re"), "{s}");
+    assert!(style_paths(&mut doc.clone(), 0, &[0], PathStyle::default()).is_err());
+    assert!(style_paths(&mut doc.clone(), 0, &[0], PathStyle { color: None, width: Some(f64::NAN) }).is_err());
+}
+
+#[test]
+fn a_vector_point_can_be_dragged() {
+    let mut doc = page_with_forms(PATHS, &[]);
+    move_path_point(&mut doc, 0, 0, 1, [250.0, 120.0]).unwrap();
+    let doc = reopen(&doc);
+    assert!(page_content(&doc).contains("100 100 m\n") || page_content(&doc).contains("100 100 m 250 120 l"), "{}", page_content(&doc));
+    assert_eq!(path_objects(&doc)[0].outline.as_ref().unwrap().points, [[100.0, 100.0], [250.0, 120.0]]);
+    // A corner of a rectangle (under a translation): it becomes a four-sided path.
+    let mut rect = page_with_forms(PATHS, &[]);
+    move_path_point(&mut rect, 0, 2, 2, [60.0, 80.0]).unwrap();
+    let rect = reopen(&rect);
+    let paths = path_objects(&rect);
+    let outline = paths[2].outline.as_ref().unwrap();
+    assert_eq!(outline.points, [[10.0, 20.0], [40.0, 20.0], [60.0, 80.0], [10.0, 60.0]]);
+    assert!(outline.closed);
+    assert!(move_path_point(&mut rect.clone(), 0, 2, 9, [1.0, 1.0]).is_err(), "no such point");
+    assert!(move_path_point(&mut rect.clone(), 0, 9, 0, [1.0, 1.0]).is_err(), "no such path");
+    assert!(move_path_point(&mut rect.clone(), 0, 0, 0, [f64::INFINITY, 0.0]).is_err());
+}
+
 #[test]
 fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     let mut doc = fixture();
@@ -6570,4 +6668,65 @@ fn a_flatten_refused_on_a_later_page_changes_nothing() {
     let before = (*doc.get(first)).clone();
     assert!(matches!(flatten(&mut doc, &[0, 1], true, false), Err(EditError::Invalid(_))));
     assert_eq!((*doc.get(first)).clone(), before, "the first page keeps its comment and content");
+}
+
+#[test]
+fn mixed_object_delete_removes_native_image_text_and_added_content() {
+    let mut doc = image_page();
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "Added label".into(), rect: [50.0, 350.0, 200.0, 380.0], ..Default::default() }))
+        .unwrap();
+    let targets = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect::<Vec<_>>();
+    assert_eq!(targets.len(), 3);
+    delete_objects(&mut doc, 0, &targets).unwrap();
+    let doc = reopen(&doc);
+    assert!(editable_objects(&doc, 0).unwrap().is_empty());
+    assert!(text_lines(&doc, 0).unwrap().is_empty());
+    assert!(page_images(&doc, 0).unwrap().is_empty());
+    assert!(list_added(&doc).is_empty());
+}
+
+#[test]
+fn deleting_several_paragraphs_preserves_unselected_text_advance() {
+    for show in ["(Hello) Tj", "[(He) -20 (llo)] TJ", "(Hello) '", "2 1 (Hello) \""] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 14 TL 72 700 Td {show} [-3000] TJ /F2 12 Tf (ab) Tj [-3000] TJ /F1 12 Tf (Last) Tj ET"));
+        let before = text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text == "ab").unwrap();
+        let targets =
+            editable_objects(&doc, 0).unwrap().into_iter().filter(|o| o.text.as_deref() != Some("ab")).map(|o| o.target).collect::<Vec<_>>();
+        assert_eq!(targets.len(), 2);
+        delete_objects(&mut doc, 0, &targets).unwrap();
+        let after = text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), 1, "{show}");
+        assert_eq!(after[0].text, "ab");
+        assert!(after[0].rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 1e-6), "{show}: the neighbour stayed in place");
+    }
+}
+
+#[test]
+fn deleting_tagged_text_removes_it_from_the_page_text_inventory() {
+    let mut doc = text_page("/Span << /ActualText (Logical text) >> BDC BT /F1 12 Tf 72 700 Td (Glyph text) Tj ET EMC");
+    let objects = editable_objects(&doc, 0).unwrap();
+    assert_eq!(objects.len(), 1);
+    assert_eq!(objects[0].text.as_deref(), Some("Logical text"));
+    delete_objects(&mut doc, 0, &[objects[0].target]).unwrap();
+    let doc = reopen(&doc);
+    assert!(editable_objects(&doc, 0).unwrap().is_empty());
+    assert!(text_lines(&doc, 0).unwrap().is_empty());
+}
+
+#[test]
+fn mixed_object_delete_refuses_invalid_targets_and_rolls_back_a_late_refusal() {
+    let mut doc = text_page("0 0 30 40 re f BT /F1 12 Tf 4 Tr 50 400 Td (Clipping) Tj ET");
+    let targets = editable_objects(&doc, 0).unwrap().into_iter().map(|o| o.target).collect::<Vec<_>>();
+    assert_eq!(targets.len(), 2);
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    for selection in [
+        targets.clone(),
+        vec![],
+        vec![targets[0], targets[0]],
+        vec![targets[0], ObjectTarget { kind: ObjectKind::Image, index: usize::MAX }],
+        vec![targets[0]; MAX_MOVE_OBJECTS + 1],
+    ] {
+        assert!(delete_objects(&mut doc, 0, &selection).is_err());
+        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    }
 }

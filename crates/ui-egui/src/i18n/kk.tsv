@@ -2513,3 +2513,7 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Lines	Сызықтар
+	Line colour	Сызық түсі
+	Drag a point to reshape the line. Delete removes it.	Сызық пішінін өзгерту үшін нүктені сүйреңіз. Delete пернесі оны жояды.
+	This point could not be moved. Try a smaller move.	Бұл нүктені жылжыту мүмкін болмады. Азырақ жылжытып көріңіз.

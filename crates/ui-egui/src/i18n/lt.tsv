@@ -2776,3 +2776,12 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+	Lines	Linijos
+	Line colour	Linijos spalva
+	Drag a point to reshape the line. Delete removes it.	Vilkite tašką, kad pakeistumėte linijos formą. Klavišas Delete ją pašalina.
+	This point could not be moved. Try a smaller move.	Šio taško nepavyko perkelti. Pabandykite mažesnį poslinkį.
+	Delete line	Ištrinti liniją
+	Delete lines	Ištrinti linijas
+	Format line	Formatuoti liniją
+	Format lines	Formatuoti linijas
+	Move line point	Perkelti linijos tašką

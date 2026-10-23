@@ -2514,3 +2514,7 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+	Lines	Vonalak
+	Line colour	Vonal színe
+	Drag a point to reshape the line. Delete removes it.	Húzzon el egy pontot a vonal alakjának módosításához. A Delete törli a vonalat.
+	This point could not be moved. Try a smaller move.	Ezt a pontot nem sikerült áthelyezni. Próbáljon kisebb elmozdítást.

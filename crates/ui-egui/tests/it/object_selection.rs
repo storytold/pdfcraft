@@ -10,6 +10,10 @@ fn fixture(clipping: bool) -> Vec<u8> {
 }
 
 fn fixture_with_background(clipping: bool, background: bool) -> Vec<u8> {
+    fixture_with_shape(clipping, background, false)
+}
+
+fn fixture_with_shape(clipping: bool, background: bool, shape: bool) -> Vec<u8> {
     let stream = |body: &str, dict: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
     let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -18,9 +22,10 @@ fn fixture_with_background(clipping: bool, background: bool) -> Vec<u8> {
             .into(),
         stream(
             &format!(
-                "{}q BT {} Tr /F1 18 Tf 40 430 Td (Group headline) Tj ET Q q 1 0 0 1 40 340 cm /Figure Do Q BT /F1 12 Tf 240 90 Td (Keep here) Tj ET",
+                "{}q BT {} Tr /F1 18 Tf 40 430 Td (Group headline) Tj ET Q q 1 0 0 1 40 340 cm /Figure Do Q BT /F1 12 Tf 240 90 Td (Keep here) Tj ET {}",
                 if background { "q /Background Do Q " } else { "" },
-                if clipping { 4 } else { 0 }
+                if clipping { 4 } else { 0 },
+                if shape { "q 0 0.4 0.8 rg 250 340 60 30 re f Q" } else { "" }
             ),
             "",
         ),
@@ -55,11 +60,15 @@ fn harness_with(clipping: bool) -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_document(clipping: bool, background: bool) -> Harness<'static, PdfCraftApp> {
+    harness_bytes(fixture_with_background(clipping, background))
+}
+
+fn harness_bytes(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option("language", "en").unwrap();
-        app.open_bytes("group.pdf", None, fixture_with_background(clipping, background)).unwrap();
+        app.open_bytes("group.pdf", None, bytes).unwrap();
         let id = app.views[0].id;
         app.session
             .apply(
@@ -390,4 +399,94 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         let shift = if stationary { [0.0, 0.0] } else { [25.0, -30.0] };
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
+}
+
+#[test]
+fn delete_removes_a_mixed_selection_as_one_undo_step_and_survives_reopen() {
+    for key in [Key::Delete, Key::Backspace] {
+        let mut h = harness_bytes(fixture_with_shape(false, false, true));
+        let before = objects(&h);
+        assert_eq!(before.len(), 5);
+        let (a, b) = (at(&h, 25.0, 45.0), at(&h, 325.0, 175.0));
+        drag(&mut h, a, b);
+        h.get_by_label("4 objects selected");
+        if let Ok(path) = std::env::var("PDFCRAFT_DELETE_SHOT") {
+            let _gpu = crate::gpu();
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.hover_at(at(&h, 370.0, 250.0));
+        h.key_press(key);
+        h.run_steps(4);
+        let remaining = objects(&h);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].text.as_deref(), Some("Keep here"));
+        let id = h.state().views[0].id;
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete content"));
+        assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 1);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run_steps(4);
+        assert_eq!(objects(&h), before);
+        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        h.run_steps(4);
+        assert_eq!(objects(&h), remaining);
+        let bytes = h.state_mut().session.save_full_bytes(id).unwrap();
+        let mut session = pdfcraft_engine::Session::new();
+        let reopened = session.open("deleted.pdf", None, bytes, None).unwrap();
+        assert_eq!(session.get(reopened).unwrap().editable_objects(0).unwrap(), remaining);
+    }
+}
+
+#[test]
+fn clicking_a_shape_then_delete_removes_only_that_shape() {
+    let mut h = harness_bytes(fixture_with_shape(false, false, true));
+    let before = objects(&h);
+    let p = at(&h, 280.0, 145.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    h.hover_at(at(&h, 370.0, 250.0));
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after = objects(&h);
+    assert_eq!(after.len(), before.len() - 1);
+    assert!(after.iter().all(|o| o.target.kind != pdfcraft_engine::ObjectKind::Path));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+}
+
+#[test]
+fn a_selected_image_deletes_even_after_the_pointer_leaves_it() {
+    let mut h = harness();
+    let before = objects(&h);
+    let p = at(&h, 60.0, 145.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().views[0].image_selection.is_some());
+    h.hover_at(at(&h, 370.0, 250.0));
+    h.run_steps(2);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after = objects(&h);
+    assert_eq!(after.len(), before.len() - 1);
+    assert!(after.iter().all(|o| o.target.kind != pdfcraft_engine::ObjectKind::Image));
+    assert!(h.state().views[0].image_selection.is_none(), "a deleted image cannot leave a stale selected index");
+    h.key_press(Key::Delete);
+    h.run_steps(2);
+    assert_eq!(objects(&h), after, "a second Delete cannot remove an unselected object");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+}
+
+#[test]
+fn delete_inside_the_paragraph_editor_does_not_delete_the_box() {
+    let mut h = harness();
+    let before = objects(&h);
+    let p = at(&h, 55.0, 70.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().views[0].line_editor.is_some());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.key_press(Key::Delete);
+    h.run_steps(2);
+    assert!(h.state().views[0].line_editor.is_some());
+    assert_eq!(objects(&h), before, "the text draft has not been applied as an object deletion");
 }

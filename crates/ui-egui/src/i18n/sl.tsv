@@ -2520,3 +2520,7 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	Lines	Črte
+	Line colour	Barva črte
+	Drag a point to reshape the line. Delete removes it.	Povlecite točko, da spremenite obliko črte. Tipka Delete jo odstrani.
+	This point could not be moved. Try a smaller move.	Te točke ni bilo mogoče premakniti. Poskusite z manjšim premikom.

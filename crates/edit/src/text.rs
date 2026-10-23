@@ -2486,13 +2486,24 @@ pub fn text_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditEr
 /// preserve the text matrix, so unselected text positioned relative to it stays in place.
 /// Call this on a clone: it is a preview operation, not a document edit.
 pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), EditError> {
+    clear_blocks(doc, page, &[block])
+}
+
+/// Clear selected paragraphs from one source inventory, preserving following text advances.
+pub(crate) fn clear_blocks(doc: &mut Document, page: usize, indexes: &[usize]) -> Result<(), EditError> {
+    if indexes.is_empty() {
+        return Ok(());
+    }
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
-    let target = blocks.get(block).ok_or_else(|| EditError::Invalid("the paragraph no longer exists".into()))?;
-    let targets: Vec<&TextLine> = target.lines.iter().filter_map(|i| lines.get(*i)).collect();
+    let mut targets = Vec::new();
+    for index in indexes {
+        let block = blocks.get(*index).ok_or_else(|| EditError::Invalid("the paragraph no longer exists".into()))?;
+        targets.extend(block.lines.iter().filter_map(|i| lines.get(*i)));
+    }
     targets.iter().try_for_each(|line| line.ensure_editable())?;
     let mut drops = coincident_ops(&lines, &targets);
-    drops.extend(target.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()));
+    drops.extend(targets.iter().flat_map(|l| l.ops.iter().copied()));
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;

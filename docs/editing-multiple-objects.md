@@ -1,4 +1,4 @@
-# Move several objects together
+# Select, move and delete page objects
 
 In **Edit a PDF → Edit text & images**, select several items on the same page:
 
@@ -6,6 +6,9 @@ In **Edit a PDF → Edit text & images**, select several items on the same page:
   paragraph, image, or added item becomes the first member when you extend its selection.
 - Drag through empty page space to draw a selection rectangle. Items intersecting the rectangle
   are selected; hold one of those modifiers to add to the selection.
+- Press **Delete** or **Backspace** to remove the selected objects as one undo step. Text being
+  typed keeps its normal character-deletion keys; select the paragraph frame to delete the box.
+  A selected image can be deleted even after the pointer moves away from it.
 - Drag the selection to move all its items by the same distance. Blue outlines preview the move;
   releasing commits it as **one undo step**. Escape cancels the gesture or clears the selection.
 - Switching tabs, opening Home or a modal dialog, or losing window focus cancels a drag preview.
@@ -15,13 +18,13 @@ In **Edit a PDF → Edit text & images**, select several items on the same page:
   Finish or discard a text draft before starting a multi-selection.
 
 The supported items are the existing paragraph boxes, raster Image XObjects, whole Form artwork,
-and text/images added by PdfCraft. A Form remains one item, including its nested artwork and
+vector paths painted into the page, and text/images added by PdfCraft. A Form remains one item, including its nested artwork and
 resources. Added items appear once in the selection inventory. Selections stay on one page and
 contain at most 1,000 items; pages with more than 10,000 recognised objects are refused for group
 selection. Content streams must decode completely within 64 MiB each and 128 MiB per page, with
 a 1,024-level graphics-state limit and 100,000 content operations. These limits apply to both the
 original page and the moved result; unreadable or missing streams are refused. Moving between pages,
-arbitrary paths, inline images, group resizing, align/distribute,
+inline images, group resizing, align/distribute,
 and vertical or clipping text are outside this operation's scope. A refusal changes nothing.
 
 Added streams move by changing their outer placement, preserving drawing bytes, fonts, crop paths,
@@ -37,6 +40,12 @@ selection only when the new geometry matches uniquely; other document edits clea
 
 ## Engine
 
+`Edit::DeleteObjects { page, objects }` removes a mixed selection atomically. Missing, repeated,
+oversized or unsupported references refuse the whole edit. A refusal preserves the selection
+and document; undo restores all deleted objects together. Selected paragraphs are cleared together from the original
+source inventory, preserving the text advances of unselected neighbours. This is ordinary editing, not secure redaction: earlier
+revisions and unused resources can retain deleted data.
+
 `Document::editable_objects(page)` returns a mixed inventory with zero-based `ObjectTarget`
 references and user-space rectangles. Apply `Edit::MoveObjects { page, objects, offset }` through
 `Session`. Targets resolve together before mutation. Permission checks, dirty state, history,
@@ -51,8 +60,8 @@ re-list after changes; the automation generation guard detects stale references 
 ## CLI and MCP
 
 Both frontends use the same tools. `object_list` returns a document `generation` and items with
-`kind` (`added`, `text`, or `image`), 1-based `index`, `type`, displayed `rect`, and optional `text`.
-Treat those references as belonging to that generation and pass it back when moving:
+`kind` (`added`, `text`, `image`, or `path`), 1-based `index`, `type`, displayed `rect`, and optional `text`.
+Treat those references as belonging to that generation and pass it back when moving or deleting:
 
 ```json
 [
@@ -74,6 +83,9 @@ session. For a CLI script, include `doc_open` in that script before the move:
   {"tool":"doc_save","args":{"doc":1,"path":"moved.pdf"}}
 ]
 ```
+
+To delete the same selection, use `object_delete` with `doc`, `page`, `generation` and `objects`
+(the same references), without `offset`. It returns `deleted` and creates one undo step.
 
 Use the actual generation and references from your document, rather than assuming these example
 values. `offset` is in displayed points: positive x moves right, positive y moves down. The optional

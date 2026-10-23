@@ -2479,3 +2479,7 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+	Lines	线条
+	Line colour	线条颜色
+	Drag a point to reshape the line. Delete removes it.	拖动点可改变线条形状。按 Delete 键删除。
+	This point could not be moved. Try a smaller move.	无法移动此点。请尝试较小的移动。

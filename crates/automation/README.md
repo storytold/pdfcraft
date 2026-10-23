@@ -35,6 +35,15 @@ its undo/redo history.
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
 - `Automation::with_automation_roots` holds a read folder and a write folder (`pdfcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`, see [docs/mcp.md](../../docs/mcp.md)). Reads must lie inside the read root and writes inside the write root, links followed. A root left out grants none of its access. Refusals read `automation path rejected: outside the read root <root>: <path>`. It applies on top of `with_root`.
 
+## Deleting selected page objects
+
+`object_list` returns generation-bound references to native paragraphs, Image/Form artwork,
+vector paths and added content. `object_delete` takes `doc`, `page`, `objects` (1–1000
+`{kind, index}` references) and optionally the returned `generation`. It validates the complete
+selection and deletes it in one undo step. Invalid or stale references leave the document
+unchanged. This is ordinary editing; use redaction to sanitize sensitive information.
+See [selection, movement and deletion](../../docs/editing-multiple-objects.md).
+
 ## Text search and cache limits
 
 `text_word_count` counts the current snapshot without filling the text cache. It returns totals
