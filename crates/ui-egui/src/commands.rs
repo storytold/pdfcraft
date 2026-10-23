@@ -280,6 +280,7 @@ impl PdfCraftApp {
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.split" => self.toggle_split(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return v.view_history(id == "view.next_view");
@@ -697,13 +698,15 @@ impl PdfCraftApp {
     /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
     /// next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
-        let count = self.views.len() + usize::from(self.combine_tab.open);
-        let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
+        // The tabs of the strip being worked in: split view's second pane steps through its own.
+        let place = self.active.and_then(|i| self.place_of(i)).unwrap_or_default();
+        let tabs = self.tabs_in(place);
+        let count = tabs.len() + usize::from(place == crate::panes::Place::Main && self.combine_tab.open);
+        let current = if self.combine_showing() { Some(tabs.len()) } else { self.active.and_then(|a| tabs.iter().position(|&i| i == a)) };
         let Some(next) = tab_after(current, count, forward) else { return };
-        if next < self.views.len() {
-            self.active = Some(next);
-        } else {
-            self.open_combine_tab();
+        match tabs.get(next) {
+            Some(&i) => self.active = Some(i),
+            None => self.open_combine_tab(),
         }
     }
 

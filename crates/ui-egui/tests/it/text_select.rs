@@ -344,7 +344,8 @@ fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     h.state_mut().views[0].open_find();
     h.state_mut().views[0].find.as_mut().unwrap().query = "widget café".into();
     h.run_steps(3);
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("find-input")));
+    let find_input = h.state().views[0].find_input_id();
+    h.ctx.memory_mut(|m| m.request_focus(find_input));
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);

@@ -104,6 +104,7 @@ mod page_selection_ui;
 mod pageboxes;
 mod palette;
 mod panels;
+pub mod panes;
 #[cfg(not(target_arch = "wasm32"))]
 mod pickers;
 pub mod prepare;
@@ -495,6 +496,8 @@ pub struct RecentFile {
 }
 
 pub struct PdfCraftApp {
+    /// Split view (`panes`); which pane shows each tab is its view's.
+    pub panes: panes::Panes,
     pub docking: docking::Workspace,
     pub(crate) pending_panel_reveals: Vec<docking::Panel>,
     pub session: Session,
@@ -936,6 +939,7 @@ pub enum OpenOutcome {
 impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
+            panes: Default::default(),
             session: Session::new(),
             views: Vec::new(),
             closed_tabs: Vec::new(),
@@ -2007,20 +2011,25 @@ impl PdfCraftApp {
         if index >= self.views.len() {
             return;
         }
-        let id = self.views.remove(index).id;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
-            if self.closed_tabs.len() == 10 {
-                self.closed_tabs.remove(0);
+        let view = self.views.remove(index);
+        let (id, place) = (view.id, view.place());
+        // Another tab showing the same document (split view) keeps it open.
+        if !self.views.iter().any(|v| v.id == id) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+                if self.closed_tabs.len() == 10 {
+                    self.closed_tabs.remove(0);
+                }
+                self.closed_tabs.push(path);
             }
-            self.closed_tabs.push(path);
+            self.forget_recovery(id);
+            self.session.close(id);
         }
-        self.forget_recovery(id);
-        self.session.close(id);
         self.active = match self.active {
             _ if self.views.is_empty() => None,
             Some(a) if a > index => Some(a - 1),
-            Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
+            // The tab after it in its strip comes forward (or the last).
+            Some(a) if a == index => self.after_close(place, index),
             other => other,
         };
     }
@@ -3325,9 +3334,10 @@ impl eframe::App for PdfCraftApp {
         for view in &mut self.views {
             view.begin_render_frame();
         }
+        panes::frame(self);
         // The window shows the active document's name (or title, if it asks for that).
         let title = self
-            .active
+            .pane_front(panes::Place::Main)
             .and_then(|i| crate::canvas::tab_label(self, i))
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
             .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
@@ -3376,14 +3386,7 @@ impl eframe::App for PdfCraftApp {
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
             if self.mode == Mode::Read {
-                match self.active {
-                    None if self.combine_showing() => combine_ui::page(self, ui),
-                    None => home::show(self, ui),
-                    Some(index) => match compare_ui::side_by_side(self, index) {
-                        Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
-                        None => canvas::document_area(self, index, ui),
-                    },
-                }
+                panes::page_area(self, ui);
             } else {
                 docking::show(self, ui);
             }
@@ -3401,23 +3404,39 @@ impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
-        // Retire hidden documents before admitting the visible document's textures, so the
+        // Retire hidden documents before admitting the visible documents' textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
-        // Side by side: the comparison's old file renders alongside the active one.
-        let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
+        // On screen: the active tab, the comparison's old file side by side with it, and what
+        // split view's other pane shows.
+        let shown = self.views_on_screen();
+        let shown_docs: std::collections::HashSet<DocId> = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.id).collect();
         for (i, view) in self.views.iter_mut().enumerate() {
-            if Some(i) != self.active
-                && Some(i) != partner
-                && let Some(doc) = self.session.get(view.id)
-            {
+            if shown.contains(&i) {
+                continue;
+            }
+            if shown_docs.contains(&view.id) {
+                // Another tab of this document is on screen, and renders through its pool.
+                view.release_rasters();
+            } else if let Some(doc) = self.session.get(view.id) {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner) {
-            if let Some(view) = self.views.get_mut(i)
-                && let Some(doc) = self.session.get(view.id)
-            {
-                view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+        // Each document on screen once: two views of it (split view) share its render pool.
+        let mut done = std::collections::HashSet::new();
+        for &i in &shown {
+            let Some(id) = self.views.get(i).map(|v| v.id) else { continue };
+            if !done.insert(id) {
+                continue;
+            }
+            let Some(doc) = self.session.get(id) else { continue };
+            let group: Vec<usize> = shown.iter().copied().filter(|&k| self.views.get(k).is_some_and(|v| v.id == id)).collect();
+            match group.as_slice() {
+                [only] => {
+                    if let Some(view) = self.views.get_mut(*only) {
+                        view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+                    }
+                }
+                _ => DocView::finish_shared_render_frame(ctx, &doc.info, &doc.renderer, &mut self.views, &group),
             }
         }
     }

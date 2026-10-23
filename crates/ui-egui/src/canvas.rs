@@ -383,6 +383,9 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 }
 
 pub struct DocView {
+    /// Where the tab shows (split view's panes) and the key that tells two
+    /// views of one document apart (`crate::panes`).
+    pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
     pub zoom: f32,
     pub fit: Fit,
@@ -730,6 +733,7 @@ impl DocView {
     /// any layout or zoom the PDF itself asks for.
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
+            pane: Default::default(),
             id,
             zoom: defaults.zoom,
             fit: defaults.fit,
@@ -900,7 +904,7 @@ impl DocView {
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
         fresh.thumbnail_zoom = self.thumbnail_zoom;
-        // Same document id, so the scroll offset egui keeps for it is still this document's.
+        // Same view key (`pane`), so the scroll offset egui keeps for it is still this view's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
         fresh.notice_dismissed = self.notice_dismissed;
@@ -917,11 +921,56 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
         self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
         self.page_input_reselect = true;
+    }
+
+    /// Another view of this document changed it (split view: an edit, Undo,
+    /// a reload): start afresh as a reload does, keeping the reader's place, so nothing here
+    /// points into the old version.
+    pub(crate) fn follow_document(&mut self, info: &DocInfo) {
+        let continuous = self.continuous;
+        self.document_replaced(info);
+        self.continuous = continuous;
+    }
+
+    /// A second view of this document (split view), showing what this one shows.
+    pub(crate) fn twin(&self, info: &DocInfo) -> Self {
+        let mut v = Self::new(self.id, info, ViewDefaults::default());
+        v.zoom = self.zoom;
+        v.fit = self.fit;
+        v.layout = self.layout;
+        v.continuous = self.continuous;
+        v.show_page_gaps = self.show_page_gaps;
+        v.rotation = self.rotation;
+        v.cover = self.cover;
+        v.current = self.current;
+        v.page_input = self.page_input.clone();
+        v.highlight_fields = self.highlight_fields;
+        v.notice_dismissed = self.notice_dismissed;
+        v.scripts_off_noted = self.scripts_off_noted;
+        v.goto = Some((self.current, 0.0));
+        v
+    }
+
+    /// The key that tells this view apart from another view of the same document (split view):
+    /// unique for the app's life. Ids of what is drawn over the page are keyed by it.
+    pub fn view_key(&self) -> u64 {
+        self.pane.key
+    }
+
+    /// The id of this view's find field, for what needs to give it the focus or take it away.
+    pub fn find_input_id(&self) -> egui::Id {
+        find_input_id(self.pane.key)
+    }
+
+    /// Where this tab shows: the main pane or split view's second pane.
+    pub fn place(&self) -> crate::panes::Place {
+        self.pane.place
     }
 
     /// Open Organize Pages on the page being read (issue #1910). An empty selection means the
@@ -1134,6 +1183,12 @@ impl DocView {
     /// The whole-page raster on screen for `page` (the low-res backdrop of a tiled page), if any.
     pub(crate) fn page_raster(&self, page: usize) -> Option<egui::TextureId> {
         self.pages.get(&page).map(|p| p.tex.id())
+    }
+
+    /// The size of `page`'s whole-page raster, when one is drawn and up to date (not waiting for
+    /// its replacement after a change; tests and automation).
+    pub fn drawn_page_size(&self, page: usize) -> Option<[usize; 2]> {
+        self.pages.get(&page).filter(|p| p.tag != STALE_TAG).map(|p| p.tex.size())
     }
 
     /// Whether `page`'s whole-page raster (a tiled page's backdrop too) is still the one from
@@ -1775,6 +1830,22 @@ impl DocView {
     /// Only the displayed document owns raster textures. Tabs keep their document and view
     /// state, but do not each retain a separate full application texture allowance.
     pub(crate) fn suspend_rendering(&mut self, pool: &RenderPool) {
+        let queued = !self.last_queue.is_empty();
+        self.release_rasters();
+        if queued {
+            pool.set_queue(Vec::new());
+        }
+        // Results already finished for this tab would otherwise sit in its pool, rasters and
+        // all, until the tab is shown again. (An inline pool renders inside try_recv: skip it.)
+        if !pool.is_inline() {
+            while pool.try_recv().is_some() {}
+        }
+    }
+
+    /// The view's half of [`DocView::suspend_rendering`]: its rasters and its demand go, and its
+    /// document's pool is left alone. On its own for a view whose document another view on screen
+    /// renders through the same pool (split view).
+    pub(crate) fn release_rasters(&mut self) {
         self.begin_render_frame();
         self.pages.clear();
         self.tiles.clear();
@@ -1788,15 +1859,8 @@ impl DocView {
         self.signature_drag = Default::default();
         self.text_background = Default::default();
         self.move_background = Default::default();
-        if !self.last_queue.is_empty() {
-            pool.set_queue(Vec::new());
-            self.last_queue.clear();
-        }
-        // Results already finished for this tab would otherwise sit in its pool, rasters and
-        // all, until the tab is shown again. (An inline pool renders inside try_recv: skip it.)
-        if !pool.is_inline() {
-            while pool.try_recv().is_some() {}
-        }
+        self.last_queue.clear();
+        self.pane.shared = false;
     }
 
     fn thumbnail_requests(&self, info: &DocInfo, ppp: f32) -> Vec<RenderRequest> {
@@ -1976,7 +2040,8 @@ impl DocView {
             return;
         }
         let queue = self.prepare_render_queue(info, ctx.pixels_per_point());
-        if queue != self.last_queue {
+        // (Shared with another view of the document last frame, the pool's queue was both views'.)
+        if queue != self.last_queue || std::mem::take(&mut self.pane.shared) {
             pool.set_queue(queue.clone());
             self.last_queue = queue;
         }
@@ -1988,25 +2053,69 @@ impl DocView {
         }
     }
 
+    /// [`DocView::finish_render_frame`] for several views of one document on screen at once (split
+    /// view), `group` in `views`: the document's one render pool works for
+    /// all of them, and a request they share (the same page at the same scale) is rendered once
+    /// and handed to each.
+    pub(crate) fn finish_shared_render_frame(ctx: &egui::Context, info: &DocInfo, pool: &RenderPool, views: &mut [DocView], group: &[usize]) {
+        // As for one view (#3149): an edit after the canvases collected demand leaves its scales
+        // and indexes on the old pages, in every view of the document (the pool's queue is theirs).
+        if group.iter().any(|&i| views.get(i).is_some_and(|v| v.frame_geometry_changed)) {
+            for &i in group {
+                if let Some(view) = views.get_mut(i) {
+                    view.begin_render_frame();
+                    view.last_queue.clear();
+                }
+            }
+            pool.set_queue(Vec::new());
+            ctx.request_repaint();
+            return;
+        }
+        let ppp = ctx.pixels_per_point();
+        let mut changed = false;
+        let mut union: Vec<RenderRequest> = Vec::new();
+        for &i in group {
+            let Some(view) = views.get_mut(i) else { continue };
+            let queue = view.prepare_render_queue(info, ppp);
+            changed |= !view.pane.shared || queue != view.last_queue;
+            for r in &queue {
+                if !union.contains(r) {
+                    union.push(*r);
+                }
+            }
+            view.last_queue = queue;
+            view.pane.shared = true;
+        }
+        if changed {
+            pool.set_queue(union);
+        }
+        // A result can go to both views, so one view holding its rasters holds them for both.
+        if !group.iter().any(|&i| views.get(i).is_some_and(|v| v.hold_rasters)) {
+            receive_batch(pool, |r| {
+                let wanting: Vec<usize> =
+                    group.iter().copied().filter(|&i| views.get(i).is_some_and(|v| v.last_queue.contains(&r.request))).collect();
+                let Some((&last, rest)) = wanting.split_last() else { return 0 };
+                let mut uploaded = 0usize;
+                for &i in rest {
+                    if let Some(view) = views.get_mut(i) {
+                        uploaded = uploaded.saturating_add(view.receive_result(ctx, copy_result(&r)));
+                    }
+                }
+                if let Some(view) = views.get_mut(last) {
+                    uploaded = uploaded.saturating_add(view.receive_result(ctx, r));
+                }
+                uploaded
+            });
+        }
+        if group.iter().any(|&i| views.get(i).is_some_and(|v| !v.last_queue.is_empty())) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+    }
+
     /// Pull a bounded batch of current results into textures. Demand is committed first, so
     /// offscreen results and obsolete scale/configuration tags never allocate a ColorImage.
     pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
-        let budget = if pool.is_inline() { 1 } else { RESULTS_PER_FRAME };
-        let mut uploaded = 0usize;
-        #[cfg(not(target_arch = "wasm32"))]
-        let started = std::time::Instant::now();
-        for _ in 0..budget {
-            let Some(r) = pool.try_recv() else { break };
-            uploaded = uploaded.saturating_add(self.receive_result(ctx, r));
-            // One whole-page upload may exceed the frame allowance; it must still progress.
-            if uploaded >= UPLOAD_BYTES_PER_FRAME {
-                break;
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            if started.elapsed() >= std::time::Duration::from_millis(4) {
-                break;
-            }
-        }
+        receive_batch(pool, |r| self.receive_result(ctx, r));
     }
 
     fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage) -> usize {
@@ -2288,6 +2397,44 @@ fn anchored_scroll(point: Pos2, rel: Vec2, content: Vec2, viewport: Vec2) -> Vec
 }
 
 /// The request tag for a raster at `scale`: equal tags mean the same scale (to 1/65536).
+/// Take a bounded batch of finished renders from `pool` and hand each to `receive`, which
+/// returns the bytes it uploaded: at most a few results, one frame's upload allowance, and 4 ms
+/// a frame.
+fn receive_batch(pool: &RenderPool, mut receive: impl FnMut(pdfcraft_render::RenderedPage) -> usize) {
+    let budget = if pool.is_inline() { 1 } else { RESULTS_PER_FRAME };
+    let mut uploaded = 0usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    let started = std::time::Instant::now();
+    for _ in 0..budget {
+        let Some(r) = pool.try_recv() else { break };
+        uploaded = uploaded.saturating_add(receive(r));
+        // One whole-page upload may exceed the frame allowance; it must still progress.
+        if uploaded >= UPLOAD_BYTES_PER_FRAME {
+            break;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if started.elapsed() >= std::time::Duration::from_millis(4) {
+            break;
+        }
+    }
+}
+
+/// A copy of a render result, for a second view of the document that asked for the same request
+/// (split view). Not `Clone` on purpose: page rasters are large, and this is the one place they
+/// are copied.
+fn copy_result(r: &pdfcraft_render::RenderedPage) -> pdfcraft_render::RenderedPage {
+    pdfcraft_render::RenderedPage {
+        request: r.request,
+        width: r.width,
+        height: r.height,
+        rgba: r.rgba.clone(),
+        error: r.error.clone(),
+        text: r.text.clone(),
+        warnings: r.warnings.clone(),
+        millis: r.millis,
+    }
+}
+
 fn scale_tag(scale: f32) -> u64 {
     (f64::from(scale) * 65536.0).round() as u64
 }
@@ -2623,16 +2770,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         f.in_panel = false;
     }
     // The snapshot notice bar's Close was clicked: close here, where no document borrow is
-    // held. The tab is looked up by id: indices may have shifted since the click, and the
-    // flag rides its own view, so a stale flag can never close the wrong tab.
-    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
+    // held. The tab is looked up by its view key (indices may have shifted since the click,
+    // and split view can show one document in two tabs), and the flag rides its own view, so
+    // a stale flag can never close the wrong tab.
+    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.view_key()).and_then(|key| app.tab_with_key(key));
     if let Some(i) = pending {
         app.views[i].close_requested = false;
-        if app.has_unsaved_work(i) {
-            app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
-        } else {
-            app.close_tab(i);
-        }
+        app.request_close_tab(i);
         return;
     }
     let Some(doc) = app.session.get(app.views[index].id) else { return };
@@ -2930,8 +3074,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         },
         ..Default::default()
     });
-    // Each document keeps its own scroll position when switching tabs (#189).
-    scroll = scroll.id_salt(("page-view", view.id));
+    // Each tab keeps its own scroll position when switching tabs (#189), and so does each view of
+    // one document in split view.
+    scroll = scroll.id_salt(("page-view", view.view_key()));
     // Every scroll here asks for no animation. An animated area would still queue a zero-length
     // offset target for the next frame, which overwrites the jump a page turn just set.
     scroll = scroll.animated(false);
@@ -3106,7 +3251,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
-    let out = page_scroll(ui, scroll, egui::Id::new(("page-view-scope", view.id)), |ui, viewport| {
+    // Keyed by the view, not the document: with one document in both panes of split view, shared
+    // ids gave the main pane's clicks on the page to the second pane's widgets.
+    let out = page_scroll(ui, scroll, egui::Id::new(("page-view-scope", view.view_key())), |ui, viewport| {
         // egui's drag responses accept every pointer button. Keep a wheel gesture from also
         // selecting text, drawing a mark, or panning with the Hand tool.
         if middle_gesture {
@@ -4458,7 +4605,8 @@ fn selection_actions(
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::new(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
+    let area = egui::Id::new(("text-selection-actions", view.view_key()));
+    egui::Area::new(area).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (label, action) in [
@@ -4638,6 +4786,12 @@ fn page_size_hint(view: &DocView, info: &DocInfo, units: crate::units::Unit, are
         });
 }
 
+/// The id of a pane's find field: one per view, so two find bars open at once do not share an id
+/// (and so the focus).
+fn find_input_id(key: u64) -> egui::Id {
+    egui::Id::new(("find-input", key))
+}
+
 /// Acrobat-style floating find bar at the top-right of the document area.
 fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
@@ -4648,7 +4802,7 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
     let mut close = false;
     let mut step: Option<bool> = None;
     let searched = view.texts.len() + view.text_failed.len();
-    egui::Area::new(egui::Id::new("find-bar"))
+    egui::Area::new(egui::Id::new(("find-bar", view.pane.key)))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
         .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
@@ -4663,7 +4817,7 @@ fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: 
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::new("find-input"))
+                            .id(find_input_id(view.pane.key))
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
@@ -4964,7 +5118,7 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
 fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let pos = area.left_top() + vec2(14.0, 14.0);
-    egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+    egui::Area::new(app.panes.area_id("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.border))

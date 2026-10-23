@@ -251,7 +251,11 @@ impl PdfCraftApp {
     /// Returns false when a field refused the typing queued for it (its editor is open again).
     pub(crate) fn process_pending_edits(&mut self) -> bool {
         let Some(i) = self.active else { return true };
-        let applied = self.apply_queued_edit(i);
+        // Split view: the other pane's tab can hold an edit too (its field committed when the
+        // click that brought this pane forward took the focus). It goes in first, as it came first.
+        let (other_applied, stay) = self.apply_other_pane_edit(i);
+        let modal = self.modal_open();
+        let applied = self.apply_queued_edit(i) && other_applied;
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
             self.deferred_commands.clear();
@@ -287,7 +291,54 @@ impl PdfCraftApp {
             }
             None => {}
         }
+        // That tab comes forward when its value was refused (its editor is open again with the
+        // text) or its edit opened a dialog for its document, unless this tab's action opened one.
+        if let Some(key) = stay
+            && self.active == Some(i)
+            && (modal || !self.modal_open())
+        {
+            self.active = self.tab_with_key(key).or(self.active);
+        }
         applied
+    }
+
+    /// Split view: apply the edit queued on the tab the other pane shows, with that tab active
+    /// while it goes in (tab `i`, the active one, is active again afterwards). Left queued, it was
+    /// lost when the next frame replaced that tab to follow a change made through tab `i`
+    /// (`settle_panes`). Returns false when a field refused it, and that tab's view key when it
+    /// should come forward: its value was refused, or its edit opened a dialog.
+    fn apply_other_pane_edit(&mut self, i: usize) -> (bool, Option<u64>) {
+        use crate::panes::Place;
+        let Some(place) = self.views.get(i).map(|v| v.place()) else { return (true, None) };
+        let other = if place == Place::Main { Place::Second } else { Place::Main };
+        let Some((k, key, id)) = self
+            .panes
+            .split
+            .and_then(|_| self.pane_front(other))
+            .filter(|&k| k != i)
+            .and_then(|k| self.views.get(k).filter(|v| v.pending_edit.is_some()).map(|v| (k, v.view_key(), v.id)))
+        else {
+            return (true, None);
+        };
+        let generation = |app: &Self| app.session.get(id).map(|d| d.edit_generation());
+        let (before, modal) = (generation(self), self.modal_open());
+        self.active = Some(k);
+        let applied = self.apply_queued_edit(k);
+        let opened = !modal && self.modal_open();
+        self.active = Some(i);
+        // Tab `i` on the same document catches up now, keeping what it holds (this frame's click
+        // may have queued an edit or opened a field): the next frame replaces only the tab that
+        // isn't active, as if this change had come through the active one.
+        if generation(self) != before
+            && let Some(doc) = self.session.get(id)
+        {
+            for (j, v) in self.views.iter_mut().enumerate() {
+                if j != k && v.id == id {
+                    v.document_changed(&doc.info);
+                }
+            }
+        }
+        (applied, (!applied || opened).then_some(key))
     }
 
     /// Enhance ▸ Camera image ▸ clean-up slider: undo the enhancement (and the turns made since)
@@ -598,10 +649,16 @@ impl PdfCraftApp {
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
+        self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|doc| doc.dirty) || self.has_unsaved_typing(index)
+    }
+
+    /// Whether tab `index` holds work of its own that isn't in its document yet: form typing not
+    /// committed, an edit waiting, text being typed. (The document's own edits are shared with
+    /// any other tab of it, in split view.)
+    pub(crate) fn has_unsaved_typing(&self, index: usize) -> bool {
         let Some(v) = self.views.get(index) else { return false };
         let Some(doc) = self.session.get(v.id) else { return false };
-        doc.dirty
-            || v.pending_edit.is_some()
+        v.pending_edit.is_some()
             || v.content.blocked().is_some()
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
@@ -800,10 +857,15 @@ impl PdfCraftApp {
 
     /// Close a tab, asking first if it has unsaved changes.
     pub fn request_close_tab(&mut self, index: usize) {
-        // Text typed into a field counts as an unsaved change.
-        if self.has_unsaved_work(index)
+        // Text typed into a field counts as an unsaved change. Another tab of the document (split
+        // view) keeps the document's changes open, so closing this one asks only about its own.
+        if self.asks_before_closing(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
         {
+            if self.has_twin(index) {
+                // The question is about this tab of the document (`asking_tab`).
+                self.active = Some(index);
+            }
             self.close_request = Some(CloseRequest::Tab(id));
         } else {
             self.close_tab(index);
@@ -856,7 +918,7 @@ impl PdfCraftApp {
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
         let index = match req {
-            CloseRequest::Tab(id) => match self.views.iter().position(|v| v.id == id) {
+            CloseRequest::Tab(id) => match self.asking_tab(id) {
                 Some(i) => i,
                 None => return, // already closed
             },
@@ -891,12 +953,18 @@ impl PdfCraftApp {
                 // document open.
                 let ctx = ctx.clone();
                 self.save_then(index, SaveTarget::InPlace, move |app| {
-                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                    if let Some(i) = app.asking_tab(id) {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
             }
         }
+    }
+
+    /// The tab a close question about document `id` is about: the active one when it shows `id`
+    /// (in split view two tabs can), else the document's first.
+    pub(crate) fn asking_tab(&self, id: pdfcraft_engine::DocId) -> Option<usize> {
+        self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).or_else(|| self.views.iter().position(|v| v.id == id))
     }
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
