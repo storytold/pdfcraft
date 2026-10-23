@@ -145,8 +145,8 @@ fn every_registered_command_is_implemented() {
             let p = pdfcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
             app.apply_edit(pdfcraft_engine::Edit::Protect(p));
         }
-        // The cover toggle needs two-page view first (it is disabled elsewhere).
-        if spec.id == "view.layout.cover" {
+        // The cover and right-to-left toggles need two-page view first (they are disabled elsewhere).
+        if spec.id == "view.layout.cover" || spec.id == "view.layout.right_to_left" {
             app.set_option("layout", "two-up").unwrap();
         }
         // History commands need a real jump (and Back first to make Forward available).

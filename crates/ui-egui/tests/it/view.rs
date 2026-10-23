@@ -798,6 +798,74 @@ fn page_display_commands_switch_layouts() {
     assert!(!h.state().views[0].continuous(), "switching the base layout leaves scrolling off");
 }
 
+/// Three 300×400 pt pages bound on the right (`/Direction /R2L`), opening in two-page view.
+const RIGHT_BOUND: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /PageLayout /TwoPageLeft /ViewerPreferences << /Direction /R2L >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+fn right_bound_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("right-bound.pdf", None, RIGHT_BOUND.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
+/// A book bound on the right opens with its spreads right to left: page 1 on the right of page 2,
+/// and ← turns to the next spread, as a reader of an Arabic or Japanese book expects.
+#[test]
+fn a_right_bound_document_opens_with_right_to_left_spreads() {
+    let mut h = right_bound_harness();
+    let v = &h.state().views[0];
+    assert_eq!(v.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "/PageLayout /TwoPageLeft");
+    assert!(v.right_to_left, "/Direction /R2L turns right-to-left spreads on");
+    let (p1, p2) = (rect(&h, 0).expect("page 1 shown"), rect(&h, 1).expect("page 2 shown"));
+    assert!(p1.min.x > p2.max.x, "page 1 is right of page 2: {p1:?} {p2:?}");
+    assert!((p1.center().y - p2.center().y).abs() < 1.0, "one spread");
+    // The next page is to the left: ← moves forward a spread, → back.
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "← turns to the spread holding page 3");
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "→ turns back");
+    // The reader can still lay the spreads out left to right.
+    assert!(h.state_mut().execute("view.layout.right_to_left"));
+    h.run_steps(4);
+    assert!(!h.state().views[0].right_to_left);
+    let (p1, p2) = (rect(&h, 0).expect("page 1 shown"), rect(&h, 1).expect("page 2 shown"));
+    assert!(p1.max.x < p2.min.x, "left to right again: {p1:?} {p2:?}");
+}
+
+#[test]
+fn right_to_left_spreads_toggle_through_the_command_and_control_channel() {
+    let mut h = harness(&[]);
+    assert!(!h.state().views[0].right_to_left, "a document without /Direction reads left to right");
+    // Like the cover page, it needs two-page view rather than arming a hidden flag.
+    assert!(!h.state_mut().execute("view.layout.right_to_left"));
+    assert!(h.state_mut().set_option("right-to-left", "on").is_err());
+    assert!(!h.state().views[0].right_to_left);
+    h.state_mut().set_option("layout", "two-page").unwrap();
+    h.state_mut().set_option("right-to-left", "on").unwrap();
+    h.run_steps(4);
+    assert!(h.state().views[0].right_to_left);
+    let (p1, p2) = (rect(&h, 0).expect("page 1 shown"), rect(&h, 1).expect("page 2 shown"));
+    assert!(p1.min.x > p2.max.x, "page 1 is right of page 2: {p1:?} {p2:?}");
+    assert!(h.state_mut().set_option("right-to-left", "maybe").is_err());
+    assert!(h.state_mut().execute("view.layout.right_to_left"));
+    assert!(!h.state().views[0].right_to_left, "the command toggles it back");
+}
+
 #[test]
 fn layout_option_rejects_typos() {
     let mut h = harness(&[]);

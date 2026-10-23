@@ -1162,6 +1162,9 @@ impl PdfCraftApp {
             }
         }
         let view = &mut self.views[index];
+        // The binding is part of the document, not a display preference: a book bound on the
+        // right (`/Direction /R2L`) lays its spreads out right to left even with the default view.
+        view.right_to_left = v.right_to_left;
         if !self.always_default_view {
             match v.layout {
                 // The view opened in Default page display already.
@@ -2762,6 +2765,17 @@ impl PdfCraftApp {
                 }
                 v.set_cover(on);
             }
+            ("right-to-left", Some(v)) => {
+                let on = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("right-to-left must be on or off".into()),
+                };
+                if on && !v.cover_applies() {
+                    return Err("switch to two-page view first to lay pages out right to left".into());
+                }
+                v.set_right_to_left(on);
+            }
             ("default-layout", _) => {
                 let (layout, continuous) =
                     canvas::parse_display_token(value).ok_or("default-layout must be single, continuous, two-up or two-page")?;
@@ -2946,6 +2960,7 @@ impl PdfCraftApp {
                     "continuous",
                     "page-gaps",
                     "cover",
+                    "right-to-left",
                     "organize",
                     "grid-zoom",
                     "thumbnail-zoom",
