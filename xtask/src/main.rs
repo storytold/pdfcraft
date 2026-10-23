@@ -2,6 +2,7 @@
 
 use std::process::ExitCode;
 
+mod arlington;
 mod assets;
 mod corpus;
 mod demo_pdf;
@@ -40,6 +41,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
+    (
+        "arlington",
+        "Compact the pinned Arlington PDF Model (--from a checkout; --check, --update-pin) into crates/arlington/data/arlington.tsv",
+        arlington::run,
+    ),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
 

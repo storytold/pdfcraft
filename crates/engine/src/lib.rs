@@ -36,6 +36,7 @@ mod scan_fields;
 pub mod signature_image;
 pub mod signature_scan;
 mod stamp_preview;
+pub mod structure;
 pub mod text_fonts;
 mod text_preview;
 pub mod word_count;

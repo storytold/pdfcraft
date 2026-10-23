@@ -213,6 +213,33 @@
 	Prepare for distribution…	Valmistele jakelua varten…
 	Optimize scanned documents…	Optimoi skannatut asiakirjat…
 	Compare files…	Vertaa tiedostoja…
+	Validate structure…	Validoi rakenne…
+	Validate structure	Validoi rakenne
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} objektia tarkistettiin Arlington PDF -mallia vasten (PDF {version}).
+	No errors: the structure follows the Arlington PDF Model.	Ei virheitä: rakenne noudattaa Arlington PDF -mallia.
+	No errors in the rules that were evaluated.	Arvioiduissa säännöissä ei ole virheitä.
+	Errors	Virheet
+	Not evaluated: {list}	Ei arvioitu: {list}
+	Only the first {n} of each kind are listed.	Kustakin lajista luetellaan vain ensimmäiset {n}.
+	The document has more objects than one check covers; the rest was not checked.	Asiakirjassa on enemmän objekteja kuin yksi tarkistus kattaa; loppuja ei tarkistettu.
+	{type} lacks the required entry {key}	Tyypistä {type} puuttuu pakollinen avain {key}
+	{key} in {type} is {found}, but must be {expected}	{key} tyypissä {type} on {found}, mutta sen on oltava {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} tyypissä {type} on {value}, joka ei ole mikään arvoista {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} tyypissä {type} on {value}, mikä rikkoo sääntöä {rule}
+	{key} in {type} must be {expected} when {rule}	{key} tyypissä {type} on oltava {expected}, kun {rule}
+	{key} in {type} must be an indirect reference	{key} tyypissä {type} on oltava epäsuora viittaus
+	{key} in {type} must be a direct object, not a reference	{key} tyypissä {type} on oltava suora objekti, ei viittaus
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} tyypissä {type} on PDF {since}:stä, uudempi kuin tiedoston PDF {version}
+	{key} in {type} is deprecated since PDF {since}	{key} tyypissä {type} on vanhentunut PDF {since}:stä lähtien
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	Tyypin {type} avaimen {key} arvo {value} on PDF {since}:stä, joka on uudempi kuin tiedoston PDF {version}
+	The value {value} of {key} in {type} is deprecated since PDF {since}	Tyypin {type} avaimen {key} arvo {value} on vanhentunut PDF {since}:stä lähtien
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} tyypissä {type} on {found}, joka on PDF {since}:stä, uudempi kuin tiedoston PDF {version}
+	{key} in {type} breaks the rule {rule}	{key} tyypissä {type} rikkoo sääntöä {rule}
+	{type} has {count} elements, more than the {max} it allows	Tyypissä {type} on {count} alkiota, enemmän kuin sallitut {max}
+	{type} has {count} elements, but they come in sets of {n}	Tyypissä {type} on {count} alkiota, mutta niitä tulee {n} alkion ryhminä
+	{key} in {type} refers to object {object}, which doesn't exist	{key} tyypissä {type} viittaa objektiin {object}, jota ei ole olemassa
+	{key} in {type} matches none of the types it may have ({candidates})	{key} tyypissä {type} ei vastaa mitään sille sallituista tyypeistä ({candidates})
+	{key} is not an entry of {type} in the model	{key} ei ole mallissa tyypin {type} avain
 	Detect form fields	Tunnista lomakekentät
 	Merge data files into spreadsheet…	Yhdistä datatiedostot laskentataulukkoon…
 	Flatten form fields	Litistä lomakekentät

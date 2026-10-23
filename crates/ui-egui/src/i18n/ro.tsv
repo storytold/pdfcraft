@@ -1367,6 +1367,33 @@
 	Compare	Comparare
 	Compare files	Comparare fișiere
 	Compare files…	Comparare fișiere…
+	Validate structure…	Validare structură…
+	Validate structure	Validare structură
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	S-au verificat {objects} obiecte față de modelul PDF Arlington pentru PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Nicio eroare: structura respectă modelul PDF Arlington.
+	No errors in the rules that were evaluated.	Nicio eroare în regulile care au fost evaluate.
+	Errors	Erori
+	Not evaluated: {list}	Neevaluate: {list}
+	Only the first {n} of each kind are listed.	Sunt listate doar primele {n} de fiecare tip.
+	The document has more objects than one check covers; the rest was not checked.	Documentul are mai multe obiecte decât acoperă o verificare; restul nu a fost verificat.
+	{type} lacks the required entry {key}	Lui {type} îi lipsește intrarea obligatorie {key}
+	{key} in {type} is {found}, but must be {expected}	{key} din {type} este {found}, dar trebuie să fie {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} din {type} este {value}, care nu este una dintre {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} din {type} este {value}, ceea ce încalcă regula {rule}
+	{key} in {type} must be {expected} when {rule}	{key} din {type} trebuie să fie {expected} când {rule}
+	{key} in {type} must be an indirect reference	{key} din {type} trebuie să fie o referință indirectă
+	{key} in {type} must be a direct object, not a reference	{key} din {type} trebuie să fie un obiect direct, nu o referință
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} din {type} este din PDF {since}, mai nou decât PDF {version} al fișierului
+	{key} in {type} is deprecated since PDF {since}	{key} din {type} este învechit începând cu PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	Valoarea {value} a lui {key} din {type} este din PDF {since}, mai nou decât PDF {version} al fișierului
+	The value {value} of {key} in {type} is deprecated since PDF {since}	Valoarea {value} a lui {key} din {type} este învechită începând cu PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} din {type} este un {found}, care este din PDF {since}, mai nou decât PDF {version} al fișierului
+	{key} in {type} breaks the rule {rule}	{key} din {type} încalcă regula {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} are {count} elemente, mai multe decât cele {max} permise
+	{type} has {count} elements, but they come in sets of {n}	{type} are {count} elemente, dar acestea vin în grupuri de câte {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} din {type} se referă la obiectul {object}, care nu există
+	{key} in {type} matches none of the types it may have ({candidates})	{key} din {type} nu corespunde niciunuia dintre tipurile pe care le poate avea ({candidates})
+	{key} is not an entry of {type} in the model	{key} nu este o intrare a lui {type} în model
 	Compress a PDF	Comprimare PDF
 	Console	Consolă
 	Convert colors	Conversie culori

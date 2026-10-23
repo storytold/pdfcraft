@@ -583,6 +583,7 @@ impl PdfCraftApp {
             }
             "form.detect" => self.detect_fields(),
             "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
+            "standards.structure" => self.open_structure(),
             "standards.pdfa" => {
                 self.pdfa.issues = None;
                 self.dialog = Some(Dialog::PdfA);

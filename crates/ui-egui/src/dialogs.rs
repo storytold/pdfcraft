@@ -740,6 +740,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
                 return;
             }
+            Dialog::Structure => {
+                close = crate::structure_ui::body(ui, app, &t);
+                return;
+            }
             Dialog::CertificateViewer => {
                 ui.set_width(700.0);
                 let trusted = app.session.trusted_certificates().to_vec();

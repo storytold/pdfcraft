@@ -213,6 +213,33 @@
 	Prepare for distribution…	Prepara per a la distribució…
 	Optimize scanned documents…	Optimitza documents escanejats…
 	Compare files…	Compara fitxers…
+	Validate structure…	Valida l'estructura…
+	Validate structure	Valida l'estructura
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	S'han comprovat {objects} objectes amb el model PDF Arlington per a PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Cap error: l'estructura segueix el model PDF Arlington.
+	No errors in the rules that were evaluated.	No hi ha errors en les regles que s'han avaluat.
+	Errors	Errors
+	Not evaluated: {list}	No avaluat: {list}
+	Only the first {n} of each kind are listed.	Només es mostren els primers {n} de cada tipus.
+	The document has more objects than one check covers; the rest was not checked.	El document té més objectes dels que cobreix una comprovació; la resta no s'ha comprovat.
+	{type} lacks the required entry {key}	A {type} li falta l'entrada obligatòria {key}
+	{key} in {type} is {found}, but must be {expected}	{key} a {type} és {found}, però ha de ser {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} a {type} és {value}, que no és cap de {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} a {type} és {value}, que incompleix la regla {rule}
+	{key} in {type} must be {expected} when {rule}	{key} a {type} ha de ser {expected} quan {rule}
+	{key} in {type} must be an indirect reference	{key} a {type} ha de ser una referència indirecta
+	{key} in {type} must be a direct object, not a reference	{key} a {type} ha de ser un objecte directe, no una referència
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} a {type} és de PDF {since}, posterior al PDF {version} del fitxer
+	{key} in {type} is deprecated since PDF {since}	{key} a {type} està obsolet des de PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	El valor {value} de {key} a {type} és de PDF {since}, posterior al PDF {version} del fitxer
+	The value {value} of {key} in {type} is deprecated since PDF {since}	El valor {value} de {key} a {type} està obsolet des de PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} a {type} és un {found}, que és de PDF {since}, posterior al PDF {version} del fitxer
+	{key} in {type} breaks the rule {rule}	{key} a {type} incompleix la regla {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} té {count} elements, més dels {max} que permet
+	{type} has {count} elements, but they come in sets of {n}	{type} té {count} elements, però van en grups de {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} a {type} fa referència a l'objecte {object}, que no existeix
+	{key} in {type} matches none of the types it may have ({candidates})	{key} a {type} no coincideix amb cap dels tipus que pot tenir ({candidates})
+	{key} is not an entry of {type} in the model	{key} no és una entrada de {type} al model
 	Detect form fields	Detecta camps de formulari
 	Merge data files into spreadsheet…	Combina fitxers de dades en un full de càlcul…
 	Flatten form fields	Aplana els camps de formulari
