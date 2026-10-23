@@ -372,6 +372,115 @@ fn device_colour_in_forms_patterns_and_glyphs_is_found() {
     }
 }
 
+const NO_INTENT: &str = "Device colour is used, but there is no PDF/A output intent";
+
+/// Whether verify asks for an output intent, and convert then adds the sRGB one: device colour
+/// that is gray or RGB only.
+fn gets_srgb(mut doc: Document) -> bool {
+    let asked = messages(&verify(&doc, Level::A2b)).contains(&NO_INTENT);
+    let added = convert(&mut doc, Level::A2b).is_ok_and(|r| r.fixed.iter().any(|f| f.contains("output intent")));
+    asked && added && declared(&doc).output_intents == ["sRGB IEC61966-2.1"]
+}
+
+/// Issue #2411: an indexed image draws in its base space, so `/ColorSpace [/Indexed /DeviceCMYK …]` on an
+/// image XObject is DeviceCMYK, written inline or as an object of its own. An RGB or gray base is
+/// device colour too, and gets the sRGB output intent; an ICC-based one is not.
+#[test]
+fn device_colour_under_an_indexed_image_is_found() {
+    let image = |space: &str, extra: &[&str]| {
+        let im = format!(
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace {space} /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+        );
+        let mut objs = vec![im.as_str()];
+        objs.extend_from_slice(extra);
+        drawing("q 10 0 0 10 0 0 cm /Im0 Do Q", "/XObject << /Im0 5 0 R >>", &objs)
+    };
+    assert!(uses_cmyk(&image("[/Indexed /DeviceCMYK 0 <00000000>]", &[])), "an indexed image over DeviceCMYK");
+    assert!(uses_cmyk(&image("6 0 R", &["[/Indexed /DeviceCMYK 0 <00000000>]"])), "an indexed space of its own over DeviceCMYK");
+    for base in ["/DeviceRGB 0 <000000>", "/DeviceGray 0 <00>"] {
+        let doc = image(&format!("[/Indexed {base}]"), &[]);
+        assert!(!uses_cmyk(&doc), "{base}");
+        assert!(gets_srgb(doc), "an indexed image over {base} is device colour");
+    }
+    let icc = image("[/Indexed [/ICCBased 6 0 R] 0 <000000>]", &["<< /N 3 /Length 0 >>\nstream\n\nendstream"]);
+    assert!(!messages(&verify(&icc, Level::A2b)).contains(&NO_INTENT), "an indexed image over an ICC profile");
+}
+
+/// Issue #2411: a colour space in a `/ColorSpace` resource is used once content selects it by name: with `cs`
+/// or `CS`, or as an inline image's `/CS`, on a page or in a form. An indexed space draws in its
+/// base, and a device space may be listed under a name of its own. A space the resources only
+/// list, and nothing selects, is not used.
+#[test]
+fn device_colour_named_in_resources_is_found() {
+    let indexed = "/ColorSpace << /CS0 [/Indexed /DeviceCMYK 0 <00000000>] >>";
+    let device = "/ColorSpace << /CS0 /DeviceCMYK >>";
+    for (content, resources) in [
+        ("/CS0 cs 0 sc 0 0 10 10 re f", indexed),
+        ("/CS0 CS 0 SC 0 0 m 10 10 l S", indexed),
+        ("/CS0 cs 0 0 0 1 sc 0 0 10 10 re f", device),
+        ("q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /CS0 /BPC 8 ID \u{0} EI Q", indexed),
+    ] {
+        assert!(uses_cmyk(&drawing(content, resources, &[])), "{content:?} with {resources}");
+    }
+    // The resource dictionary, or its /ColorSpace, as an object of its own.
+    assert!(uses_cmyk(&drawing("/CS0 cs 0 sc 0 0 10 10 re f", "/ColorSpace 5 0 R", &["<< /CS0 [/Indexed /DeviceCMYK 0 <00000000>] >>"])));
+    // A form selects from its own resources.
+    let content = "/CS1 cs 0 sc 0 0 10 10 re f";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ColorSpace << /CS1 [/Indexed /DeviceCMYK 0 <00000000>] >> >> /Length {} >>\nstream\n{content}\nendstream",
+        content.len()
+    );
+    assert!(uses_cmyk(&drawing("/Fm0 Do", "/XObject << /Fm0 5 0 R >>", &[&form])), "a form's own resources");
+    // An RGB base is device colour that gets the sRGB output intent.
+    assert!(gets_srgb(drawing("/CS0 cs 0 sc 0 0 10 10 re f", "/ColorSpace << /CS0 [/Indexed /DeviceRGB 0 <000000>] >>", &[])));
+    // Listed beside the space content selects, but never selected itself.
+    let unused = drawing("/CS1 cs 1 0 0 sc 0 0 10 10 re f", "/ColorSpace << /CS0 [/Indexed /DeviceCMYK 0 <00000000>] /CS1 /DeviceRGB >>", &[]);
+    assert!(!uses_cmyk(&unused));
+    assert!(gets_srgb(unused), "a CMYK space nothing selects kept the sRGB output intent away");
+}
+
+/// Issue #2411: a Separation or DeviceN space is drawn in its alternate space by every device that lacks its
+/// colorants, which is every screen and every composite proof, so a device alternate is device
+/// colour (ISO 32000-2 §8.6.6.4–5; ISO 19005-2 6.2.4.3 exempts no use of a device space, and
+/// 6.2.4.4 only asks same-named alternates to agree). A spot colour with a DeviceCMYK alternate
+/// needs a CMYK output intent, wherever the space is: on an image, a shading, a resource selected
+/// by name, or under an indexed space.
+#[test]
+fn device_colour_behind_separation_and_devicen_is_found() {
+    let tint = "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.5 1 0] /N 1 >>";
+    let spot = format!("[/Separation /Orange /DeviceCMYK {tint}]");
+    let duo = format!("[/DeviceN [/Orange] /DeviceCMYK {tint}]");
+    let image = |space: &str| {
+        format!("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace {space} /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream")
+    };
+    let shading = format!("<< /ShadingType 2 /ColorSpace {spot} /Coords [0 0 10 0] /Function {tint} /Extend [true true] >>");
+    let cases: [(&str, Document); 6] = [
+        ("an image in a Separation space", drawing("/Im0 Do", "/XObject << /Im0 5 0 R >>", &[&image(&spot)])),
+        ("an image in a DeviceN space", drawing("/Im0 Do", "/XObject << /Im0 5 0 R >>", &[&image(&duo)])),
+        (
+            "an indexed image over a Separation space",
+            drawing("/Im0 Do", "/XObject << /Im0 5 0 R >>", &[&image(&format!("[/Indexed {spot} 1 <00ff>]"))]),
+        ),
+        ("a shading in a Separation space", drawing("/Sh0 sh", "/Shading << /Sh0 5 0 R >>", &[&shading])),
+        ("a Separation resource selected with cs", drawing("/CS0 cs 1 scn 0 0 10 10 re f", &format!("/ColorSpace << /CS0 {spot} >>"), &[])),
+        ("a DeviceN resource selected with CS", drawing("/CS0 CS 1 SCN 0 0 m 10 10 l S", &format!("/ColorSpace << /CS0 {duo} >>"), &[])),
+    ];
+    for (what, mut doc) in cases {
+        assert!(uses_cmyk(&doc), "the DeviceCMYK alternate of {what} wasn't found");
+        let r = convert(&mut doc, Level::A2b).unwrap();
+        assert!(declared(&doc).output_intents.is_empty(), "{what}: an sRGB output intent was added to a CMYK document: {:?}", r.fixed);
+    }
+    // An RGB alternate is device colour that gets the sRGB output intent; an ICC-based one is not
+    // device colour at all.
+    let rgb = "[/Separation /Orange /DeviceRGB << /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0.5 0] /N 1 >>]";
+    let doc = drawing("/CS0 cs 1 scn 0 0 10 10 re f", &format!("/ColorSpace << /CS0 {rgb} >>"), &[]);
+    assert!(!uses_cmyk(&doc));
+    assert!(gets_srgb(doc), "a Separation space over DeviceRGB is device colour");
+    let icc = format!("[/Separation /Orange [/ICCBased 5 0 R] {tint}]");
+    let doc = drawing("/CS0 cs 1 scn 0 0 10 10 re f", &format!("/ColorSpace << /CS0 {icc} >>"), &["<< /N 4 /Length 0 >>\nstream\n\nendstream"]);
+    assert!(!messages(&verify(&doc, Level::A2b)).contains(&NO_INTENT), "a Separation space over an ICC profile");
+}
+
 #[test]
 fn standards_identification_uses_namespace_not_prefix() {
     fn with_xmp(xmp: &str) -> Document {
@@ -425,7 +534,7 @@ fn content_colour_reads_operators_one_at_a_time_and_stops_when_all_are_found() {
     let mut data = b"0 g 0 0 0 rg 0 0 0 0 k\n".to_vec();
     data.extend(b"n\n".repeat(100_000));
     let mut used = DeviceColour::default();
-    let read = content_colour(&data, &mut used);
+    let read = content_colour(&Document::new_empty(), &data, &mut used, &mut std::collections::HashSet::new());
     assert!(used.gray && used.rgb && used.cmyk);
     assert_eq!(read, 3);
 }
