@@ -23,6 +23,7 @@ mod conventions;
 pub mod file_access;
 mod forms;
 mod hairlines;
+mod invoice;
 mod layers;
 mod links;
 #[cfg(feature = "mcp")]
