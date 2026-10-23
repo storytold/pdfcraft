@@ -76,6 +76,7 @@
 	Paste pages	ວາງໜ້າ
 	Fit visible	ພໍດີກັບພື້ນທີ່ສະແດງຜົນ
 	Marquee zoom	ຊູມຕາມພື້ນທີ່ເລືອກ
+	Dynamic zoom	ຊູມແບບໄດນາມິກ
 	Take a snapshot	ຖ່າຍພາບໜ້າຈໍ
 	Column select	ເລືອກຖັນ
 	Full screen mode	ໂໝດເຕັມຈໍ
@@ -1818,6 +1819,7 @@
 	Details	ລາຍລະອຽດ
 	Select (V)	ເລືອກ (V)
 	Hand (H)	ມືຈັບ (H)
+	Zoom (Z)	ຊູມ (Z)
 	Delete pages (Delete)	ລຶບໜ້າ (Delete)
 	Insert a blank page after the selection	ແຊກໜ້າຫວ່າງຫຼັງຈາກສ່ວນທີ່ເລືອກ
 	Insert pages from a file…	ແຊກໜ້າຈາກໄຟລ໌…

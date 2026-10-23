@@ -92,6 +92,7 @@
 	Find tools and commands…	Najít nástroje a příkazy…
 	Fit visible	Přizpůsobit viditelnému obsahu
 	Marquee zoom	Zvětšit vybranou oblast
+	Dynamic zoom	Dynamické zvětšení
 	Full screen mode	Režim celé obrazovky
 	Read mode	Režim čtení
 	Next tab	Další karta
@@ -1891,6 +1892,7 @@ key	Space	Mezerník
 	Details	Podrobnosti
 	Select (V)	Výběr (V)
 	Hand (H)	Ruka (H)
+	Zoom (Z)	Lupa (Z)
 	Delete pages (Delete)	Odstranit stránky (Delete)
 	Insert a blank page after the selection	Vložit prázdnou stránku za výběr
 	Insert pages from a file…	Vložit stránky ze souboru…

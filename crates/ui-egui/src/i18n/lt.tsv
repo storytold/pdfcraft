@@ -628,6 +628,7 @@
 	Greyscale	Pilki atspalviai
 	Grid view	Tinklelio rodinys
 	Hand (H)	Rankos įrankis (H)
+	Zoom (Z)	Mastelis (Z)
 	Has JavaScript actions (run in M6)	Turi JavaScript veiksmų (bus vykdomi M6 etape)
 	Height:	Aukštis:
 	Hide field highlights	Slėpti laukų paryškinimą
@@ -1527,6 +1528,7 @@
 	Manage embedded index	Tvarkyti įdėtąjį indeksą
 	Markup	Žymėjimas
 	Marquee zoom	Didinti pažymėtą sritį
+	Dynamic zoom	Dinaminis mastelis
 	Measure area	Matuoti plotą
 	Measure distance	Matuoti atstumą
 	Measure objects	Matuoti objektus

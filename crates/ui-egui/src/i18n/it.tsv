@@ -74,6 +74,7 @@
 	Paste pages	Incolla pagine
 	Fit visible	Adatta all'area visibile
 	Marquee zoom	Ingrandimento selettivo
+	Dynamic zoom	Zoom dinamico
 	Take a snapshot	Acquisisci istantanea
 	Column select	Selezione colonna
 	Full screen mode	Modalità schermo intero
@@ -1851,6 +1852,7 @@
 	Details	Dettagli
 	Select (V)	Seleziona (V)
 	Hand (H)	Mano (H)
+	Zoom (Z)	Zoom (Z)
 	Delete pages (Delete)	Elimina pagine (Canc)
 	Insert a blank page after the selection	Inserisci una pagina vuota dopo la selezione
 	Insert pages from a file…	Inserisci pagine da un file…

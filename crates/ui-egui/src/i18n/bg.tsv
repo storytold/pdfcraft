@@ -109,6 +109,7 @@
 	Fit visible	Побери видимото
 	Fit to height	Побери по височина
 	Marquee zoom	Мащабиране с рамка
+	Dynamic zoom	Динамично мащабиране
 	Zoom in	Увеличи
 	Zoom out	Намали
 	Rotate view clockwise	Завърти изгледа по часовниковата стрелка
@@ -1807,6 +1808,7 @@
 	Details	Подробности
 	Select (V)	Избиране (V)
 	Hand (H)	Ръка (H)
+	Zoom (Z)	Мащабиране (Z)
 	Delete pages (Delete)	Изтрий страниците (Delete)
 	Insert a blank page after the selection	Вмъкни празна страница след избраното
 	Insert pages from a file…	Вмъкни страници от файл…

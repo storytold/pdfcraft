@@ -48,6 +48,7 @@
 	Paste pages	Oldalak beillesztése
 	Fit visible	Látható tartalomhoz igazítás
 	Marquee zoom	Kijelölő nagyítás
+	Dynamic zoom	Dinamikus nagyítás
 	Take a snapshot	Pillanatkép
 	Column select	Oszlopkijelölés
 	Full screen mode	Teljes képernyő
@@ -1765,6 +1766,7 @@
 	Details	Részletek
 	Select (V)	Kijelölés (V)
 	Hand (H)	Kéz (H)
+	Zoom (Z)	Nagyító (Z)
 	Delete pages (Delete)	Oldalak törlése (Delete)
 	Insert a blank page after the selection	Üres oldal beszúrása a kijelölés után
 	Insert pages from a file…	Oldalak beszúrása fájlból…

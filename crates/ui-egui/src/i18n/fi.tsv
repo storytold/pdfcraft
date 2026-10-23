@@ -72,6 +72,7 @@
 	Paste pages	Liitä sivut
 	Fit visible	Sovita näkyvä alue
 	Marquee zoom	Aluezoomaus
+	Dynamic zoom	Dynaaminen zoomaus
 	Take a snapshot	Ota tilannekuva
 	Column select	Sarakevalinta
 	Full screen mode	Koko näytön tila
@@ -1783,6 +1784,7 @@
 	Details	Tiedot
 	Select (V)	Valitse (V)
 	Hand (H)	Käsi (H)
+	Zoom (Z)	Zoomaus (Z)
 	Delete pages (Delete)	Poista sivut (Delete)
 	Insert a blank page after the selection	Lisää tyhjä sivu valinnan jälkeen
 	Insert pages from a file…	Lisää sivuja tiedostosta…

@@ -621,6 +621,7 @@
 	Greyscale	Gråtoner
 	Grid view	Rutenettvisning
 	Hand (H)	Hånd (H)
+	Zoom (Z)	Zoom (Z)
 	Has JavaScript actions (run in M6)	Har JavaScript-handlinger (kjøres i M6)
 	Height:	Høyde:
 	Hide field highlights	Skjul feltuthevinger
@@ -1479,6 +1480,7 @@
 	Manage embedded index	Administrer innebygd indeks
 	Markup	Markering
 	Marquee zoom	Markeringszoom
+	Dynamic zoom	Dynamisk zoom
 	Measure area	Mål areal
 	Measure distance	Mål avstand
 	Measure objects	Mål objekter

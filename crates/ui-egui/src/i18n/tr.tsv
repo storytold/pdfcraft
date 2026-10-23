@@ -40,6 +40,7 @@
 	Paste pages	Sayfaları yapıştır
 	Fit visible	Görünene sığdır
 	Marquee zoom	Seçim yakınlaştırma
+	Dynamic zoom	Dinamik yakınlaştırma
 	Take a snapshot	Anlık görüntü al
 	Full screen mode	Tam ekran modu
 	Read mode	Okuma modu
@@ -1738,6 +1739,7 @@
 	Details	Ayrıntılar
 	Select (V)	Seç (V)
 	Hand (H)	El (H)
+	Zoom (Z)	Yakınlaştırma (Z)
 	Delete pages (Delete)	Sayfaları sil (Delete)
 	Insert a blank page after the selection	Seçimden sonra boş bir sayfa ekle
 	Insert pages from a file…	Dosyadan sayfa ekle…

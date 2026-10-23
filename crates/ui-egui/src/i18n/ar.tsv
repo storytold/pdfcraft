@@ -77,6 +77,7 @@
 	Paste pages	لصق الصفحات
 	Fit visible	ملاءمة المرئي
 	Marquee zoom	تكبير بالتحديد
+	Dynamic zoom	تكبير ديناميكي
 	Take a snapshot	التقاط لقطة
 	Column select	تحديد عمود
 	Full screen mode	وضع ملء الشاشة
@@ -1844,6 +1845,7 @@
 	Details	التفاصيل
 	Select (V)	تحديد (V)
 	Hand (H)	يد (H)
+	Zoom (Z)	تكبير (Z)
 	Delete pages (Delete)	حذف الصفحات (Delete)
 	Insert a blank page after the selection	إدراج صفحة فارغة بعد التحديد
 	Insert pages from a file…	إدراج صفحات من ملف…

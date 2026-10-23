@@ -77,6 +77,7 @@
 	Paste pages	ページを貼り付け
 	Fit visible	表示範囲に合わせる
 	Marquee zoom	範囲指定ズーム
+	Dynamic zoom	ダイナミックズーム
 	Take a snapshot	スナップショットを作成
 	Column select	列の選択
 	Full screen mode	全画面表示
@@ -1857,6 +1858,7 @@
 	Details	詳細
 	Select (V)	選択（V）
 	Hand (H)	手のひら（H）
+	Zoom (Z)	ズーム（Z）
 	Delete pages (Delete)	ページを削除（Delete）
 	Insert a blank page after the selection	選択範囲の後に空白ページを挿入
 	Insert pages from a file…	ファイルからページを挿入…

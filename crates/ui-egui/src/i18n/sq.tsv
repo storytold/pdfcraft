@@ -880,6 +880,7 @@
 	H / Space (hold)	H / Hapësira (mbaje shtypur)
 	HTML web page	Faqe interneti HTML
 	Hand (H)	Dora (H)
+	Zoom (Z)	Zmadhim (Z)
 	Has JavaScript actions (run in M6)	Ka veprime JavaScript (ekzekutohen në M6)
 	Header and footer	Koka dhe këmba e faqes
 	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Qelizat e kokës (TH) u tregojnë dëgjuesve çfarë përmban çdo kolonë ose rresht. Shëno qelizat e kokës.
@@ -1062,6 +1063,7 @@
 	Marked	I shënuar
 	Markup	Shënime
 	Marquee zoom	Zmadhim me zgjedhje
+	Dynamic zoom	Zmadhim dinamik
 	Mask:	Maska:
 	Match field sizes	Përputh madhësitë e fushave
 	Maximum	Maksimumi

@@ -48,6 +48,7 @@
 	Paste pages	Kopierte Seiten einfügen
 	Fit visible	Sichtbaren Inhalt einpassen
 	Marquee zoom	Auswahlrahmen-Zoom
+	Dynamic zoom	Dynamischer Zoom
 	Take a snapshot	Schnappschuss erstellen
 	Column select	Spaltenauswahl
 	Full screen mode	Vollbildmodus
@@ -1780,6 +1781,7 @@
 	Details	Details
 	Select (V)	Auswählen (V)
 	Hand (H)	Hand (H)
+	Zoom (Z)	Zoom (Z)
 	Delete pages (Delete)	Seiten löschen (Entf)
 	Insert a blank page after the selection	Leere Seite nach der Auswahl einfügen
 	Insert pages from a file…	Seiten aus Datei einfügen…

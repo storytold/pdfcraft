@@ -77,6 +77,7 @@
 	Paste pages	لکاندنی پەڕەکان
 	Fit visible	گونجاندنی ناوەڕۆکی دیار
 	Marquee zoom	گەورەکردنەوە بە هەڵبژاردن
+	Dynamic zoom	گەورەکردنەوەی جووڵاو
 	Take a snapshot	گرتنی وێنەی چەقاو
 	Column select	هەڵبژاردنی ستوونی
 	Full screen mode	دۆخی شاشەی پڕ
@@ -1808,6 +1809,7 @@
 	Details	وردەکارییەکان
 	Select (V)	هەڵبژاردن (V)
 	Hand (H)	دەست (H)
+	Zoom (Z)	گەورەکردنەوە (Z)
 	Delete pages (Delete)	سڕینەوەی پەڕەکان (Delete)
 	Insert a blank page after the selection	خستنەناوی پەڕەیەکی بەتاڵ دوای هەڵبژاردنەکە
 	Insert pages from a file…	خستنەناوی پەڕە لە فایلێکەوە…

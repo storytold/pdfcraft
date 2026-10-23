@@ -1,7 +1,8 @@
-//! View ▸ Zoom ▸ Marquee Zoom (drag a rectangle to fill the window with it; click to zoom in)
-//! and Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image).
+//! View ▸ Zoom ▸ Marquee Zoom (drag a rectangle to fill the window with it; click to zoom in),
+//! View ▸ Zoom ▸ Dynamic Zoom (drag to zoom continuously) and Edit ▸ Take a Snapshot (drag a
+//! rectangle to copy that area as an image).
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
+use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, Vec2};
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
 use crate::canvas::{DocView, PageXform};
@@ -41,6 +42,58 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     {
         let v = xf.screen_to_view(p);
         view.marquee_done = Some((page, Rect::from_min_size(p, egui::Vec2::ZERO), [v.0, v.1, v.0, v.1]));
+    }
+}
+
+/// Dynamic Zoom: screen points of drag that double (or halve) the zoom, as PhotoCraft's
+/// Scrubby Zoom.
+pub(crate) const DOUBLING: f32 = 100.0;
+
+/// A Dynamic Zoom drag in progress.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ZoomDrag {
+    /// Where the button went down.
+    press: Pos2,
+    /// The zoom then.
+    zoom0: f32,
+    /// The document point under `press`, which stays under it ([`DocView::anchor_at`]).
+    anchor: Option<(usize, f32, f32, Vec2)>,
+}
+
+/// The zoom after a Dynamic Zoom drag of `d` from a press at zoom `zoom0`: right or up zooms in,
+/// left or down zooms out, doubling every [`DOUBLING`] points (Acrobat's Dynamic Zoom goes up
+/// and down, PhotoCraft's Scrubby Zoom right and left; either works).
+pub(crate) fn scrub_zoom(zoom0: f32, d: Vec2) -> f32 {
+    let along = d.x - d.y;
+    // ±40 doublings already span far more than the zoom range; it keeps the power finite.
+    let e = if along.is_finite() { (along / DOUBLING).clamp(-40.0, 40.0) } else { 0.0 };
+    zoom0 * e.exp2()
+}
+
+/// Dynamic Zoom on the page view's widget `resp`: a drag zooms continuously about the point
+/// pressed; a click zooms in one step there, or out with Alt/Option.
+pub(crate) fn dynamic_input(ui: &egui::Ui, resp: &egui::Response, view: &mut DocView) {
+    let (origin, pointer, out) = ui.input(|i| (i.pointer.press_origin(), i.pointer.latest_pos(), i.modifiers.alt));
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(if out { egui::CursorIcon::ZoomOut } else { egui::CursorIcon::ZoomIn });
+    }
+    if !resp.dragged_by(egui::PointerButton::Primary) {
+        view.zoom_drag = None;
+    } else if view.zoom_drag.is_none()
+        && let Some(press) = origin.filter(|p| p.is_finite())
+    {
+        view.zoom_drag = Some(ZoomDrag { press, zoom0: view.zoom, anchor: view.anchor_at(press) });
+    }
+    if let Some(z) = view.zoom_drag
+        && let Some(p) = pointer
+    {
+        view.zoom_about(scrub_zoom(z.zoom0, p - z.press), z.anchor);
+    }
+    if resp.clicked()
+        && let Some(p) = pointer
+        && let Some(z) = view.next_zoom_step(!out)
+    {
+        view.zoom_at(z, p);
     }
 }
 
@@ -170,6 +223,25 @@ pub(crate) fn ink_bounds(w: usize, h: usize, rgba: &[u8]) -> Option<[f32; 4]> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use egui::vec2;
+
+    #[test]
+    fn scrub_zoom_doubles_per_step_and_stays_finite() {
+        assert_eq!(scrub_zoom(1.0, Vec2::ZERO), 1.0);
+        assert!((scrub_zoom(1.0, vec2(DOUBLING, 0.0)) - 2.0).abs() < 1e-5);
+        assert!((scrub_zoom(1.0, vec2(0.0, -DOUBLING)) - 2.0).abs() < 1e-5, "up zooms in");
+        assert!((scrub_zoom(1.0, vec2(-DOUBLING, 0.0)) - 0.5).abs() < 1e-5);
+        assert!((scrub_zoom(1.0, vec2(0.0, DOUBLING)) - 0.5).abs() < 1e-5, "down zooms out");
+        // Monotone along the drag.
+        let zs: Vec<f32> = (0..50).map(|i| scrub_zoom(0.7, vec2(i as f32 * 3.0, 0.0))).collect();
+        assert!(zs.windows(2).all(|w| w[1] > w[0]));
+        for d in [vec2(f32::INFINITY, 0.0), vec2(f32::NAN, 1.0), vec2(1e30, -1e30), vec2(f32::MIN, 0.0)] {
+            let z = scrub_zoom(1.0, d);
+            assert!(z.is_finite() && z > 0.0, "{d:?} → {z}");
+        }
+    }
+
     #[test]
     fn ink_bounds_finds_the_marked_area() {
         let (w, h) = (10, 20);

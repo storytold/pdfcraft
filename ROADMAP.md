@@ -686,3 +686,5 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-21 (M4, #3865):** A new bookmark records where the reader is: the top-left of the selected text, or the top of the window, as `/XYZ left top null` (zoom kept), instead of the page top (`Edit::AddBookmark` takes `left` and `top`; `bookmark_add` takes `top` and `left`; `PageInfo::xyz_for_view`).
 
 - **2026-10-18 (renderer, hayro patches 19/35):** A mesh shading (types 4–7) is sampled over its own triangles instead of the whole path: a BricsCAD plan with 310 one-triangle `sh` fills took 2 s per 1024 px tile at every zoom (and hit the 20 s watchdog on a busy machine); now about 70 ms, so zooming into dense topology drawings stays fluid. Estimates unchanged.
+
+- **2026-10-22 (M3, Dynamic Zoom):** Z or the quick bar's magnifier picks a Dynamic Zoom tool: drag right or up to zoom in, left or down to zoom out, about the point pressed (PhotoCraft's Scrubby Zoom, Acrobat's Dynamic Zoom); click steps in, Alt/Option-click out. Loupe still missing. Estimates unchanged.

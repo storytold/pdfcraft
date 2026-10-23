@@ -570,6 +570,8 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Dynamic Zoom: the drag in progress.
+    pub(crate) zoom_drag: Option<crate::zoom_snap::ZoomDrag>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -849,6 +851,7 @@ impl DocView {
             panel_drag: None,
             marquee: None,
             marquee_done: None,
+            zoom_drag: None,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -1705,22 +1708,35 @@ impl DocView {
 
     /// Zoom keeping the document point under `screen_pos` still (pinch, ⌘-scroll).
     pub fn zoom_at(&mut self, zoom: f32, screen_pos: Pos2) {
-        if !zoom.is_finite() || !screen_pos.is_finite() {
+        if !screen_pos.is_finite() {
+            return;
+        }
+        let anchor = self.anchor_at(screen_pos);
+        self.zoom_about(zoom, anchor);
+    }
+
+    /// Where `screen_pos` is, as a zoom anchor: a page, the fraction of it across and down, and
+    /// the point's offset in the viewport. In gutters/gaps it is relative to the nearest page
+    /// rather than jumping to its top; fractions outside 0..1 keep the point's place outside the
+    /// page as well.
+    pub(crate) fn anchor_at(&self, screen_pos: Pos2) -> Option<(usize, f32, f32, Vec2)> {
+        self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
+            |(p, r)| {
+                let f = (screen_pos - r.min) / r.size();
+                (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
+            },
+        )
+    }
+
+    /// Zoom keeping `anchor` (from [`Self::anchor_at`]) still.
+    pub(crate) fn zoom_about(&mut self, zoom: f32, anchor: Option<(usize, f32, f32, Vec2)>) {
+        if !zoom.is_finite() {
             return;
         }
         let zoom = zoom.clamp(0.08, 64.0);
         if zoom == self.zoom && self.fit == Fit::None {
             return;
         }
-        // In gutters/gaps, anchor relative to the nearest page rather than jumping to its top.
-        // Fractions outside 0..1 preserve the pointer's position outside the page as well.
-        let anchor =
-            self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
-                |(p, r)| {
-                    let f = (screen_pos - r.min) / r.size();
-                    (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
-                },
-            );
         self.zoom = zoom;
         self.fit = Fit::None;
         match anchor {
@@ -1739,12 +1755,16 @@ impl DocView {
 
     /// Standard zoom steps (as in Acrobat's zoom menu).
     pub fn zoom_step(&mut self, up: bool) {
-        const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
-        let z = self.zoom;
-        let next = if up { STEPS.iter().copied().find(|s| *s > z * 1.01) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.99) };
-        if let Some(n) = next {
+        if let Some(n) = self.next_zoom_step(up) {
             self.set_zoom(n);
         }
+    }
+
+    /// The standard zoom step above (or below) the current zoom, if there is one.
+    pub(crate) fn next_zoom_step(&self, up: bool) -> Option<f32> {
+        const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
+        let z = self.zoom;
+        if up { STEPS.iter().copied().find(|s| *s > z * 1.01) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.99) }
     }
 
     /// Start collecting demand from every consumer before scheduling or uploading results.
@@ -3023,6 +3043,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     };
     let prefs = &app.comment_prefs;
@@ -3137,6 +3158,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
+        }
+        // Dynamic Zoom zooms by this widget's drag too, about the point pressed. The pages above
+        // were laid out at the old zoom, so it anchors to last frame's page rectangles, the ones
+        // on screen.
+        if tool == QuickTool::DynamicZoom {
+            crate::zoom_snap::dynamic_input(ui, &resp, view);
+        } else {
+            view.zoom_drag = None;
         }
         let origin = resp_rect.min - vec2(0.0, y_shift);
         let painter = ui.painter();
@@ -4978,6 +5007,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     }
                     if icons::button(ui, "hand", 32.0, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
                         app.quick_tool = QuickTool::Hand;
+                    }
+                    if icons::button(ui, "zoom-in", 32.0, app.quick_tool == QuickTool::DynamicZoom, tl!("Zoom (Z)")).clicked() {
+                        app.quick_tool = QuickTool::DynamicZoom;
                     }
                     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
                     // group selects its last-used tool; clicking it again opens the flyout.

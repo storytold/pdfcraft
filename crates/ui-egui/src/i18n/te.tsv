@@ -54,6 +54,7 @@ comment menu	Edit	సవరించు
 	Paste pages	పేజీలను అతికించు
 	Fit visible	కనిపించే భాగానికి సరిపోయేలా
 	Marquee zoom	ఎంచుకున్న ప్రాంతానికి జూమ్
+	Dynamic zoom	డైనమిక్ జూమ్
 	Take a snapshot	స్నాప్‌షాట్ తీయి
 	Column select	నిలువు వరుస ఎంపిక
 	Full screen mode	పూర్తి స్క్రీన్ మోడ్
@@ -1764,6 +1765,7 @@ action wizard	Start	ప్రారంభించు
 	Details	వివరాలు
 	Select (V)	ఎంచుకో (V)
 	Hand (H)	హ్యాండ్ సాధనం (H)
+	Zoom (Z)	జూమ్ (Z)
 	Delete pages (Delete)	పేజీలను తొలగించు (Delete)
 	Insert a blank page after the selection	ఎంపిక తర్వాత ఖాళీ పేజీని చొప్పించు
 	Insert pages from a file…	ఫైల్ నుండి పేజీలను చొప్పించు…

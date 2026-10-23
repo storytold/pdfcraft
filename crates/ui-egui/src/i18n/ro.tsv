@@ -621,6 +621,7 @@
 	Greyscale	Tonuri de gri
 	Grid view	Vizualizare grilă
 	Hand (H)	Mână (H)
+	Zoom (Z)	Zoom (Z)
 	Has JavaScript actions (run in M6)	Are acțiuni JavaScript (rulate în M6)
 	Height:	Înălțime:
 	Hide field highlights	Ascundere evidențiere câmpuri
@@ -1477,6 +1478,7 @@
 	Manage embedded index	Gestionare index încorporat
 	Markup	Marcare
 	Marquee zoom	Zoom pe zonă selectată
+	Dynamic zoom	Zoom dinamic
 	Measure area	Măsurare arie
 	Measure distance	Măsurare distanță
 	Measure objects	Măsurare obiecte

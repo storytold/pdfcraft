@@ -52,6 +52,7 @@
 	Paste pages	Беттерді қою
 	Fit visible	Көрінетін аймаққа сыйдыру
 	Marquee zoom	Аймақты масштабтау
+	Dynamic zoom	Динамикалық масштабтау
 	Take a snapshot	Суретке түсіру
 	Full screen mode	Толық экран режимі
 	Read mode	Оқу режимі
@@ -1767,6 +1768,7 @@
 	Details	Мәліметтер
 	Select (V)	Таңдау (V)
 	Hand (H)	Қол (H)
+	Zoom (Z)	Масштабтау (Z)
 	Delete pages (Delete)	Беттерді жою (Delete)
 	Insert a blank page after the selection	Таңдалған беттерден кейін бос бет енгізу
 	Insert pages from a file…	Файлдан беттер енгізу…

@@ -891,6 +891,7 @@
 	H / Space (hold)	H / preslednica (drži)
 	HTML web page	Spletna stran HTML
 	Hand (H)	Roka (H)
+	Zoom (Z)	Povečava (Z)
 	Has JavaScript actions (run in M6)	Vsebuje dejanja JavaScript (izvajajo se v M6)
 	Header and footer	Glava in noga
 	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	Celice glave (TH) povedo bralniku, kaj vsebuje posamezen stolpec ali vrstica. Označite celice glave.
@@ -1106,6 +1107,7 @@
 	Marked	Označeno
 	Markup	Označba
 	Marquee zoom	Povečava z okvirjem
+	Dynamic zoom	Dinamična povečava
 	Mask:	Maska:
 	Match field sizes	Uskladi velikosti polj
 	Maximum	Največ

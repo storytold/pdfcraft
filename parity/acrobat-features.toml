@@ -1031,11 +1031,11 @@ title = "Dynamic zoom (drag to zoom)"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.dynamic_zoom"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/viewer.rs::dynamic_zoom_drags_and_clicks_about_the_pointer", "crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools", "crates/ui-egui/src/zoom_snap.rs::scrub_zoom_doubles_per_step_and_stays_finite"]
+notes = "Z or the quick bar's magnifier: drag right or up to zoom in, left or down to zoom out (doubling every 100 pt), about the point pressed; click steps in, Alt/Option-click out. Z is always on, like V and H, not behind Acrobat's single-key accelerators preference. Missing: the loupe, and Shift+Z cycling the zoom tools."
 
 [[feature]]
 id = "view.loupe"

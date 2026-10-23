@@ -71,6 +71,7 @@
 	Paste pages	Pegar páginas
 	Fit visible	Ajustar al contenido visible
 	Marquee zoom	Zoom por selección
+	Dynamic zoom	Zoom dinámico
 	Take a snapshot	Tomar una instantánea
 	Column select	Selección de columna
 	Full screen mode	Modo de pantalla completa
@@ -1857,6 +1858,7 @@ action wizard	Start	Iniciar
 	Details	Detalles
 	Select (V)	Seleccionar (V)
 	Hand (H)	Mano (H)
+	Zoom (Z)	Zoom (Z)
 	Delete pages (Delete)	Eliminar páginas (Supr)
 	Insert a blank page after the selection	Insertar una página en blanco después de la selección
 	Insert pages from a file…	Insertar páginas desde un archivo…

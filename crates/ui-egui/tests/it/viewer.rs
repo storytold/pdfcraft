@@ -811,6 +811,67 @@ fn marquee_zoom_and_snapshot() {
 }
 
 #[test]
+fn dynamic_zoom_drags_and_clicks_about_the_pointer() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().set_option("quick", "dynamic-zoom").unwrap();
+    h.run_steps(2);
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    // The page fraction under `p`, and where that fraction is on screen now.
+    let frac = |r: egui::Rect, p: egui::Pos2| (p - r.min) / r.size();
+    let press = r.center() + egui::vec2(-r.width() * 0.2, -r.height() * 0.1);
+    let f = frac(r, press);
+    let settle = |h: &mut Harness<'static, PdfCraftApp>| {
+        for _ in 0..3 {
+            h.run_steps(2);
+        }
+    };
+    // Dragging right zooms in, about the point pressed.
+    let z0 = h.state().views[i].zoom;
+    drag(&mut h, press, press + egui::vec2(100.0, 0.0));
+    settle(&mut h);
+    let z1 = h.state().views[i].zoom;
+    assert!((z1 / z0 - 2.0).abs() < 0.15, "one doubling: {z0} → {z1}");
+    let r1 = h.state().views[i].page_screen_rect(0).expect("still on screen");
+    let kept = r1.min + f * r1.size();
+    assert!((kept - press).length() < 4.0, "the pressed point stays put: {press:?} → {kept:?}");
+    // Up zooms in as well (Acrobat's direction); left or down zooms out.
+    drag(&mut h, press, press + egui::vec2(0.0, -50.0));
+    settle(&mut h);
+    let z2 = h.state().views[i].zoom;
+    assert!(z2 > z1 * 1.2, "up: {z1} → {z2}");
+    drag(&mut h, press, press + egui::vec2(-60.0, 40.0));
+    settle(&mut h);
+    let z3 = h.state().views[i].zoom;
+    assert!((z3 / z2 - 0.5).abs() < 0.05, "left 60 and down 40 halve it: {z2} → {z3}");
+    // A click steps in; Alt/Option-click steps out.
+    let at = h.state().views[i].viewport_rect().center();
+    let click = |h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers| {
+        h.event(Event::ModifiersChanged(modifiers));
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers });
+        h.run_steps(1);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        for _ in 0..3 {
+            h.run_steps(2);
+        }
+    };
+    click(&mut h, Modifiers::NONE);
+    let z4 = h.state().views[i].zoom;
+    assert!(z4 > z3, "click: {z3} → {z4}");
+    click(&mut h, Modifiers::ALT);
+    let z5 = h.state().views[i].zoom;
+    assert!(z5 < z4, "Alt-click: {z4} → {z5}");
+    // Nothing was edited.
+    let id = h.state().views[i].id;
+    assert!(!h.state().session.get(id).expect("open").dirty);
+}
+
+#[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();
     let i = h.state().active.unwrap();
@@ -1248,6 +1309,12 @@ fn v_h_and_space_pick_the_quick_tools() {
     };
     assert_eq!(press(&mut h, Key::H), QuickTool::Hand);
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    assert_eq!(press(&mut h, Key::Z), QuickTool::DynamicZoom);
+    // ⌘Z / Ctrl+Z is still Undo, not the zoom tool.
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "⌘Z");
     // V leaves any other tool too, as the toolbar button does.
     h.state_mut().quick_tool = QuickTool::Crop;
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);

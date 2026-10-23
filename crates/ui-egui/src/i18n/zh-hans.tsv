@@ -115,6 +115,7 @@
 	Fit visible	适合可见区域
 	Fit to height	适合高度
 	Marquee zoom	选框缩放
+	Dynamic zoom	动态缩放
 	Zoom in	放大
 	Zoom out	缩小
 	Rotate view clockwise	顺时针旋转视图
@@ -1814,6 +1815,7 @@
 	Details	详情
 	Select (V)	选择 (V)
 	Hand (H)	抓手 (H)
+	Zoom (Z)	缩放 (Z)
 	Delete pages (Delete)	删除页面 (Delete)
 	Insert a blank page after the selection	在所选内容后插入空白页
 	Insert pages from a file…	从文件插入页面…

@@ -62,6 +62,7 @@
 	Paste pages	Επικόλληση σελίδων
 	Fit visible	Προσαρμογή στο ορατό τμήμα
 	Marquee zoom	Μεγέθυνση επιλεγμένης περιοχής
+	Dynamic zoom	Δυναμική μεγέθυνση
 	Take a snapshot	Λήψη στιγμιότυπου
 	Column select	Επιλογή στήλης
 	Full screen mode	Λειτουργία πλήρους οθόνης
@@ -1242,6 +1243,7 @@
 	Highlight fields	Επισήμανση πεδίων
 	Select (V)	Επιλογή (V)
 	Hand (H)	Χέρι (H)
+	Zoom (Z)	Μεγέθυνση (Z)
 	Delete pages (Delete)	Διαγραφή σελίδων (Delete)
 	Insert a blank page after the selection	Εισαγωγή κενής σελίδας μετά την επιλογή
 	Insert pages from a file…	Εισαγωγή σελίδων από αρχείο…

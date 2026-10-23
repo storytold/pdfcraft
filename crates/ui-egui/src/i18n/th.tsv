@@ -68,6 +68,7 @@
 	Paste pages	วางหน้า
 	Fit visible	พอดีส่วนที่มองเห็น
 	Marquee zoom	ขยายตามกรอบที่ลาก
+	Dynamic zoom	ซูมแบบไดนามิก
 	Take a snapshot	จับภาพบางส่วน
 	Column select	เลือกเป็นคอลัมน์
 	Full screen mode	โหมดเต็มหน้าจอ
@@ -1789,6 +1790,7 @@
 	Details	รายละเอียด
 	Select (V)	เลือก (V)
 	Hand (H)	มือ (H)
+	Zoom (Z)	ซูม (Z)
 	Delete pages (Delete)	ลบหน้า (Delete)
 	Insert a blank page after the selection	แทรกหน้าเปล่าหลังส่วนที่เลือก
 	Insert pages from a file…	แทรกหน้าจากไฟล์…

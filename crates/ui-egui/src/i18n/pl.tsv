@@ -74,6 +74,7 @@
 	Paste pages	Wklej strony
 	Fit visible	Dopasuj widoczny obszar
 	Marquee zoom	Powiększ zaznaczony obszar
+	Dynamic zoom	Powiększenie dynamiczne
 	Take a snapshot	Zrób migawkę
 	Full screen mode	Tryb pełnoekranowy
 	Read mode	Tryb czytania
@@ -1838,6 +1839,7 @@
 	Details	Szczegóły
 	Select (V)	Zaznaczanie (V)
 	Hand (H)	Rączka (H)
+	Zoom (Z)	Lupa (Z)
 	Delete pages (Delete)	Usuń strony (Delete)
 	Insert a blank page after the selection	Wstaw pustą stronę za zaznaczeniem
 	Insert pages from a file…	Wstaw strony z pliku…

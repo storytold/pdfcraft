@@ -58,6 +58,7 @@
 	Paste pages	पृष्ठ पेस्ट करें
 	Fit visible	दृश्य भाग पर फ़िट करें
 	Marquee zoom	चयनित क्षेत्र पर ज़ूम करें
+	Dynamic zoom	डायनेमिक ज़ूम
 	Take a snapshot	स्नैपशॉट लें
 	Column select	कॉलम चयन
 	Full screen mode	पूर्ण स्क्रीन मोड
@@ -1766,6 +1767,7 @@
 	Details	विवरण
 	Select (V)	चयन करें (V)
 	Hand (H)	हैंड (H)
+	Zoom (Z)	ज़ूम (Z)
 	Delete pages (Delete)	पृष्ठ हटाएँ (Delete)
 	Insert a blank page after the selection	चयन के बाद एक रिक्त पृष्ठ जोड़ें
 	Insert pages from a file…	फ़ाइल से पृष्ठ जोड़ें…
