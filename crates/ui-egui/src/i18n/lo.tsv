@@ -2429,3 +2429,9 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	ໝູນຄວາມເຫັນ
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ລາກເພື່ອໝູນ · Shift: ເທື່ອລະ 15° · Tab ຂະນະລາກ: ເທື່ອລະ 90°

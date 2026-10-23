@@ -2747,3 +2747,9 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Ruota commento
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Trascina per ruotare · Shift: passi di 15° · Tab durante il trascinamento: quarti di giro

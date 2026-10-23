@@ -2537,3 +2537,9 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Повернути коментар
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Перетягніть, щоб повернути · Shift: крок 15° · Tab під час перетягування: на чверть оберту

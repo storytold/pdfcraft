@@ -1675,3 +1675,146 @@ fn a_star_note_keeps_its_star_when_recoloured() {
     let Object::Stream(s) = &*doc.get(n) else { panic!() };
     assert_eq!(s.decoded().unwrap(), note_drawing(Some("Star"), [0.0, 0.0, 1.0]));
 }
+
+/// The appearance stream's dictionary.
+fn ap_form(doc: &Document, d: &Dict) -> Dict {
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).expect("has /AP /N");
+    let obj = doc.get(n);
+    let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+    s.dict.clone()
+}
+
+fn numbers(d: &Dict, key: &[u8]) -> Vec<f64> {
+    d.get(key).and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default()
+}
+
+fn near(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6)
+}
+
+/// A rectangle turned a quarter keeps its own box; `/Rect` is the turned box's upright hull, and
+/// the appearance, drawn in the own box, turns about its centre. Turned back, it is as before.
+#[test]
+fn a_turned_rectangle_keeps_its_box_and_turns_its_appearance() {
+    let mut doc = fixture();
+    let i = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 150.0] }), &meta("r")).unwrap();
+    rotate_annotation(&mut doc, 0, i, 90.0, &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[i];
+    assert_eq!(d.get(b"PCAngle").and_then(|a| a.as_f64()), Some(90.0));
+    assert!(near(&numbers(d, b"PCBox"), &[100.0, 100.0, 200.0, 150.0]));
+    assert!(near(&rect(d), &[125.0, 75.0, 175.0, 175.0]), "{:?}", rect(d));
+    let form = ap_form(&doc2, d);
+    assert!(near(&numbers(&form, b"BBox"), &[100.0, 100.0, 200.0, 150.0]));
+    // A quarter turn about (150, 125): x' = -y + 275, y' = x - 25.
+    assert!(near(&numbers(&form, b"Matrix"), &[0.0, 1.0, -1.0, 0.0, 275.0, -25.0]), "{:?}", numbers(&form, b"Matrix"));
+
+    // Moved, the own box goes along.
+    move_annotation(&mut doc, 0, i, 10.0, 5.0, &meta("")).unwrap();
+    let d = &list(&doc, 0)[i];
+    assert!(near(&numbers(d, b"PCBox"), &[110.0, 105.0, 210.0, 155.0]));
+    assert!(near(&rect(d), &[135.0, 80.0, 185.0, 180.0]));
+
+    // 30 degrees more, then all the way back: upright, no angle, no own box, no turn.
+    rotate_annotation(&mut doc, 0, i, 30.0, &meta("")).unwrap();
+    assert_eq!(list(&doc, 0)[i].get(b"PCAngle").and_then(|a| a.as_f64()), Some(120.0));
+    rotate_annotation(&mut doc, 0, i, -120.0, &meta("")).unwrap();
+    let d = &list(&doc, 0)[i];
+    assert!(!d.contains(b"PCAngle") && !d.contains(b"PCBox"));
+    assert!(near(&rect(d), &[110.0, 105.0, 210.0, 155.0]));
+    assert!(numbers(&ap_form(&doc, d), b"Matrix").is_empty(), "upright again: no turn");
+
+    // Ovals turn alike; half turns stay within -180..180.
+    let o = add_annotation(&mut doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 400.0, 340.0] }), &meta("o")).unwrap();
+    rotate_annotation(&mut doc, 0, o, 200.0, &meta("")).unwrap();
+    assert_eq!(list(&doc, 0)[o].get(b"PCAngle").and_then(|a| a.as_f64()), Some(-160.0));
+}
+
+/// Lines, connected lines, polygons and drawings turn their points about their middle.
+#[test]
+fn turning_lines_polygons_and_drawings_turns_their_points() {
+    let mut doc = fixture();
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [100.0, 100.0], to: [200.0, 100.0], start: LineEnding::None, end: LineEnding::OpenArrow }),
+        &meta("l"),
+    )
+    .unwrap();
+    rotate_annotation(&mut doc, 0, l, 90.0, &meta("")).unwrap();
+    assert!(near(&numbers(&list(&doc, 0)[l], b"L"), &[150.0, 50.0, 150.0, 150.0]));
+
+    let p = add_annotation(
+        &mut doc,
+        &new(0, Shape::Polygon { vertices: vec![[300.0, 300.0], [400.0, 300.0], [400.0, 350.0]], cloud: false }),
+        &meta("p"),
+    )
+    .unwrap();
+    rotate_annotation(&mut doc, 0, p, 180.0, &meta("")).unwrap();
+    let d = &list(&doc, 0)[p];
+    assert!(near(&numbers(d, b"Vertices"), &[400.0, 350.0, 300.0, 350.0, 300.0, 300.0]), "{:?}", numbers(d, b"Vertices"));
+    let r = rect(d);
+    assert!(r[0] < 300.0 && r[2] > 400.0 && r[1] < 300.0 && r[3] > 350.0, "the box holds the turned corners: {r:?}");
+
+    let k = add_annotation(&mut doc, &new(0, Shape::Ink { strokes: vec![vec![[100.0, 500.0], [140.0, 500.0]]] }), &meta("k")).unwrap();
+    rotate_annotation(&mut doc, 0, k, -90.0, &meta("")).unwrap();
+    let d = &list(&doc, 0)[k];
+    let ink = d.get(b"InkList").and_then(|l| l.as_array()).and_then(|l| l.first()).and_then(|s| s.as_array()).unwrap();
+    let ink: Vec<f64> = ink.iter().filter_map(|x| x.as_f64()).collect();
+    assert!(near(&ink, &[120.0, 520.0, 120.0, 480.0]), "{ink:?}");
+    assert!(ap_content(&doc, d).contains(" l"), "redrawn");
+}
+
+/// Typed into after turning, a text box grows from its top edge as it reads: that edge stays
+/// where it is on the page.
+#[test]
+fn a_turned_text_box_grows_from_its_top_edge_as_it_reads() {
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 600.0, 200.0, 650.0], font_size: 12.0 }), &meta("t")).unwrap();
+    rotate_annotation(&mut doc, 0, t, 90.0, &meta("")).unwrap();
+    // The middle of the top edge, as turned.
+    let top = |doc: &Document| {
+        let d = &list(doc, 0)[t];
+        let b = numbers(d, b"PCBox");
+        let angle = d.get(b"PCAngle").and_then(|a| a.as_f64()).unwrap();
+        let m = appearance::turn_matrix(angle, [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]);
+        appearance::transform(m, [(b[0] + b[2]) / 2.0, b[3]])
+    };
+    let before = top(&doc);
+    assert!(near(&before, &[125.0, 625.0]), "{before:?}");
+    set_contents(&mut doc, 0, t, &"A longer text that wraps onto several lines of the box. ".repeat(4), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let b = numbers(d, b"PCBox");
+    assert!(b[3] - b[1] > 50.0, "the box grew: {b:?}");
+    assert!(near(&top(&doc), &before), "the top edge stayed: {:?} {before:?}", top(&doc));
+    assert!(near(&rect(d), &appearance::turned_hull([b[0], b[1], b[2], b[3]], 90.0)));
+    assert!(ap_content(&doc, d).contains("Tj"), "the text is drawn");
+    set_font_size(&mut doc, 0, t, 20.0, &meta("")).unwrap();
+    assert!(near(&top(&doc), &before), "a larger font keeps the top edge too");
+}
+
+/// Callouts, measurements, notes and stamps don't turn.
+#[test]
+fn callouts_notes_and_stamps_do_not_turn() {
+    let mut doc = fixture();
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 600.0, 500.0, 612.0],
+                knee: [260.0, 560.0],
+                point: [200.0, 520.0],
+                font_size: 12.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    let n = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    for i in [c, n] {
+        assert!(matches!(rotate_annotation(&mut doc, 0, i, 90.0, &meta("")), Err(AnnotError::Invalid(_))), "{i}");
+    }
+    assert!(rotate_annotation(&mut doc, 1, 0, 90.0, &meta("")).is_err(), "a stamp");
+    assert!(rotate_annotation(&mut doc, 0, n, f64::NAN, &meta("")).is_err());
+}

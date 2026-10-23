@@ -2774,3 +2774,9 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Rotire comentariu
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Trageți pentru a roti · Shift: pași de 15° · Tab în timpul tragerii: sferturi de rotație

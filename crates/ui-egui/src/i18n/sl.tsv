@@ -2520,3 +2520,9 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Zavrti komentar
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Povlecite za vrtenje · Shift: koraki po 15° · Tab med vlečenjem: četrtine obrata

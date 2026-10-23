@@ -2521,3 +2521,9 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Περιστροφή σχολίου
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Σύρετε για περιστροφή · Shift: βήματα 15° · Tab κατά τη μεταφορά: τέταρτα στροφής

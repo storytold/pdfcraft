@@ -5746,6 +5746,7 @@ mod tests {
             intent: None,
             fill_sign,
             points: Vec::new(),
+            turn: None,
         }
     }
 

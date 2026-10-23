@@ -2800,3 +2800,9 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Girar comentário
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Arraste para girar · Shift: passos de 15° · Tab ao arrastar: quartos de volta

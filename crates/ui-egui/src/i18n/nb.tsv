@@ -2694,3 +2694,9 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Roter kommentar
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Dra for å rotere · Shift: trinn på 15° · Tab mens du drar: kvarte omdreininger

@@ -845,7 +845,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points), shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud) or angle (`rotate`: degrees counterclockwise about its middle; lines, polygons and drawings turn their points, rectangles, ovals, text boxes and typewriter text keep their box and report `angle` in comment_list, whose `rect` is then the upright rectangle around them; not callouts or measurements). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
@@ -856,6 +856,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
                 "points": { "type": "array", "items": point(), "minItems": 2, "description": "A line's two ends, or every corner of connected lines, a polygon or a cloud, in page coordinates." },
+                "rotate": { "type": "number", "minimum": -360, "maximum": 360, "description": "Turn by this many degrees counterclockwise, as displayed." },
             })),
             &["doc"],
         )),

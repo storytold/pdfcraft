@@ -2500,3 +2500,9 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Rrotullo komentin
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Tërhiqni për të rrotulluar · Shift: hapa 15° · Tab gjatë tërheqjes: çerekë rrotullimi

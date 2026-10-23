@@ -2478,3 +2478,9 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Завърти коментара
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Плъзнете за завъртане · Shift: стъпки от 15° · Tab при плъзгане: четвърт оборот

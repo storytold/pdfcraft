@@ -3127,6 +3127,17 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);
+        // While a comment is turned by its handle, Tab turns it a quarter further (Shift+Tab
+        // back). Taken before egui sees it: egui would move the keyboard focus to a toolbar button.
+        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+            && let Some(comments::Gesture::Rotate { quarter, .. }) = view.comments.gesture.as_mut()
+        {
+            let step = comments::take_turn_tabs(&mut raw.events);
+            if step != 0 {
+                *quarter = Some(quarter.unwrap_or(0).saturating_add(step));
+                ctx.request_repaint();
+            }
+        }
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
         }

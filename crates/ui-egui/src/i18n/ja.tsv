@@ -2515,3 +2515,9 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	注釈を回転
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ドラッグで回転 · Shift: 15°刻み · ドラッグ中に Tab: 90°ずつ

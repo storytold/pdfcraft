@@ -2781,3 +2781,9 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Faire pivoter le commentaire
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Faites glisser pour pivoter · Shift : pas de 15° · Tab en glissant : quarts de tour

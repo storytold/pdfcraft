@@ -2713,3 +2713,9 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	سووڕاندنەوەی لێدوان
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	ڕابکێشە بۆ سووڕاندنەوە · Shift: هەنگاوی 15° · Tab لە کاتی ڕاکێشان: چارەکە سووڕ

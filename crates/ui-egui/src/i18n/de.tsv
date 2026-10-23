@@ -2516,3 +2516,9 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Kommentar drehen
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Ziehen zum Drehen · Umschalt: 15°-Schritte · Tab beim Ziehen: Vierteldrehungen

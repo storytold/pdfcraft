@@ -389,6 +389,10 @@ pub enum Gesture {
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
+    /// Turning a comment by its rotate handle about `centre` (on screen), from the press at
+    /// `from`. `quarter`: Tab has set the turn to this many quarter turns counterclockwise (Shift+Tab
+    /// clockwise), and the pointer no longer turns it.
+    Rotate { page: usize, index: usize, centre: Pos2, from: Pos2, quarter: Option<i32> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -660,9 +664,55 @@ impl PageCx<'_> {
             .collect()
     }
 
-    /// The topmost comment under `p`.
+    /// The topmost comment under `p`. A turned box is hit inside its turned outline.
     fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).last()
+        self.comments()
+            .filter(|a| match a.turn {
+                Some(_) => self.screen_rect(a).expand(3.0).contains(p) && inside(&self.outline(a, 0.0).0, p, 3.0),
+                None => self.screen_rects(a).any(|r| r.expand(3.0).contains(p)),
+            })
+            .last()
+    }
+
+    /// Where a comment's middle is on screen, which it turns about (see
+    /// `pdfcraft_annot::rotate_annotation`): a turned box's own centre, the middle of a line's or
+    /// polygon's points, otherwise of `/Rect`.
+    fn turn_centre(&self, a: &Annotation) -> Pos2 {
+        if let Some((_, b)) = a.turn {
+            return self.to_screen([f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0]);
+        }
+        let points = a.points.iter().fold(None, |acc: Option<[f32; 4]>, q| match acc {
+            None => Some([q[0], q[1], q[0], q[1]]),
+            Some(r) => Some([r[0].min(q[0]), r[1].min(q[1]), r[2].max(q[0]), r[3].max(q[1])]),
+        });
+        match points {
+            Some(r) => self.to_screen([f64::from(r[0] + r[2]) / 2.0, f64::from(r[1] + r[3]) / 2.0]),
+            None => self.screen_rect(a).center(),
+        }
+    }
+
+    /// A comment's outline on screen turned by `extra` degrees more (counterclockwise) about its
+    /// middle, and whether it is closed: a turned box's own box as turned, a line's or connected
+    /// lines' points, a polygon's corners, otherwise `/Rect`'s corners.
+    pub(crate) fn outline(&self, a: &Annotation, extra: f64) -> (Vec<Pos2>, bool) {
+        let (points, closed, angle, c): (Vec<[f64; 2]>, bool, f64, [f64; 2]) = match a.turn {
+            Some((angle, b)) => {
+                let b = b.map(f64::from);
+                (vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]], true, f64::from(angle), [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0])
+            }
+            None if !a.points.is_empty() => {
+                let pts: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+                let c = self.to_user(self.turn_centre(a));
+                (pts, a.subtype == "Polygon", 0.0, c)
+            }
+            None => {
+                let r = a.rect.map(f64::from);
+                (vec![[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], true, 0.0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0])
+            }
+        };
+        let (s, k) = (angle + extra).to_radians().sin_cos();
+        let turn = |p: [f64; 2]| [c[0] + (p[0] - c[0]) * k - (p[1] - c[1]) * s, c[1] + (p[0] - c[0]) * s + (p[1] - c[1]) * k];
+        (points.into_iter().map(|p| self.to_screen(turn(p))).collect(), closed)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
@@ -717,6 +767,73 @@ fn is_markup(subtype: &str) -> bool {
 /// `/Rect` also holds its leader line, so it only moves.
 fn resizable(a: &Annotation) -> bool {
     matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
+}
+
+/// What turns by the rotate handle (see `pdfcraft_annot::rotate_annotation`): rectangles,
+/// ovals, text boxes and typewriter text, lines, connected lines, polygons, clouds and drawings.
+/// Not callouts or measurements, and not a locked comment.
+fn turnable(a: &Annotation) -> bool {
+    matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Line" | "PolyLine" | "Polygon" | "Ink")
+        && a.intent.as_deref() != Some("FreeTextCallout")
+        && !a.intent.as_deref().is_some_and(|i| i.ends_with("Dimension"))
+        && !a.locked
+}
+
+/// The rotate handle above a selected comment's frame `r` (on screen): the middle of a round
+/// button with a turning arrow, on a stem.
+fn turn_handle(r: Rect) -> Pos2 {
+    pos2(r.center().x, r.top() - 30.0)
+}
+
+/// How near the rotate handle's middle a press takes it.
+const TURN_HANDLE_REACH: f32 = 12.0;
+
+/// How far a drag of the rotate handle turns, in degrees counterclockwise as displayed: from the
+/// press `from` to `to` about `centre`, between -180 and 180, in 15° steps with Shift. After Tab,
+/// `quarter` quarter turns instead.
+pub(crate) fn turn_degrees(centre: Pos2, from: Pos2, to: Pos2, shift: bool, quarter: Option<i32>) -> f64 {
+    if let Some(k) = quarter {
+        return f64::from(k) * 90.0;
+    }
+    let angle = |p: Pos2| f64::from((p.y - centre.y).atan2(p.x - centre.x)).to_degrees();
+    // Screen y grows downwards: a counterclockwise turn lowers the angle.
+    let d = (angle(from) - angle(to) + 180.0).rem_euclid(360.0) - 180.0;
+    if shift { (d / 15.0).round() * 15.0 } else { d }
+}
+
+/// Whether `p` is inside the closed `outline` or within `margin` of it.
+fn inside(outline: &[Pos2], p: Pos2, margin: f32) -> bool {
+    let n = outline.len();
+    let mut odd = false;
+    for i in 0..n {
+        let (a, b) = (outline[i], outline[(i + 1) % n]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            odd = !odd;
+        }
+        let ab = b - a;
+        let t = if ab.length_sq() > 0.0 { ((p - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0) } else { 0.0 };
+        if (a + ab * t).distance(p) <= margin {
+            return true;
+        }
+    }
+    odd
+}
+
+/// Takes Tab presses out of `events` while a comment is turned by its handle: +1 quarter turn
+/// counterclockwise for each Tab, -1 for each Shift+Tab (their releases go too). Tabs with other
+/// modifiers stay.
+pub(crate) fn take_turn_tabs(events: &mut Vec<egui::Event>) -> i32 {
+    let mut step = 0i32;
+    events.retain(|e| match e {
+        egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if modifiers.is_none() || modifiers.shift_only() => {
+            if *pressed {
+                step += if modifiers.shift { -1 } else { 1 };
+            }
+            false
+        }
+        _ => true,
+    });
+    step
 }
 
 /// Lines, connected lines, polygons and clouds: their ends and corners have handles of their own
@@ -1099,7 +1216,7 @@ pub(crate) fn draw_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool
         return false;
     }
     let cv = &view.comments;
-    if matches!(cv.gesture, Some(Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page) {
         return true;
     }
     // A polygon being clicked out keeps its clicks, even near an old shape's handle.
@@ -1115,8 +1232,10 @@ fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotati
     if cx.hidden {
         return false;
     }
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
-    {
+    if matches!(
+        view.comments.gesture,
+        Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page
+    ) {
         return true;
     }
     let Some(p) = press_point(ui, cx) else { return false };
@@ -1133,8 +1252,9 @@ fn press_point(ui: &egui::Ui, cx: &PageCx<'_>) -> Option<Pos2> {
 /// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
 fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation) -> bool) -> bool {
     view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed).is_some_and(|a| {
-        (resizable(a) && HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
+        (resizable(a) && a.turn.is_none() && HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
             || (grabs_points(cx.tool) && reshapable(a) && point_handle(cx, a, p).is_some())
+            || (turnable(a) && turn_handle(cx.screen_rect(a).expand(2.0)).distance(p) <= TURN_HANDLE_REACH)
     })
 }
 
@@ -1156,16 +1276,21 @@ fn select_input(
     let selected = cv.selected.filter(|(p, _)| *p == cx.page).and_then(|(_, i)| cx.get(i));
     // Handles of a selected, resizable comment.
     let handle_at = |p: Pos2| -> Option<(i8, i8)> {
-        let a = selected.filter(|a| cx.allowed && resizable(a))?;
+        let a = selected.filter(|a| cx.allowed && resizable(a) && a.turn.is_none())?;
         let r = cx.screen_rect(a);
         HANDLES.into_iter().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
     };
     // Ends and corners of a selected line, connected lines, polygon or cloud.
     let point_at =
         |p: Pos2| -> Option<usize> { selected.filter(|a| cx.allowed && grabs_points(cx.tool) && reshapable(a)).and_then(|a| point_handle(cx, a, p)) };
+    // The rotate handle above the selected comment's frame.
+    let turn_at =
+        |p: Pos2| selected.filter(|a| cx.allowed && turnable(a) && turn_handle(cx.screen_rect(a).expand(2.0)).distance(p) <= TURN_HANDLE_REACH);
     let mut consumed = false;
     if let Some(p) = pointer {
-        if point_at(p).is_some() {
+        if turn_at(p).is_some() || matches!(cv.gesture, Some(Gesture::Rotate { page, .. }) if page == cx.page) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else if point_at(p).is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         } else if let Some(h) = handle_at(p) {
             ui.ctx().set_cursor_icon(match h {
@@ -1183,7 +1308,10 @@ fn select_input(
         && pressed_here
         && let Some(o) = origin
     {
-        if let (Some(point), Some(a)) = (point_at(o), selected) {
+        if let Some(a) = turn_at(o) {
+            cv.gesture = Some(Gesture::Rotate { page: cx.page, index: a.index, centre: cx.turn_centre(a), from: o, quarter: None });
+            consumed = true;
+        } else if let (Some(point), Some(a)) = (point_at(o), selected) {
             let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
             cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
             consumed = true;
@@ -1209,7 +1337,10 @@ fn select_input(
             consumed = true;
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    if matches!(
+        cv.gesture,
+        Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page
+    ) {
         consumed = true;
     }
     if resp.drag_stopped()
@@ -1242,6 +1373,13 @@ fn select_input(
                 let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
                 if moved {
                     view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                }
+            }
+            Some(Gesture::Rotate { page, index, centre, from, quarter }) if page == cx.page => {
+                cv.gesture = None;
+                let degrees = turn_degrees(centre, from, p, ui.input(|i| i.modifiers.shift), quarter);
+                if degrees.abs() >= 0.5 {
+                    view.pending_edit = Some(Edit::RotateAnnotation { page, index, degrees });
                 }
             }
             _ => {}
@@ -1354,8 +1492,36 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
+        // Turning: the outline as it will be, and the angle by the pointer.
+        if let Some(Gesture::Rotate { page: p, index: i, centre, from, quarter }) = &cv.gesture
+            && (*p, *i) == (page, index)
+        {
+            let degrees = pointer.map_or(0.0, |at| turn_degrees(*centre, *from, at, shift, *quarter));
+            let (outline, closed) = cx.outline(a, degrees);
+            let stroke = Stroke::new(1.5, SELECT_BLUE);
+            painter.add(if closed { egui::Shape::closed_line(outline, stroke) } else { egui::Shape::line(outline, stroke) });
+            painter.circle(*centre, 3.0, SELECT_BLUE, Stroke::NONE);
+            if let Some(at) = pointer {
+                let label = format!("{}°", degrees.round());
+                painter.text(at + vec2(14.0, -14.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(12.0), SELECT_BLUE);
+            }
+            return paint_gesture(painter, cx, view);
+        }
+        if cx.allowed && turnable(a) && cv.gesture.is_none() {
+            paint_turn_handle(ui, painter, cx.screen_rect(a).expand(2.0), (page, index), pointer);
+        }
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
+        }
+        // A turned box: its turned outline, moved along while it is dragged; no resize handles.
+        if a.turn.is_some() {
+            let shift_by = match (&cv.gesture, pointer) {
+                (Some(Gesture::Move { page: p, index: i, from }), Some(at)) if (*p, *i) == (page, index) => at - *from,
+                _ => vec2(0.0, 0.0),
+            };
+            let (outline, _) = cx.outline(a, 0.0);
+            painter.add(egui::Shape::closed_line(outline.into_iter().map(|q| q + shift_by).collect(), Stroke::new(1.0, SELECT_BLUE)));
+            return paint_gesture(painter, cx, view);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
@@ -1367,6 +1533,27 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         }
     }
     paint_gesture(painter, cx, view);
+}
+
+/// The rotate handle above frame `r`: a stem, and a round button with a turning arrow that
+/// lights up under the pointer. It names itself to screen readers and says how it works.
+fn paint_turn_handle(ui: &egui::Ui, painter: &egui::Painter, r: Rect, (page, index): (usize, usize), pointer: Option<Pos2>) {
+    let knob = turn_handle(r);
+    let radius = 10.0;
+    painter.line_segment([r.center_top(), knob + vec2(0.0, radius)], Stroke::new(1.0, SELECT_BLUE));
+    let over = pointer.is_some_and(|p| p.distance(knob) <= TURN_HANDLE_REACH);
+    let fill = if over { SELECT_BLUE } else { Color32::WHITE };
+    painter.circle(knob, radius, fill, Stroke::new(1.5, SELECT_BLUE));
+    let tint = if over { Color32::WHITE } else { SELECT_BLUE };
+    icons::paint(ui, Rect::from_center_size(knob, vec2(13.0, 13.0)), "rotate-cw", 13.0, tint);
+    // Hover only: the page below still takes the press and the drag.
+    let tip = tl!("Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns");
+    let resp =
+        ui.interact(Rect::from_center_size(knob, vec2(2.0 * radius, 2.0 * radius)), egui::Id::new(("turn-handle", page, index)), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Rotate")));
+    if over {
+        resp.on_hover_text(tip);
+    }
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
@@ -1898,6 +2085,14 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
+            if turnable(a) {
+                for (label, degrees) in [("Rotate counterclockwise", 90.0), ("Rotate clockwise", -90.0)] {
+                    if ui.add_enabled(allowed, egui::Button::new(tl!(label))).clicked() {
+                        action = Some(CanvasAction::Edit(Box::new(Edit::RotateAnnotation { page, index, degrees })));
+                        ui.close();
+                    }
+                }
+            }
             ui.separator();
             if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
@@ -2406,6 +2601,7 @@ mod tests {
                 intent: None,
                 fill_sign: false,
                 points: Vec::new(),
+                turn: None,
             }],
             ..Default::default()
         };

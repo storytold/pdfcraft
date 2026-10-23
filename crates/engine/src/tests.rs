@@ -7438,3 +7438,27 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     assert!(pages[0].images.is_empty(), "the picture is past the budget");
     assert_eq!(truncated, [0]);
 }
+
+/// A turned rectangle is drawn turned: a flat red bar turned a quarter stands upright about its
+/// middle, on screen and once flattened; undo lays it down again.
+#[test]
+fn a_turned_rectangle_is_drawn_turned() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(form_fixture()), None).unwrap();
+    s.apply(id, rect_comment(0, [40.0, 140.0, 160.0, 160.0])).unwrap();
+    let red = |p: [u8; 4]| p[0] > 200 && p[1] < 80 && p[2] < 80;
+    assert!(red(pixel(&s, id, 0, 50, 150)) && !red(pixel(&s, id, 0, 100, 60)), "lying flat");
+    let square = |s: &Session| s.get(id).unwrap().info.annotations.iter().find(|a| a.subtype == "Square").cloned();
+    let index = square(&s).unwrap().index;
+    s.apply(id, Edit::RotateAnnotation { page: 0, index, degrees: 90.0 }).unwrap();
+    assert!(!red(pixel(&s, id, 0, 50, 150)), "no longer where its left end was");
+    for y in [95, 150, 205] {
+        assert!(red(pixel(&s, id, 0, 100, y)), "standing upright through ({}, {y})", 100);
+    }
+    assert_eq!(square(&s).unwrap().turn.map(|t| t.0), Some(90.0));
+    s.apply(id, Edit::Flatten { comments: true, fields: false }).unwrap();
+    assert!(red(pixel(&s, id, 0, 100, 95)) && !red(pixel(&s, id, 0, 50, 150)), "flattened as turned");
+    s.undo(id).unwrap();
+    s.undo(id).unwrap();
+    assert!(red(pixel(&s, id, 0, 50, 150)) && square(&s).unwrap().turn.is_none(), "undo lays it down");
+}

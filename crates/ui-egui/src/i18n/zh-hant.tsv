@@ -2465,3 +2465,9 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	旋轉註解
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	拖曳以旋轉 · Shift：以 15° 為間隔 · 拖曳時按 Tab：每次 90°

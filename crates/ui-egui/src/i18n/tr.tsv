@@ -2511,3 +2511,9 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Yorumu döndür
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Döndürmek için sürükleyin · Shift: 15° adımlar · Sürüklerken Tab: çeyrek dönüşler

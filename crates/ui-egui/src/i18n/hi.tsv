@@ -2750,3 +2750,9 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	टिप्पणी घुमाएँ
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	घुमाने के लिए खींचें · Shift: 15° के चरण · खींचते समय Tab: चौथाई घुमाव

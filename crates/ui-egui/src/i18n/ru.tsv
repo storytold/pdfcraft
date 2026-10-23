@@ -2428,3 +2428,9 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+
+# Turning a comment by its rotate handle: the undo label (M5).
+	Rotate comment	Повернуть комментарий
+
+# The rotate handle's tooltip (M5).
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	Перетащите, чтобы повернуть · Shift: шаг 15° · Tab при перетаскивании: на четверть оборота
