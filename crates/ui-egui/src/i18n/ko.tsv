@@ -2750,3 +2750,14 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Highlight content	콘텐츠 강조
+	Mark everything in this tag as an artifact and remove the tag from reading order	이 태그의 모든 항목을 아티팩트로 표시하고 읽기 순서에서 태그 제거
+	Move into previous tag	이전 태그 안으로 이동
+	Move out of parent tag	상위 태그 밖으로 이동
+	New tag	새 태그
+	Delete tag	태그 삭제
+	Remove tag, keep its contents	태그 제거, 내용은 유지
+	Draw a rectangle on the page or click content, then choose its tag.	페이지에 사각형을 그리거나 콘텐츠를 클릭한 다음 태그를 선택하세요.
+	Tag annotation	주석에 태그 지정
+	Untagged content	태그가 없는 콘텐츠
+	Annotation	주석

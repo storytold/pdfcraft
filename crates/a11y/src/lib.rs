@@ -19,6 +19,7 @@ mod content;
 mod headings;
 mod report;
 mod structure;
+mod tagging;
 mod tags;
 
 #[cfg(test)]
@@ -42,6 +43,10 @@ pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
 pub use autotag_fields::tag_form_fields;
 pub use headings::{Heading, headings};
 pub use report::{REPORT_WORDS, report_html};
+pub use tagging::{
+    AnnotationItem, ContentUnit, Destination, PageTagging, Region, Selection, TaggingError, UnitKind, UnitMark, content_to_artifact, delete_tag,
+    move_tag_to, new_tag, page_tagging, structure_problems, tag_annotation, tag_at, tag_boxes, tag_selection, tag_to_artifact,
+};
 pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

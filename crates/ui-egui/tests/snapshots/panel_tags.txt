@@ -2,6 +2,7 @@ Label = "Tags"
 Button "Close" [off]
 Label = "Find a tag"
 TextInput "Find a tag"
+CheckBox "Highlight content" [on]
 Label = "1 tags"
 Button "P · 16" [on]
 Label = "16 0 R"
@@ -21,4 +22,12 @@ Button "Revert changes" [disabled]
 Button "Move tag earlier" [disabled]
 Button "Move tag later" [disabled]
 Button "Mark as artifact"
+Button "Move into previous tag" [disabled]
+Button "Move out of parent tag" [disabled]
+ComboBox = "P"
+Button "New tag"
+Button "Delete tag"
+Button "Remove tag, keep its contents"
+Button "Find untagged content"
 Button "MCID 0 · Go to page 1 · Panel sample"
+ScrollBar

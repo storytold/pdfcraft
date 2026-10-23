@@ -2,6 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (M12/gap 11: the Tags panel's structural edits and the Reading Order tool ship; gap 11 40–70 h → 25–50 h) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
 > **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M3, #3808: the Pages inspector has an independent 50–150% thumbnail size slider and buttons; selection and current-page following are retained, with headless ui.set coverage. Estimates unchanged.)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M11 #3507: image merging preserves content stream boundaries; estimates unchanged)
@@ -86,7 +87,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
+| **Feature breadth** | **≈ 67%** tier-weighted (57.9% unweighted: 427 shipped + 81 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -144,7 +145,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 | J Create and export | 39.7% | 25% | 55–100 |
 | K Optimize and standards | 34.5% | 20% | 65–115 |
 | L Print | 39.7% | 35% | 30–55 |
-| M Accessibility | 63.1% | 30% | 40–70 |
+| M Accessibility | 75.4% | 40% | 25–50 |
 | N Automation, preferences, misc | 30.0% | 35% | 25–45 |
 
 What's strong and missing in each: [target-app-parity.md](docs/target-app-parity.md#by-feature-area).
@@ -186,7 +187,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 4 | OCR languages and Office export/import (M10) | 95–175 |
 | 5 | Preflight and PDF/A/X/UA (M11) | 65–115 |
 | 6 | Signatures for institutions: PKCS #11, timestamp servers, online LTV (M9) | 40–70 |
-| 7 | Accessibility tagging (M12) | 40–70 |
+| 7 | Accessibility tagging (M12) | 25–50 |
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
@@ -272,6 +273,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-16 (M7, #2140):** Header & footer (and Bates numbering, which uses the same dialog) can shrink the page content so the header and footer don't cover it: the original content is scaled evenly into the band they leave free, centred across, also on rotated pages; Remove and Update take the scaling away, and margins that leave no room are refused. Dialog checkbox with a preview of the band, `shrink` on `doc_header_footer`, all catalogs. Annotations and added text and images are not moved yet. Estimates unchanged.
 - **2026-10-20 (M14, Spanish catalog gaps):** `es.tsv` gains the 143 `(context, English)` keys the other catalogs carried and it was missing, so Spanish covers the whole bundled key union like Lithuanian and Vietnamese: calendar months and weekdays, the `certificate` context, X.509 key usages, signature-revision and digital-ID lines, password validation, eight plural messages, the combine-from-folder strings, the rendering and stale-file notices and the shortcut-spelled tooltips. Counts in `localization-parity.md` re-measured against the current union (`vi` restated against it for the same reason). Status stays `partial`: no translated help, and OS details stay outside the catalog. Estimates unchanged.
 - **2026-10-16 (M14, localization):** Czech goes from menus-and-dialogs to the whole surface: 2,674 entries after adding the ~220 keys the other catalogs had -- the sentences the engine words (signature details, accessibility findings and report, PDF/A problems, pages to print, history labels), the date picker's weekday heads, the certificate viewer's fields and shared buttons. "Tag" is *tag* throughout (the Tags panel said *značky*, which is also a redaction mark), and "{n} tags" no longer reads "1 značek". Two new catalog tests. Estimates unchanged.
+- **2026-10-16 (M12, gap 11):** The Tags panel gets New Tag, Delete Tag (or remove a tag keeping its contents), moving tags across parents by drag and drop or with buttons, Change Tag to Artifact for whole subtrees, Highlight content, and a click on page content selecting its tag. Accessibility ▸ Fix reading order is the Reading Order tool: the page's tagged content as numbered regions in tag order and its untagged content in another colour; a rectangle or a click selects content, which becomes P, H1–H6, Figure (with alternate text), Table, List or an artifact, and the order list reorders regions. A new `a11y` tagging engine reads and extends any parent-tree layout in place, splices marked content into page content without re-serializing it, and refuses what it can't do safely; 11 headless tools, kittest UI tests and property tests over random edit sequences. `a11y.tags-panel`, `a11y.reading-order-tool` and `a11y.create-tag-from-selection` shipped. Gap 11 40–70 h → 25–50 h.
 - **2026-10-15 (M2, gap 12):** `cargo xtask text-oracle` scores reading order as well as word F1: the longest common subsequence of the two word sequences over the longer one. F1 is a bag of words and cannot see order at all -- measuring #2431, a change that moves text and nothing else, it called 26 of the 29 files whose output changed identical, where the order score separated 18 improvements from 6 regressions. Reports, does not gate; a disagreement with Poppler, not a verdict. Estimates unchanged.
 - **2026-10-15 (M2, #2305 follow-up):** WinAnsiEncoding 0xA0 and 0xAD and MacRomanEncoding 0xCA extract as the ordinary space and hyphen Annex D.2 names them, in the vendored hayro tables (patch 30) as well as `crates/fonts`, so search, copy and redaction see characters that were hidden behind U+00A0 and U+00AD. Across the pdf.js corpus the soft hyphens we extract fall 117 to 13 and the non-breaking spaces 30 to 26; the rest come from `/ToUnicode`. An explicit `/Differences` name keeps its glyph list value, as pdftotext does. Estimates unchanged.
 - **2026-10-15 (M12, XFA, #2574):** A `pageArea` with no `<occur>` repeats without limit instead of taking a subform's default of one use, so a later page area with `occur max="1"` is no longer drawn (with a copy of its fields) over every body page. A page area's `occur min` is honoured too: one the body never reached gets the pages it still needs after the body (the once-only closing page of a form, with its button, comes last). Acrobat Pro also puts that page last, and when printing keeps it but leaves it blank (`relevant="-print"` on the page area), which PdfCraft does not do yet; both re-observed on a synthetic fixture, see the 2026-10-19 line. Synthetic regression tests. Estimates unchanged.

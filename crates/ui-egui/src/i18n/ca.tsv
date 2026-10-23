@@ -2774,3 +2774,15 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Highlight content	Ressalta el contingut
+	Mark everything in this tag as an artifact and remove the tag from reading order	Marca tot el que hi ha en aquesta etiqueta com a artefacte i treu l'etiqueta de l'ordre de lectura
+	Move into previous tag	Mou a l'etiqueta anterior
+	Move out of parent tag	Mou fora de l'etiqueta pare
+	New tag	Etiqueta nova
+	Delete tag	Suprimeix l'etiqueta
+	Remove tag, keep its contents	Elimina l'etiqueta i conserva'n el contingut
+	Draw a rectangle on the page or click content, then choose its tag.	Dibuixa un rectangle a la pàgina o fes clic al contingut i després tria'n l'etiqueta.
+	Tag annotation	Etiqueta l'anotació
+	Untagged content	Contingut sense etiquetar
+	Annotation	Anotació
+	Tag content as {type}	Etiqueta el contingut com a {type}

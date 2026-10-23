@@ -2500,3 +2500,14 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Highlight content	Thekso përmbajtjen
+	Mark everything in this tag as an artifact and remove the tag from reading order	Shëno gjithçka në këtë etiketë si artefakt dhe hiqe etiketën nga renditja e leximit
+	Move into previous tag	Zhvendos në etiketën e mëparshme
+	Move out of parent tag	Zhvendos jashtë etiketës prind
+	New tag	Etiketë e re
+	Delete tag	Fshi etiketën
+	Remove tag, keep its contents	Hiq etiketën, mbaj përmbajtjen
+	Draw a rectangle on the page or click content, then choose its tag.	Vizato një drejtkëndësh në faqe ose kliko përmbajtjen, pastaj zgjidh etiketën e saj.
+	Tag annotation	Etiketo shënimin
+	Untagged content	Përmbajtje pa etiketë
+	Annotation	Shënim

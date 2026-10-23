@@ -2354,7 +2354,6 @@ animation effects	Off	Выкл
 	Found {n} untagged content problems.	Найдено проблем с нетегированным контентом: {n}.
 	Tag form fields	Пометить поля формы
 	Mark as artifact	Пометить как артефакт
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Удалите этот конечный тег из порядка чтения и пометьте его непосредственное содержимое как артефакт
 	Mark content as artifact	Пометить содержимое как артефакт
 	Word count	Количество слов
 	Current page only	Только текущая страница
@@ -2428,3 +2427,15 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Highlight content	Выделять содержимое
+	Mark everything in this tag as an artifact and remove the tag from reading order	Пометить всё содержимое этого тега как артефакт и убрать тег из порядка чтения
+	Move into previous tag	Переместить внутрь предыдущего тега
+	Move out of parent tag	Вынести из родительского тега
+	New tag	Новый тег
+	Delete tag	Удалить тег
+	Remove tag, keep its contents	Удалить тег, сохранив содержимое
+	Draw a rectangle on the page or click content, then choose its tag.	Нарисуйте прямоугольник на странице или щёлкните содержимое, затем выберите его тег.
+	Tag annotation	Добавить тег к аннотации
+	Untagged content	Нетегированный контент
+	Annotation	Аннотация
+	Tag content as {type}	Пометить содержимое тегом {type}

@@ -2751,3 +2751,14 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Highlight content	Sorot konten
+	Mark everything in this tag as an artifact and remove the tag from reading order	Tandai semua isi tag ini sebagai artefak dan hapus tag dari urutan baca
+	Move into previous tag	Pindahkan ke tag sebelumnya
+	Move out of parent tag	Pindahkan keluar dari tag induk
+	New tag	Tag baru
+	Delete tag	Hapus tag
+	Remove tag, keep its contents	Hapus tag, pertahankan isinya
+	Draw a rectangle on the page or click content, then choose its tag.	Gambar persegi panjang di halaman atau klik konten, lalu pilih tagnya.
+	Tag annotation	Beri tag pada anotasi
+	Untagged content	Konten tanpa tag
+	Annotation	Anotasi

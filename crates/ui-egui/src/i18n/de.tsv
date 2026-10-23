@@ -2442,7 +2442,6 @@ animation effects	Off	Aus
 	Found {n} untagged content problems.	{n} Probleme mit unmarkiertem Inhalt gefunden.
 	Tag form fields	Formularfelder taggen
 	Mark as artifact	Als Artefakt markieren
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Dieses Blatt-Tag aus der Lesereihenfolge entfernen und seinen direkten Inhalt als Artefakt markieren
 	Mark content as artifact	Inhalt als Artefakt markieren
 @id	file.word_count	Wörter zählen…
 	Word count	Wörter zählen
@@ -2516,3 +2515,15 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Highlight content	Inhalt hervorheben
+	Mark everything in this tag as an artifact and remove the tag from reading order	Alles in diesem Tag als Artefakt markieren und den Tag aus der Lesereihenfolge entfernen
+	Move into previous tag	In vorherigen Tag verschieben
+	Move out of parent tag	Aus übergeordnetem Tag verschieben
+	New tag	Neuer Tag
+	Delete tag	Tag löschen
+	Remove tag, keep its contents	Tag entfernen, Inhalt behalten
+	Draw a rectangle on the page or click content, then choose its tag.	Ziehe ein Rechteck auf der Seite auf oder klicke auf Inhalt und wähle dann seinen Tag.
+	Tag annotation	Anmerkung taggen
+	Untagged content	Nicht markierter Inhalt
+	Annotation	Anmerkung
+	Tag content as {type}	Inhalt als {type} taggen

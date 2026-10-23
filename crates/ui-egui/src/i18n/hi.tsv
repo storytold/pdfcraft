@@ -2750,3 +2750,14 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Highlight content	सामग्री हाइलाइट करें
+	Mark everything in this tag as an artifact and remove the tag from reading order	इस टैग की हर चीज़ को आर्टिफ़ैक्ट के रूप में चिह्नित करें और टैग को पढ़ने के क्रम से हटाएँ
+	Move into previous tag	पिछले टैग में ले जाएँ
+	Move out of parent tag	पैरेंट टैग से बाहर ले जाएँ
+	New tag	नया टैग
+	Delete tag	टैग हटाएँ
+	Remove tag, keep its contents	टैग हटाएँ, उसकी सामग्री रखें
+	Draw a rectangle on the page or click content, then choose its tag.	पृष्ठ पर एक आयत बनाएँ या सामग्री पर क्लिक करें, फिर उसका टैग चुनें।
+	Tag annotation	एनोटेशन को टैग करें
+	Untagged content	बिना टैग की सामग्री
+	Annotation	एनोटेशन

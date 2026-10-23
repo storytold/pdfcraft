@@ -1,0 +1,24 @@
+Label = "Fix reading order"
+Button "Close" [off]
+Label = "Draw a rectangle on the page or click content, then choose its tag."
+Button "<P>" [disabled]
+Button "<H1>" [disabled]
+Button "<H2>" [disabled]
+Button "<H3>" [disabled]
+Button "<H4>" [disabled]
+Button "<H5>" [disabled]
+Button "<H6>" [disabled]
+Button "<Figure>" [disabled]
+Button "<Table>" [disabled]
+Button "<L>" [disabled]
+Button "Mark as artifact" [disabled]
+Label = "Alternate text"
+MultilineTextInput "Alternate text"
+Button "1  <P>  Panel sample" [off]
+Button "Move up" [disabled]
+Button "Move down" [disabled]
+Label = "Untagged content"
+Button "Text · Draft notes" [off]
+Button "Annotation · Widget" [off]
+Button "Annotation · Widget" [off]
+Button "Annotation · Text" [off]

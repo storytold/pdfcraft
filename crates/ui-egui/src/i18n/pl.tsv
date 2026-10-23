@@ -2417,7 +2417,6 @@ animation effects	Off	Wyłączone
 	Found {n} untagged content problems.	Znaleziono problemów z nieoznaczoną zawartością: {n}.
 	Tag form fields	Oznacz pola formularza
 	Mark as artifact	Oznacz jako artefakt
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Usuń ten znacznik liścia z kolejności odczytu i oznacz jego bezpośrednią zawartość jako artefakt
 	Mark content as artifact	Oznacz zawartość jako artefakt
 	Word count	Liczba słów
 	Current page only	Tylko bieżąca strona
@@ -2611,3 +2610,15 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+	Highlight content	Wyróżnij zawartość
+	Mark everything in this tag as an artifact and remove the tag from reading order	Oznacz całą zawartość tego znacznika jako artefakt i usuń znacznik z kolejności czytania
+	Move into previous tag	Przenieś do poprzedniego znacznika
+	Move out of parent tag	Przenieś poza znacznik nadrzędny
+	New tag	Nowy znacznik
+	Delete tag	Usuń znacznik
+	Remove tag, keep its contents	Usuń znacznik, zachowaj jego zawartość
+	Draw a rectangle on the page or click content, then choose its tag.	Narysuj prostokąt na stronie lub kliknij zawartość, a następnie wybierz jej znacznik.
+	Tag annotation	Oznacz adnotację znacznikiem
+	Untagged content	Nieoznaczona zawartość
+	Annotation	Adnotacja
+	Tag content as {type}	Oznacz zawartość jako {type}

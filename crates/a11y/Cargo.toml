@@ -17,3 +17,6 @@ pdfcraft-content = { workspace = true }
 pdfcraft-filters = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 thiserror.workspace = true
+
+[dev-dependencies]
+proptest = { workspace = true }

@@ -38,6 +38,7 @@ pub mod canvas;
 mod chrome;
 mod combine_grid;
 mod image_pick;
+mod reading_order_ui;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
@@ -212,6 +213,8 @@ pub enum RightPanel {
     Accessibility,
     /// Reachable PDF structure tags and their properties.
     Tags,
+    /// Accessibility ▸ Fix reading order: the Reading Order tool's tags and order list.
+    ReadingOrder,
     /// Advanced Search results.
     Search,
     /// Compare files: the differences.
@@ -257,6 +260,8 @@ pub enum QuickTool {
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
     /// Select tool does the same while Alt/Option is held at the start of a drag.
     ColumnSelect,
+    /// Accessibility ▸ Fix reading order: numbered regions; click or drag to select content.
+    ReadingOrder,
 }
 
 /// A file dropped on a page grid: its name, and its bytes or, for a file on disk, the path they are
@@ -697,6 +702,7 @@ pub struct PdfCraftApp {
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
     pub(crate) tags_state: tags_ui::State,
+    pub(crate) reading_order: reading_order_ui::State,
     /// Rules skipped by hand, for the document they were skipped in.
     pub a11y_skipped: std::collections::HashSet<(DocId, pdfcraft_engine::a11y::Rule)>,
     pub alt_draft: a11y_ui::AltDraft,
@@ -1052,6 +1058,7 @@ impl PdfCraftApp {
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
+            reading_order: Default::default(),
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
             os_key_store_ids: false,
@@ -2338,6 +2345,16 @@ impl PdfCraftApp {
         }
     }
 
+    /// The tag selected in the Tags panel, as `(object number, generation)`.
+    pub fn selected_tag(&self) -> Option<(u32, u16)> {
+        self.tags_state.selected_tag().map(|r| (r.num, r.generation))
+    }
+
+    /// The content the Reading Order tool has selected: its page (0-based) and unit indices.
+    pub fn reading_order_selection(&self) -> (Option<usize>, Vec<usize>) {
+        (self.reading_order.page, self.reading_order.units.iter().copied().collect())
+    }
+
     /// Opens a right panel, or closes it with `None`, because the user chose to. Closing Comments
     /// keeps comment tools from reopening it; opening it again lets them (#225). A choice made in
     /// Read mode replaces the pane saved on the way in, so leaving Read mode doesn't undo it.
@@ -2656,6 +2673,7 @@ impl PdfCraftApp {
                     "signatures" => Some(RightPanel::Signatures),
                     "accessibility" => Some(RightPanel::Accessibility),
                     "tags" => Some(RightPanel::Tags),
+                    "reading-order" => Some(RightPanel::ReadingOrder),
                     "search" => Some(RightPanel::Search),
                     "compare" => Some(RightPanel::Compare),
                     "none" => None,
@@ -2726,6 +2744,15 @@ impl PdfCraftApp {
                 self.palette_query = value.to_string();
             }
             ("page", Some(v)) => v.go_to_page(value.parse::<usize>().map_err(|e| e.to_string())?.saturating_sub(1)),
+            // The Tags panel's selection, by object number (screenshots and the control channel).
+            ("tag", Some(v)) => {
+                let id = v.id;
+                let number = value.parse::<u32>().map_err(|_| "tag must be a tag's object number".to_string())?;
+                let doc = self.session.get(id).ok_or("no document is open")?;
+                let tags = self.tags_state.tags(doc);
+                let object = tags.iter().find(|t| t.object.num == number).map(|t| t.object).ok_or_else(|| format!("no tag is object {number}"))?;
+                self.tags_state.select(id, &tags, object);
+            }
             ("zoom", Some(v)) => v.set_zoom(DocView::parse_zoom_percent(value).ok_or("zoom must be a percentage above 0")?),
             ("layout", Some(v)) => {
                 let (layout, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
@@ -2867,6 +2894,7 @@ impl PdfCraftApp {
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
+                    "reading-order" => QuickTool::ReadingOrder,
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;
