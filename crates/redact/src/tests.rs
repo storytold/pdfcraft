@@ -48,10 +48,11 @@ fn content(doc: &Document, page: usize) -> String {
 /// Glyphs (and inline images) of page `page` under `rects` (the verifier's count).
 fn under(doc: &mut Document, page: usize, rects: &[[f64; 4]]) -> usize {
     let p = pdfcraft_model::pages(doc).swap_remove(page);
-    let (_, data) = page_streams(doc, &p.dict, page).unwrap();
+    let mut budget = pdfcraft_cos::DecodeBudget::page();
+    let (_, data) = page_streams_within(doc, &p.dict, page, &mut budget).unwrap();
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
-    let mut scope = Scope::new(rects, Mode::Verify, &mut rep);
+    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget);
     process(doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY).residue
 }
 
@@ -1689,8 +1690,8 @@ fn bluefin_survives(doc: &Document) -> bool {
 
 /// #3285 review (the maintainer's probes): an element written in place in the parent tree that
 /// owns the redacted text can't be changed, so applying is refused; the same element as an object
-/// of its own is cleaned, and nothing of the word is left in a full rewrite.
-/// Refusal does not promise rollback: direct callers discard the failed working copy.
+/// of its own is cleaned, and nothing of the word is left in a full rewrite. A refusal leaves the
+/// document as it was.
 #[test]
 fn an_element_written_in_place_owning_redacted_text_is_refused() {
     let objs = |element: &str| -> Vec<Vec<u8>> {
@@ -1710,17 +1711,13 @@ fn an_element_written_in_place_owning_redacted_text_is_refused() {
     let mut doc = pdf(objs("<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 /ActualText (Codename Bluefin) >>"));
     mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
     let before = write_full(&doc, &SaveOptions::default()).unwrap();
-    let mut working = doc.clone();
-    let error = apply(&mut working, None).unwrap_err();
+    let error = apply(&mut doc, None).unwrap_err();
     assert!(matches!(error, RedactError::Tags));
     assert_eq!(
         error.to_string(),
         "the document's tags can't be cleaned completely (an element written in place, or a structure tree too large or too deep to follow); the operation was refused"
     );
-    assert!(!content(&working, 0).contains("Bluefin"), "the failed working copy was partially changed");
-    assert!(bluefin_survives(&working), "the failed working copy still holds the word in its tags");
-    drop(working);
-    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "discarding the working copy preserves the original");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "the refused document is unchanged");
     let mut doc = pdf(objs("7 0 R"));
     mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
     let r = apply(&mut doc, None).unwrap();
@@ -2461,7 +2458,12 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
     }
 }
 
+mod descriptions;
+mod inline_images;
+mod limits;
 mod property_retirement;
+mod surviving_references;
+mod text_state;
 
 /// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
 /// draws only the one immediately before it (LASTARR, 7 glyphs, 35 pt wide from x = 10) -- not
@@ -2471,4 +2473,292 @@ fn a_tj_surplus_arrays_undrawn_glyphs_are_not_seen_under_a_mark() {
     let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td [(FIRSTARR)] [(LASTARR)] TJ ET", "", vec![]);
     assert_eq!(under(&mut doc, 0, &[[45.0, 95.0, 50.0, 110.0]]), 0, "nothing is drawn past LASTARR's 35pt width");
     assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 45.0, 110.0]]), 7, "LASTARR's 7 glyphs, the one the page draws");
+}
+
+#[test]
+fn form_entries_share_one_budget_per_page() {
+    // 20 draws of a form that draws the next 20 times, four levels down: 160,000 glyphs from a
+    // few hundred bytes.
+    let draws = "/X Do ".repeat(20);
+    let mut objs = vec![stream("/Type /XObject /Subtype /Form /Resources << /Font << /F1 5 0 R >> >>", b"BT /F1 10 Tf 10 100 Td (A) Tj ET")];
+    for inner in 7..10 {
+        objs.push(stream(&format!("/Type /XObject /Subtype /Form /Resources << /XObject << /X {inner} 0 R >> >>"), draws.as_bytes()));
+    }
+    let mut doc = one_page(draws.as_bytes(), "/XObject << /X 10 0 R >>", objs);
+    let residue = under(&mut doc, 0, &[[0.0, 90.0, 50.0, 120.0]]);
+    assert!(residue > 0 && residue <= pdfcraft_cos::MAX_PAGE_FORMS, "{residue} glyphs counted");
+    // Applying refuses the page rather than leave forms past the budget unread.
+    mark(&mut doc, 0, &[[0.0, 90.0, 50.0, 120.0]], "");
+    assert!(apply(&mut doc, None).is_err());
+}
+
+/// A name tree whose levels each list the next level twice: a walk that follows every path
+/// visits 2^levels nodes.
+#[test]
+fn a_name_tree_whose_nodes_share_kids_counts_each_entry_once() {
+    use crate::sanitize::{Hidden, scan};
+    let levels = 12;
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 5 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"BT ET"),
+    ];
+    for k in 0..levels {
+        let next = 6 + k;
+        objs.push(format!("<< /Kids [{next} 0 R {next} 0 R] >>").into_bytes());
+    }
+    objs.push(b"<< /Names [(a.txt) << /Type /Filespec /F (a.txt) >>] >>".to_vec());
+    let doc = pdf(objs);
+    let counts: std::collections::HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::Attachments], 1, "one entry, reached through 2^{levels} paths");
+}
+
+/// Page content that stops decoding at its start (`z` inside an ASCII85 group) while the rest of
+/// the stream draws hidden text. A tolerant decode reads nothing, counts nothing and keeps the
+/// stream; sanitizing must refuse instead.
+#[test]
+fn hidden_text_in_content_that_stops_decoding_is_refused() {
+    use crate::sanitize::{Hidden, remove_hidden, sanitize};
+    let encoded: &[u8] = br"!!z6<#'\7PQ#?0Ha>,+>Y->EZd(j+>PW)+B2ko-rWQ%;FOP6+B3(u78s~>";
+    let fresh = || {
+        let mut doc = one_page(b"", "", vec![stream("/Filter /ASCII85Decode", encoded)]);
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+        doc
+    };
+    let mut doc = fresh();
+    let out = remove_hidden(&mut doc, &[Hidden::HiddenText]);
+    assert!(matches!(out, Err(RedactError::Unreadable(1))), "{out:?}");
+    let mut doc = fresh();
+    let out = sanitize(&mut doc);
+    assert!(matches!(out, Err(RedactError::Unreadable(1))), "{out:?}");
+}
+
+/// An array of references to objects `nums` (generation 0).
+fn ref_array(nums: &[u32]) -> Object {
+    Object::Array(nums.iter().map(|&n| Object::Ref(ObjRef::new(n, 0))).collect())
+}
+
+/// An interactive form dictionary listing fields `nums`.
+fn fields_dict(nums: &[u32]) -> Object {
+    let mut d = Dict::new();
+    d.set(b"Fields".to_vec(), ref_array(nums));
+    Object::Dict(d)
+}
+
+/// Flattening keeps hidden widgets (they draw nothing); removing form fields must still take them
+/// and their values, and their parent field's value, out of the file.
+#[test]
+fn removing_form_fields_takes_hidden_widgets_and_their_values_out_of_the_file() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 10 100 Td (Visible) Tj ET",
+        "",
+        vec![
+            // 7 a hidden terminal field merged with its widget, 8 a parent field, 9 its hidden widget
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (own) /V (LEAK_WIDGET_VALUE) /F 2 /Rect [10 200 150 220] /AP << /N 10 0 R >> >>".to_vec(),
+            b"<< /FT /Tx /T (parent) /V (LEAK_PARENT_VALUE) /Kids [9 0 R] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /Parent 8 0 R /F 32 /Rect [10 230 150 250] /AP << /N 10 0 R >> >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 140 20]", b"0 g"),
+        ],
+    );
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), fields_dict(&[7, 8]))).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), ref_array(&[7, 9]))).unwrap();
+    remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
+    assert_no_secret(&doc, b"LEAK_");
+    assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
+}
+
+/// Removing hidden text cleans the structure tree as redaction does: the elements describing the
+/// removed text lose their descriptions, and a reference into a rewritten Form points at the copy.
+#[test]
+fn removing_hidden_text_cleans_the_structure_tree() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = one_page(
+        b"/P <</MCID 0>> BDC BT /F1 10 Tf 3 Tr 10 200 Td (SECRET) Tj ET EMC /P <</MCID 1>> BDC BT /F1 10 Tf 0 Tr 10 100 Td (Public) Tj ET EMC /Fm Do",
+        "/XObject << /Fm 7 0 R >>",
+        vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>",
+                b"/P <</MCID 0>> BDC BT /F1 10 Tf 3 Tr 10 150 Td (FORMSECRET) Tj ET EMC",
+            ),
+            b"<< /Type /StructTreeRoot /K 9 0 R >>".to_vec(),
+            b"<< /S /Document /P 8 0 R /K [10 0 R 11 0 R 12 0 R] >>".to_vec(),
+            b"<< /S /P /P 9 0 R /Pg 3 0 R /ActualText (LEAK_PAGE_TAG) /K 0 >>".to_vec(),
+            b"<< /S /P /P 9 0 R /Pg 3 0 R /ActualText (Public) /K 1 >>".to_vec(),
+            b"<< /S /P /P 9 0 R /Pg 3 0 R /Alt (LEAK_FORM_TAG) /K << /Type /MCR /Pg 3 0 R /Stm 7 0 R /MCID 0 >> >>".to_vec(),
+        ],
+    );
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"StructTreeRoot".to_vec(), Object::Ref(ObjRef::new(8, 0)))).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"StructParents".to_vec(), Object::Int(0))).unwrap();
+    remove_hidden(&mut doc, &[Hidden::HiddenText]).unwrap();
+    assert_no_secret(&doc, b"LEAK_");
+    assert_no_secret(&doc, b"SECRET");
+    assert!(doc.get(ObjRef::new(11, 0)).as_dict().unwrap().contains(b"ActualText"), "untouched content keeps its tags");
+}
+
+/// One page drawing image /Im (object 7) and form /Fm (object 8), with `extra` objects from 9 on.
+fn owners_fixture(image: &str, form: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objs = vec![
+        stream(&format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {image}"), b"\x80"),
+        stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] {form}"), b"0 0 5 5 re f"),
+    ];
+    objs.extend(extra);
+    one_page(b"BT /F1 10 Tf 10 100 Td (Visible) Tj ET q 10 0 0 10 0 0 cm /Im Do Q /Fm Do", "/XObject << /Im 7 0 R /Fm 8 0 R >>", objs)
+}
+
+/// Removing one category and saving leaves none of `secret` in the file, and the scan counted it.
+fn removes_from_every_owner(mut doc: Document, h: crate::sanitize::Hidden, secret: &[u8]) {
+    use crate::sanitize::{remove_hidden, scan};
+    let counts: std::collections::HashMap<_, usize> = scan(&doc).into_iter().collect();
+    assert!(counts[&h] > 0, "{h:?} is counted");
+    remove_hidden(&mut doc, &[h]).unwrap();
+    assert_no_secret(&doc, secret);
+    assert!(scan(&reopen(&doc)).into_iter().all(|(k, n)| k != h || n == 0 || h == crate::sanitize::Hidden::Metadata));
+}
+
+#[test]
+fn private_data_of_a_form_xobject_is_removed() {
+    let doc = owners_fixture("", "/PieceInfo << /App << /Private (LEAK_PRIVATE) >> >>", vec![]);
+    removes_from_every_owner(doc, crate::sanitize::Hidden::PrivateData, b"LEAK_");
+}
+
+#[test]
+fn metadata_of_an_image_is_removed() {
+    let doc = owners_fixture("/Metadata 9 0 R", "", vec![stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta>LEAK_XMP</x:xmpmeta>")]);
+    removes_from_every_owner(doc, crate::sanitize::Hidden::Metadata, b"LEAK_");
+}
+
+#[test]
+fn a_pages_associated_files_are_removed_with_attachments() {
+    let mut doc = owners_fixture(
+        "",
+        "",
+        vec![b"<< /Type /Filespec /F (a.txt) /AFRelationship /Data /EF << /F 10 0 R >> >>".to_vec(), stream("/Type /EmbeddedFile", b"LEAK_ATTACHED")],
+    );
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"AF".to_vec(), ref_array(&[9]))).unwrap();
+    removes_from_every_owner(doc, crate::sanitize::Hidden::Attachments, b"LEAK_");
+}
+
+#[test]
+fn a_fields_own_actions_are_removed_with_links_actions_and_scripts() {
+    let mut doc = owners_fixture(
+        "",
+        "",
+        vec![
+            b"<< /FT /Tx /T (total) /AA << /C << /S /JavaScript /JS (LEAK_SCRIPT) >> >> /Kids [10 0 R] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /Parent 9 0 R /Rect [10 200 150 220] >>".to_vec(),
+        ],
+    );
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), fields_dict(&[9]))).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), ref_array(&[10]))).unwrap();
+    removes_from_every_owner(doc, crate::sanitize::Hidden::LinksActionsScripts, b"LEAK_");
+}
+
+/// Resource names are chosen by the producer: a font named like an owned entry stays.
+#[test]
+fn a_resource_named_like_an_owned_entry_is_kept() {
+    let mut doc = one_page(
+        b"BT /AF 10 Tf 10 100 Td (Visible) Tj ET",
+        "",
+        vec![b"<< /Type /Filespec /F (a.txt) /EF << /F 8 0 R >> >>".to_vec(), stream("/Type /EmbeddedFile", b"LEAK_ATTACHED")],
+    );
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        let mut fonts = Dict::new();
+        fonts.set(b"AF".to_vec(), Object::Ref(ObjRef::new(5, 0)));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        d.set(b"AF".to_vec(), ref_array(&[7]));
+    })
+    .unwrap();
+    removes_from_every_owner(doc.clone(), crate::sanitize::Hidden::Attachments, b"LEAK_");
+    crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Attachments]).unwrap();
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    assert!(res.get(b"Font").and_then(|f| f.as_dict()).is_some_and(|f| f.contains(b"AF")));
+    assert!(!page.dict.contains(b"AF"));
+}
+
+/// Owners written in place deeper than the sweep follows are refused, not skipped.
+#[test]
+fn owners_nested_too_deeply_are_refused() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let nested = format!("{}<< /AA << /O << /S /JavaScript /JS (LEAK_DEEP) >> >> >>{}", "[".repeat(100), "]".repeat(100));
+    let mut doc = one_page(b"BT ET", "", vec![format!("<< /Deep {nested} >>").into_bytes()]);
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"PieceInfo".to_vec(), Object::Ref(ObjRef::new(7, 0)))).unwrap();
+    let out = remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]);
+    assert!(matches!(out, Err(RedactError::TooDeep)), "{out:?}");
+}
+
+/// A name tree node that lists the same kid more times than the node budget: each repeat costs a
+/// step, so the walk stops at the budget instead of scanning every repeat, and the distinct kid
+/// listed after them is never reached.
+#[test]
+fn repeated_name_tree_kids_count_towards_the_node_budget() {
+    use crate::sanitize::{Hidden, scan};
+    let repeats = "6 0 R ".repeat(100_010);
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 5 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"BT ET"),
+        format!("<< /Kids [{repeats}7 0 R] >>").into_bytes(),
+        b"<< /Names [(a.txt) << /Type /Filespec /F (a.txt) >>] >>".to_vec(),
+        b"<< /Names [(b.txt) << /Type /Filespec /F (b.txt) >>] >>".to_vec(),
+    ]);
+    let counts: std::collections::HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::Attachments], 1, "the walk went past its node budget to the last kid");
+}
+
+/// Content streams and the forms they draw spend one page allowance: 130 MiB of content and a
+/// 130 MiB form are each under it, together past it.
+#[test]
+fn content_and_forms_share_one_budget_per_page() {
+    use pdfcraft_cos::{Dict, Stream};
+    let mut doc = one_page(b"", "", vec![]);
+    let mut content = b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET /X Do\n%".to_vec();
+    content.resize(130 << 20, b'x');
+    let content = doc.add(Object::Stream(Stream::flate(Dict::new(), &content)));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    let mut body = b"%".to_vec();
+    body.resize(130 << 20, b'x');
+    let form = doc.add(Object::Stream(Stream::flate(form, &body)));
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"X".to_vec(), Object::Ref(form));
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0)));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        d.set(b"Contents".to_vec(), Object::Ref(content));
+    })
+    .unwrap();
+    mark(&mut doc, 0, &[[0.0, 90.0, 50.0, 120.0]], "");
+    assert!(apply(&mut doc, None).is_err(), "the form past the page's allowance was read");
+}
+
+/// A page that fails to read after another page was already redacted leaves the whole document as
+/// it was, the shared resources the first page's rewrite localised included.
+#[test]
+fn a_failure_on_a_later_page_leaves_the_document_unchanged() {
+    let mut doc = two_pages_one_resource_dictionary(true, false);
+    let all = pdfcraft_model::pages(&doc);
+    let (first, second, parent) = (all[0].obj, all[1].obj, doc.get(all[0].obj).as_dict().unwrap().reference(b"Parent").unwrap());
+    let mut dct = Dict::new();
+    dct.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    let bad = doc.add(Object::Stream(Stream::from_raw(dct, b"garbage".to_vec())));
+    doc.update_dict(second, |d| d.set(b"Contents".to_vec(), Object::Ref(bad))).unwrap();
+    mark(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]], "");
+    mark(&mut doc, 1, &[[0.0, 0.0, 50.0, 50.0]], "");
+    let before: Vec<Object> = [first, second, parent].iter().map(|r| (*doc.get(*r)).clone()).collect();
+    let text = content(&doc, 0);
+    assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(2)));
+    let after: Vec<Object> = [first, second, parent].iter().map(|r| (*doc.get(*r)).clone()).collect();
+    assert_eq!(after, before);
+    assert_eq!(content(&doc, 0), text);
 }

@@ -254,7 +254,7 @@ update the numbers.
   reference image and no oracle. **We render 1 distinct image across all 96; Poppler renders 8**,
   drawing a blank page for the seven halftone-skip and symbol fixtures and mis-decoding TPGRON
   refinement (its output changes when TPGRON is switched on, which a correct decoder's cannot).
-  Pinned as `crates/render/tests/jbig2_invariants.rs`. **Poppler is not a usable oracle for JBIG2**,
+  Pinned as `crates/render/tests/it/jbig2_invariants.rs`. **Poppler is not a usable oracle for JBIG2**,
   and roughly a fifth of its fixtures should be read as its bugs rather than ours.
 - **Annotations are shown, and that was measured rather than argued.** Poppler synthesises an
   appearance for an annotation that has none, where we draw only what the document carries (link

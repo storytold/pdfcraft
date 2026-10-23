@@ -14,7 +14,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, PdfString};
 
 mod actions;
 pub mod af;
@@ -264,7 +264,7 @@ fn name_obj(text: &str) -> Object {
 const MAX_LAYER_STATE: usize = 1024;
 
 /// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget).
-fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> Option<af::ButtonAction> {
+fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
     // A button PdfCraft generated for an XFA image field (`/PCXfaImage true`, no PDF action):
     // clicking it picks a picture, as `buttonImportIcon()` does.
     if matches!(d.get(b"PCXfaImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
@@ -345,7 +345,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> Option<af::But
             let preserve_rb = !a.get(b"PreserveRB").is_some_and(|p| matches!(&*doc.resolve(p), Object::Bool(false)));
             af::ButtonAction::SetLayers { changes, preserve_rb }
         }
-        b"JavaScript" => af::button_script(&script(doc, &action)?),
+        b"JavaScript" => af::button_script(&script(doc, &action, scripts)?),
         _ => return None,
     })
 }
@@ -371,20 +371,30 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("."))
 }
 
-/// The JavaScript of an action dictionary (`/JS` string or stream).
-fn script(doc: &Document, action: &Object) -> Option<String> {
+/// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
+/// in all, however many actions name the same stream.
+const MAX_SCRIPT_BYTES: usize = 64 << 20;
+
+/// A budget for the script streams of one reading of the form.
+fn script_budget() -> DecodeBudget {
+    DecodeBudget::new(MAX_SCRIPT_BYTES, 0)
+}
+
+/// The JavaScript of an action dictionary (`/JS` string or stream). A stream is decoded against
+/// `budget`, and is `None` once it is spent.
+fn script(doc: &Document, action: &Object, budget: &mut DecodeBudget) -> Option<String> {
     let a = doc.resolve(action);
     let js = a.as_dict()?.get(b"JS")?.clone();
     match &*doc.resolve(&js) {
         Object::String(s) => Some(s.to_text()),
-        Object::Stream(s) => s.decoded().ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+        Object::Stream(s) => budget.decode(s).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
     }
 }
 
 /// A field's format/keystroke, validate and calculate scripts (field dictionary, or its only
 /// widget's when the field has none).
-fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> af::Actions {
+fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> af::Actions {
     let aa = d.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).or_else(|| {
         (widgets.len() == 1)
             .then(|| doc.get(widgets[0]))
@@ -393,7 +403,7 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef]) -> af::Actions {
     });
     let mut out = af::Actions::default();
     let Some(aa) = aa else { return out };
-    let js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a));
+    let mut js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a, scripts));
     if let Some(f) = js(b"F") {
         match af::parse_format(&f) {
             Some(fm) => out.format = fm,
@@ -580,7 +590,7 @@ fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         None => Inherited::default(),
     };
     let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = Seen { fields: std::collections::HashSet::new(), widgets: std::collections::HashSet::new(), scripts: script_budget() };
     if let Some(af) = &af {
         for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = f.as_ref() {
@@ -604,7 +614,7 @@ fn adopt_page_fields(
     pages: &[ObjRef],
     base: &Inherited,
     page_of: &std::collections::HashMap<ObjRef, usize>,
-    seen: &mut std::collections::HashSet<ObjRef>,
+    seen: &mut Seen,
     out: &mut Vec<Field>,
 ) {
     for p in pages {
@@ -613,7 +623,7 @@ fn adopt_page_fields(
         let Some(annots) = annots.as_array() else { continue };
         for e in annots {
             let Some(r) = e.as_ref() else { continue };
-            if seen.contains(&r) {
+            if seen.fields.contains(&r) || seen.widgets.contains(&r) {
                 continue;
             }
             let obj = doc.get(r);
@@ -624,7 +634,7 @@ fn adopt_page_fields(
             if !d.contains(b"FT") && !d.contains(b"T") && !d.contains(b"Parent") {
                 continue;
             }
-            if let Some(root) = unlisted_root(doc, r, seen) {
+            if let Some(root) = unlisted_root(doc, r, &seen.fields) {
                 walk(doc, root, base, page_of, seen, out, 0);
             }
         }
@@ -754,6 +764,15 @@ pub fn set_tab_order(doc: &mut Document, pages: &[usize], order: TabOrder) -> Re
     Ok(())
 }
 
+/// What one reading of the form's fields has used: the field and widget dictionaries read, and
+/// the script budget their actions share.
+struct Seen {
+    fields: std::collections::HashSet<ObjRef>,
+    /// A widget belongs to the first field that lists it, however often it is listed.
+    widgets: std::collections::HashSet<ObjRef>,
+    scripts: DecodeBudget,
+}
+
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
 /// `parent`: kids with a name are fields of their own, kids without are this field's widgets.
 fn walk(
@@ -761,11 +780,11 @@ fn walk(
     r: ObjRef,
     parent: &Inherited,
     page_of: &std::collections::HashMap<ObjRef, usize>,
-    seen: &mut std::collections::HashSet<ObjRef>,
+    seen: &mut Seen,
     out: &mut Vec<Field>,
     depth: usize,
 ) {
-    if depth > 64 || !seen.insert(r) {
+    if depth > 64 || !seen.fields.insert(r) {
         return;
     }
     let obj = doc.get(r);
@@ -807,10 +826,8 @@ fn walk(
         }
         return;
     }
-    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
-    let actions = actions_of(doc, d, &widget_refs);
-    let button =
-        (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0).then(|| button_action(doc, d, &widget_refs)).flatten();
+    // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
+    // field listing them then reads.
     let ff = inh.ff.unwrap_or(0);
     let kind = match inh.ft.as_deref() {
         Some(b"Tx") => FieldKind::Text,
@@ -822,6 +839,12 @@ fn walk(
         Some(b"Sig") => FieldKind::Signature,
         _ => return,
     };
+    let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
+    let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
+    let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
+    let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
+        .then(|| button_action(doc, d, &widget_refs, &mut seen.scripts))
+        .flatten();
     let widgets = widget_refs
         .into_iter()
         .filter_map(|w| {

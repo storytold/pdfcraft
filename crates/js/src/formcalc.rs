@@ -15,7 +15,7 @@ use std::rc::Rc;
 use crate::Limits;
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
-    resolve_som, run_within,
+    reset_names, resolve_som, run_within,
 };
 
 /// Deepest nesting the parser follows.
@@ -1466,8 +1466,7 @@ impl Interp<'_> {
                 }
                 "resetdata" => {
                     let list = self.arg_str(args, 0)?;
-                    let names: Vec<String> = list.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
-                    self.h.push(XfaEffect::ResetData(names));
+                    self.h.push(XfaEffect::ResetData(reset_names(&list)));
                     Ok(Val::Null)
                 }
                 "print" => {
@@ -1618,19 +1617,13 @@ impl Interp<'_> {
                     "presence" => {
                         let p = self.to_str(&v);
                         if matches!(p.as_str(), "visible" | "invisible" | "hidden" | "inactive") {
-                            if let Some(n) = self.h.nodes.get_mut(i) {
-                                n.presence = p.clone();
-                            }
-                            self.h.push(XfaEffect::SetPresence { som, presence: p });
+                            self.h.set_state(i, XfaEffect::SetPresence { som, presence: p });
                         }
                     }
                     "access" => {
                         let a = self.to_str(&v);
                         if matches!(a.as_str(), "open" | "readOnly" | "protected" | "nonInteractive") {
-                            if let Some(n) = self.h.nodes.get_mut(i) {
-                                n.access = a.clone();
-                            }
-                            self.h.push(XfaEffect::SetAccess { som, access: a });
+                            self.h.set_state(i, XfaEffect::SetAccess { som, access: a });
                         }
                     }
                     other => {
@@ -1646,6 +1639,8 @@ impl Interp<'_> {
                             return Err(format!("{som} has no {other} to assign to"));
                         }
                         for k in kids {
+                            // Every destination copies the value: charge each copy.
+                            self.charge(self.cost(&v))?;
                             self.assign_to(Val::Node(k), "rawValue", v.clone())?;
                         }
                     }
@@ -1654,6 +1649,7 @@ impl Interp<'_> {
             }
             Val::List(items) => {
                 for it in items {
+                    self.charge(self.cost(&v))?;
                     self.assign_to(it, prop, v.clone())?;
                 }
                 Ok(())

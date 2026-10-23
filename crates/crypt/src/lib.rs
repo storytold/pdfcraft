@@ -138,9 +138,51 @@ pub struct SecurityHandler {
     key: Vec<u8>,
     auth: Auth,
     recovered_user: Option<Vec<u8>>,
+    methods: Methods,
+}
+
+/// The crypt filter methods of a handler, resolved once: a document controls both the number of
+/// filters and the number of strings, so a search of `/CF` per string would multiply them.
+#[derive(Clone, Debug)]
+struct Methods {
+    string: Method,
+    stream: Method,
+    embedded_file: Method,
+    named: std::collections::HashMap<Vec<u8>, Method>,
+}
+
+impl Methods {
+    fn new(dict: &EncryptDict) -> Self {
+        let mut named = std::collections::HashMap::with_capacity(dict.crypt_filters.len());
+        for (name, method) in &dict.crypt_filters {
+            #[cfg(test)]
+            tests::FILTER_COMPARES.with(|c| c.set(c.get() + 1));
+            // The first of two filters with one name wins, as a search would find it.
+            named.entry(name.clone()).or_insert(*method);
+        }
+        let mut methods = Methods { string: Method::Identity, stream: Method::Identity, embedded_file: Method::Identity, named };
+        methods.string = methods.get(&dict.str_f);
+        methods.stream = methods.get(&dict.stm_f);
+        methods.embedded_file = methods.get(if dict.ef_f.is_empty() { &dict.stm_f } else { &dict.ef_f });
+        methods
+    }
+
+    fn get(&self, name: &[u8]) -> Method {
+        if name == b"Identity" || name.is_empty() {
+            return Method::Identity;
+        }
+        #[cfg(test)]
+        tests::FILTER_COMPARES.with(|c| c.set(c.get() + 1));
+        self.named.get(name).copied().unwrap_or(Method::Identity)
+    }
 }
 
 impl SecurityHandler {
+    fn new(dict: EncryptDict, key: Vec<u8>, auth: Auth, recovered_user: Option<Vec<u8>>) -> Self {
+        let methods = Methods::new(&dict);
+        Self { dict, key, auth, recovered_user, methods }
+    }
+
     /// Authenticate with `password` (tried as owner password, then user password). `None`
     /// tries the empty password, which opens documents that only have an owner password.
     pub fn open(dict: EncryptDict, id0: &[u8], password: Option<&str>) -> Result<Self, CryptError> {
@@ -177,7 +219,7 @@ impl SecurityHandler {
             }
             r => return Err(CryptError::Unsupported(format!("revision {r}"))),
         };
-        Ok(Self { dict, key, auth, recovered_user })
+        Ok(Self::new(dict, key, auth, recovered_user))
     }
 
     /// Upgrade to owner access with the owner (permissions) password, as when a restricted
@@ -235,26 +277,16 @@ impl SecurityHandler {
         self.dict.encrypt_metadata
     }
 
-    fn method_named(&self, name: &[u8]) -> Method {
-        if name == b"Identity" || name.is_empty() {
-            return Method::Identity;
-        }
-        self.dict.crypt_filters.iter().find(|(n, _)| n == name).map(|(_, m)| *m).unwrap_or(Method::Identity)
-    }
-
     /// The method for strings or a kind of stream.
     fn method(&self, stream: Option<StreamKind>) -> Method {
         if self.dict.v < 4 {
             return Method::Rc4;
         }
         match stream {
-            None => self.method_named(&self.dict.str_f),
-            Some(StreamKind::Normal) => self.method_named(&self.dict.stm_f),
-            Some(StreamKind::EmbeddedFile) => {
-                let eff = if self.dict.ef_f.is_empty() { &self.dict.stm_f } else { &self.dict.ef_f };
-                self.method_named(eff)
-            }
-            Some(StreamKind::Named(n)) => self.method_named(n),
+            None => self.methods.string,
+            Some(StreamKind::Normal) => self.methods.stream,
+            Some(StreamKind::EmbeddedFile) => self.methods.embedded_file,
+            Some(StreamKind::Named(n)) => self.methods.get(n),
         }
     }
 
@@ -642,7 +674,7 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             d.o = o;
             let key = file_key_r4(&d, id0, &user);
             d.u = u_value_r4(&d, id0, &key);
-            Ok(SecurityHandler { dict: d, key, auth: Auth::Owner, recovered_user: Some(user) })
+            Ok(SecurityHandler::new(d, key, Auth::Owner, Some(user)))
         }
         Algorithm::Aes256 => {
             (d.v, d.r, d.length_bits) = (5, 6, 256);
@@ -671,7 +703,7 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             perms[9..12].copy_from_slice(b"adb");
             perms[12..16].copy_from_slice(&expand(&params.seed, b"perms", 4));
             d.perms = aes_cbc_encrypt(&key, &[0; 16], &perms, false);
-            Ok(SecurityHandler { dict: d, key, auth: Auth::Owner, recovered_user: None })
+            Ok(SecurityHandler::new(d, key, Auth::Owner, None))
         }
     }
 }

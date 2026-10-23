@@ -420,6 +420,15 @@ const MAX_CELLS: i64 = 4096;
 /// their unmarked redraws (the text reads twice, as it would without `/ActualText`).
 const MAX_REDRAW_WORK: usize = 1 << 22;
 
+/// Most replacement text bytes the redraw dedupe in `TextDevice::finish` copies on one page.
+const MAX_REDRAW_TEXT: usize = 1 << 22;
+
+#[cfg(test)]
+thread_local! {
+    /// Replacement text bytes given to redraws on this thread.
+    static REDRAW_TEXT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn cell(v: f32) -> i64 {
     // Glyph boxes are finite (`draw_glyph` and `merge` drop the rest); `as` saturates.
     (v / CELL).floor() as i64
@@ -564,6 +573,7 @@ impl TextDevice {
         redraws.sort_by_key(|(range, _)| range.start);
         let glyphs = std::mem::take(&mut self.glyphs);
         let mut redraws = redraws.into_iter().peekable();
+        let mut text_left = MAX_REDRAW_TEXT;
         let mut i = 0;
         while let Some(g) = glyphs.get(i) {
             let Some((range, k)) = redraws.next_if(|(range, _)| range.start == i) else {
@@ -572,7 +582,18 @@ impl TextDevice {
                 continue;
             };
             let run = glyphs.get(range.clone()).unwrap_or_default();
-            let text = self.replaced.get(k).map(|r| r.text.clone()).unwrap_or_default();
+            let replacement = self.replaced.get(k).map_or("", |r| r.text.as_str());
+            // Each redraw takes its own copy of the replacement, and one long replacement can
+            // have many redraws: past the budget a redraw keeps its glyphs, as past the work budget.
+            let Some(left) = text_left.checked_sub(replacement.len()) else {
+                self.glyphs.extend_from_slice(run);
+                i = range.end.max(i + 1);
+                continue;
+            };
+            text_left = left;
+            let text = replacement.to_owned();
+            #[cfg(test)]
+            REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
             if !text.chars().all(|c| c.is_control()) {
                 match merge(run, text) {
                     Some(glyph) => self.glyphs.push(glyph),
@@ -1869,6 +1890,27 @@ mod tests {
 
     fn marked_text(pdf: &Pdf, page: usize) -> PageText {
         extract_page(pdf, page, &InterpreterSettings::default()).unwrap()
+    }
+
+    #[test]
+    fn redraws_of_a_long_replacement_share_a_text_budget() {
+        let long = "0041".repeat(32 * 1024);
+        let redraws = 200;
+        let content = format!(
+            "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText <FEFF{long}>>> BDC (x) Tj EMC {} ET",
+            "1 0 0 1 100 150 Tm (x) Tj ".repeat(redraws)
+        );
+        let pdf = marked_pages(&[&content]);
+        REDRAW_TEXT_BYTES.with(|c| c.set(0));
+        let text = marked_text(&pdf, 0);
+        let given = REDRAW_TEXT_BYTES.with(|c| c.get());
+        assert!(given <= MAX_REDRAW_TEXT, "{given} bytes of replacement text given to {redraws} redraws");
+        assert!(text.plain_text().starts_with("AAAA"));
+        // A short replacement still covers its redraw.
+        let pdf = marked_pages(&["BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (fi)>> BDC (x) Tj EMC 1 0 0 1 100 150 Tm (x) Tj ET"]);
+        REDRAW_TEXT_BYTES.with(|c| c.set(0));
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "fi");
+        assert_eq!(REDRAW_TEXT_BYTES.with(|c| c.get()), 2);
     }
 
     #[test]

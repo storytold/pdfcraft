@@ -2503,6 +2503,7 @@ animation effects	Off	Wyłączone
 	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Certyfikat podpisującego nie jest wystawiony do podpisywania dokumentów (jego rozszerzone użycie klucza nie obejmuje podpisywania dokumentów).
 	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Certyfikat podpisującego ma rozszerzenia krytyczne, których PdfCraft nie rozpoznaje ({}).
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Certyfikat podmiotu {} nie jest certyfikatem urzędu certyfikacji, który może wystawiać certyfikaty, dlatego nie poświadcza certyfikatu {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Certyfikat podmiotu {} ma rozszerzenia krytyczne, których PdfCraft nie rozpoznaje, dlatego nie poświadcza certyfikatu {}.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Certyfikat podmiotu {} nie dopuszcza tylu certyfikatów urzędów certyfikacji poniżej siebie (długość ścieżki), dlatego nie poświadcza certyfikatu {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certyfikat podmiotu {} nie był ważny w chwili podpisania, dlatego nie poświadcza certyfikatu {}.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Tożsamość podpisującego jest nieznana, ponieważ jego certyfikatu nie ma na liście zaufanych certyfikatów i żaden z certyfikatów nadrzędnych nie jest zaufany.
@@ -2522,6 +2523,7 @@ animation effects	Off	Wyłączone
 	The timestamp token could not be read ({}).	Nie udało się odczytać tokenu znacznika czasu ({}).
 	The document has been altered or corrupted since the timestamp was applied.	Dokument został zmieniony lub uszkodzony po dodaniu znacznika czasu.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Certyfikat urzędu znacznika czasu nie był ważny w chwili oznaczania czasem.
+	The timestamp authority's certificate is not issued for time stamping.	Certyfikat urzędu znakowania czasem nie jest wystawiony do znakowania czasem.
 	This document has not been modified since this timestamp was applied.	Dokument nie był modyfikowany od dodania tego znacznika czasu.
 	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Dokument zmodyfikowano po dodaniu tego znacznika czasu, ale zmiany są dozwolone ({}).
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Dokument zmieniono po dodaniu tego znacznika czasu w sposób, na który znacznik nie pozwala ({}).

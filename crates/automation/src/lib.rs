@@ -435,7 +435,7 @@ impl Automation {
             "doc_revisions" => self.doc_revisions(&a)?,
             "text_lines" => {
                 let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let doc = self.doc_to_copy(&a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
                 let lines: Vec<Value> = doc
@@ -709,7 +709,11 @@ impl Automation {
                 let moved = [block.rect[0] + dx, block.rect[1] + dy, block.rect[2] + dx, block.rect[3] + dy];
                 let wanted: String = text.split_whitespace().collect();
                 let mut out = self.apply(&a, Edit::EditTextBlock { page, block: index, text, style })?;
-                let after = self.doc(&a)?.text_blocks(page);
+                let doc = self.doc(&a)?;
+                let after = doc.text_blocks(page);
+                // Without `text` the paragraph keeps the document's own words: not echoed when
+                // the document doesn't allow copying them.
+                let copy = doc.allows_copying();
                 // Only a paragraph that now shows exactly the requested text is the edited one. A
                 // neighbour that overlaps the old box (overlaid text, a text layer) must not take
                 // its number, and neither must a paragraph the edit merged it into: rewriting that
@@ -717,7 +721,10 @@ impl Automation {
                 let edited = block_overlapping(&after, moved)
                     .filter(|&i| !wanted.is_empty() && after.get(i).is_some_and(|b| b.text.split_whitespace().collect::<String>() == wanted));
                 if let Some(b) = edited.and_then(|i| after.get(i)) {
-                    out["paragraph"] = json!({ "text": b.text, "lines": b.lines.len(), "font": b.base_font });
+                    out["paragraph"] = json!({ "lines": b.lines.len(), "font": b.base_font });
+                    if copy {
+                        out["paragraph"]["text"] = json!(b.text);
+                    }
                 }
                 let stale = self.follow_edit(id, page, k, edited.and_then(|i| after.get(i)), &after);
                 if !stale.is_empty() {

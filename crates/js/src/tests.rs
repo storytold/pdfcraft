@@ -244,6 +244,46 @@ fn document_requests_and_console() {
     );
 }
 
+/// Bytes of text a run handed back in its messages, console lines and requests.
+fn kept_bytes(o: &Outcome) -> usize {
+    let req = |r: &Request| match r {
+        Request::Reset(names) => names.iter().map(String::len).sum(),
+        Request::Submit(u) | Request::LaunchUrl(u) | Request::Focus(u) => u.len(),
+        _ => 0,
+    };
+    o.console.iter().chain(&o.alerts).map(String::len).sum::<usize>() + o.requests.iter().map(req).sum::<usize>()
+}
+
+#[test]
+fn console_alerts_and_requests_are_capped_in_count_and_bytes() {
+    let o = go(
+        "var s = 'x'; while (s.length < 8192) s += s; \
+         for (var i = 0; i < 1500; i++) { console.println(s); app.alert(s); } \
+         var a = []; for (var i = 0; i < 2000; i++) a.push(s); \
+         for (var i = 0; i < 5; i++) this.resetForm(a); \
+         for (var i = 0; i < 12000; i++) app.launchURL('u');",
+        &Event::field("Mouse Up", "agree", ""),
+    );
+    assert_eq!(o.error, None);
+    assert!(o.console.len() <= crate::xfa::MAX_CONSOLE + 1, "{} console lines", o.console.len());
+    assert!(o.alerts.len() <= crate::xfa::MAX_ALERTS, "{} alerts", o.alerts.len());
+    assert!(o.requests.len() <= crate::xfa::MAX_EFFECTS, "{} requests", o.requests.len());
+    assert!(o.console.iter().chain(&o.alerts).all(|m| m.chars().count() <= 4_097));
+    assert!(kept_bytes(&o) <= crate::xfa::MAX_PAYLOAD, "{} bytes kept", kept_bytes(&o));
+    assert!(o.console.last().is_some_and(|l| l.contains("left out")), "{:?}", o.console.last());
+}
+
+#[test]
+fn printd_reads_a_long_literal_run_in_linear_work() {
+    crate::PRINTD_SCANNED.store(0, std::sync::atomic::Ordering::Relaxed);
+    let o = go("event.value = util.printd(new Array(20001).join('x'), new Date(2024, 0, 5)).length;", &Event::field("Calculate", "total", ""));
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "20000");
+    // Other tests format short dates at the same time; they add a few dozen bytes at most.
+    let scanned = crate::PRINTD_SCANNED.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(scanned < 40_000, "printd scanned {scanned} bytes for a 20000-byte format");
+}
+
 #[test]
 fn document_level_functions_are_available() {
     let o = run(
@@ -311,6 +351,23 @@ fn ordinary_nesting_still_runs() {
     // Brackets in strings and comments don't count.
     let s = format!("// {}\nevent.value = '{}'.length;", "(".repeat(1000), "[".repeat(1000));
     assert_eq!(go(&s, &Event::field("Calculate", "a", "")).value, "1000");
+}
+
+/// Code built from strings at run time would reach the parser without the size and nesting
+/// checks the script itself passed, so `eval` and the `Function` constructors refuse it.
+#[test]
+fn scripts_cannot_compile_code_from_strings() {
+    for s in [
+        "event.value = eval('1 + 1');",
+        "event.value = (0, eval)('1 + 1');",
+        "event.value = new Function('return 2')();",
+        "event.value = Function('a', 'return a')(2);",
+        "event.value = (function* () {}).constructor('yield 2')().next().value;",
+        "event.value = new Array(1001).join('(') + '1' + new Array(1001).join(')'); event.value = eval(event.value);",
+    ] {
+        let o = go(s, &Event::field("Calculate", "a", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("compile code from strings")), "{s}: {o:?}");
+    }
 }
 
 mod xfa_model {
@@ -396,6 +453,43 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("10"));
         let o = go("this.rawValue = xfa.form.form1.page1.qty.rawValue + 1;", "form1[0].page1[0].total[0]", "calculate");
         assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].total[0]".into(), value: "5".into() }]);
+    }
+
+    /// A long value written again and again stops at the run's byte budget, and the write that
+    /// does not fit is left out of the field the script reads as well as of the effect.
+    #[test]
+    fn a_value_past_the_byte_budget_is_left_out_of_reads_and_effects_alike() {
+        let o = go(
+            "var s = 'x'; while (s.length < 65536) s += s; \
+             for (var i = 0; i < 300; i++) details.note.rawValue = ('00000' + i).slice(-6) + s.slice(6); \
+             details.note.rawValue.slice(0, 6)",
+            "form1[0].page1[0].total[0]",
+            "calculate",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        let set: Vec<&str> = o
+            .effects
+            .iter()
+            .filter_map(|e| if let XfaEffect::SetValue { value, .. } = e { Some(value.get(..6).unwrap_or(value)) } else { None })
+            .collect();
+        assert_eq!(set.len(), 1);
+        assert_eq!(o.result.as_deref(), set.first().copied());
+    }
+
+    /// The script runs through `eval`, so code built from strings at run time is held to the
+    /// script's own size and nesting checks instead of being refused outright.
+    #[test]
+    fn code_built_from_strings_is_checked_like_the_script() {
+        let total = "form1[0].page1[0].total[0]";
+        assert_eq!(go("eval('qty.rawValue * 2')", total, "calculate").result.as_deref(), Some("8"));
+        assert_eq!(go("new Function('return 3')()", total, "calculate").result.as_deref(), Some("3"));
+        for s in [
+            "eval(new Array(1001).join('(') + '1' + new Array(1001).join(')'))",
+            "new Function(new Array(1001).join('[') + new Array(1001).join(']'))",
+        ] {
+            let o = go(s, total, "calculate");
+            assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{s}: {o:?}");
+        }
     }
 
     /// A form whose one field `d` holds the ISO date 2026-10-20, shown as 20261020.
@@ -592,6 +686,74 @@ mod xfa_model {
         assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.chars().count() <= 4_097));
     }
 
+    /// Past the byte budget, adding or removing a row is left out of the snapshot as well as the
+    /// effects, so the script never counts rows the form will not get.
+    #[test]
+    fn rows_changed_past_the_byte_budget_are_left_out_of_the_snapshot_too() {
+        let o = go(
+            "var s = 'x'; while (s.length < 4096) s += s; for (var i = 0; i < 9000; i++) xfa.host.gotoURL(s); \
+             table._row.removeInstance(0); var added = table._row.addInstance(1); (added === null) + ':' + table._row.count",
+            "form1[0].page1[0].go[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert!(o.notes.iter().any(|n| n.contains("MiB")), "{:?}", o.notes);
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::AddInstance { .. } | XfaEffect::RemoveInstance { .. })));
+        assert_eq!(o.result.as_deref(), Some("true:2"));
+    }
+
+    /// Past the effect cap, presence and access set on a new object are left out of the snapshot
+    /// as well as the effects; one set again on an object that already has its effect still lands.
+    #[test]
+    fn presence_and_access_past_the_effect_cap_are_left_out_of_the_snapshot_too() {
+        let read = "qty.presence + ':' + qty.access + ':' + price.presence";
+        let before = go(read, "form1[0].page1[0]", "click").result;
+        let o = go(
+            &format!(
+                "price.presence = 'invisible'; for (var i = 0; i < 20000; i++) xfa.host.beep(); qty.presence = 'hidden'; qty.access = 'readOnly'; price.presence = 'hidden'; {read}"
+            ),
+            "form1[0].page1[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        let unchanged = before.as_deref().and_then(|b| b.rsplit_once(':')).map(|(qty, _)| format!("{qty}:hidden"));
+        assert_eq!(o.result, unchanged);
+        assert!(o.effects.contains(&XfaEffect::SetPresence { som: "form1[0].page1[0].price[0]".into(), presence: "hidden".into() }));
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::SetPresence { som, .. } | XfaEffect::SetAccess { som, .. } if som.contains("qty"))));
+    }
+
+    /// Past the effect cap, a value written to a field with no effect yet is left out of reads as
+    /// well as the effects; a field written again before the cap still takes its new value.
+    #[test]
+    fn a_value_past_the_effect_cap_is_left_out_of_reads_and_effects_alike() {
+        let o = go(
+            "price.rawValue = 1; for (var i = 0; i < 20000; i++) xfa.host.beep(); qty.rawValue = 9; price.rawValue = 3; qty.rawValue + ':' + price.rawValue",
+            "form1[0].page1[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        assert_eq!(o.result.as_deref(), Some("4:3"));
+        assert!(!o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { som, .. } if som.contains("qty"))));
+    }
+
+    #[test]
+    fn urls_and_reset_lists_are_clipped_and_deduplicated() {
+        let o = go(
+            "var s = 'x'; while (s.length < 65536) s += s; for (var i = 0; i < 600; i++) xfa.host.gotoURL(s + i); \
+             var r = 'a,'; while (r.length < 262144) r += r; xfa.host.resetData(r);",
+            "form1[0].page1[0]",
+            "initialize",
+        );
+        assert_eq!(o.error, None);
+        let urls: Vec<&String> = o.effects.iter().filter_map(|e| if let XfaEffect::LaunchUrl(u) = e { Some(u) } else { None }).collect();
+        assert_eq!(urls.len(), 600);
+        assert!(urls.iter().all(|u| u.chars().count() <= 4_097));
+        let names: usize = o.effects.iter().map(|e| if let XfaEffect::ResetData(n) = e { n.len() } else { 0 }).sum();
+        assert_eq!(names, 1);
+    }
+
     #[test]
     fn a_slow_engine_start_does_not_count_against_the_script() {
         let ms = std::time::Duration::from_millis;
@@ -641,6 +803,54 @@ mod formcalc {
         let o = go(script, "form1[0].page1[0].total[0]", "calculate");
         assert_eq!(o.error, None, "{script}");
         o.result.unwrap_or_default()
+    }
+
+    /// Assigning one long value to many fields at once stops at the run's byte budget and is
+    /// charged per copy, and a reset list names each field once.
+    #[test]
+    fn bulk_assignments_and_reset_lists_are_bounded() {
+        let f = |i: usize| super::xfa_model::field("f", &format!("form1[0].page1[0].f[{i}]"), "", false);
+        let root = XfaNode {
+            name: "form1".into(),
+            som: "form1[0]".into(),
+            kind: Some(XfaKind::Subform),
+            children: vec![XfaNode {
+                name: "page1".into(),
+                som: "form1[0].page1[0]".into(),
+                kind: Some(XfaKind::Subform),
+                children: (0..1300).map(f).collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ev = XfaEvent { activity: "initialize".into(), target: "form1[0]".into(), ..Default::default() };
+        let run = |script: &str| run_formcalc(script, &ev, &XfaDoc::default(), &root, Limits::default());
+        let o = run("var s = \"x\"\nwhile (Len(s) < 65536) do s = Concat(s, s) endwhile\npage1.f = s");
+        assert_eq!(o.error, None, "{o:?}");
+        let kept: usize = o.effects.iter().map(|e| if let XfaEffect::SetValue { value, .. } = e { value.len() } else { 0 }).sum();
+        assert!(kept <= MAX_PAYLOAD, "{kept} bytes of values kept");
+        assert!(o.notes.iter().any(|n| n.contains("left out")), "{:?}", o.notes);
+        // 1300 copies of a 1 MiB value are more work than a script may do.
+        let o = run("var s = \"x\"\nwhile (Len(s) < 1048576) do s = Concat(s, s) endwhile\npage1.f = s");
+        assert_eq!(o.error.as_deref(), Some("the script ran too long"), "{:?}", o.notes);
+        let o = run("var r = \"a,\"\nwhile (Len(r) < 262144) do r = Concat(r, r) endwhile\n$host.resetData(r)\n$host.resetData(r)");
+        assert_eq!(o.error, None, "{o:?}");
+        let names: usize = o.effects.iter().map(|e| if let XfaEffect::ResetData(n) = e { n.len() } else { 0 }).sum();
+        assert_eq!(names, 2);
+    }
+
+    /// FormCalc presence and access past the effect cap are left out of the snapshot too.
+    #[test]
+    fn formcalc_presence_and_access_past_the_effect_cap_are_left_out_of_the_snapshot_too() {
+        let o = go(
+            "for i = 1 upto 20000 do $host.beep() endfor\nqty.presence = \"hidden\"\nqty.access = \"readOnly\"\nConcat(qty.presence, \":\", qty.access)",
+            "form1[0].page1[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), MAX_EFFECTS);
+        let before = go("Concat(qty.presence, \":\", qty.access)", "form1[0].page1[0]", "click");
+        assert_eq!(o.result, before.result);
     }
 
     /// FormCalc reads `formattedValue` as the field's picture shows it too, until the script

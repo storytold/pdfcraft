@@ -391,7 +391,7 @@ mod tests {
             ],
             images: vec![Image {
                 ext: "png",
-                bytes: b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03".to_vec(),
+                bytes: b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03".as_slice().into(),
                 rect: [72.0, 150.0, 300.0, 300.0],
                 size: [228.0, 150.0],
                 rotation: 0.0,
@@ -619,7 +619,13 @@ mod tests {
             blocks.push(huge("inf", f64::INFINITY, 200.0 - k as f64));
         }
         let images = (0..40)
-            .map(|k| Image { ext: "png", bytes: vec![0; 4], rect: [0.0, -1e300, 1e-300, 1e300 - k as f64], size: [1.0, 1.0], rotation: 0.0 })
+            .map(|k| Image {
+                ext: "png",
+                bytes: [0; 4].as_slice().into(),
+                rect: [0.0, -1e300, 1e-300, 1e300 - k as f64],
+                size: [1.0, 1.0],
+                rotation: 0.0,
+            })
             .collect();
         let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, background: None };
         let bytes = pptx(&[p], "Hostile");

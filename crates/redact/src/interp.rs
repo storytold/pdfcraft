@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
-use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
@@ -74,6 +74,10 @@ pub(crate) struct Output {
     /// Apply mode met vertical-writing text (which it cannot remove) while a redaction region was
     /// in force: the operation must fail closed rather than leave that text under the mark.
     pub vertical: bool,
+    /// The content holds an inline image the renderer reads no image for
+    /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
+    /// be what the page shows, so a redaction must not trust it.
+    pub ambiguous: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
     pub error: Option<CosError>,
 }
@@ -102,10 +106,16 @@ pub(crate) struct Scope<'a> {
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
+    /// Form entries and decoded bytes left for this page, its content streams already charged:
+    /// shared forms drawn from other shared forms would otherwise multiply the work with every
+    /// level.
+    budget: DecodeBudget,
 }
 
 impl<'a> Scope<'a> {
-    pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report) -> Self {
+    /// A scope whose form walk spends `budget`, what is left of the page's allowance after its
+    /// content streams were decoded.
+    pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget) -> Self {
         Scope {
             rects,
             mode,
@@ -120,6 +130,7 @@ impl<'a> Scope<'a> {
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
+            budget,
         }
     }
 
@@ -529,8 +540,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         }
     }
     // A surviving form can own the same old resource dictionary as a rewritten page. Its
-    // unused descriptions remain reachable too, even after every page holder is cleaned.
-    unlink_form_properties(doc, &holder_nodes, retired_properties)?;
+    // unused descriptions and doomed XObjects remain reachable too, even after every page
+    // holder is cleaned.
+    unlink_from_forms(doc, &holder_nodes, &doomed, retired_properties)?;
     Ok(())
 }
 
@@ -567,8 +579,11 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
     Ok(pruned)
 }
 
-fn unlink_form_properties(doc: &mut Document, holders: &[ObjRef], retired: &[Object]) -> Result<(), CosError> {
-    if retired.is_empty() {
+/// Unlink retired properties and `doomed` XObjects from the resources of the forms reachable from
+/// the page-tree `holders`, each unless the form's own content (or a form inheriting its
+/// resources) still uses the name. Fails closed when that cannot be determined.
+fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), CosError> {
+    if retired.is_empty() && doomed.is_empty() {
         return Ok(());
     }
     let mut pending: Vec<Dict> = holders
@@ -593,7 +608,27 @@ fn unlink_form_properties(doc: &mut Document, holders: &[ObjRef], retired: &[Obj
             let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
             let names: Vec<Vec<u8>> =
                 res_dict(doc, &res, b"Properties").iter().filter(|(_, value)| retired.contains(value)).map(|(name, _)| name.to_vec()).collect();
-            if !names.is_empty() && prune_retired_properties(doc, &mut res, &names, &[vec![form.decoded()?]])? {
+            let mut xo = res_dict(doc, &res, b"XObject");
+            let doomed_names: Vec<Vec<u8>> =
+                xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+            if names.is_empty() && doomed_names.is_empty() {
+                pending.push(res);
+                continue;
+            }
+            let data = form.decoded()?;
+            let mut pruned = false;
+            for name in doomed_names {
+                match content_draws(doc, std::slice::from_ref(&data), &xo, &name, 0, &mut HashSet::new()) {
+                    Some(true) => {}
+                    Some(false) => pruned |= xo.remove(&name).is_some(),
+                    None => return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() }),
+                }
+            }
+            if pruned {
+                res.set(b"XObject".to_vec(), Object::Dict(xo));
+            }
+            pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
+            if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }
             pending.push(res);
@@ -690,6 +725,34 @@ fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> 
     Ok(())
 }
 
+/// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
+/// would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The metrics are cached with the
+/// fonts `Tf` names, under a key no resource name can take (a name cannot hold a null byte).
+fn extgstate_font(
+    doc: &Document,
+    scope: &mut Scope<'_>,
+    ext_gstates: &Dict,
+    name: &[u8],
+    fallback: &Rc<Metrics>,
+) -> Option<(Rc<Metrics>, bool, f64)> {
+    let state = doc.resolve(ext_gstates.get(name)?).as_dict().cloned()?;
+    let entry = doc.resolve(state.get(b"Font")?).as_array().cloned()?;
+    let [font, size] = entry.as_slice() else { return None };
+    let size = doc.resolve(size).as_f64()?;
+    let font_dict = doc.resolve(font).as_dict().cloned();
+    let vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+    let key = [b"\0".as_slice(), name].concat();
+    let metrics = match scope.fonts.get(&key) {
+        Some(m) => m.clone(),
+        None => {
+            let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
+            scope.fonts.insert(key, m.clone());
+            m
+        }
+    };
+    Some((metrics, vertical, size))
+}
+
 /// One glyph of a shown string.
 struct Glyph {
     bytes: std::ops::Range<usize>,
@@ -700,11 +763,9 @@ struct Glyph {
 
 /// Process a scope's content streams (state flows from one stream to the next).
 pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, ctm: Matrix) -> Output {
-    let mut out = Output::default();
-    let fallback = Rc::new(Metrics::fallback());
-    let mut gs = Gs {
+    let gs = Gs {
         ctm,
-        font: fallback.clone(),
+        font: Rc::new(Metrics::fallback()),
         vertical: false,
         size: 0.0,
         char_spacing: 0.0,
@@ -714,9 +775,19 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         leading: 0.0,
         rise: 0.0,
     };
+    process_from(doc, scope, streams, resources, gs)
+}
+
+/// [`process`] from graphics state `gs`: a form XObject starts with its caller's, text state
+/// included (ISO 32000-2 §8.10.1), so text it shows without setting a font of its own is placed
+/// with the caller's font, size and spacing, as the renderer places it.
+fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, mut gs: Gs) -> Output {
+    let mut out = Output::default();
+    let fallback = Rc::new(Metrics::fallback());
     let mut stack: Vec<Gs> = Vec::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let fonts_res = res_dict(doc, resources, b"Font");
+    let ext_gstates = res_dict(doc, resources, b"ExtGState");
     let mut xobjects = res_dict(doc, resources, b"XObject");
     // The current path: its operators, its bounding box in user space, and whether it clips.
     let mut path: Vec<Op> = Vec::new();
@@ -729,6 +800,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
     let joined = Pieces::join(streams);
     let mut parsed = joined.parse();
+    out.ambiguous = parsed.ambiguous_images > 0;
     // A rewritten piece loses its comments, so keep where they began and ended: a comment that
     // ran on into the next piece still hides that piece's first line.
     let comment_edges = joined.comment_edges(&parsed);
@@ -863,6 +935,11 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
                                 m
                             }
                         };
+                    }
+                }
+                b"gs" => {
+                    if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &ext_gstates, n, &fallback)) {
+                        (gs.font, gs.vertical, gs.size) = (font, vertical, size);
                     }
                 }
                 b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
@@ -1201,8 +1278,26 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            let data = match s.decoded() {
+            // Strict, like page content: a Form read only in part counts as undecodable.
+            let data = if scope.budget.enter_form() {
+                scope.budget.decode_strict(s)
+            } else {
+                Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
+            };
+            let data = match data {
                 Ok(d) => d,
+                // Past the page's budget nothing more is read: apply refuses the page, and
+                // verification counts the form as content that may remain.
+                Err(e) if scope.budget.exhausted() => {
+                    if scope.mode == Mode::Apply {
+                        out.error = Some(e);
+                    } else if scope.everywhere() {
+                        scope.layer_blocks += 1;
+                    } else {
+                        out.residue += 1;
+                    }
+                    return None;
+                }
                 Err(_) if scope.mode == Mode::Apply => {
                     scope.report.forms_removed += 1;
                     out.replaced.push(name);
@@ -1222,11 +1317,12 @@ fn xobject(
             let res = own.clone().unwrap_or_else(|| resources.clone());
             let saved_fonts = std::mem::take(&mut scope.fonts);
             scope.depth += 1;
-            let inner = process(doc, scope, std::slice::from_ref(&data), &res, fctm);
+            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
             scope.depth -= 1;
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
+            out.ambiguous |= inner.ambiguous;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
             out.tag_changes.extend(inner.tag_changes);

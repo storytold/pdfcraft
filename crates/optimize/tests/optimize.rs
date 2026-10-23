@@ -1023,6 +1023,19 @@ fn images_are_not_resampled_when_some_uses_could_not_be_measured() {
     assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
 }
 
+/// Each form entry counts against the page's form allowance, even for a form that decodes to
+/// nothing and so costs no decoded bytes.
+#[test]
+fn images_are_not_resampled_when_a_page_enters_more_forms_than_allowed() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let empty = form(&mut doc, None, "");
+    let draws = "/E Do ".repeat(pdfcraft_cos::MAX_PAGE_FORMS + 1);
+    page(&mut doc, &[("E", empty), ("Im", img)], &format!("q 72 0 0 72 36 36 cm /Im Do Q {draws}"));
+    let refs = pdfcraft_annot::page_refs(&doc).unwrap();
+    assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
+}
+
 #[test]
 fn image_resolution_keeps_comments_across_content_pieces() {
     for ending in ["", "\n", "\r", "\r\n"] {

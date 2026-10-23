@@ -1684,6 +1684,7 @@
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo din semnătura RSA nu are parametrul NULL (semnatarii mai vechi îl scriu așa); a fost citită oricum.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Certificatul lui {} nu permite atâtea certificate CA sub el (lungimea căii), așa că nu este folosit pentru a garanta pentru {}.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Certificatul lui {} nu este un certificat CA care poate emite certificate, așa că nu este folosit pentru a garanta pentru {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certificatul lui {} nu era valabil în momentul semnării, așa că nu este folosit pentru a garanta pentru {}.
 	The checker found problems which may prevent the document from being fully accessible.	Verificatorul a găsit probleme care pot împiedica accesibilitatea completă a documentului.
 	The document has been altered or corrupted since the signature was applied.	Documentul a fost modificat sau deteriorat după aplicarea semnăturii.
@@ -1729,6 +1730,7 @@
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identitatea semnatarului este necunoscută, deoarece nu a fost inclusă în lista certificatelor de încredere și niciunul dintre certificatele părinte nu este de încredere.
 	The signer's identity is valid.	Identitatea semnatarului este validă.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Certificatul autorității de marcare temporală nu era valabil în momentul marcării.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
 	The timestamp contents are not hexadecimal.	Conținutul marcajului temporal nu este hexazecimal.
 	The timestamp has no valid byte range.	Marcajul temporal nu are un interval de octeți valid.
 	The timestamp token could not be read ({}).	Tokenul de marcaj temporal nu a putut fi citit ({}).

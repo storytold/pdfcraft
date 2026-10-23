@@ -64,6 +64,10 @@ pub enum RedactError {
         "the document's tags can't be cleaned completely (an element written in place, or a structure tree too large or too deep to follow); the operation was refused"
     )]
     Tags,
+    /// Objects written in place nest deeper than hidden information is followed, so its removal
+    /// could not be shown complete.
+    #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
+    TooDeep,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -139,6 +143,10 @@ pub struct Report {
     /// The form was an AcroForm+XFA form and its `/XFA` packets (which still held redacted field
     /// values, and from which a relayout could rebuild them) were removed.
     pub xfa_removed: bool,
+    /// The content streams this apply added to draw the marks' boxes and labels. They are the
+    /// only streams a check for text left under the marks may skip: an input stream labelled
+    /// like an overlay (`/PCMark /Redaction`) is checked like any other.
+    pub overlays: Vec<ObjRef>,
 }
 
 fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
@@ -219,8 +227,20 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
     (out, unreadable)
 }
 
-/// A page's content streams: (the references or inline objects as listed, their decoded data).
+/// A page's content streams: (the references or inline objects as listed, their decoded data),
+/// decoded within one page's [`pdfcraft_cos::DecodeBudget`].
 pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<(Vec<Object>, Vec<Vec<u8>>), RedactError> {
+    page_streams_within(doc, page, index, &mut pdfcraft_cos::DecodeBudget::page())
+}
+
+/// [`page_streams`], decoded against `budget`, which the walk of the page's forms then goes on
+/// spending.
+pub(crate) fn page_streams_within(
+    doc: &Document,
+    page: &Dict,
+    index: usize,
+    budget: &mut pdfcraft_cos::DecodeBudget,
+) -> Result<(Vec<Object>, Vec<Vec<u8>>), RedactError> {
     let list: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -231,7 +251,9 @@ pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<
     let mut data = Vec::new();
     for o in &list {
         match &*doc.resolve(o) {
-            Object::Stream(s) => data.push(s.decoded().map_err(|_| RedactError::Unreadable(index + 1))?),
+            // Strict: a tolerant decode keeps what precedes corruption and drops the rest, which
+            // still draws in viewers that read further; anything not read can't be cleaned.
+            Object::Stream(s) => data.push(budget.decode_strict(s).map_err(|_| RedactError::Unreadable(index + 1))?),
             Object::Null => data.push(Vec::new()),
             _ => return Err(RedactError::Unreadable(index + 1)),
         }
@@ -335,10 +357,17 @@ fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfc
 ///
 /// # Errors
 ///
-/// This operation is not transactional: an error may leave `doc` partially modified, with
-/// sensitive content still present. Call this on a working clone and replace the original only
-/// on success. On any error, discard the working clone; do not save or reuse it.
+/// On any error `doc` is left as it was: the redaction runs on a copy (cheap: unchanged objects
+/// are shared) that replaces `doc` only on success.
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
+    let mut work = doc.clone();
+    let report = apply_to(&mut work, pages)?;
+    *doc = work;
+    Ok(report)
+}
+
+/// [`apply`] without the copy: an error can leave `doc` part redacted.
+fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
     let (all_marks, unreadable) = marks_checked(doc);
     // A mark with no readable area is not applied, and applying the others would look complete:
     // refuse before anything changes. Only the pages being applied count.
@@ -384,10 +413,11 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
 
         // 1. Content.
-        let (list, data) = page_streams(doc, &page.dict, pi)?;
+        let mut budget = pdfcraft_cos::DecodeBudget::page();
+        let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let out = {
-            let mut scope = Scope::new(&rects, Mode::Apply, &mut report);
+            let mut scope = Scope::new(&rects, Mode::Apply, &mut report, budget);
             process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
         };
         // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
@@ -400,6 +430,12 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         }
         if out.vertical {
             return Err(RedactError::VerticalText(pi + 1));
+        }
+        // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
+        // can't read): where the page's operators resume after it is a guess, so neither removal
+        // nor the verify pass can be trusted on this page.
+        if out.ambiguous {
+            return Err(RedactError::Unreadable(pi + 1));
         }
         doomed_xobjects.extend_from_slice(&out.doomed);
         retired_properties.extend(out.retired_properties);
@@ -570,7 +606,7 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
     // 4. The boxes.
     for (pi, content) in overlays {
         if !content.is_empty() {
-            pdfcraft_edit::stamp(doc, pi, "Redaction", content)?;
+            report.overlays.push(pdfcraft_edit::stamp(doc, pi, "Redaction", content)?);
         }
     }
 
@@ -583,17 +619,14 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
-        let (list, data) = page_streams(doc, &page.dict, pi)?;
-        // The overlay stream (last) draws text of its own: the overlay label is allowed.
-        let original: Vec<Vec<u8>> = list
-            .iter()
-            .zip(data)
-            .filter(|(o, _)| doc.resolve(o).as_dict().and_then(|d| d.name(b"PCMark")) != Some(b"Redaction"))
-            .map(|(_, d)| d)
-            .collect();
+        let mut budget = pdfcraft_cos::DecodeBudget::page();
+        let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
+        // The overlay stream draws text of its own: the overlay label is allowed.
+        let original: Vec<Vec<u8>> =
+            list.iter().zip(data).filter(|(o, _)| !o.as_ref().is_some_and(|r| report.overlays.contains(&r))).map(|(_, d)| d).collect();
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut scratch = Report::default();
-        let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch);
+        let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch, budget);
         residue += process(doc, &mut scope, &original, &resources, pdfcraft_content::Matrix::IDENTITY).residue;
     }
     if residue > 0 {
