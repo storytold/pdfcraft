@@ -1942,6 +1942,9 @@
 	Draw your {what} below.	下に{what}を描いてください。
 	Your name	お名前
 	Images and text (converted to PDF)	画像とテキスト（PDF に変換）
+	Word, PowerPoint and Excel (converted to PDF)	Word、PowerPoint、Excel（PDF に変換）
+	PDF, images, text and Office documents	PDF、画像、テキスト、Office 文書
+	Converted {name}. Approximated: {notes}	{name} を変換しました。近似した内容: {notes}
 	Images and text	画像とテキスト
 	Check Box Style:	チェックボックスの形状:
 	Button Style:	ボタンの形状:

@@ -275,6 +275,108 @@ fn images_are_removed_or_have_their_pixels_cleared() {
     assert_eq!(orig.decoded().unwrap(), [255; 4], "the shared original is untouched");
 }
 
+/// Generated pixels only: no external fixture, font or JPEG metadata is required.
+fn jpeg_fixture(gray: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let channels = if gray { 1 } else { 3 };
+    let pixels: Vec<u8> = (0..8 * 4 * channels).map(|i| (80 + i % 150) as u8).collect();
+    let color = if gray { ::image::ExtendedColorType::L8 } else { ::image::ExtendedColorType::Rgb8 };
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95).encode(&pixels, 8, 4, color).unwrap();
+    // An APP1 payload stands in for a thumbnail or private camera metadata. It must not survive.
+    let marker = b"PRIVATE-JPEG-METADATA";
+    let mut app = vec![0xff, 0xe1];
+    app.extend_from_slice(&((marker.len() + 2) as u16).to_be_bytes());
+    app.extend_from_slice(marker);
+    bytes.splice(2..2, app);
+    bytes
+}
+
+#[test]
+fn jpeg_redaction_preserves_uncovered_samples_and_retires_original_after_save() {
+    for gray in [false, true] {
+        let jpeg = jpeg_fixture(gray);
+        let decoded = ::image::load_from_memory_with_format(&jpeg, ::image::ImageFormat::Jpeg).unwrap().into_bytes();
+        let cs = if gray { "DeviceGray" } else { "DeviceRGB" };
+        let filter = if gray { "[/DCTDecode]" } else { "/DCTDecode" };
+        let img = stream(&format!("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /{cs} /BitsPerComponent 8 /Filter {filter}"), &jpeg);
+        let mut doc = one_page(b"q 80 0 0 40 100 100 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+        mark(&mut doc, 0, &[[100.0, 100.0, 140.0, 140.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (0, 1));
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(!bytes.windows(jpeg.len()).any(|w| w == jpeg));
+        assert!(!bytes.windows(21).any(|w| w == b"PRIVATE-JPEG-METADATA"));
+        let saved = Document::open(Arc::new(bytes)).unwrap();
+        let page = pdfcraft_model::pages(&saved).remove(0);
+        let resources = saved.resolve(page.dict.get(b"Resources").unwrap());
+        let xobjects = saved.resolve(resources.as_dict().unwrap().get(b"XObject").unwrap());
+        let xo = xobjects.as_dict().unwrap();
+        assert!(!xo.contains(b"Im1"));
+        let (_, reference) = xo.iter().find(|(name, _)| name.starts_with(b"PCRedacted")).unwrap();
+        let object = saved.resolve(reference);
+        let Object::Stream(copy) = &*object else { panic!("expected image") };
+        assert_eq!(copy.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
+        let actual = copy.decoded().unwrap();
+        let channels = if gray { 1 } else { 3 };
+        let mut expected = decoded;
+        for y in 0..4 {
+            expected[y * 8 * channels..(y * 8 + 4) * channels].fill(0);
+        }
+        assert_eq!(actual, expected, "uncovered decoded samples must remain exact");
+    }
+}
+
+/// A cleared copy is a new picture: the original's XMP metadata (which can hold a thumbnail) and
+/// its OPI link to the high-resolution original must not follow it into the saved file.
+#[test]
+fn cleared_images_drop_metadata_and_links_that_show_the_original() {
+    let raw = vec![200u8; 8 * 4 * 3];
+    for (filter, samples) in [("/DCTDecode", jpeg_fixture(false)), ("", raw)] {
+        let img = stream(
+            &format!(
+                "/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter {filter} /Metadata 8 0 R /OPI << /2.0 << /Type /OPI /Version 2.0 /F (SECRET-OPI-ORIGINAL.tif) >> >> /ID (SECRET-ID)"
+            )
+            .replace("/Filter  ", ""),
+            &samples,
+        );
+        let xmp = stream("/Type /Metadata /Subtype /XML", b"<x:xmpmeta>SECRET-XMP-THUMBNAIL</x:xmpmeta>");
+        let mut doc = one_page(b"q 80 0 0 40 100 100 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img, xmp]);
+        mark(&mut doc, 0, &[[100.0, 100.0, 140.0, 140.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (0, 1), "{filter}");
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        for secret in [&b"SECRET-XMP-THUMBNAIL"[..], b"SECRET-OPI-ORIGINAL", b"SECRET-ID"] {
+            assert!(!bytes.windows(secret.len()).any(|w| w == secret), "{} survived ({filter})", String::from_utf8_lossy(secret));
+        }
+    }
+}
+
+#[test]
+fn jpeg_redaction_rejects_inconsistent_dimensions_and_color_spaces() {
+    let jpeg = jpeg_fixture(false);
+    for (width, height, cs, bpc, extra) in [
+        (9i64, 4, "DeviceRGB", 8, ""),
+        (8, 4, "DeviceGray", 8, ""),
+        (8, 4, "DeviceCMYK", 8, ""),
+        (8, 4, "DeviceRGB", 16, ""),
+        (i64::MAX, i64::MAX, "DeviceRGB", 8, ""),
+        (8, 4, "DeviceRGB", 8, "/DecodeParms << /ColorTransform 0 >>"),
+    ] {
+        let img = stream(
+            &format!(
+                "/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{cs} /BitsPerComponent {bpc} /Filter /DCTDecode {extra}"
+            ),
+            &jpeg,
+        );
+        let mut doc = one_page(b"q 80 0 0 40 100 100 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+        mark(&mut doc, 0, &[[100.0, 100.0, 140.0, 140.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0));
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(!bytes.windows(jpeg.len()).any(|w| w == jpeg));
+    }
+}
+
 #[test]
 fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let src = b"0 g 10 10 20 20 re f 0 0 300 300 re f q 10 0 0 10 50 50 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q 1 0 0 RG 150 150 m 160 160 l S";

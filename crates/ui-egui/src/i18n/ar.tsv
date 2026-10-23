@@ -1929,6 +1929,9 @@
 	Draw your {what} below.	ارسم {what} أدناه.
 	Your name	اسمك
 	Images and text (converted to PDF)	صور ونص (تُحوَّل إلى PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word وPowerPoint وExcel (تُحوَّل إلى PDF)
+	PDF, images, text and Office documents	PDF وصور ونص ومستندات Office
+	Converted {name}. Approximated: {notes}	تم تحويل {name}. عناصر تقريبية: {notes}
 	Images and text	صور ونص
 	Check Box Style:	نمط خانة الاختيار:
 	Button Style:	نمط الزر:

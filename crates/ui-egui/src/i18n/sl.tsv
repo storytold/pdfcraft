@@ -934,6 +934,9 @@
 	Images	Slike
 	Images and text	Slike in besedilo
 	Images and text (converted to PDF)	Slike in besedilo (pretvorjeno v PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint in Excel (pretvorjeno v PDF)
+	PDF, images, text and Office documents	PDF, slike, besedilo in dokumenti Office
+	Converted {name}. Approximated: {notes}	{name} je pretvorjen. Približno: {notes}
 	Import comments…	Uvozi komentarje…
 	Import data	Uvozi podatke
 	Import form data…	Uvozi podatke obrazca…

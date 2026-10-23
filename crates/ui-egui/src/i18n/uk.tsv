@@ -1927,6 +1927,9 @@
 	Draw your {what} below.	Намалюйте {what} нижче.
 	Your name	Ваше ім’я
 	Images and text (converted to PDF)	Зображення й текст (перетворені на PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint і Excel (перетворені на PDF)
+	PDF, images, text and Office documents	PDF, зображення, текст і документи Office
+	Converted {name}. Approximated: {notes}	{name} перетворено. Приблизно: {notes}
 	Images and text	Зображення й текст
 	Check Box Style:	Стиль прапорця:
 	Button Style:	Стиль кнопки:

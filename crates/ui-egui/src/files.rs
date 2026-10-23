@@ -70,7 +70,7 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
         return dialog.add_filter("PDF", &["pdf"]);
     }
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
-    dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
+    dialog.add_filter(tl!("PDF, images, text and Office documents"), &all).add_filter("PDF", &["pdf"])
 }
 
 /// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
@@ -555,7 +555,7 @@ impl PdfCraftApp {
         self.insert_files(vec![(name.to_string(), bytes)]);
     }
 
-    /// Insert the pages of `files` (PDFs, images, text), in order, at the gap a "+" in the page
+    /// Insert the pages of `files` (PDFs, images, text, Office documents), in order, at the gap a "+" in the page
     /// grid chose, or else after the selection (or the current page); then select them.
     pub fn insert_files(&mut self, files: Vec<(String, Vec<u8>)>) {
         self.insert_each(files.into_iter().map(Ok));
@@ -581,10 +581,17 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let converted =
-                self.session.convert_to_pdf(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
+            let converted = (|| {
+                let (pdf, notice) = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+                    let (pdf, report) = self.session.create_from_office(&name, &bytes)?;
+                    (pdf, crate::office_note(&name, &report))
+                } else {
+                    (self.session.convert_to_pdf(&name, &Arc::new(bytes))?.1, None)
+                };
+                Ok::<_, pdfcraft_engine::EditError>((self.session.page_count_of(&name, &pdf)?, pdf, notice))
+            })();
             match converted {
-                Ok((pages, bytes)) => {
+                Ok((pages, bytes, notice)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {
                         name,
                         bytes,
@@ -593,6 +600,9 @@ impl PdfCraftApp {
                         field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
                     }) {
                         at = at.saturating_add(pages);
+                        if let Some(notice) = notice {
+                            self.notify(notice);
+                        }
                     }
                 }
                 Err(e) => self.notify_error(e),

@@ -1930,6 +1930,9 @@
 	Draw your {what} below.	Нарисуйте: {what} ниже.
 	Your name	Ваше имя
 	Images and text (converted to PDF)	Изображения и текст (конвертированные в PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint и Excel (конвертированные в PDF)
+	PDF, images, text and Office documents	PDF, изображения, текст и документы Office
+	Converted {name}. Approximated: {notes}	{name} преобразован. Приблизительно: {notes}
 	Images and text	Изображения и текст
 	Check Box Style:	Стиль флажка:
 	Button Style:	Стиль кнопки:

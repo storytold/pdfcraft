@@ -2729,7 +2729,7 @@ status = "shipped"
 commands = ["page.insert"]
 tools = ["page_insert_file"]
 evidence = ["crates/organize/src/tests.rs::inserting_pages_from_another_file_is_an_incremental_edit", "crates/organize/src/tests.rs::inserting_a_file_brings_its_bookmarks_under_one_named_after_it", "crates/automation/tests/it/automation.rs::inserting_a_file_brings_its_bookmarks", "crates/ui-egui/tests/it/editing.rs::inserting_a_file_goes_after_the_selection_and_undoes", "crates/ui-egui/tests/it/editing.rs::plus_between_pages_inserts_picked_files_there_in_order"]
-notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images and .txt files are converted first; the inserted pages end up selected. The file's bookmarks come along, collapsed under one named after the file, placed among the document's bookmarks where the pages went (as Combine does per file). The page_insert_file tool takes PDFs only. Missing: choosing which pages of the file to insert in the app; the file's tags (structure tree) are not merged."
+notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images, .txt and Office documents are converted first (Office conversion is reported); the inserted pages end up selected. The file's bookmarks come along, collapsed under one named after the file, placed among the document's bookmarks where the pages went (as Combine does per file). The page_insert_file tool accepts the same inputs, returning Office conversion notes (#2871). Missing: choosing which pages of the file to insert in the app; the file's tags (structure tree) are not merged."
 
 [[feature]]
 id = "organize.insert-from-clipboard"
@@ -5590,7 +5590,7 @@ status = "shipped"
 commands = ["redact.mark"]
 tools = ["redact_mark"]
 evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared"]
-notes = "drag a box anywhere else"
+notes = "drag a box anywhere else; plain 8-bit gray/RGB JPEGs preserve uncovered decoded samples with Flate output; CMYK/complex spaces and unsupported masks/codecs still fail closed"
 
 [[feature]]
 id = "protect.redact-pages"
@@ -5733,8 +5733,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
-evidence = ["crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared", "crates/redact/src/tests.rs::redaction_clears_pixels_intersected_without_covering_their_centres"]
-notes = "intersected pixel footprints are cleared conservatively in a copy; DCT/JPX/JBIG2/CCITT images removed whole"
+evidence = ["crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared", "crates/redact/src/tests.rs::redaction_clears_pixels_intersected_without_covering_their_centres", "crates/redact/src/tests.rs::jpeg_redaction_preserves_uncovered_samples_and_retires_original_after_save"]
+notes = "intersected pixel footprints are cleared conservatively in a copy; 8-bit gray/RGB DCT is decoded and the copy written as Flate; CMYK and other DCT, JPX, JBIG2 and CCITT images removed whole"
 
 [[feature]]
 id = "protect.redact-vectors"
@@ -6926,15 +6926,15 @@ notes = ""
 
 [[feature]]
 id = "create.from-office"
-title = "Create PDF from Office documents (LibreOffice sidecar)"
+title = "Create PDF from Office documents"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["create.file", "file.open"]
+tools = ["doc_create", "doc_open", "page_insert_file", "doc_combine"]
+evidence = ["crates/automation/tests/it/automation.rs::docx_open_insert_combine_and_root_confinement", "crates/create/src/office/tests.rs::turkish_and_central_european_letters_are_drawn_not_escaped", "crates/ui-egui/tests/it/create.rs::docx_opens_inserts_and_combines_as_pdf_pages", "crates/engine/src/tests.rs::docx_converts_combines_and_inserts_without_changing_the_source", "crates/create/src/office/tests.rs::word_paragraphs_styles_lists_tables_images_and_page_numbers", "crates/create/src/office/tests.rs::powerpoint_slides_with_inherited_placeholders_bullets_shapes_and_pictures", "crates/create/src/office/tests.rs::excel_sheets_with_formats_fills_borders_and_merges", "crates/automation/tests/it/automation.rs::creating_pdfs_from_word_and_powerpoint_natively"]
+notes = "#2871 follow-up: direct automation Open and selected-page insertion also convert Office inputs; Open/Insert and Combine rows retain font/layout caveats and notes. Native Office Open XML import (docx/pptx/xlsx and their macro/template variants), no sidecar: Word styles, lists, tables, images, sections, headers/footers with page fields, footnotes; PowerPoint slides with master/layout inheritance, theme colours, shapes, pictures, groups, tables; Excel sheets with number formats, fills, borders, merges. Turkish, Central European, Baltic and Romanian letters are drawn from the standard-14 faces through a second encoding. Missing: embedded fonts (text uses the standard-14 faces, so Greek, Cyrillic, CJK and other scripts, and ď ľ ť ģ Đ đ, become [U+XXXX], and line breaks can differ), charts and SmartArt (outlined boxes), EMF/WMF/SVG images, multi-column sections, Excel print areas and sheet pictures, legacy .doc/.ppt/.xls, OpenDocument, password-protected files."
 
 [[feature]]
 id = "create.create-multiple"

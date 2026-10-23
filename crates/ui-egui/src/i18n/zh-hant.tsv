@@ -1929,6 +1929,9 @@
 	Draw your {what} below.	在下方繪製您的{what}。
 	Your name	您的姓名
 	Images and text (converted to PDF)	圖片與文字（轉換為 PDF）
+	Word, PowerPoint and Excel (converted to PDF)	Word、PowerPoint 與 Excel（轉換為 PDF）
+	PDF, images, text and Office documents	PDF、圖片、文字和 Office 文件
+	Converted {name}. Approximated: {notes}	已轉換{name}。近似處理：{notes}
 	Images and text	圖片與文字
 	Check Box Style:	核取方塊樣式：
 	Button Style:	按鈕樣式：

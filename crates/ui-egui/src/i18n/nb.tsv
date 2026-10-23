@@ -2694,3 +2694,6 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint og Excel (konvertert til PDF)
+	PDF, images, text and Office documents	PDF, bilder, tekst og Office-dokumenter
+	Converted {name}. Approximated: {notes}	Konverterte {name}. Tilnærmet: {notes}

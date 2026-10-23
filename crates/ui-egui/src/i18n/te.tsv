@@ -1849,6 +1849,9 @@ action wizard	Start	ప్రారంభించు
 	Draw your {what} below.	కింద మీ {what} గీయండి.
 	Your name	మీ పేరు
 	Images and text (converted to PDF)	చిత్రాలు, టెక్స్ట్ (PDFగా మార్చబడతాయి)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint, Excel (PDFగా మార్చబడతాయి)
+	PDF, images, text and Office documents	PDF, చిత్రాలు, టెక్స్ట్, Office పత్రాలు
+	Converted {name}. Approximated: {notes}	{name} మార్చబడింది. సుమారుగా: {notes}
 	Images and text	చిత్రాలు, టెక్స్ట్
 	Check Box Style:	చెక్ బాక్స్ శైలి:
 	Button Style:	బటన్ శైలి:

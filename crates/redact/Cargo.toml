@@ -18,6 +18,7 @@ pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 thiserror = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }

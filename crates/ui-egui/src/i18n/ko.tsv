@@ -2750,3 +2750,6 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint 및 Excel(PDF로 변환)
+	PDF, images, text and Office documents	PDF, 이미지, 텍스트 및 Office 문서
+	Converted {name}. Approximated: {notes}	{name}을(를) 변환했습니다. 근사 처리됨: {notes}

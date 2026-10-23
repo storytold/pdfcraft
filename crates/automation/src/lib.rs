@@ -1039,6 +1039,14 @@ impl Automation {
         let path = self.resolve(a.str("path")?, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+            let (pdf, report) = self.session.create_from_office(&name, &bytes).map_err(failed)?;
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let id = self.session.open_new(format!("{stem}.pdf"), pdf).map_err(failed)?;
+            let mut result = summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?);
+            result["office"] = office_report(&report);
+            return Ok(result);
+        }
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
         Ok(summary(doc))
@@ -1470,6 +1478,8 @@ impl Automation {
     }
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {
+        // What an Office conversion approximated, returned with the new document.
+        let mut office = None;
         let (name, bytes) = match a.str("from")? {
             "blank" => {
                 let n = a.opt_int("pages")?.unwrap_or(1).clamp(1, 10_000) as usize;
@@ -1509,11 +1519,30 @@ impl Automation {
                 })?;
                 (format!("{title}.pdf"), bytes)
             }
+            "office" => {
+                let path = self.resolve(a.str("path")?, false)?;
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if !file.rsplit_once('.').is_some_and(|(_, ext)| pdfcraft_engine::OFFICE_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext))) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "{file}: office needs a Word, PowerPoint or Excel file ({})",
+                        pdfcraft_engine::OFFICE_EXTENSIONS.join(", ")
+                    )));
+                }
+                let data = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                let (bytes, report) = self.session.create_from_office(&file, &data).map_err(failed)?;
+                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                office = Some(office_report(&report));
+                (format!("{stem}.pdf"), bytes)
+            }
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
         };
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or(name);
         let id = self.session.open_new(name, bytes).map_err(failed)?;
-        Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
+        let mut out = summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?);
+        if let (Some(report), Some(map)) = (office, out.as_object_mut()) {
+            map.insert("office".into(), report);
+        }
+        Ok(out)
     }
 
     fn page_transition_set(&mut self, a: &Args) -> Result<Value> {
@@ -1674,7 +1703,18 @@ impl Automation {
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let pages = a.opt_ints("pages")?.map(|p| one_based(&p)).transpose()?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.apply(a, Edit::InsertPagesFrom { name, bytes: Arc::new(bytes), pages, at, field_conflicts: pdfcraft_organize::FieldConflicts::Rename })
+        let (bytes, report) = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+            let (pdf, report) = self.session.create_from_office(&name, &bytes).map_err(failed)?;
+            (pdf, Some(report))
+        } else {
+            (self.session.as_pdf(&name, &Arc::new(bytes)).map_err(failed)?, None)
+        };
+        let mut result =
+            self.apply(a, Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts: pdfcraft_organize::FieldConflicts::Rename })?;
+        if let Some(report) = report {
+            result["office"] = office_report(&report);
+        }
+        Ok(result)
     }
 
     /// Write freshly created bytes to `out` and/or open them as a new document.
@@ -1712,16 +1752,26 @@ impl Automation {
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
         // Each file is read, converted and copied in turn, so a long list holds one file at a time.
+        let mut conversions = Vec::new();
         let sources = paths.into_iter().zip(ranges).map(|(p, range)| -> std::result::Result<pdfcraft_engine::CombineSource, ToolError> {
             let path = self.resolve(p, false)?;
             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            let (_, pdf, report) = self.session.convert_to_pdf_reported(&name, &Arc::new(bytes)).map_err(failed)?;
+            if let Some(report) = report {
+                let mut conversion = office_report(&report);
+                conversion["path"] = json!(p);
+                conversions.push(conversion);
+            }
             let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Ok((title, pdf, range))
         });
         let bytes = self.session.combine_each(sources)?.ok_or_else(|| ToolError::InvalidArgs("paths must list at least one file".into()))?;
-        self.deliver(a, "Combined", bytes)
+        let mut result = self.deliver(a, "Combined", bytes)?;
+        if !conversions.is_empty() {
+            result["conversions"] = json!(conversions);
+        }
+        Ok(result)
     }
 
     /// One PDF per file, written into `out_dir`; a file that fails doesn't stop the others.
@@ -1734,15 +1784,19 @@ impl Automation {
                 let bytes = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
                 let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let stem = src.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                let (kind, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(|e| e.to_string())?;
-                Ok((kind, stem, pdf))
+                let (kind, pdf, report) = self.session.convert_to_pdf_reported(&name, &Arc::new(bytes)).map_err(|e| e.to_string())?;
+                Ok((kind, stem, pdf, report))
             });
             out.push(match converted {
                 Ok((pdfcraft_engine::SourceKind::Pdf, ..)) => json!({ "path": p, "skipped": "already a PDF" }),
-                Ok((_, stem, pdf)) => {
+                Ok((_, stem, pdf, report)) => {
                     let target = unused(&dir, &stem);
                     write_atomic(&target, &pdf)?;
-                    json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
+                    let mut file = json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() });
+                    if let Some(report) = report {
+                        file["conversion"] = office_report(&report);
+                    }
+                    file
                 }
                 Err(e) => json!({ "path": p, "error": e }),
             });
@@ -1820,6 +1874,7 @@ impl Automation {
         };
         let mut sources: Vec<CombineSource> = Vec::new();
         let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
+        let mut conversions = Vec::new();
         for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
             let group = groups.as_ref().and_then(|g| g.get(i).copied().flatten());
@@ -1838,7 +1893,15 @@ impl Automation {
                     let bytes = Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?);
                     // Images and text files are made into PDFs first (#569), as in the Combine files tab.
                     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.session.as_pdf(&file_name, &bytes).map_err(failed)?
+                    if pdfcraft_engine::source_kind(&file_name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+                        let (pdf, report) = self.session.create_from_office(&file_name, &bytes).map_err(failed)?;
+                        let mut conversion = office_report(&report);
+                        conversion["path"] = json!(p);
+                        conversions.push(conversion);
+                        pdf
+                    } else {
+                        self.session.as_pdf(&file_name, &bytes).map_err(failed)?
+                    }
                 }
             };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1866,6 +1929,9 @@ impl Automation {
         }
         .map_err(failed)?;
         let mut result = self.deliver(a, "Combined", combined.bytes)?;
+        if !conversions.is_empty() {
+            result["conversions"] = json!(conversions);
+        }
         if !combined.renamed_fields.is_empty() {
             result["renamed_fields"] = json!(combined.renamed_fields.iter().map(|(old, new)| json!([old, new])).collect::<Vec<_>>());
         }
@@ -2780,6 +2846,10 @@ fn write_atomic_synced(
     // any step removes it and leaves the destination as it was.
     pdfcraft_platform::staging::write_atomically_with(path, bytes, StagingName::SuffixThenTag, suffixes, sync)
         .map_err(|e| failed(format!("{}: {e}", path.display())))
+}
+
+fn office_report(report: &pdfcraft_engine::OfficeReport) -> Value {
+    json!({ "kind": report.kind.label(), "pages": report.pages, "escaped": report.escaped, "notes": report.notes, "notice": report.notice() })
 }
 
 #[cfg(test)]

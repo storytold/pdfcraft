@@ -21,8 +21,21 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 - `from_text_escaped(text, …)`: the same for reports PdfCraft generates from documents
   (comment summaries, compare reports): such characters are written as `[U+XXXX]` and the first
   line says so (`ESCAPED_NOTE`).
+- `from_office(name, bytes)`: a Word (`.docx`), PowerPoint (`.pptx`) or Excel (`.xlsx`) file, read
+  natively from its Office Open XML package (`office/`): Word flows onto its sections' pages with
+  styles, lists, tables, images, headers and footers; PowerPoint gives one page per visible slide
+  with master and layout inheritance; Excel prints each visible sheet's used range with its number
+  formats. Text is set in the standard-14 faces chosen from each run's font family, with Turkish,
+  Central European, Baltic and Romanian letters drawn through a second encoding of the same face
+  (`office/latin.rs`); characters they can't draw are written as `[U+XXXX]`. Returns the document and an `OfficeReport` counting
+  what was approximated (charts and vector images become outlined boxes). See
+  [Word, PowerPoint and Excel to PDF](../../docs/office-import.md).
 
-Every function returns a `pdfcraft_cos::Document`; the caller writes it.
+`source_kind` recognises Office packages (and encrypted ones, which `from_office` refuses with a
+reason) by name and signature as `SourceKind::Office`.
+
+Every function returns a `pdfcraft_cos::Document`; the caller writes it. `from_office` also returns its
+`OfficeReport`, which the caller shows: it is the only record of what the conversion approximated.
 
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.

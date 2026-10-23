@@ -1976,6 +1976,9 @@ key	Space	Mezerník
 	Draw your {what} below.	Níže nakreslete {what}.
 	Your name	Vaše jméno
 	Images and text (converted to PDF)	Obrázky a text (převedené do PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint a Excel (převedené do PDF)
+	PDF, images, text and Office documents	PDF, obrázky, text a dokumenty Office
+	Converted {name}. Approximated: {notes}	{name} převeden. Přibližně: {notes}
 	Images and text	Obrázky a text
 	Check Box Style:	Styl zaškrtávacího políčka:
 	Button Style:	Styl přepínače:

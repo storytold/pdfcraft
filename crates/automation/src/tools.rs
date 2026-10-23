@@ -129,7 +129,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
-        t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
+        t("doc_open", "Open a PDF", "Open a PDF or convert an Office document to a new unsaved PDF with an office report, and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
@@ -233,7 +233,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "at": { "type": "integer", "minimum": 1 }, "width": { "type": "number", "description": "Points." }, "height": { "type": "number", "description": "Points." } }),
                 &["doc", "at"],
             )),
-        t("page_insert_file", "Insert pages from a file", "Insert pages of another PDF so the first becomes page `at`. Its bookmarks come along, collapsed under one bookmark named after the file, placed among the document's bookmarks where the pages went. Undoable.")
+        t("page_insert_file", "Insert pages from a file", "Insert pages of another PDF, or converted image/text/Office document, so the first becomes page `at`. Its bookmarks come along, collapsed under one bookmark named after the file, placed among the document's bookmarks where the pages went. Undoable.")
             .cmd("page.insert")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "at": { "type": "integer", "minimum": 1 }, "pages": pages("of the source file (default: all)") }), &["doc", "path", "at"])),
         t("page_extract", "Extract pages", "Copy pages into a new PDF (links, bookmarks, fields and layers that belong to them come along). separate: true writes each page as its own file into out_dir; delete: true removes the pages from this document afterwards (undoable).")
@@ -242,7 +242,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to extract"), "out": save_out.clone(), "open": open.clone(), "separate": { "type": "boolean" }, "out_dir": { "type": "string" }, "delete": { "type": "boolean" } }),
                 &["doc", "pages"],
             )),
-        t("doc_combine", "Combine files", "Combine files, in order, into one PDF (bookmarks are kept under one entry per file). Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) and .txt files are made into PDFs first. pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages. passwords, also in step with paths, opens encrypted files (the open password, or the permissions password where a file's security doesn't allow copying pages; null for none). The result is not encrypted. Passwords are never echoed back. groups, also in step with paths, splits a file around others: entries with the same number (they must name the same path) are one file, copied once, so it keeps one bookmark at its first page, its links and its form fields; null for a file of its own. A group uses its first entry's password. When two files' forms name the same field, field_conflicts says what happens: \"rename\" (the default) keeps the fields separate by renaming the later one (Text1 becomes Text1-1) and the result lists renamed_fields as [[old, new], …] — scripts that refer to the old name are not rewritten; \"merge\" makes them one field, as before.")
+        t("doc_combine", "Combine files", "Combine files, in order, into one PDF (bookmarks are kept under one entry per file). Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000), .txt and Office documents are made into PDFs first. Office conversion returns per-source reports. pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages. passwords, also in step with paths, opens encrypted files (the open password, or the permissions password where a file's security doesn't allow copying pages; null for none). The result is not encrypted. Passwords are never echoed back. groups, also in step with paths, splits a file around others: entries with the same number (they must name the same path) are one file, copied once, so it keeps one bookmark at its first page, its links and its form fields; null for a file of its own. A group uses its first entry's password. When two files' forms name the same field, field_conflicts says what happens: \"rename\" (the default) keeps the fields separate by renaming the later one (Text1 becomes Text1-1) and the result lists renamed_fields as [[old, new], …] — scripts that refer to the old name are not rewritten; \"merge\" makes them one field, as before.")
             .cmd("page.combine")
             .with(schema(
                 json!({
@@ -256,7 +256,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths"],
             )),
-        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
+        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files, Word/PowerPoint/Excel documents) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file, and lists each Office file's report under conversions; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result, with an Office file's report under conversion.")
             .cmd("create.multiple")
             .with(schema(
                 json!({
@@ -1258,11 +1258,11 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused) or `office` (`path` of a Word .docx, PowerPoint .pptx or Excel .xlsx file, converted natively: Word flows onto its section's pages with styles, lists, tables, images, headers and footers; PowerPoint gives one page per visible slide; Excel prints each visible sheet's used range. Text uses the standard PDF fonts, so characters outside Western European are written as [U+XXXX]; charts, SmartArt and vector images become outlined boxes. The result's `office` says what was approximated). Save it with doc_save and a path.",
         )
         .with(schema(
             json!({
-                "from": { "type": "string", "enum": ["blank", "images", "text"] },
+                "from": { "type": "string", "enum": ["blank", "images", "text", "office"] },
                 "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                 "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override the embedded resolution without resampling. 72 gives one point per pixel; omit to use each image's resolution (72 when absent)." },
                 "text": { "type": "string" },

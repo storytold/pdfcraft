@@ -2040,6 +2040,9 @@
 	Go to page {p}	转到第 {p} 页
 	Images and text	图像和文本
 	Images and text (converted to PDF)	图像和文本（转换为 PDF）
+	Word, PowerPoint and Excel (converted to PDF)	Word、PowerPoint 和 Excel（转换为 PDF）
+	PDF, images, text and Office documents	PDF、图像、文本和 Office 文档
+	Converted {name}. Approximated: {notes}	已转换{name}。近似处理：{notes}
 	Import {name}	导入 {name}
 	Insert pages from {name}	从 {name} 插入页面
 	Insert pages from {name} — 1 field renamed	从 {name} 插入页面 — 已重命名 1 个字段

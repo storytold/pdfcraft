@@ -1860,6 +1860,9 @@
 	Draw your {what} below.	Dessinez votre {what} ci-dessous.
 	Your name	Votre nom
 	Images and text (converted to PDF)	Images et texte (convertis en PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint et Excel (convertis en PDF)
+	PDF, images, text and Office documents	PDF, images, texte et documents Office
+	Converted {name}. Approximated: {notes}	{name} converti. Approximations : {notes}
 	Images and text	Images et texte
 	Check Box Style:	Style de case :
 	Button Style:	Style de bouton :

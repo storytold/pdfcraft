@@ -1935,6 +1935,9 @@
 	Draw your {what} below.	Disegna qui sotto: {what}.
 	Your name	Il tuo nome
 	Images and text (converted to PDF)	Immagini e testo (convertiti in PDF)
+	Word, PowerPoint and Excel (converted to PDF)	Word, PowerPoint ed Excel (convertiti in PDF)
+	PDF, images, text and Office documents	PDF, immagini, testo e documenti Office
+	Converted {name}. Approximated: {notes}	{name} convertito. Approssimato: {notes}
 	Images and text	Immagini e testo
 	Check Box Style:	Stile casella di controllo:
 	Button Style:	Stile pulsante:
