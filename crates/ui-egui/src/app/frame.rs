@@ -30,6 +30,13 @@ impl PdfCraftApp {
             self.theme = kind;
             theme::apply(ctx, kind);
         }
+        // System releases the saved Windows frame override back to the OS.
+        #[cfg(target_os = "windows")]
+        ctx.set_theme(match self.theme_preference {
+            ThemePreference::System => egui::ThemePreference::System,
+            ThemePreference::Light => egui::ThemePreference::Light,
+            ThemePreference::Dark => egui::ThemePreference::Dark,
+        });
     }
 }
 
