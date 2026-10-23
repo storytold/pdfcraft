@@ -7477,6 +7477,32 @@ fn mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools() {
 }
 
 #[test]
+fn explicit_text_width_survives_save_reopen_and_later_edits_through_tools() {
+    let dir = workdir("paragraph-frame");
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":"Hi","width":90}));
+    let resized = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0].clone();
+    let frame = resized["editing_rect"].as_array().unwrap();
+    assert!((frame[2].as_f64().unwrap() - frame[0].as_f64().unwrap() - 90.0).abs() < 0.1);
+    assert_ne!(resized["rect"], resized["editing_rect"], "ink and editing geometry are distinct");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/resized.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"out/resized.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0], resized);
+    ok(&mut a, "text_edit", json!({"doc":re,"page":1,"paragraph":1,"text":"One two three four five six seven"}));
+    let long = ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0].clone();
+    assert!(long["rows"].as_array().unwrap().len() > 1);
+    assert_eq!(long["editing_rect"][0], resized["editing_rect"][0]);
+    assert_eq!(long["editing_rect"][2], resized["editing_rect"][2]);
+    a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "edit_undo", json!({"doc":re}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0], resized);
+    ok(&mut a, "edit_redo", json!({"doc":re}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0], long);
+}
+
+#[test]
 fn clipped_image_bounds_and_text_edit_save_reopen_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
     let dir = workdir("clipped-artwork");

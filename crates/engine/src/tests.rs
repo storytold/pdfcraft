@@ -6909,6 +6909,43 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     assert!(((rect[2] - rect[0]) - 20.0).abs() < 0.01 && ((rect[3] - rect[1]) - 30.0).abs() < 0.01, "{rect:?}");
 }
 
+/// #3474: an explicit frame survives every state transition without depending on glyph bounds.
+#[test]
+fn explicit_paragraph_width_survives_reopen_retyping_and_history() {
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).unwrap().text_blocks(0)[0].clone();
+    s.apply(
+        id,
+        Edit::EditTextBlock { page: 0, block: 0, text: "Hi".into(), style: pdfcraft_edit::BlockStyle { width: Some(90.0), ..Default::default() } },
+    )
+    .unwrap();
+    let check = |s: &Session, id| {
+        let b = s.get(id).unwrap().text_blocks(0).remove(0);
+        let r = b.editing_rect();
+        assert!((r[2] - r[0] - 90.0).abs() < 0.5, "{b:?}");
+        b
+    };
+    assert!(check(&s, id).rect[2] - check(&s, id).rect[0] < 90.0);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().text_blocks(0)[0], before);
+    s.redo(id).unwrap();
+    check(&s, id);
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("saved.pdf", None, saved, None).unwrap();
+    check(&reopened, rid);
+    reopened
+        .apply(rid, Edit::EditTextBlock { page: 0, block: 0, text: "One two three four five six seven eight nine".into(), style: Default::default() })
+        .unwrap();
+    let long = check(&reopened, rid);
+    assert!(long.rows.len() > 1, "{long:?}");
+    assert!(long.rect[2] <= long.editing_rect()[2] + 0.5);
+    reopened.undo(rid).unwrap();
+    assert_eq!(check(&reopened, rid).text, "Hi");
+    reopened.redo(rid).unwrap();
+    assert_eq!(check(&reopened, rid).text, long.text);
+}
+
 /// Opening a paragraph and applying its edit read the page's text blocks; after an edit they are
 /// still read once per document state, and undo and redo never get another state's blocks.
 #[test]

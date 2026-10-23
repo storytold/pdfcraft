@@ -3077,6 +3077,114 @@ fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
 }
 
 #[test]
+fn a_resized_paragraph_keeps_its_width_when_edited_after_reopening() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hi) Tj ET");
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after[0].text, before[0].text);
+    assert!(close(after[0].rect, before[0].rect), "resizing must not stretch the glyphs");
+    let frame = text::text_blocks(&doc, 0).unwrap()[0].editing_rect();
+    assert!((frame[2] - frame[0] - 90.0).abs() < 0.01, "{frame:?}");
+    text::replace_block(&mut doc, 0, 0, "One two three four five six seven").unwrap();
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert!(blocks[0].rows.len() > 1, "the chosen width must survive reopening and subsequent editing: {:?}", blocks[0]);
+    assert!(blocks[0].rect[2] <= 72.0 + 90.5, "{:?}", blocks[0]);
+}
+
+#[test]
+fn resized_frames_follow_moves_and_repeated_resizes_without_merging_neighbours() {
+    let mut doc = text_page("q 0.5 0 0 0.5 0 0 cm BT /F1 24 Tf 144 1400 Td (Hi) Tj ET Q BT /F1 12 Tf 180 700 Td (Neighbour) Tj ET");
+    let neighbour = text::text_blocks(&doc, 0).unwrap()[1].clone();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(160.0), ..Default::default() }).unwrap();
+    for width in 100..120 {
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(f64::from(width)), ..Default::default() }).unwrap();
+    }
+    let before = text::text_blocks(&doc, 0).unwrap()[0].editing_rect();
+    objects::move_objects(&mut doc, 0, &[objects::ObjectTarget { kind: objects::ObjectKind::Text, index: 0 }], [-20.0, -25.0]).unwrap();
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert!(close(blocks[0].editing_rect(), [before[0] - 20.0, before[1] - 25.0, before[2] - 20.0, before[3] - 25.0]));
+    assert_eq!(blocks[1].text, neighbour.text);
+    assert!(close(blocks[1].rect, neighbour.rect));
+    let data = streams(&doc, 0).join("\n");
+    assert_eq!(data.matches("/PCTextFrame").count(), 1, "repeated resize replaces its own wrapper");
+}
+
+#[test]
+fn resized_frames_keep_alignment_and_mixed_source_styles() {
+    for mixed in [false, true] {
+        for align in [added::Align::Left, added::Align::Center, added::Align::Right] {
+            let text = if mixed { "(Hi ) Tj 0 0 1 rg (there) Tj" } else { "(Hi there) Tj" };
+            let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td {text} ET"));
+            let colors = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.color).collect::<Vec<_>>();
+            for width in [120.0, 150.0] {
+                text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(width), align: Some(align), ..Default::default() })
+                    .unwrap();
+                let b = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+                let frame = b.editing_rect();
+                assert!((frame[0] - 72.0).abs() < 0.1 && (frame[2] - frame[0] - width).abs() < 0.1, "{b:?}");
+                let anchor = match align {
+                    added::Align::Center => (b.rect[0] + b.rect[2] - frame[0] - frame[2]) / 2.0,
+                    added::Align::Right => b.rect[2] - frame[2],
+                    _ => b.rect[0] - frame[0],
+                };
+                assert!(anchor.abs() < 0.5, "{align:?}: {b:?}");
+            }
+            assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.color).collect::<Vec<_>>(), colors);
+            text::replace_block(&mut doc, 0, 0, "Hi there and more words to wrap within the chosen frame").unwrap();
+            let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+            assert_eq!(blocks.len(), 1);
+            assert!(blocks[0].rows.len() > 1, "{blocks:?}");
+            assert_eq!(blocks[0].horizontal_frame, Some([72.0, 222.0]));
+        }
+    }
+}
+
+#[test]
+fn a_refused_resized_frame_does_not_embed_fallback_fonts() {
+    for content in ["(Hi) Tj", "(Hi ) Tj 0 0 1 rg (there) Tj"] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td {content} ET"));
+        let before = doc.read_state();
+        let style = text::BlockStyle { width: Some(90.0), offset: Some([1e10, 0.0]), ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("Hi Ω there"), &style).is_err());
+        assert!(before.matches(&doc), "invalid geometry must be refused before adding fonts");
+    }
+}
+
+#[test]
+fn an_unchanged_word_can_overflow_an_explicitly_narrowed_frame() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Unbreakable) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(24.0), ..Default::default() }).unwrap();
+    let layout = text::text_edit_layout(&doc, 0, 0, "Unbreakable", &Default::default()).unwrap();
+    assert!(layout.overflow, "the frame can be narrower than an indivisible word: {layout:?}");
+}
+
+#[test]
+fn an_unclosed_private_frame_does_not_join_unrelated_paragraphs() {
+    let mut doc =
+        text_page("/PCTextFrame << /Baseline [72 700 162 700] >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET BT /F1 12 Tf 72 100 Td (Footer) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2, "an unclosed frame is not authoritative: {before:?}");
+    text::replace_block(&mut doc, 0, 0, "Hello").unwrap();
+    let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(after[1].text, "Footer");
+    assert!(close(before[1].rect, after[1].rect));
+}
+
+#[test]
+fn malformed_private_text_frames_fall_back_to_ink_bounds() {
+    for frame in ["[]", "[72 700 71 700]", "[72 700 200 600]", "[72 700 99999999999999 700]", "[72 700 /bad 700]"] {
+        let doc = text_page(&format!("/PCTextFrame << /Baseline {frame} >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC"));
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].text, "Hi");
+        assert_eq!(blocks[0].horizontal_frame, None);
+        assert_eq!(blocks[0].editing_rect(), blocks[0].rect);
+    }
+}
+
+#[test]
 fn paragraphs_move_and_rewrap_to_a_new_width() {
     let para = "BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj ET";
     let close = |a: f64, b: f64| (a - b).abs() < 0.5;

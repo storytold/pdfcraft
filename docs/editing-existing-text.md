@@ -10,11 +10,19 @@ moved because an earlier row wrapped, are rewritten, and formatting a selection 
 only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
 every row.
 
+Drag either horizontal edge of a closed upright paragraph to choose its wrap width.
+The frame stays at that width even when its text is shorter, and survives typing, moving,
+undo/redo and save/reopen. Its height continues to follow the rows; vertical resize handles
+are not available. Automation `text_paragraphs` returns both `rect` (ink bounds) and
+`editing_rect` (the editing frame); `text_edit.width` sets the persistent width.
+
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Draft boxes grow to the page edge
-before wrapping, and the saved item uses that width. A single visual source row grows across font/style boundaries;
-multi-row paragraphs retain their existing wrap width. Retyping uses a preview with only
-that added item's old drawing removed, so deleted draft characters do not show underneath.
+before wrapping, and the saved item uses that width. A single visual source row grows across
+font/style boundaries; multi-row paragraphs retain their existing wrap width. An explicitly
+resized paragraph keeps its chosen width instead of growing to the page edge. Retyping uses a
+preview with only that added item's old drawing removed, so deleted draft characters do not
+show underneath.
 
 A subset font contains only some of the original face's glyphs. A new character cannot be
 reconstructed from a glyph the PDF does not contain. **Load font…** imports an openly licensed,

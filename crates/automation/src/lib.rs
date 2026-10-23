@@ -603,6 +603,7 @@ impl Automation {
                             "rows": b.rows.iter().map(|row| row.iter().map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
+                            "editing_rect": comments::rect_to_view(info, b.editing_rect().map(|v| v as f32)),
                             "font": b.base_font,
                             "size": (b.size * 100.0).round() / 100.0,
                         })

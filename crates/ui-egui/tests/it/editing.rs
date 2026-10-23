@@ -40,7 +40,7 @@ fn fixture(n: usize) -> Vec<u8> {
 
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
-    if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
+    if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() || std::env::var_os("PDFCRAFT_RESIZE_SNAPSHOT").is_some() {
         builder = builder.wgpu();
     }
     let mut h = builder.build_eframe(move |_cc| {
@@ -4308,14 +4308,15 @@ fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
     assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
     // Flick the right edge outward, past the box and its handle: back onto one line.
     let b = block(&h);
-    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    let edge = screen(b.editing_rect()[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
     flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
     let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
     assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
     // Flick the left edge inward: it rewraps and its left side follows the pointer.
     let b = block(&h);
-    let edge = screen(b.rect[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
-    let inward = (b.rect[2] - b.rect[0] - 45.0) as f32;
+    let frame = b.editing_rect();
+    let edge = screen(frame[0], grip_y(&b)) - egui::vec2(2.0, 0.0);
+    let inward = (frame[2] - frame[0] - 45.0) as f32;
     flick(&mut h, edge, edge + egui::vec2(inward * k, 0.0));
     let after = lines(&h);
     let text: Vec<String> = after.iter().map(|l| l.text.clone()).collect();
@@ -4377,6 +4378,105 @@ fn a_paragraph_rewraps_from_the_outer_half_of_its_edge_handles() {
     drag(&mut h, grip, grip + egui::vec2(inward * k, 0.0));
     assert_eq!(lines(&h), ["Page", "1"], "narrowed from the left handle");
     assert!((block(&h).rect[0] - (before.rect[0] + f64::from(inward))).abs() < 1.5, "{:?} → {:?}", before.rect, block(&h).rect);
+}
+
+/// #3474: widening must retain the container even when the glyphs do not move.
+#[test]
+fn widening_a_paragraph_keeps_both_handles_at_the_chosen_edges() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let original = block(&h);
+    let frame = original.editing_rect();
+    let grip = screen(frame[2], frame[3] - 6.0) + egui::vec2(5.0, 0.0);
+    drag(&mut h, grip, grip + egui::vec2(40.0 * k, 0.0));
+    let widened = block(&h);
+    assert_eq!(widened.editor_text, original.editor_text);
+    assert!(widened.rect.iter().zip(original.rect).all(|(a, b)| (a - b).abs() < 0.5), "glyphs stay in place");
+    assert!((widened.editing_rect()[2] - frame[2] - 40.0).abs() < 1.5, "{widened:?}");
+    // Grab the new right edge, well outside the original ink. It must remain a resize handle.
+    let new_frame = widened.editing_rect();
+    let grip = screen(new_frame[2], new_frame[3] - 6.0) + egui::vec2(5.0, 0.0);
+    drag(&mut h, grip, grip + egui::vec2(15.0 * k, 0.0));
+    assert!((block(&h).editing_rect()[2] - new_frame[2] - 15.0).abs() < 1.5);
+    // Widen from the left while preserving the right edge and the font size.
+    let before_left = block(&h);
+    let b = before_left.editing_rect();
+    let grip = screen(b[0], b[3] - 6.0) - egui::vec2(5.0, 0.0);
+    drag(&mut h, grip, grip - egui::vec2(10.0 * k, 0.0));
+    let after = block(&h);
+    assert!((after.editing_rect()[0] - b[0] + 10.0).abs() < 1.5);
+    assert!((after.editing_rect()[2] - b[2]).abs() < 1.5);
+    assert_eq!(after.size, original.size);
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(block(&h).editing_rect(), before_left.editing_rect());
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(block(&h).editing_rect(), after.editing_rect());
+    let id = h.state().views[0].id;
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let rid = reopened.open("resized.pdf", None, saved, None).unwrap();
+    assert_eq!(reopened.get(rid).unwrap().text_blocks(0)[0].editing_rect(), after.editing_rect());
+    // Empty space added to the box belongs to the editor too, rather than starting a marquee.
+    let empty = screen((after.rect[2] + after.editing_rect()[2]) / 2.0, after.rect[3] - 6.0);
+    h.event(egui::Event::PointerMoved(empty));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the widened box opens from its empty interior");
+    if let Some(path) = std::env::var_os("PDFCRAFT_RESIZE_SNAPSHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    // Selecting the open frame must keep its added area as part of the movable selection.
+    let border = screen((after.rect[2] + after.editing_rect()[2]) / 2.0, after.rect[3]) - egui::vec2(0.0, 4.0);
+    click_at(&mut h, border);
+    assert!(h.state().views[0].line_editor.is_none());
+    drag(&mut h, empty, empty + egui::vec2(10.0 * k, -15.0 * k));
+    let moved = block(&h);
+    assert!((moved.editing_rect()[0] - after.editing_rect()[0] - 10.0).abs() < 1.5);
+    assert!((moved.rect[1] - after.rect[1] - 15.0).abs() < 1.5);
+    press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert!((block(&h).editing_rect()[0] - moved.editing_rect()[0] - 1.0).abs() < 0.1, "the moved frame stays selected");
+}
+
+#[test]
+fn a_word_overflowing_a_narrow_frame_still_opens_for_typing() {
+    let mut h = harness(1, |app| {
+        let id = app.views[0].id;
+        app.session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::EditTextBlock {
+                    page: 0,
+                    block: 0,
+                    text: "Unbreakable".into(),
+                    style: pdfcraft_engine::BlockStyle { width: Some(24.0), ..Default::default() },
+                },
+            )
+            .unwrap();
+    });
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    assert!(block.rect[2] > block.editing_rect()[2] + 15.0);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = r.width() / 200.0;
+    let x = (block.rect[2] + block.editing_rect()[2]) / 2.0;
+    let y = (block.rect[1] + block.rect[3]) / 2.0;
+    click_at(&mut h, egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k));
+    assert!(h.state().views[0].line_editor.is_some(), "visible overflow remains editable");
 }
 
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.

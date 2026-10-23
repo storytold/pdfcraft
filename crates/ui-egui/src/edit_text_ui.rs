@@ -377,7 +377,7 @@ impl LineEditor {
 
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
     pub(crate) fn refresh_source(&mut self, block: &pdfcraft_engine::TextBlock, lines: Vec<pdfcraft_engine::TextLine>) {
-        self.source_rect = block.rect.map(|v| v as f32);
+        self.source_rect = block.editing_rect().map(|v| v as f32);
         self.multiline = block.rows.len() > 1;
         self.source = Some((block.clone(), lines));
         self.text = block.editor_text.clone();
@@ -407,7 +407,11 @@ fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool,
 }
 
 fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
-    source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
+    let mut look = source_look(&b.base_font, b.size, b.color, b.bold, b.italic);
+    if let Some(align) = b.horizontal_alignment {
+        look.align = align;
+    }
+    look
 }
 
 pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
@@ -1173,11 +1177,12 @@ fn open_editor(
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
     // Screen pixels per point, from the box's width.
-    let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
+    let frame = l.editing_rect();
+    let scale = (b.width() - 4.0) / ((frame[2] - frame[0]).max(1.0) as f32);
     // How far the editor box may grow: a single-line paragraph's rewrite grows to the
     // page's right edge, a multi-line paragraph rewraps to its own width.
     let right = xf.rect.right().min(view.viewport_rect().right()) - 6.0;
-    let max_width = if l.rows.len() == 1 { (right - b.left()).max(b.width()) } else { b.width() };
+    let max_width = if l.rows.len() == 1 && l.horizontal_frame.is_none() { (right - b.left()).max(b.width()) } else { b.width() };
     view.line_editor = Some(LineEditor {
         selection: None,
         font_resource: None,
@@ -1186,7 +1191,7 @@ fn open_editor(
         text: text.clone(),
         original: text,
         rect: *b,
-        source_rect: l.rect.map(|v| v as f32),
+        source_rect: frame.map(|v| v as f32),
         multiline: l.rows.len() > 1,
         source: Some((l.clone(), source_lines)),
         fonts: install_source_fonts(ui.ctx(), doc, page),
@@ -1220,7 +1225,13 @@ pub(crate) fn page_input(
         view.block_drag = None;
         return true;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.editing_rect())).collect();
+    // Handles belong to the chosen frame; an indivisible word may still paint outside it.
+    // Accept that ink for body clicks and moves after giving the frame's handles priority.
+    let grab = |p| {
+        grab_at(&boxes, p, has_edges(info, page))
+            .or_else(|| lines.iter().rposition(|l| paragraph_box(xf, info, page, l.rect).contains(p)).map(|i| (i, Grip::Move)))
+    };
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
@@ -1276,7 +1287,8 @@ pub(crate) fn page_input(
                 // The new width in user space: the box's change, added to the paragraph's own. A
                 // moved left side (in user space; on an upside-down page that's the screen's right
                 // edge) moves the paragraph with it.
-                let width = (l.rect[2] - l.rect[0]) + (to[2] - to[0]) - (from[2] - from[0]);
+                let frame = l.editing_rect();
+                let width = (frame[2] - frame[0]) + (to[2] - to[0]) - (from[2] - from[0]);
                 let shift = to[0] - from[0];
                 let style = pdfcraft_engine::BlockStyle { width: Some(width), offset: (shift != 0.0).then_some([shift, 0.0]), ..Default::default() };
                 Edit::EditTextBlock { page, block: d.block, text: l.text.clone(), style }
@@ -1302,13 +1314,13 @@ pub(crate) fn page_input(
     if resp.drag_started()
         && active.is_none()
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
-        && let Some((block, grip)) = grab_at(&boxes, o, upright)
+        && let Some((block, grip)) = grab(o)
     {
         view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
         return true;
     }
     let Some(p) = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some((hit, grip)) = grab_at(&boxes, p, upright) else { return false };
+    let Some((hit, grip)) = grab(p) else { return false };
     if active != Some(hit) {
         painter.rect_stroke(boxes[hit], CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
     }
@@ -1414,6 +1426,13 @@ fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32
         if centered {
             job.halign = egui::Align::Center;
         }
+        if block.horizontal_alignment.is_some() {
+            job.halign = match ed.look.align {
+                pdfcraft_engine::TextAlign::Center => egui::Align::Center,
+                pdfcraft_engine::TextAlign::Right => egui::Align::RIGHT,
+                _ => egui::Align::LEFT,
+            };
+        }
         for (range, index) in block.edited_spans(text) {
             let Some(line) = lines.get(index) else { continue };
             let mut look = source_look(&line.base_font, line.size, line.color, line.bold, line.italic);
@@ -1485,6 +1504,7 @@ fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
     let mut job = editor_job(ui, ed, text, scale, width);
     let centered = job.halign == egui::Align::Center;
+    let right_aligned = job.halign == egui::Align::RIGHT;
     job.halign = egui::Align::LEFT;
     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let Some((block, lines)) = &ed.source else { return galley };
@@ -1528,7 +1548,15 @@ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: 
         let base_y = (block.rect[3] - baseline) as f32 * scale;
         let row = Arc::make_mut(&mut placed.row);
         placed.pos.y = base_y - ascent;
-        placed.pos.x = if centered { (width - row.size.x) / 2.0 } else { (source_rect[0] - block.rect[0]) as f32 * scale };
+        placed.pos.x = if centered {
+            (width - row.size.x) / 2.0
+        } else if right_aligned {
+            width - row.size.x
+        } else if block.horizontal_frame.is_some() {
+            0.0
+        } else {
+            (source_rect[0] - block.rect[0]) as f32 * scale
+        };
         for glyph in &mut row.glyphs {
             let dy = ascent - glyph.pos.y;
             glyph.pos.y = ascent;
@@ -1619,7 +1647,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // extent: single rows grow toward the page edge, paragraphs rewrap at their
             // source width, and the visible frame grows/shrinks vertically with their rows.
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
-            let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
+            let single_run =
+                ed.source.as_ref().is_some_and(|(block, _)| block.horizontal_frame.is_none() && (block.rows.len() == 1 || block.invisible));
             let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
                 let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
                 let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
@@ -1634,6 +1663,14 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
+            let live = if ed.source.as_ref().is_some_and(|(b, _)| b.horizontal_frame.is_some()) {
+                Rect::from_min_max(
+                    Pos2::new(live.left().min(ed.rect.left()), live.top()),
+                    Pos2::new(live.right().max(ed.rect.right()), live.bottom()),
+                )
+            } else {
+                live
+            };
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
@@ -1803,6 +1840,44 @@ mod tests {
             extras0: Extras::default(),
         };
         (app, ed)
+    }
+
+    #[test]
+    fn resized_centered_and_right_aligned_drafts_stay_inside_their_frame() {
+        for align in [pdfcraft_engine::TextAlign::Center, pdfcraft_engine::TextAlign::Right] {
+            let (mut app, mut ed) = preview_app();
+            let id = app.views[0].id;
+            app.session
+                .apply(
+                    id,
+                    Edit::EditTextBlock {
+                        page: 0,
+                        block: 0,
+                        text: "Hi".into(),
+                        style: pdfcraft_engine::BlockStyle { width: Some(90.0), align: Some(align), ..Default::default() },
+                    },
+                )
+                .unwrap();
+            let doc = app.session.get(id).unwrap();
+            let block = doc.text_blocks(0).remove(0);
+            ed.refresh_source(&block, doc.text_lines(0));
+            ed.look = look_of(&block);
+            ed.look0 = ed.look.clone();
+            ed.text = "One two three four five six seven".into();
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                let g = editor_galley(ui, &ed, &ed.text, 1.0, 90.0);
+                assert!(g.rows.len() > 1);
+                for row in &g.rows {
+                    assert!(row.pos.x >= -0.5 && row.pos.x + row.size.x <= 90.5, "{align:?}: {:?}, {:?}", row.pos, row.size);
+                    let free = 90.0 - row.size.x;
+                    let expected = if align == pdfcraft_engine::TextAlign::Center { free / 2.0 } else { free };
+                    assert!((row.pos.x - expected).abs() < 0.5);
+                }
+            })
+            .textures_delta
+            .clear();
+        }
     }
 
     #[test]
