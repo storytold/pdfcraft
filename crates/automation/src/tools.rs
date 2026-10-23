@@ -91,6 +91,8 @@ fn language_enum() -> Value {
     Value::Array(pdfcraft_engine::ocr::LANGUAGES.iter().map(|(code, _)| json!(code)).collect())
 }
 
+/// Describe the narrow draft subset to CLI/MCP clients; the handler separately
+/// enforces nested limits, numeric grammar and semantic checks at runtime.
 fn invoice_draft() -> Value {
     let text = json!({"type":"string", "maxLength":1024});
     let decimal = json!({"type":"string", "maxLength":19, "pattern":"^[0-9]{1,12}(\\.[0-9]{1,6})?$"});

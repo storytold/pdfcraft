@@ -4,6 +4,7 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
+/// Run the documented draft through the real CLI and require exact totals without output files.
 #[test]
 fn invoice_script_returns_exact_totals_and_explicit_validation_scope() {
     let directory = std::env::temp_dir().join(format!("pdfcraft-cli-invoice-{}", std::process::id()));

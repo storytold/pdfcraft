@@ -21,6 +21,9 @@ fn bounded(value: &Value, nodes: &mut usize, depth: usize) -> bool {
 }
 
 impl Automation {
+    /// Bound and decode the draft, then serialize the engine's immutable arithmetic report.
+    /// Malformed or oversized JSON is an argument error; semantic failures remain field issues.
+    /// This handler grants no file or document access and performs no standards validation.
     pub(crate) fn invoice_calculate(&self, args: &Args) -> Result<Value> {
         let raw = args.get("draft").ok_or_else(|| ToolError::InvalidArgs("draft is required".into()))?;
         if !bounded(raw, &mut 0, 0) {

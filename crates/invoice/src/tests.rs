@@ -1,6 +1,7 @@
 use super::*;
 use proptest::prelude::*;
 
+/// Supply a valid baseline so each test can isolate one arithmetic or validation condition.
 fn draft() -> Draft {
     Draft {
         number: "RE-2026-001".into(),
@@ -12,10 +13,12 @@ fn draft() -> Draft {
     }
 }
 
+/// Construct a standard-rated line from exact decimal literals owned by the test.
 fn line(quantity: &str, price: &str, rate: &str) -> Line {
     Line { description: "Service".into(), quantity: quantity.parse().unwrap(), unit_price: price.parse().unwrap(), vat_rate: rate.parse().unwrap() }
 }
 
+/// Pin mixed-rate results and verify the calculator leaves its input unchanged.
 #[test]
 fn mixed_rates_are_grouped_with_exact_line_and_tax_totals() {
     let mut input = draft();
@@ -36,6 +39,7 @@ fn mixed_rates_are_grouped_with_exact_line_and_tax_totals() {
     assert_eq!(input, original);
 }
 
+/// Distinguish group VAT rounding from per-line VAT rounding at half-cent boundaries.
 #[test]
 fn rounding_is_half_up_per_line_and_then_per_tax_group() {
     let mut input = draft();
@@ -50,6 +54,7 @@ fn rounding_is_half_up_per_line_and_then_per_tax_group() {
     assert_eq!(calculate(&input).totals.unwrap().net_amount, "0.01");
 }
 
+/// Report every invalid field while withholding a misleading partial total.
 #[test]
 fn unsupported_drafts_return_field_paths_and_no_totals() {
     let mut input = draft();
@@ -66,6 +71,7 @@ fn unsupported_drafts_return_field_paths_and_no_totals() {
     }
 }
 
+/// Reject noncanonical dates, oversized UTF-8 text and unsupported VAT precision.
 #[test]
 fn calendar_dates_text_limits_and_rate_precision_are_checked() {
     let mut input = draft();
@@ -84,6 +90,7 @@ fn calendar_dates_text_limits_and_rate_precision_are_checked() {
     }
 }
 
+/// Exercise both line-count boundaries and the largest accepted numeric values.
 #[test]
 fn line_limits_and_largest_supported_inputs_are_bounded() {
     let mut input = draft();
@@ -100,6 +107,7 @@ fn line_limits_and_largest_supported_inputs_are_bounded() {
     assert_eq!(report.issues[0].code, "line_limit");
 }
 
+/// Ensure unimplemented financial terms cannot disappear during deserialization.
 #[test]
 fn unknown_financial_fields_are_refused_at_every_model_level() {
     let value = serde_json::to_value(draft()).unwrap();
@@ -116,6 +124,7 @@ fn unknown_financial_fields_are_refused_at_every_model_level() {
 }
 
 proptest! {
+    /// Compare whole-euro cases with an independent integer-cent expectation.
     #[test]
     fn integer_euro_lines_conserve_money(quantity in 1_u32..100_000, euros in 0_u32..100_000, rate in 1_u32..100) {
         let mut input = draft();

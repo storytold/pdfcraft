@@ -3,6 +3,7 @@
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+/// Build supported JSON input without relying on PDF state or external fixtures.
 fn draft() -> Value {
     json!({
         "number":"RE-2026-001", "issue_date":"2026-10-23", "currency":"EUR",
@@ -12,6 +13,7 @@ fn draft() -> Value {
     })
 }
 
+/// Invoke the public tool dispatcher and require its structured JSON report.
 fn calculate(automation: &mut Automation, draft: Value) -> Value {
     let result = automation.call("invoice_calculate", &json!({"draft":draft})).unwrap();
     match result.into_iter().next().unwrap() {
@@ -20,6 +22,7 @@ fn calculate(automation: &mut Automation, draft: Value) -> Value {
     }
 }
 
+/// Verify exact totals, truthful validation scope and unchanged open-document state.
 #[test]
 fn invoice_tool_calculates_without_claiming_conformance_or_opening_documents() {
     let mut a = Automation::new();
@@ -46,6 +49,7 @@ fn invoice_tool_calculates_without_claiming_conformance_or_opening_documents() {
     assert!(!tool.destructive);
 }
 
+/// Separate field-level semantic issues from malformed or unsupported argument errors.
 #[test]
 fn invoice_tool_returns_semantic_issues_but_rejects_unsupported_fields_and_numbers() {
     let mut a = Automation::new();
@@ -71,6 +75,7 @@ fn invoice_tool_returns_semantic_issues_but_rejects_unsupported_fields_and_numbe
     }
 }
 
+/// Exercise handler limits before JSON cloning and reject an unexpected output path.
 #[test]
 fn invoice_tool_refuses_oversized_or_deep_inputs_before_copying_them() {
     let mut a = Automation::new();
