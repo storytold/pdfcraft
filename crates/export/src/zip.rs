@@ -86,8 +86,13 @@ fn entry_headers(name: &str, crc: u32, method: u16, compressed: u64, uncompresse
         h.extend(method.to_le_bytes());
         h.extend([0, 0, 0x21, 0]); // 00:00, 1980-01-01 (a zero date is not a valid DOS date)
         h.extend(crc.to_le_bytes());
-        h.extend(classic_u32(compressed).to_le_bytes());
-        h.extend(classic_u32(uncompressed).to_le_bytes());
+        // A local ZIP64 extra carries both sizes, so both corresponding classic fields are
+        // sentinels even when only one size needs offloading (APPNOTE 4.5.3). Central entries
+        // remain selective and use a sentinel only for fields represented in their extra.
+        let (compressed_field, uncompressed_field) =
+            if !central && size_is_zip64 { (u32::MAX, u32::MAX) } else { (classic_u32(compressed), classic_u32(uncompressed)) };
+        h.extend(compressed_field.to_le_bytes());
+        h.extend(uncompressed_field.to_le_bytes());
         h.extend((name.len() as u16).to_le_bytes());
         let extra = if central { &central_extra } else { &local_extra };
         h.extend((extra.len() as u16).to_le_bytes()); // extra
@@ -229,6 +234,69 @@ mod tests {
         let le = |i: usize, n: usize| h[i..i + n].iter().rev().fold(0usize, |v, b| v << 8 | *b as usize);
         let (name_len, extra_len) = (le(28, 2), le(30, 2));
         &h[46 + name_len..46 + name_len + extra_len]
+    }
+
+    /// The classic compressed and original size fields of a local file header (`at` 18) or a
+    /// central directory entry (`at` 20).
+    fn classic_sizes(h: &[u8], at: usize) -> (u32, u32) {
+        let field = |i: usize| u32::from_le_bytes(h[i..i + 4].try_into().unwrap_or([0; 4]));
+        (field(at), field(at + 4))
+    }
+
+    /// Asserts the local header carries both sizes whenever either needs ZIP64, with both classic
+    /// size fields set to the sentinel (APPNOTE 4.5.3: a ZIP64 value appears only for a field set to
+    /// its sentinel, and the local entry must carry both sizes). The central entry stays selective:
+    /// only the fields that themselves overflow get a value, in specification order.
+    fn assert_local_pair_and_central_selectivity(compressed: u64, uncompressed: u64) {
+        let at_limit = |v: u64| v >= u32::MAX as u64;
+        let (local, central) = entry_headers("a", 0, 0, compressed, uncompressed, 0);
+        assert_eq!(classic_sizes(&local, 18), (u32::MAX, u32::MAX), "both local size fields are sentinels for ({compressed}, {uncompressed})");
+        let extra = local_extra(&local);
+        assert_eq!(
+            u16::from_le_bytes(extra[2..4].try_into().unwrap_or([0; 2])),
+            16,
+            "both local sizes are present for ({compressed}, {uncompressed})"
+        );
+        assert_eq!(u64::from_le_bytes(extra[4..12].try_into().unwrap_or([0; 8])), uncompressed, "original size first");
+        assert_eq!(u64::from_le_bytes(extra[12..20].try_into().unwrap_or([0; 8])), compressed, "compressed size second");
+        let expected =
+            (if at_limit(compressed) { u32::MAX } else { compressed as u32 }, if at_limit(uncompressed) { u32::MAX } else { uncompressed as u32 });
+        assert_eq!(
+            classic_sizes(&central, 20),
+            expected,
+            "the central entry offloads only the fields that overflow for ({compressed}, {uncompressed})"
+        );
+        let fields = usize::from(at_limit(uncompressed)) + usize::from(at_limit(compressed));
+        let extra = central_extra(&central);
+        assert_eq!(
+            u16::from_le_bytes(extra[2..4].try_into().unwrap_or([0; 2])),
+            8 * fields as u16,
+            "one central value per sentinel field for ({compressed}, {uncompressed})"
+        );
+        if at_limit(uncompressed) {
+            assert_eq!(u64::from_le_bytes(extra[4..12].try_into().unwrap_or([0; 8])), uncompressed, "original size first");
+        }
+        if at_limit(compressed) {
+            let at = if at_limit(uncompressed) { 12 } else { 4 };
+            assert_eq!(u64::from_le_bytes(extra[at..at + 8].try_into().unwrap_or([0; 8])), compressed, "compressed size in specification order");
+        }
+    }
+
+    #[test]
+    fn both_local_sizes_are_sentinels_when_only_one_needs_zip64() {
+        // A local ZIP64 extra must carry both sizes, and its values correspond to classic fields set
+        // to their sentinel — so a small classic size next to an overflowing one is wrong even
+        // though the extra holds the truth. Both orders of which size overflows.
+        assert_local_pair_and_central_selectivity(100, u32::MAX as u64 + 1);
+        assert_local_pair_and_central_selectivity(u32::MAX as u64 + 1, 100);
+    }
+
+    #[test]
+    fn both_local_sizes_are_sentinels_when_one_equals_the_sentinel() {
+        // A size of exactly 0xFFFFFFFF is indistinguishable from the sentinel, so it needs ZIP64
+        // just like a larger one; the other local size must then become a sentinel too. Both orders.
+        assert_local_pair_and_central_selectivity(100, u32::MAX as u64);
+        assert_local_pair_and_central_selectivity(u32::MAX as u64, 100);
     }
 
     #[test]
