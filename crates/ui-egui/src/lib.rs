@@ -152,6 +152,7 @@ mod widgets;
 pub mod window_controls;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod window_state;
+pub mod windows;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod open_worker_tests;
@@ -163,6 +164,7 @@ pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::{ThemeKind, ThemePreference};
+pub use windows::{WindowId, WindowOp};
 
 /// Top-level workspace modes (Acrobat's mode bar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -454,6 +456,8 @@ struct PendingOpen {
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
+    /// The window the open was asked in: its tab goes there, whichever window is focused by then.
+    window: WindowId,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -617,8 +621,23 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
     /// winit's frame instead of drawing the header bar (#1001).
     pub system_title_bar: bool,
-    /// Whether the window currently has the app's header bar (`None` until the first frame).
-    app_frame_shown: Option<bool>,
+    /// The windows besides the main one, in the order they opened (see [`windows`]).
+    pub(crate) windows: Vec<windows::WindowSlot>,
+    /// The main window's state while another window is current.
+    root_state: Option<windows::WindowState>,
+    /// The window whose state the app fields hold (the one being drawn; the main window
+    /// between frames).
+    current_window: WindowId,
+    /// The window that has the keyboard focus.
+    focused_window: WindowId,
+    next_window_id: u32,
+    window_ops: Vec<WindowOp>,
+    /// Where each window is on screen, for dragging tabs between windows.
+    window_geometry: std::collections::HashMap<WindowId, windows::WindowGeometry>,
+    /// The icon the extra windows open with (the main window's comes from the desktop app).
+    pub window_icon: Option<std::sync::Arc<egui::IconData>>,
+    /// A document tab being dragged out of a strip or between windows.
+    pub(crate) tab_drag: Option<windows::TabDrag>,
     pub password_prompt: Option<PasswordPrompt>,
     pub unlock_prompt: Option<UnlockPrompt>,
     pub full_screen: bool,
@@ -1004,7 +1023,15 @@ impl PdfCraftApp {
             integrated_titlebar: false,
             window_controls: None,
             system_title_bar: false,
-            app_frame_shown: None,
+            windows: Vec::new(),
+            root_state: None,
+            current_window: WindowId::ROOT,
+            focused_window: WindowId::ROOT,
+            next_window_id: 1,
+            window_ops: Vec::new(),
+            window_geometry: Default::default(),
+            window_icon: None,
+            tab_drag: None,
             password_prompt: None,
             unlock_prompt: None,
             full_screen: false,
@@ -1239,6 +1266,7 @@ impl PdfCraftApp {
             after_open: request.after_open,
             recovered: request.recovered,
             then: request.then,
+            window: self.current_window(),
         });
         Ok(token)
     }
@@ -1256,8 +1284,18 @@ impl PdfCraftApp {
                 waiting.extend(remaining);
                 break;
             }
+            // The open finishes in the window that asked (the current one when that window has
+            // closed); a prompt open there keeps the reply queued too, so it isn't replaced.
+            let window = if self.has_window(pending.window) { pending.window } else { self.current_window() };
+            if self.with_window(window, |app| app.modal_open()).unwrap_or(false) {
+                waiting.push(pending);
+                waiting.extend(remaining);
+                break;
+            }
             match pending.receiver.try_recv() {
-                Ok(result) if result.token == pending.token => self.finish_pending_open(pending, result.kind),
+                Ok(result) if result.token == pending.token => {
+                    self.with_window(window, |app| app.finish_pending_open(pending, result.kind));
+                }
                 Ok(_) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1640,12 +1678,14 @@ impl PdfCraftApp {
             return;
         }
         let app_frame = self.draws_window_frame();
-        if self.app_frame_shown != Some(app_frame) {
+        // Per window: a window opened later starts with the frame the preference asked for then.
+        let shown = &mut self.window_geometry.entry(self.current_window).or_default().app_frame;
+        if *shown != Some(app_frame) {
             // The window opens undecorated, so only a change from that needs a command.
-            if self.app_frame_shown.is_some() || !app_frame {
+            if shown.is_some() || !app_frame {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
             }
-            self.app_frame_shown = Some(app_frame);
+            *shown = Some(app_frame);
         }
     }
 
@@ -1783,17 +1823,31 @@ impl PdfCraftApp {
         }
     }
 
-    /// The tab already showing the file at `path` (the same path, or one that names the same
-    /// file once made absolute).
-    pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+    /// The window and document already showing the file at `path`, in any window: one file,
+    /// one tab (#2166) holds across windows.
+    pub(crate) fn window_showing(&self, path: &str) -> Option<(WindowId, DocId)> {
+        self.all_views()
+            .find(|(_, v)| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+            .map(|(w, v)| (w, v.id))
+    }
+
+    /// Bring `doc` to the front in window `window` (and the window to the front).
+    pub(crate) fn show_doc_in(&mut self, window: WindowId, doc: DocId) {
+        self.with_window(window, |a| {
+            if let Some(i) = a.views.iter().position(|v| v.id == doc) {
+                a.active = Some(i);
+            }
+        });
+        if window != self.current_window() {
+            self.queue_window_op(WindowOp::Focus(window));
+        }
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
-        if let Some(i) = self.tab_showing(path) {
-            self.active = Some(i);
+        if let Some((window, doc)) = self.window_showing(path) {
+            self.show_doc_in(window, doc);
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             self.open_path(path);
@@ -1893,13 +1947,16 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
-        // One file, one tab (#2166): a file that is open already comes to the front instead,
-        // and the tool it was opened for runs on it. One still being opened is left to that.
-        if let Some(i) = self.tab_showing(path) {
+        // One file, one tab (#2166), in whichever window: a file that is open already comes to
+        // the front instead, and the tool it was opened for runs on it there. One still being
+        // opened is left to that.
+        if let Some((window, doc)) = self.window_showing(path) {
             self.startup_superseded = true;
-            self.active = Some(i);
+            self.show_doc_in(window, doc);
             if let Some(command) = then {
-                self.execute(command);
+                self.with_window(window, |a| {
+                    a.execute(command);
+                });
             }
             return OpenOutcome::Focused;
         }
@@ -2139,11 +2196,16 @@ impl PdfCraftApp {
     /// Colors). A document the change actually touches re-renders.
     pub fn set_reading_colors(&mut self, colors: pdfcraft_render::ReadingColors) {
         self.reading_colors = colors;
-        for i in 0..self.views.len() {
-            // Idempotent per document: the engine says whether anything changed.
-            if self.session.set_reading_colors(self.views[i].id, colors) {
-                self.views[i].invalidate_content();
-            }
+        // The documents of every window, not only the current one's.
+        for window in self.window_ids() {
+            self.with_window(window, |app| {
+                for i in 0..app.views.len() {
+                    // Idempotent per document: the engine says whether anything changed.
+                    if app.session.set_reading_colors(app.views[i].id, colors) {
+                        app.views[i].invalidate_content();
+                    }
+                }
+            });
         }
     }
 
@@ -3150,16 +3212,12 @@ impl eframe::App for PdfCraftApp {
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
-        self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some(worker) = &self.open_worker {
-                worker.set_context(ctx);
-            }
-            self.poll_pending_opens();
+        if let Some(worker) = &self.open_worker {
+            worker.set_context(ctx);
         }
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
         let cjk = theme::CjkPreference::for_language(lang.code());
@@ -3180,34 +3238,45 @@ impl eframe::App for PdfCraftApp {
         self.sync_theme(ctx);
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         ui_scale::sync(ctx, ui_scale::zoom(self.ui_scale, self.system_text_scale, native), &mut self.ui_scale_applied);
-        // Remember user work even if its tab is subsequently closed or Home is selected.
-        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
         // Before anything reads this frame's wheel input or draws, and with the line speed just set.
         self.motion.begin_pass(ctx, self.animation_effects);
-        // Before taking this frame's drop: the grid must be drawn once with the pointer where
-        // the files were let go before the gap is read.
-        self.finish_grid_drop(ctx);
-        // Showing a document hides the Combine files tab.
-        if self.active.is_some() {
-            self.combine_tab.focused = false;
+        // Window changes asked for since the last frame's passes (by a command, say).
+        self.apply_window_ops(ctx);
+        self.track_window(WindowId::ROOT, ctx, None);
+        // What belongs to no window in particular lands in the window that has the focus.
+        let focused = self.focused_window;
+        if self.with_window(focused, |app| app.global_logic(ctx)).is_none() {
+            self.global_logic(ctx);
         }
+        self.guard_quit(ctx);
+        // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
+        craft_quit::on_close_request(ctx);
+        // The main window's own share of the frame; the other windows get theirs in their passes.
+        self.window_logic(ctx, false);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw_window(ui);
+        let ctx = ui.ctx().clone();
+        self.show_child_windows(&ctx);
+        // Window changes asked for during the passes, now that no window is being drawn.
+        self.apply_window_ops(&ctx);
+    }
+}
+
+impl PdfCraftApp {
+    /// The frame's work that belongs to no window in particular: files arriving, background
+    /// work finishing, the control channel, watched files. Runs once per frame with the focused
+    /// window's state, so a file opened from a picker or the command line shows up there.
+    fn global_logic(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_pending_opens();
+        // Remember user work even if its tab is subsequently closed or Home is selected.
+        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         #[cfg(target_arch = "wasm32")]
         self.process_signature_images();
-        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        #[cfg(not(target_arch = "wasm32"))]
-        let dropped = self.drop_on_signature_pad(dropped);
-        #[cfg(not(target_arch = "wasm32"))]
-        let dropped = self.drop_on_grid(dropped, ctx);
-        for f in dropped {
-            // Files dropped on the Combine files tab join its list instead of opening.
-            if self.combine_showing() {
-                self.drop_into_combine(f, ctx);
-            } else {
-                self.open_dropped(f, ctx);
-            }
-        }
         let arrived: Vec<(String, Vec<u8>)> = self.inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, bytes) in arrived {
             if let Err(e) = self.open_bytes(&name, None, bytes) {
@@ -3256,33 +3325,80 @@ impl eframe::App for PdfCraftApp {
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
-                OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                OsEvent::Quit => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
             }
-        }
-        if let Some((_, id)) = self.active_ids() {
-            let out = self.session.take_js_output(id);
-            self.handle_js(id, out);
         }
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);
         }
-        self.guard_quit(ctx);
-        // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
-        craft_quit::on_close_request(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(ctx, now);
-        // Reload documents whose files a build rewrote (#431).
+        // Reload documents whose files a build rewrote (#431), in whichever window they are.
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();
         if self.host_dirty.is_some() {
-            let dirty = self.first_dirty().is_some();
+            let dirty = self.any_unsaved_work();
             if let Some(report) = self.host_dirty.as_mut() {
                 report(dirty);
             }
         }
         self.poll_updates();
         self.poll_print();
+        self.poll_export();
+        self.poll_ocr();
+        self.poll_optimize();
+        self.poll_action();
+        self.process_file_requests();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.process_picked();
+    }
+
+    /// One window's share of the frame's logic: its dialog, files dropped on it, the active
+    /// document's script output, its close button and its keyboard. `embedded` says the window
+    /// is drawn inside the main one (tests), whose input it shares.
+    pub(crate) fn window_logic(&mut self, ctx: &egui::Context, embedded: bool) {
+        self.dialog_epoch();
+        // Before taking this frame's drop: the grid must be drawn once with the pointer where
+        // the files were let go before the gap is read.
+        self.finish_grid_drop(ctx);
+        // Showing a document hides the Combine files tab (which the main window keeps).
+        if self.current_window == WindowId::ROOT && self.active.is_some() {
+            self.combine_tab.focused = false;
+        }
+        if !embedded {
+            let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+            #[cfg(not(target_arch = "wasm32"))]
+            let dropped = self.drop_on_signature_pad(dropped);
+            #[cfg(not(target_arch = "wasm32"))]
+            let dropped = self.drop_on_grid(dropped, ctx);
+            for f in dropped {
+                // Files dropped on the Combine files tab join its list instead of opening.
+                if self.combine_showing() {
+                    self.drop_into_combine(f, ctx);
+                } else {
+                    self.open_dropped(f, ctx);
+                }
+            }
+        }
+        if let Some((_, id)) = self.active_ids() {
+            let out = self.session.take_js_output(id);
+            self.handle_js(id, out);
+        }
+        // ⌘Q in any window quits, asking about unsaved changes (`guard_quit` keeps egui's own
+        // quit shortcut off: it ignores extra Alt/Shift, including Ctrl+Alt+Q for '@').
+        let quit = ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(e, egui::Event::Key { key: egui::Key::Q, pressed: true, modifiers, .. }
+                    if modifiers.matches_exact(egui::Modifiers::COMMAND))
+            })
+        });
+        if quit {
+            self.request_quit(ctx);
+        }
+        if !embedded {
+            self.guard_close_window(ctx);
+        }
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);
@@ -3305,16 +3421,11 @@ impl eframe::App for PdfCraftApp {
                 }
             }
         }
-        self.poll_export();
-        self.poll_ocr();
-        self.poll_optimize();
-        self.poll_action();
-        self.process_file_requests();
-        #[cfg(not(target_arch = "wasm32"))]
-        self.process_picked();
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// The current window's contents: its tab strip, mode bar, panels, document (or Home) and
+    /// dialogs. The main window's pass and every other window's pass draw through here.
+    pub(crate) fn draw_window(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
@@ -3399,8 +3510,11 @@ impl eframe::App for PdfCraftApp {
 
 impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
-        // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
-        self.combine_thumbs_frame(ctx);
+        // The Combine grid's thumbnails, whichever tab of the main window shows (renders under
+        // way still finish).
+        if self.current_window == WindowId::ROOT {
+            self.combine_thumbs_frame(ctx);
+        }
         // Retire hidden documents before admitting the visible document's textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.

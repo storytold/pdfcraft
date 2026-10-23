@@ -13,7 +13,10 @@
 //!
 //! Methods (JSON in, JSON out):
 //! - `ui.state`: open documents, active document, page, zoom, page errors, mode, panels, dialog,
-//!   notice and observed window dimensions in logical points.
+//!   notice and observed window dimensions in logical points. With several windows (M14), the
+//!   documents and the active document are the focused window's (`window_id`), and `windows`
+//!   lists every window's `id`, `title`, `focused` and `tabs`; the other `ui.*` methods act on
+//!   the focused window too.
 //! - `ui.inspect {query?, role?, focused?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
 //!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `focusable`, `focused`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a
@@ -669,9 +672,25 @@ impl Host for crate::PdfCraftApp {
             self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        // Several windows (M14): `documents` and `active` are the window's that the request runs
+        // in (the one with the focus, `window_id`); `windows` lists every window's tabs.
+        let windows: Vec<Value> = self
+            .window_titles()
+            .into_iter()
+            .map(|(id, title)| {
+                let tabs: Vec<Value> = self
+                    .all_views()
+                    .filter(|(w, _)| *w == id)
+                    .filter_map(|(_, v)| self.session.get(v.id).map(|d| json!({ "doc": v.id.0, "name": d.name, "dirty": d.dirty })))
+                    .collect();
+                json!({ "id": id.0, "title": title, "focused": self.focused_window() == id, "tabs": tabs })
+            })
+            .collect();
         json!({
             "docking": self.docking,
             "documents": docs,
+            "window_id": self.current_window().0,
+            "windows": windows,
             "pending_opens": pending_opens,
             "active": active.map(|v| json!({
                 "doc": v.id.0,

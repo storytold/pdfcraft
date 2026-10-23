@@ -2520,3 +2520,12 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Okno
+	Move tab to new window	Premakni zavihek v novo okno
+	Merge all windows	Združi vsa okna
+	Close window	Zapri okno
+	Move to new window	Premakni v novo okno
+	Move to window	Premakni v okno
+	Too many windows are open	Odprtih je preveč oken

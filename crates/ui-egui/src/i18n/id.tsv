@@ -2751,3 +2751,12 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# Several windows (M14).
+	Window	Jendela
+	Move tab to new window	Pindahkan tab ke jendela baru
+	Merge all windows	Gabungkan semua jendela
+	Close window	Tutup jendela
+	Move to new window	Pindahkan ke jendela baru
+	Move to window	Pindahkan ke jendela
+	Too many windows are open	Terlalu banyak jendela terbuka

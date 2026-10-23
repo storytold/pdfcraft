@@ -2511,3 +2511,12 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Pencere
+	Move tab to new window	Sekmeyi yeni pencereye taşı
+	Merge all windows	Tüm pencereleri birleştir
+	Close window	Pencereyi kapat
+	Move to new window	Yeni pencereye taşı
+	Move to window	Pencereye taşı
+	Too many windows are open	Çok fazla pencere açık

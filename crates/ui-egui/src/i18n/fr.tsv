@@ -2781,3 +2781,12 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Fenêtre
+	Move tab to new window	Déplacer l’onglet dans une nouvelle fenêtre
+	Merge all windows	Fusionner toutes les fenêtres
+	Close window	Fermer la fenêtre
+	Move to new window	Déplacer dans une nouvelle fenêtre
+	Move to window	Déplacer dans la fenêtre
+	Too many windows are open	Trop de fenêtres sont ouvertes

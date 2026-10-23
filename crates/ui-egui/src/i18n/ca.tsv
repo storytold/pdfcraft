@@ -2774,3 +2774,12 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Several windows (M14).
+	Window	Finestra
+	Move tab to new window	Mou la pestanya a una finestra nova
+	Merge all windows	Combina totes les finestres
+	Close window	Tanca la finestra
+	Move to new window	Mou a una finestra nova
+	Move to window	Mou a la finestra
+	Too many windows are open	Hi ha massa finestres obertes

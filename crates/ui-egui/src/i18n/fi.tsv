@@ -2783,3 +2783,12 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# Several windows (M14).
+	Window	Ikkuna
+	Move tab to new window	Siirrä välilehti uuteen ikkunaan
+	Merge all windows	Yhdistä kaikki ikkunat
+	Close window	Sulje ikkuna
+	Move to new window	Siirrä uuteen ikkunaan
+	Move to window	Siirrä ikkunaan
+	Too many windows are open	Liian monta ikkunaa on auki

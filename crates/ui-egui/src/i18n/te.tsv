@@ -2424,3 +2424,12 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	విండో
+	Move tab to new window	ట్యాబ్‌ను కొత్త విండోకు తరలించు
+	Merge all windows	అన్ని విండోలను విలీనం చేయి
+	Close window	విండోను మూసివేయి
+	Move to new window	కొత్త విండోకు తరలించు
+	Move to window	విండోకు తరలించు
+	Too many windows are open	చాలా ఎక్కువ విండోలు తెరిచి ఉన్నాయి

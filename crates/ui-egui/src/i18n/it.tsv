@@ -2747,3 +2747,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Finestra
+	Move tab to new window	Sposta scheda in una nuova finestra
+	Merge all windows	Unisci tutte le finestre
+	Close window	Chiudi finestra
+	Move to new window	Sposta in una nuova finestra
+	Move to window	Sposta nella finestra
+	Too many windows are open	Troppe finestre aperte

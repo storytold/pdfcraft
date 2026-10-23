@@ -2791,3 +2791,12 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	نافذة
+	Move tab to new window	نقل علامة التبويب إلى نافذة جديدة
+	Merge all windows	دمج كل النوافذ
+	Close window	إغلاق النافذة
+	Move to new window	نقل إلى نافذة جديدة
+	Move to window	نقل إلى نافذة
+	Too many windows are open	هناك نوافذ مفتوحة أكثر من اللازم

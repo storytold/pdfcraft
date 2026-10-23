@@ -2428,3 +2428,12 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Окно
+	Move tab to new window	Переместить вкладку в новое окно
+	Merge all windows	Объединить все окна
+	Close window	Закрыть окно
+	Move to new window	Переместить в новое окно
+	Move to window	Переместить в окно
+	Too many windows are open	Открыто слишком много окон

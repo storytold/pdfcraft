@@ -2515,3 +2515,12 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	ウィンドウ
+	Move tab to new window	タブを新しいウィンドウに移動
+	Merge all windows	すべてのウィンドウを統合
+	Close window	ウィンドウを閉じる
+	Move to new window	新しいウィンドウに移動
+	Move to window	ウィンドウに移動
+	Too many windows are open	開いているウィンドウが多すぎます

@@ -91,6 +91,10 @@ impl PdfCraftApp {
             && match spec.id {
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
+                // The only tab of a window other than the main one is that window.
+                "window.move_tab_new" => self.active.is_some_and(|i| self.can_detach(i)) && self.window_count() < crate::windows::MAX_WINDOWS,
+                "window.merge_all" => self.window_count() > 1,
+                "window.close" => Self::windows_supported(),
                 _ => true,
             }
     }
@@ -287,6 +291,14 @@ impl PdfCraftApp {
             }
             "view.next_tab" => self.step_tab(true),
             "view.previous_tab" => self.step_tab(false),
+            // Several windows (M14): applied after this frame's passes (`apply_window_ops`).
+            "window.move_tab_new" => {
+                if let Some((_, doc)) = self.active_ids() {
+                    self.queue_window_op(crate::WindowOp::MoveTab { doc, from: self.current_window(), to: None, at: None });
+                }
+            }
+            "window.merge_all" => self.queue_window_op(crate::WindowOp::MergeAll),
+            "window.close" => self.request_close_window(),
             "view.theme" => {
                 let next = if self.theme == ThemeKind::Light { ThemePreference::Dark } else { ThemePreference::Light };
                 self.set_theme_preference(next);
@@ -697,7 +709,8 @@ impl PdfCraftApp {
     /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
     /// next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
-        let count = self.views.len() + usize::from(self.combine_tab.open);
+        // The Combine files tab is the main window's.
+        let count = self.views.len() + usize::from(self.combine_tab.open && self.current_window() == crate::WindowId::ROOT);
         let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
         let Some(next) = tab_after(current, count, forward) else { return };
         if next < self.views.len() {

@@ -2822,3 +2822,12 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Okno
+	Move tab to new window	Přesunout kartu do nového okna
+	Merge all windows	Sloučit všechna okna
+	Close window	Zavřít okno
+	Move to new window	Přesunout do nového okna
+	Move to window	Přesunout do okna
+	Too many windows are open	Je otevřeno příliš mnoho oken

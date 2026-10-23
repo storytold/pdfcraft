@@ -2521,3 +2521,12 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Παράθυρο
+	Move tab to new window	Μετακίνηση καρτέλας σε νέο παράθυρο
+	Merge all windows	Συγχώνευση όλων των παραθύρων
+	Close window	Κλείσιμο παραθύρου
+	Move to new window	Μετακίνηση σε νέο παράθυρο
+	Move to window	Μετακίνηση σε παράθυρο
+	Too many windows are open	Είναι ανοιχτά πάρα πολλά παράθυρα

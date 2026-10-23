@@ -2750,3 +2750,12 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# Several windows (M14).
+	Window	창
+	Move tab to new window	탭을 새 창으로 이동
+	Merge all windows	모든 창 병합
+	Close window	창 닫기
+	Move to new window	새 창으로 이동
+	Move to window	창으로 이동
+	Too many windows are open	열린 창이 너무 많습니다

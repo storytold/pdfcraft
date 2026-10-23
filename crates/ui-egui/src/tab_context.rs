@@ -5,6 +5,10 @@ pub(crate) enum Action {
     Close(DocId),
     Reopen,
     Reveal(DocId),
+    /// Move the tab into a window of its own (M14).
+    Detach(DocId),
+    /// Move the tab into that window, after its last tab.
+    MoveTo(DocId, crate::WindowId),
 }
 
 impl crate::PdfCraftApp {
@@ -18,9 +22,9 @@ impl crate::PdfCraftApp {
             Action::Reopen => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(path) = self.closed_tabs.last().cloned() {
-                    // A tab may already have been reopened through File > Open.
-                    if let Some(index) = self.views.iter().position(|v| self.session.get(v.id).is_some_and(|d| d.path.as_deref() == Some(&path))) {
-                        self.active = Some(index);
+                    // A tab may already have been reopened through File > Open, in any window.
+                    if let Some((window, doc)) = self.window_showing(&path) {
+                        self.show_doc_in(window, doc);
                         self.closed_tabs.pop();
                     } else {
                         let tabs = self.views.len();
@@ -42,6 +46,14 @@ impl crate::PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
+            }
+            Action::Detach(id) => {
+                let from = self.current_window();
+                self.queue_window_op(crate::WindowOp::MoveTab { doc: id, from, to: None, at: None });
+            }
+            Action::MoveTo(id, window) => {
+                let from = self.current_window();
+                self.queue_window_op(crate::WindowOp::MoveTab { doc: id, from, to: Some((window, None)), at: None });
             }
         }
     }

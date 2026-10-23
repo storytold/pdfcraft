@@ -2537,3 +2537,12 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Вікно
+	Move tab to new window	Перемістити вкладку в нове вікно
+	Merge all windows	Об’єднати всі вікна
+	Close window	Закрити вікно
+	Move to new window	Перемістити в нове вікно
+	Move to window	Перемістити у вікно
+	Too many windows are open	Відкрито забагато вікон

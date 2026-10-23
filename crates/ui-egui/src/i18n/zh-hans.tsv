@@ -2479,3 +2479,12 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	窗口
+	Move tab to new window	将标签页移到新窗口
+	Merge all windows	合并所有窗口
+	Close window	关闭窗口
+	Move to new window	移到新窗口
+	Move to window	移到窗口
+	Too many windows are open	打开的窗口过多

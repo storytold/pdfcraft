@@ -2611,3 +2611,12 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Okno
+	Move tab to new window	Przenieś kartę do nowego okna
+	Merge all windows	Scal wszystkie okna
+	Close window	Zamknij okno
+	Move to new window	Przenieś do nowego okna
+	Move to window	Przenieś do okna
+	Too many windows are open	Otwarto zbyt wiele okien

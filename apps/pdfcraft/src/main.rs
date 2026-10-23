@@ -47,7 +47,7 @@ mod updates;
 mod windows_manifest;
 
 /// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
-const APP_ID: &str = "ai.storyteller.pdfcraft";
+const APP_ID: &str = pdfcraft_ui_egui::windows::APP_ID;
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
 /// transparent margin; Windows and Linux get the full-bleed tile.
@@ -409,6 +409,8 @@ fn app_creator<'a>(
         app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
         app.integrated_titlebar = integrated;
         app.window_controls = window_controls;
+        // The windows a tab is dragged out into carry the same icon.
+        app.window_icon = eframe::icon_data::from_png_bytes(APP_ICON_PNG).ok().map(std::sync::Arc::new);
         app.system_text_scale = text_scale::system();
         // Windows' Animation effects setting, which Preferences ▸ Animation effects follows unless
         // it is set to On or Off.

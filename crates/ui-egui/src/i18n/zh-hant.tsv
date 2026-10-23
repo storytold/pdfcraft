@@ -2465,3 +2465,12 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	視窗
+	Move tab to new window	將分頁移至新視窗
+	Merge all windows	合併所有視窗
+	Close window	關閉視窗
+	Move to new window	移至新視窗
+	Move to window	移至視窗
+	Too many windows are open	開啟的視窗過多

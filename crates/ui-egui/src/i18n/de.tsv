@@ -2516,3 +2516,12 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Fenster
+	Move tab to new window	Tab in neues Fenster verschieben
+	Merge all windows	Alle Fenster zusammenführen
+	Close window	Fenster schließen
+	Move to new window	In neues Fenster verschieben
+	Move to window	In Fenster verschieben
+	Too many windows are open	Es sind zu viele Fenster geöffnet

@@ -2774,3 +2774,12 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Several windows (M14).
+	Window	Fereastră
+	Move tab to new window	Mutare filă în fereastră nouă
+	Merge all windows	Combinare toate ferestrele
+	Close window	Închidere fereastră
+	Move to new window	Mutare în fereastră nouă
+	Move to window	Mutare în fereastră
+	Too many windows are open	Sunt deschise prea multe ferestre

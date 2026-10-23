@@ -2513,3 +2513,12 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Терезе
+	Move tab to new window	Қойындыны жаңа терезеге жылжыту
+	Merge all windows	Барлық терезелерді біріктіру
+	Close window	Терезені жабу
+	Move to new window	Жаңа терезеге жылжыту
+	Move to window	Терезеге жылжыту
+	Too many windows are open	Тым көп терезе ашық

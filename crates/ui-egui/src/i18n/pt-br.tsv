@@ -2800,3 +2800,12 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Janela
+	Move tab to new window	Mover aba para uma nova janela
+	Merge all windows	Mesclar todas as janelas
+	Close window	Fechar janela
+	Move to new window	Mover para uma nova janela
+	Move to window	Mover para a janela
+	Too many windows are open	Há janelas demais abertas
