@@ -42,6 +42,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        turn: None,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -381,6 +382,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            turn: None,
         }],
         ..Default::default()
     };
