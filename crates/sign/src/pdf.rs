@@ -190,13 +190,53 @@ impl DigestCache {
     }
 }
 
-/// Certificates the user trusts for signing (Acrobat: Trusted Certificates).
+/// Certificates trusted for signing (Acrobat: Trusted Certificates). Only `certs`, the user's own
+/// list, is trusted by default; a trust list has to be loaded.
 #[derive(Clone, Debug, Default)]
 pub struct TrustStore {
     pub certs: Vec<Certificate>,
+    /// Lists of CA certificates the user loaded (e.g. the EU Trusted Lists' qualified CAs). They
+    /// vouch for signers, never for a time-stamp authority: trusted time comes from `certs` alone.
+    pub lists: Vec<crate::trust::TrustList>,
+}
+
+/// Why a certificate in a chain is trusted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrustSource {
+    /// The user's own list of trusted certificates.
+    User,
+    /// The named list the user loaded.
+    List(String),
 }
 
 impl TrustStore {
+    /// Load `list`, replacing a list of the same name. A list is known by its own name, so
+    /// [`remove_list`](Self::remove_list) takes back exactly what was loaded.
+    pub fn add_list(&mut self, list: crate::trust::TrustList) {
+        self.remove_list(&list.name);
+        self.lists.push(list);
+    }
+
+    /// Remove the list called `name`, if one is loaded.
+    pub fn remove_list(&mut self, name: &str) {
+        self.lists.retain(|l| l.name != name);
+    }
+
+    /// Every certificate that can anchor a signer's chain: the user's, then the loaded lists'.
+    fn anchors(&self) -> impl Iterator<Item = &Certificate> + Clone {
+        self.certs.iter().chain(self.lists.iter().flat_map(|l| l.certs.iter()))
+    }
+
+    /// What makes `c` trusted to vouch for a signer, if anything. The user's own list wins.
+    pub fn source_of(&self, c: &Certificate) -> Option<TrustSource> {
+        if self.trusts(c) {
+            Some(TrustSource::User)
+        } else {
+            self.lists.iter().find(|l| l.certs.iter().any(|t| t.raw == c.raw)).map(|l| TrustSource::List(l.name.clone()))
+        }
+    }
+
+    /// Whether the user's own list holds `c`. Only that vouches for a time-stamp authority.
     fn trusts(&self, c: &Certificate) -> bool {
         self.certs.iter().any(|t| t.raw == c.raw)
     }
@@ -278,8 +318,9 @@ pub enum Fill {
     /// A value out of the signature itself — a time, the evidence a revocation came from — written
     /// as it stands, the way a certificate's name or date is.
     Value(String),
-    /// Two certificates' own names, for the wording that says one was not used to vouch for the
-    /// other. They go in the order the wording puts its two holes in, which a language may reverse.
+    /// Two names, for the wording with two holes: that one certificate was not used to vouch for
+    /// another, or which trust list vouched through which certificate. They go in the order the
+    /// wording puts its two holes in, which a language may reverse.
     Names(String, String),
 }
 
@@ -383,6 +424,7 @@ pub const WORDINGS: &[&str] = &[
     "The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.",
     "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.",
     "The signer's identity is valid.",
+    "Its certificate chains to {} in the trust list “{}”.",
     "The signature includes an embedded timestamp.",
     "Signing time is from the clock on the signer's computer.",
     // What the signature's own timestamp token proves, if it carries one.
@@ -875,13 +917,13 @@ fn finish_validation(
     unverified_time: Option<Time>,
 ) {
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
-    let mut pool = embedded.to_vec();
-    pool.extend(trust.certs.iter().cloned());
     // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
     let at = info.timestamp_time.or(info.signing_time);
-    let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    let (chain, refused) = build_chain_noted(&cert, embedded.iter().chain(trust.anchors()), at);
     let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
-    let trusted = chain.iter().any(|c| trust.trusts(c));
+    // The first trusted certificate going up the chain, and what makes it trusted.
+    let anchor = chain.iter().find_map(|c| trust.source_of(c).map(|s| (c.display_name(), s)));
+    let trusted = anchor.is_some();
     info.chain = chain;
     info.certificate = Some(cert.clone());
     if let Some(why) = refused
@@ -962,6 +1004,10 @@ fn finish_validation(
         }
     } else {
         info.details.push(Detail::plain("The signer's identity is valid."));
+        // Which list vouched, when one did: the user's own list is the plain case and says nothing.
+        if let Some((root, TrustSource::List(list))) = anchor {
+            info.details.push(Detail::of("Its certificate chains to {} in the trust list “{}”.", Fill::Names(root, list)));
+        }
         if !problems && !revoked {
             info.status = Status::Valid;
         }

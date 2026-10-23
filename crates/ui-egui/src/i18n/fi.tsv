@@ -2501,6 +2501,7 @@ animation effects	Off	Ei käytössä
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Kohteen {} varmenne ei ollut voimassa allekirjoitushetkellä, joten sitä ei käytetä kohteen {} vahvistamiseen.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Allekirjoittajan henkilöllisyys on tuntematon, koska sitä ei ole lisätty luotettujen varmenteiden luetteloon eikä mikään sen ylemmistä varmenteista ole luotettu varmenne.
 	The signer's identity is valid.	Allekirjoittajan henkilöllisyys on kelvollinen.
+	Its certificate chains to {} in the trust list “{}”.	Sen varmenteen ketju johtaa varmenteeseen {} luottamusluettelossa ”{}”.
 	The signature includes an embedded timestamp.	Allekirjoitus sisältää upotetun aikaleiman.
 	Signing time is from the clock on the signer's computer.	Allekirjoitusaika on peräisin allekirjoittajan tietokoneen kellosta.
 	The signature's timestamp token does not cover the signature value.	Allekirjoituksen aikaleimatunniste ei kata allekirjoituksen arvoa.

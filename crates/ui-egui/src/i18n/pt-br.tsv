@@ -2680,6 +2680,7 @@ animation effects	Off	Desativados
 	The signer's certificate was not valid at the time of signing.	O certificado do signatário não era válido no momento da assinatura.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	A identidade do signatário é desconhecida porque não foi incluída na sua lista de certificados confiáveis e nenhum dos certificados na cadeia acima dela é confiável.
 	The signer's identity is valid.	A identidade do signatário é válida.
+	Its certificate chains to {} in the trust list “{}”.	A cadeia do seu certificado chega a {} na lista de confiança “{}”.
 	The timestamp authority's certificate was not valid at the time of timestamping.	O certificado da autoridade de carimbo de data e hora não era válido no momento da emissão do carimbo.
 	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
 	The timestamp contents are not hexadecimal.	O conteúdo do carimbo de data e hora não está em hexadecimal.

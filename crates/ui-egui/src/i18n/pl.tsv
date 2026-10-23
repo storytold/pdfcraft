@@ -2508,6 +2508,7 @@ animation effects	Off	Wyłączone
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certyfikat podmiotu {} nie był ważny w chwili podpisania, dlatego nie poświadcza certyfikatu {}.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Tożsamość podpisującego jest nieznana, ponieważ jego certyfikatu nie ma na liście zaufanych certyfikatów i żaden z certyfikatów nadrzędnych nie jest zaufany.
 	The signer's identity is valid.	Tożsamość podpisującego jest prawidłowa.
+	Its certificate chains to {} in the trust list “{}”.	Łańcuch jego certyfikatu prowadzi do {} na liście zaufania „{}”.
 	The signature includes an embedded timestamp.	Podpis zawiera osadzony znacznik czasu.
 	Signing time is from the clock on the signer's computer.	Czas podpisania pochodzi z zegara komputera podpisującego.
 	The signature's timestamp token does not cover the signature value.	Token znacznika czasu nie obejmuje wartości podpisu.

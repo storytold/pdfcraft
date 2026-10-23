@@ -2657,6 +2657,7 @@ animation effects	Off	Vypnuto
 	The signer's certificate was not valid at the time of signing.	Certifikát podepisující osoby nebyl v době podpisu platný.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identita podepisující osoby je neznámá, protože není ve vašem seznamu důvěryhodných certifikátů a žádný z jejích nadřazených certifikátů není důvěryhodný.
 	The signer's identity is valid.	Identita podepisující osoby je platná.
+	Its certificate chains to {} in the trust list “{}”.	Řetězec jeho certifikátu vede k {} v důvěryhodném seznamu „{}“.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Certifikát autority časových razítek nebyl v době vystavení razítka platný.
 	The timestamp authority's certificate is not issued for time stamping.	Certifikát autority časových razítek není vystaven pro vydávání časových razítek.
 	The timestamp contents are not hexadecimal.	Obsah časového razítka není šestnáctkový.

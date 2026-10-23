@@ -2288,6 +2288,7 @@ action wizard	Start	Inicia
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	El certificat de {} no era vàlid en el moment de signar, de manera que no s'utilitza per avalar {}.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	La identitat del signant és desconeguda perquè no s'ha inclòs a la llista de certificats de confiança i cap dels seus certificats pare és un certificat de confiança.
 	The signer's identity is valid.	La identitat del signant és vàlida.
+	Its certificate chains to {} in the trust list “{}”.	La cadena del seu certificat arriba a {} a la llista de confiança «{}».
 	The signature includes an embedded timestamp.	La signatura inclou una marca de temps incrustada.
 	Signing time is from the clock on the signer's computer.	L'hora de signatura prové del rellotge de l'ordinador del signant.
 	The signature's timestamp token does not cover the signature value.	El testimoni de marca de temps de la signatura no cobreix el valor de la signatura.
