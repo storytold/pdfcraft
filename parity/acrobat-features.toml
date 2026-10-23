@@ -8166,11 +8166,11 @@ title = "Page setup"
 area = "L"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/ui-egui/tests/it/print.rs::custom_papers_and_the_paper_remembered_for_a_printer", "crates/ui-egui/src/print_paper.rs::the_paper_is_remembered_per_printer_only_when_asked", "crates/ui-egui/src/print_paper.rs::settings_are_read_as_untrusted", "crates/automation/tests/it/automation.rs::doc_print_takes_a_paper_size_of_its_own"]
+notes = "In the Print dialog, as the rest of printing is (no separate Page Setup window): Custom… beside Paper adds a named size in the preferences' unit (1 to 200 inches a side), kept with the settings and removable; 'Remember this paper for <printer>' at Print time keeps the paper for that printer (or Save as PDF) and the dialog starts with it. doc_print takes sizes such as 8.5x14in or 210x297mm. Missing: margins, and the dialog's other choices (orientation, two-sided, sizing and so on) remembered per printer."
 
 [[feature]]
 id = "print.print-ready-pdf"

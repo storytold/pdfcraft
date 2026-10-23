@@ -2445,6 +2445,10 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Custom…	自定义…
+	Add a paper size of your own to the list	将自己的纸张尺寸添加到列表
+	Take this paper size off the list	从列表中删除此纸张尺寸
+	Remember this paper for {printer}	为 {printer} 记住此纸张
 	Font	字体
 	Bulleted list	项目符号列表
 	Numbered list	编号列表

@@ -127,6 +127,8 @@ impl Automation {
         };
         let paper = match a.opt_str("paper")? {
             None => PAPERS[0].1,
+            // A size of its own: "8.5x14in", "210x297mm", "10x15cm", "612x792pt".
+            Some(p) if paper_size(p).is_some() => paper_size(p).unwrap_or(PAPERS[0].1),
             Some(p) => PAPERS
                 .iter()
                 .find(|(n, _)| {
@@ -136,7 +138,10 @@ impl Automation {
                 })
                 .map(|x| x.1)
                 .ok_or_else(|| {
-                    bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
+                    bad(format!(
+                        "unknown paper {p:?}; choose one of {}, or a size such as 8.5x14in or 210x297mm (1 to 200 inches a side)",
+                        PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+                    ))
                 })?,
         };
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
@@ -189,6 +194,19 @@ impl Automation {
         }
         Ok(out)
     }
+}
+
+/// "WxH" with a unit (in, mm, cm or pt) as a portrait paper size in points; each side 1 to 200
+/// inches (PDF's own page limit).
+fn paper_size(spec: &str) -> Option<(f64, f64)> {
+    let s = spec.trim().to_ascii_lowercase();
+    let (body, per_point) = [("in", 1.0 / 72.0), ("mm", 25.4 / 72.0), ("cm", 2.54 / 72.0), ("pt", 1.0)]
+        .into_iter()
+        .find_map(|(unit, per_point)| s.strip_suffix(unit).map(|b| (b, per_point)))?;
+    let (w, h) = body.split_once('x')?;
+    let side = |t: &str| t.trim().parse::<f64>().ok().map(|v| v / per_point).filter(|v| (72.0..=14_400.0).contains(v));
+    let (w, h) = (side(w)?, side(h)?);
+    Some((w.min(h), w.max(h)))
 }
 
 #[cfg(test)]

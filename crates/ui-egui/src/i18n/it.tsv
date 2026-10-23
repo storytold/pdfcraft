@@ -2693,6 +2693,10 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Custom…	Personalizzato…
+	Add a paper size of your own to the list	Aggiungi all'elenco un formato carta personale
+	Take this paper size off the list	Togli questo formato carta dall'elenco
+	Remember this paper for {printer}	Ricorda questa carta per {printer}
 	Font	Carattere
 	Bulleted list	Elenco puntato
 	Numbered list	Elenco numerato

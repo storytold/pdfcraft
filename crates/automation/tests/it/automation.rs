@@ -7950,6 +7950,32 @@ fn a_missing_path_under_the_root_names_where_it_was_looked_for() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// `doc_print` takes a paper size of its own besides the named ones, in inches, millimetres,
+/// centimetres or points, either way round; a size it can't read or outside 1 to 200 inches is
+/// refused.
+#[test]
+fn doc_print_takes_a_paper_size_of_its_own() {
+    let dir = workdir("print-paper-size");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (paper, want) in
+        [("8.5x14in", (612.0, 1008.0)), ("297x210mm", (595.28, 841.89)), ("10 x 15 cm", (283.46, 425.2)), ("288x432PT", (288.0, 432.0))]
+    {
+        let file = format!("{}.pdf", want.0);
+        ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "paper": paper, "orientation": "portrait", "path": file }));
+        let bytes = std::fs::read(dir.join(&file)).unwrap();
+        let out = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+        let page = pdfcraft_model::pages(&out)[0].display_size(&out);
+        assert!((page.0 - want.0).abs() < 0.5 && (page.1 - want.1).abs() < 0.5, "{paper}: {page:?}");
+    }
+    for paper in ["8.5xbroad", "8.5x14", "0.5x11in", "8.5x300in", "-8.5x11in", "NaNx11in"] {
+        match a.call("doc_print", &json!({ "doc": doc, "paper": paper, "path": "x.pdf" })) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains("unknown paper"), "{paper}: {m}"),
+            other => panic!("{paper}: {other:?}"),
+        }
+    }
+}
+
 /// `doc_print` prints as image: pictures at `dpi`, grey with `grayscale`; a resolution outside
 /// 72–600 is refused.
 #[test]

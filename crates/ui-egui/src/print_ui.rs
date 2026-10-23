@@ -76,7 +76,16 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
+    /// Paper sizes added with Custom…, kept with the settings.
+    pub custom_papers: Vec<crate::print_paper::CustomPaper>,
+    /// The paper each printer is remembered with, kept with the settings.
+    pub remembered_paper: crate::print_paper::RememberedPaper,
+    /// "Remember this paper for …", applied at Print time.
+    pub remember_paper: bool,
+    /// The custom paper being added: name, width and height as typed (the preferences' unit).
+    pub custom_new: Option<(String, String, String)>,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
     /// The sheet shown in the preview (0-based).
@@ -137,6 +146,10 @@ impl Default for PrintDraft {
             as_image: false,
             dpi: 300.0,
             paper: 0,
+            custom_papers: Vec::new(),
+            remembered_paper: Default::default(),
+            remember_paper: false,
+            custom_new: None,
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -210,7 +223,7 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper: self.paper_size(),
             orientation: self.orientation,
             layout,
             content: self.content,
@@ -391,8 +404,10 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            custom_new: None,
             ..keep
         };
+        self.print_draft.apply_remembered();
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -534,7 +549,13 @@ impl PdfCraftApp {
                     // A picked printer that is no longer listed falls back to the default too.
                     if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
-                        d.printer = default_printer(&printers);
+                        // Only a different printer starts over with its remembered paper; the
+                        // same one keeps the paper and the Remember box as they were left.
+                        let default = default_printer(&printers);
+                        if default != d.printer {
+                            d.printer = default;
+                            d.apply_remembered();
+                        }
                     }
                     d.printers = printers;
                     d.printers_loading = false;
@@ -995,6 +1016,7 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
+                    d.apply_remembered();
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -1034,11 +1056,31 @@ pub(crate) fn body(
                 });
                 ui.end_row();
                 ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
-                egui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, tl!(name));
+                ui.horizontal(|ui| {
+                    // A standard size's name is translated; a custom paper keeps the name it was given.
+                    let shown = if d.paper_is_custom() { d.paper_name() } else { tl!(d.paper_name().as_str()).to_string() };
+                    egui::ComboBox::from_id_salt("paper").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                        for (i, (name, _)) in PAPERS.iter().enumerate() {
+                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                        }
+                        if !d.custom_papers.is_empty() {
+                            ui.separator();
+                        }
+                        for (i, p) in d.custom_papers.iter().enumerate() {
+                            let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
+                            ui.selectable_value(&mut d.paper, PAPERS.len() + i, label);
+                        }
+                    });
+                    if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
+                        d.custom_new = match d.custom_new {
+                            Some(_) => None,
+                            None => Some((String::new(), String::new(), String::new())),
+                        };
+                    }
+                    if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
+                        d.remove_custom_paper();
                     }
                 });
                 // Label stock gets the label layout (cut, turned upright, fitted).
@@ -1048,6 +1090,11 @@ pub(crate) fn body(
                     d.sheet = 0;
                 }
                 ui.end_row();
+                if d.custom_new.is_some() {
+                    ui.label("");
+                    custom_paper_row(ui, d, t);
+                    ui.end_row();
+                }
             });
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
@@ -1359,6 +1406,11 @@ pub(crate) fn body(
     });
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
+    // The paper is kept for this printer (or Save as PDF) when this is ticked at Print time. On its
+    // own row above the buttons: sharing their row moved them while the dialog settled.
+    let for_whom = d.printer.as_deref().map_or_else(|| tl!("Save as PDF").to_string(), printer_label);
+    ui.add(widgets::checkbox(&mut d.remember_paper, crate::i18n::fmt(tl!("Remember this paper for {printer}"), &[("printer", &for_whom)])));
+    ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
@@ -1369,7 +1421,37 @@ pub(crate) fn body(
             cancel = true;
         }
     });
+    if go {
+        d.remember_now();
+    }
     (go, cancel)
+}
+
+/// The row that adds a custom paper: name, width and height in the preferences' unit.
+fn custom_paper_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    let unit = d.units;
+    let Some((name, width, height)) = d.custom_new.as_mut() else { return };
+    let side = |s: &str| s.trim().replace(',', ".").parse::<f64>().ok().map(|v| v / unit.per_point());
+    let paper = match (side(width), side(height)) {
+        (Some(w), Some(h)) => crate::print_paper::CustomPaper::new(name, w, h),
+        _ => None,
+    };
+    let (mut add, mut cancel) = (false, false);
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(name).hint_text(tl!("Name")).desired_width(110.0));
+        ui.add(egui::TextEdit::singleline(width).hint_text(tl!("Width")).desired_width(52.0));
+        ui.label("×");
+        ui.add(egui::TextEdit::singleline(height).hint_text(tl!("Height")).desired_width(52.0));
+        ui.label(egui::RichText::new(unit.label()).color(t.text_muted));
+        add = ui.add_enabled(paper.is_some(), egui::Button::new(tl!("Add"))).clicked();
+        cancel = ui.button(tl!("Cancel")).clicked();
+    });
+    if add && let Some(paper) = paper {
+        d.add_custom_paper(paper);
+        d.custom_new = None;
+    } else if cancel {
+        d.custom_new = None;
+    }
 }
 
 #[cfg(test)]

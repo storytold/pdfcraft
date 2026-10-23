@@ -107,6 +107,7 @@ mod panels;
 #[cfg(not(target_arch = "wasm32"))]
 mod pickers;
 pub mod prepare;
+mod print_paper;
 mod print_ui;
 mod signature_drag;
 pub mod units;
@@ -2430,9 +2431,14 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        // The Print dialog's paper list and each printer's paper (print.page-setup).
+        v["print_custom_papers"] = serde_json::json!(self.print_draft.custom_papers);
+        v["print_paper_by_printer"] = serde_json::json!(self.print_draft.remembered_paper);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
-        // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
-        v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
+        // a custom paper is stored by the name it was given.
+        let d = &self.print_draft;
+        v["print_paper"] = serde_json::json!((d.paper < d.paper_count()).then(|| d.paper_name()));
         v.to_string()
     }
 
@@ -2500,13 +2506,6 @@ impl PdfCraftApp {
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
         }
-        if let Some(paper) = v
-            .get("print_paper")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|name| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name))
-        {
-            self.print_draft.paper = paper;
-        }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
         }
@@ -2515,6 +2514,18 @@ impl PdfCraftApp {
         }
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
+        }
+        // The Print dialog's paper list and each printer's paper; settings are untrusted, so each
+        // custom paper is checked as if it were typed.
+        if v.get("print_custom_papers").is_some() {
+            self.print_draft.custom_papers = print_paper::read_custom(&v["print_custom_papers"]);
+        }
+        if v.get("print_paper_by_printer").is_some() {
+            self.print_draft.remembered_paper = print_paper::read_remembered(&v["print_paper_by_printer"]);
+        }
+        // After the custom papers, so a custom paper chosen last time is found by its name.
+        if let Some(paper) = v.get("print_paper").and_then(serde_json::Value::as_str).and_then(|name| self.print_draft.paper_index(name)) {
+            self.print_draft.paper = paper;
         }
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;

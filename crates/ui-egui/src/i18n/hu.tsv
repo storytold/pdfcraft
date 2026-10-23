@@ -2480,6 +2480,10 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Custom…	Egyéni…
+	Add a paper size of your own to the list	Saját papírméret hozzáadása a listához
+	Take this paper size off the list	Ennek a papírméretnek az eltávolítása a listáról
+	Remember this paper for {printer}	Papír megjegyzése ehhez: {printer}
 	Font	Betűtípus
 	Bulleted list	Felsorolás
 	Numbered list	Számozott lista
