@@ -1092,6 +1092,23 @@ pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) 
     }
 }
 
+/// The inline bookmark rename field. It takes focus on its first frame with all of its text
+/// selected, so typing replaces the old title instead of landing at a random caret position.
+fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
+    let first_frame = !ui.memory(|m| m.has_focus(id));
+    if first_frame {
+        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let end = egui::text::CCursor::new(text.chars().count());
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+        state.store(ui.ctx(), id);
+    }
+    let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
+    if !resp.has_focus() && !resp.lost_focus() {
+        resp.request_focus();
+    }
+    resp
+}
+
 fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineItem, path: &[usize], siblings: usize, cx: &mut OutlineCtx<'_>) {
     if cx.searching && !cx.matches.contains(path) {
         return;
@@ -1113,11 +1130,7 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
         ui.horizontal(|ui| {
             ui.add_space(x_text);
             crate::widgets::begin_dialog(ui);
-            let edit = crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id.with("rename"));
-            let resp = ui.add(edit);
-            if !resp.has_focus() && !resp.lost_focus() {
-                resp.request_focus();
-            }
+            let resp = rename_field(ui, text, id.with("rename"));
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cancel = true;
             } else if resp.lost_focus() {
@@ -1880,5 +1893,27 @@ mod bookmark_filter {
         // A child match keeps its parent: [0] and [0, 0].
         assert_eq!(outline_matches(&outline, &fold("KIŞ")).len(), 2);
         assert!(outline_matches(&outline, &fold("izmir")).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod rename_field_tests {
+    use super::rename_field;
+
+    /// The rename field opens with its whole title selected.
+    #[test]
+    fn rename_field_selects_all_text_on_first_focus() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("bm_rename_test");
+        let mut text = String::from("Untitled");
+        for _ in 0..2 {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                rename_field(ui, &mut text, id);
+            });
+            output.drop_without_applying_deltas();
+        }
+        let range = egui::TextEdit::load_state(&ctx, id).and_then(|s| s.cursor.char_range());
+        let span = range.map(|r| (r.primary.index.min(r.secondary.index), r.primary.index.max(r.secondary.index)));
+        assert_eq!(span, Some((0, 8)));
     }
 }
