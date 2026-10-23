@@ -1867,3 +1867,97 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
     let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
     assert!(appearance::build(&d).is_some());
 }
+
+/// A comment's built appearance for the dictionary `body` (no `/AP`), as text, or `None` when
+/// PdfCraft can't draw it.
+fn drawn(body: &str) -> Option<String> {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        body.as_bytes(),
+    ]);
+    let d = list(&doc, 0).into_iter().next().unwrap();
+    crate::appearance::build(&d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// The x and y range a drawing's path covers: its points, and each curve's middle (a curve's
+/// control points lie outside it, so they aren't counted).
+fn extent(ops: &str) -> [f64; 4] {
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    let mut at = (0.0, 0.0);
+    let add = |p: (f64, f64), b: &mut [f64; 4]| *b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+    for line in ops.lines() {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        let Some((op, nums)) = t.split_last() else { continue };
+        let v: Vec<f64> = nums.iter().filter_map(|n| n.parse().ok()).collect();
+        match (*op, v.as_slice()) {
+            ("m" | "l", [x, y]) => {
+                at = (*x, *y);
+                add(at, &mut b);
+            }
+            ("c", [x1, y1, x2, y2, x3, y3]) => {
+                let mid = ((at.0 + 3.0 * x1 + 3.0 * x2 + x3) / 8.0, (at.1 + 3.0 * y1 + 3.0 * y2 + y3) / 8.0);
+                add(mid, &mut b);
+                at = (*x3, *y3);
+                add(at, &mut b);
+            }
+            _ => {}
+        }
+    }
+    b
+}
+
+/// ISO 32000-2 §12.5.4, Table 169: a cloudy border (`/BE /S /C`) applies to squares, circles,
+/// polygons and (PDF 1.6) text boxes, honours the `/BS` width and dashes, and its intensity
+/// `/I` defaults to 0. Squares, circles and text boxes without an appearance were not drawn at
+/// all, so a reviewer's marks vanished; intensity 0 (or none) drew a cloud on polygons.
+#[test]
+fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
+    let base = "/Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 >>";
+    for kind in ["Square", "Circle"] {
+        let ops = drawn(&format!("<< {base} /Subtype /{kind} /BE << /S /C /I 1 >> >>")).unwrap_or_else(|| panic!("{kind} is drawn"));
+        assert!(ops.matches(" c\n").count() > 8 && !ops.contains(" re\n"), "{kind} as bumps: {ops}");
+        let e = extent(&ops);
+        assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 300.0 && e[3] <= 250.0, "{kind} stays in /Rect: {e:?}");
+    }
+    let dashed = drawn(&format!("<< {base} /Subtype /Square /BS << /W 2 /S /D /D [6 3] >> /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(dashed.contains("[6 3] 0 d") && dashed.contains(" c\n"), "dashes honoured: {dashed}");
+    let text = drawn(&format!("<< {base} /Subtype /FreeText /DA (0 0 1 rg /Helv 10 Tf) /Contents (Look here) /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(text.contains(" c\n") && text.contains("(Look here) Tj"), "a cloud around the text: {text}");
+    let dashed_text = drawn(
+        "<< /Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 /S /D /D [4 2] >> /Subtype /FreeText /DA (0 g /Helv 10 Tf) /Contents (x) /BE << /S /C /I 1 >> >>",
+    )
+    .unwrap();
+    assert!(dashed_text.contains("[4 2] 0 d"), "a text box's cloud is dashed too: {dashed_text}");
+    // Intensity 0, or none: a plain border (the default is 0).
+    for be in ["<< /S /C /I 0 >>", "<< /S /C >>", "<< /S /S /I 2 >>"] {
+        let square = drawn(&format!("<< {base} /Subtype /Square /BE {be} >>")).unwrap();
+        assert!(square.contains(" re\n") && !square.contains(" c\n"), "{be}: {square}");
+        let polygon =
+            drawn(&format!("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE {be} >>"))
+                .unwrap();
+        assert!(!polygon.contains(" c\n"), "{be}: polygon edges stay straight: {polygon}");
+    }
+    let cloudy_polygon =
+        drawn("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
+            .unwrap();
+    assert!(cloudy_polygon.contains(" c\n"));
+    // A cloudy callout is still left to its own appearance.
+    assert!(
+        drawn(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
+    );
+}
+
+/// Table 180: `/RD` gives the differences between "the left, top, right, and bottom coordinates
+/// of Rect and those of the square or circle, respectively"; a cloudy square's bumps sit on that
+/// inner square.
+#[test]
+fn a_cloudy_square_follows_rd_left_top_right_bottom() {
+    let ops = drawn("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [10 40 20 30] >>")
+        .unwrap();
+    // The corners of the inner square are path points: left 110, bottom 130, right 280, top 260.
+    for corner in ["110 130", "280 130", "280 260", "110 260"] {
+        assert!(ops.contains(corner), "corner {corner} in {ops}");
+    }
+}
