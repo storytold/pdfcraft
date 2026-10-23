@@ -692,8 +692,10 @@ fn a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn() {
     // Where the note's /Rect lies as displayed, left of where it was placed: nothing.
     click(&mut h, placed + egui::vec2(-10.0 * k, 10.0 * k));
     assert_eq!(h.state().views[0].comments.selected, None);
-    // On the icon, drawn right and down from where it was placed.
-    click(&mut h, placed + egui::vec2(10.0 * k, 10.0 * k));
+    // On the icon, drawn right and down from where it was placed. A note keeps its size on the
+    // screen (NoZoom, ISO 32000-2 §12.5.6.4): its icon has `k / zoom` pixels per point.
+    let icon = k / h.state().views[0].zoom;
+    click(&mut h, placed + egui::vec2(10.0 * icon, 10.0 * icon));
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
 }
 
@@ -2487,4 +2489,46 @@ fn text_comments_can_save_a_zero_width_default() {
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
+}
+
+/// A 300 × 200 page with two 40 × 40 rectangles whose upper-left corners sit on y = 180: one with
+/// the NoZoom flag (`/F 12`) at x = 40, one without (`/F 4`) at x = 100.
+const NO_ZOOM_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /F 12 /Rect [40 140 80 180] /C [1 0 0] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /F 4 /Rect [100 140 140 180] /C [0 0 1] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.3: a NoZoom comment keeps its size on the screen, pinned at the upper-left
+/// corner of its `/Rect`. At 400% it is drawn a quarter of its `/Rect` a side, and the Select tool
+/// picks it, and resizes it by its handles, where it is drawn; the comment without the flag still
+/// fills its `/Rect`. At 100% the two agree.
+#[test]
+fn no_zoom_comments_are_picked_and_resized_where_they_are_drawn() {
+    let mut h = harness_with_bytes(NO_ZOOM_FIXTURE.to_vec(), |app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    let select = |h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)| {
+        h.state_mut().views[0].comments.selected = None;
+        click_pt(h, p);
+        h.state().views[0].comments.selected
+    };
+    // Inside its /Rect but outside the 10 × 10 box it is drawn in at 400%.
+    assert_eq!(select(&mut h, (70.0, 150.0)), None, "nothing is drawn there at 400%");
+    assert_eq!(select(&mut h, (45.0, 175.0)), Some((0, 0)), "picked where it is drawn");
+    assert_eq!(select(&mut h, (130.0, 150.0)), Some((0, 1)), "the comment without NoZoom fills its /Rect");
+    // The drawn box's lower-right handle, dragged 10 pt right and down as drawn, makes it 20 × 20
+    // on screen at 400%: a /Rect of 80 × 80 from the same upper-left corner.
+    select(&mut h, (45.0, 175.0));
+    drag_pt(&mut h, (50.0, 170.0), (60.0, 160.0));
+    let r = comments(&h).into_iter().find(|a| a.index == 0).expect("the NoZoom comment").rect;
+    assert!(r.iter().zip([40.0, 100.0, 120.0, 180.0]).all(|(g, w)| (g - w).abs() < 1.0), "resized as drawn: {r:?}");
+    // At 100% it is drawn in its /Rect again (now 80 × 80).
+    h.state_mut().set_option("zoom", "100").unwrap();
+    crate::support::settle(&mut h);
+    assert_eq!(select(&mut h, (110.0, 110.0)), Some((0, 0)), "at 100% the whole /Rect is the comment");
 }

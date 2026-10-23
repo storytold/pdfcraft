@@ -466,6 +466,7 @@ impl DocumentCopyJob {
                         scale: 1.0,
                         tag: 0,
                         preview: false,
+                        magnification: None,
                     };
                     if let Some(t) = r.render(req).text {
                         push(t.text_of(0..t.glyphs.len()));

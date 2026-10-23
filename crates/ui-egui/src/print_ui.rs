@@ -438,6 +438,7 @@ impl PdfCraftApp {
                     scale: (1000.0 / w.max(h) as f32).clamp(0.1, 4.0),
                     tag: 0,
                     preview: false,
+                    magnification: None,
                 });
                 let [u0, v0, u1, v1] = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)?;
                 // Image rows run down from the top; display space runs up. Half a millimetre of slack.

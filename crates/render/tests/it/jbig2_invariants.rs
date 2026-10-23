@@ -50,7 +50,8 @@ fn corpus() -> Option<std::path::PathBuf> {
 fn render(path: &std::path::Path) -> Option<(u32, u32, Vec<u8>)> {
     let bytes = std::fs::read(path).ok()?;
     let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig { reject_oversize: true, ..Default::default() });
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     page.error.is_none().then_some((page.width, page.height, page.rgba.to_vec()))
 }
 

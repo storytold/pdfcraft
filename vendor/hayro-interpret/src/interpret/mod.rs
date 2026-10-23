@@ -120,6 +120,12 @@ pub struct InterpreterSettings {
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
     /// render (tiles, whole pages, print, export).
     pub preview: bool,
+    /// PdfCraft patch (51): the magnification the page is displayed at on screen (1.0 = 100%),
+    /// for annotations that keep a fixed size on the screen (the NoZoom flag, and text
+    /// annotations, ISO 32000-2 §12.5.3 and §12.5.6.4). `None`, or a value that isn't finite and
+    /// greater than zero, scales those annotations with the page like any other: print, export
+    /// and thumbnails have no on-screen magnification.
+    pub magnification: Option<f32>,
 }
 
 impl Default for InterpreterSettings {
@@ -142,6 +148,7 @@ impl Default for InterpreterSettings {
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
+            magnification: None,
         }
     }
 }
@@ -282,6 +289,12 @@ pub fn interpret_page<'a>(
                 {
                     continue;
                 }
+                // PdfCraft patch (51): NoZoom (bit 4), and text annotations whatever their flags,
+                // keep a fixed size on the screen (ISO 32000-2 §12.5.3, §12.5.6.4).
+                let affine = match no_zoom_scale(&annot, flags, context.settings.magnification, &annot_rect) {
+                    Some(scale) if (scale * affine).is_finite() => scale * affine,
+                    _ => affine,
+                };
 
                 // 3) Matrix shall be concatenated with A to form a matrix
                 // AA that maps from the appearance’s coordinate system to
@@ -361,6 +374,31 @@ fn no_rotate_turn(rotation: Rotation, rect: &kurbo::Rect) -> Affine {
     };
     let (x, y) = (rect.x0.min(rect.x1), rect.y0.max(rect.y1));
     Affine::new([cos, sin, -sin, cos, x - (cos * x - sin * y), y - (sin * x + cos * y)])
+}
+
+/// PdfCraft patch (51): the user-space scale that keeps an annotation's appearance the same size
+/// on the screen whatever the page's magnification `m`: `1/m` about the upper-left corner of
+/// `/Rect`, which stays where it is on the page (ISO 32000-2 §12.5.3). It applies to an
+/// annotation with the NoZoom flag (bit 4), and to a text annotation without it, which "shall
+/// behave as if the NoZoom and NoRotate annotation flags … were always set" (§12.5.6.4). Form
+/// fields and links are left in `/Rect`: PdfCraft takes their click targets from it. `None` when
+/// there is no on-screen magnification (print, export, thumbnails), when it isn't finite and
+/// greater than zero, or when the annotation keeps scaling with the page. The scale is uniform
+/// and has the same pivot as the NoRotate turn, so the two commute.
+fn no_zoom_scale(annot: &Dict<'_>, flags: u32, magnification: Option<f32>, rect: &kurbo::Rect) -> Option<Affine> {
+    let m = f64::from(magnification?);
+    if !(m.is_finite() && m > 0.0) {
+        return None;
+    }
+    let s = 1.0 / m;
+    let subtype = annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE);
+    let subtype = subtype.as_deref();
+    let fixed = (flags & 8 != 0 || subtype == Some(b"Text")) && !matches!(subtype, Some(b"Widget" | b"Link"));
+    if !fixed || !s.is_finite() {
+        return None;
+    }
+    let (x, y) = (rect.x0.min(rect.x1), rect.y0.max(rect.y1));
+    Some(Affine::new([s, 0.0, 0.0, s, x - s * x, y - s * y]))
 }
 
 /// PdfCraft patch: the normal appearance of a Highlight annotation that has none (ISO 32000-2

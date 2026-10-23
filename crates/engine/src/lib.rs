@@ -3025,6 +3025,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             fill_sign: s.fill_sign,
             no_rotate: s.no_rotate,
             points: s.points,
+            no_zoom: s.no_zoom,
         })
         .collect()
 }

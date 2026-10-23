@@ -130,7 +130,15 @@ impl Automation {
             return Err(failed("page has invalid dimensions"));
         }
         let scale = (max as f32 / side).min(1.0);
-        let out = self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false });
+        let out = self.renderer(id)?.render(RenderRequest {
+            page,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         if let Some(error) = out.error {
             return Err(failed(error));
         }
