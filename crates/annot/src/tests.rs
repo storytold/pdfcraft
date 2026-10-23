@@ -535,8 +535,12 @@ fn author_subject_and_note_icon_change() {
 #[test]
 fn stamps_draw_their_label_and_by_line() {
     let mut doc = fixture();
-    let shape =
-        Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::DynApproved, by: Some("By Ada at 2:14 pm, Oct 02, 2026".into()) };
+    let shape = Shape::Stamp {
+        rect: [100.0, 100.0, 260.0, 142.0],
+        stamp: StampKind::DynApproved,
+        lang: StampLang::En,
+        by: Some("By Ada at 2:14 pm, Oct 02, 2026".into()),
+    };
     let i = add_annotation(
         &mut doc,
         &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() },
@@ -547,7 +551,7 @@ fn stamps_draw_their_label_and_by_line() {
     assert_eq!((s.subtype.as_str(), s.index), ("Stamp", i));
     let ap = ap_content(&doc, &list(&doc, 0)[i]);
     assert!(ap.contains("(APPROVED) Tj") && ap.contains("(By Ada at 2:14 pm, Oct 02, 2026) Tj") && ap.contains("/HelvB"), "{ap}");
-    let sign = Shape::Stamp { rect: [100.0, 300.0, 220.0, 330.0], stamp: StampKind::SignHere, by: None };
+    let sign = Shape::Stamp { rect: [100.0, 300.0, 220.0, 330.0], stamp: StampKind::SignHere, lang: StampLang::En, by: None };
     let j = add_annotation(
         &mut doc,
         &NewAnnotation { page: 0, style: Style::default_for(&sign), shape: sign, contents: String::new(), author: "Ada".into() },
@@ -557,6 +561,55 @@ fn stamps_draw_their_label_and_by_line() {
     assert!(ap_content(&doc, &list(&doc, 0)[j]).contains("(SIGN HERE) Tj"));
     assert_eq!(StampKind::from_name(b"Approved"), Some(StampKind::Approved), "standard names");
     assert!(StampKind::ALL.iter().all(|k| k.size().0 >= 80.0));
+}
+
+#[test]
+fn stamps_are_drawn_in_their_language() {
+    let mut doc = fixture();
+    let shape = Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::Confidential, lang: StampLang::Fr, by: None };
+    let i = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() },
+        &Meta::default(),
+    )
+    .unwrap();
+    assert!(ap_content(&doc, &list(&doc, 0)[i]).contains("(CONFIDENTIEL) Tj"));
+    let shape = Shape::Stamp { rect: [100.0, 200.0, 300.0, 242.0], stamp: StampKind::PreliminaryResults, lang: StampLang::Cs, by: None };
+    let i = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() },
+        &Meta::default(),
+    )
+    .unwrap();
+    let ap = ap_content(&doc, &list(&doc, 0)[i]);
+    assert!(!ap.contains('?'), "every Czech letter has a glyph: {ap}");
+    let shape =
+        Shape::Stamp { rect: [100.0, 300.0, 300.0, 342.0], stamp: StampKind::DynApproved, lang: StampLang::Pl, by: Some("Przez Łukasz".into()) };
+    let i = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Łukasz".into() },
+        &Meta::default(),
+    )
+    .unwrap();
+    assert!(!ap_content(&doc, &list(&doc, 0)[i]).contains('?'), "a Polish name is drawn");
+    assert!(appearance::undrawable_text(&list(&doc, 0)[i]).is_none(), "and is not reported as undrawable");
+    let shape =
+        Shape::Stamp { rect: [100.0, 400.0, 300.0, 442.0], stamp: StampKind::DynApproved, lang: StampLang::Pl, by: Some("Łukasz 张".into()) };
+    let i = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Łukasz".into() },
+        &Meta::default(),
+    )
+    .unwrap();
+    assert_eq!(appearance::undrawable_text(&list(&doc, 0)[i]).map(|u| u.1), Some('张'), "only the letter with no glyph is reported");
+    assert_eq!(StampLang::from_code("pt-br"), StampLang::Pt);
+    assert_eq!(StampLang::from_code("pt-pt"), StampLang::PtPt);
+    assert_eq!(StampLang::from_code("ja"), StampLang::En, "no translation falls back to English");
+    for lang in StampLang::ALL {
+        assert_eq!(StampLang::from_code(lang.code()), lang);
+        assert!(StampKind::ALL.iter().all(|k| k.size_in(lang).0 >= 80.0 && !k.label_in(lang).is_empty()));
+        assert!(StampKind::ALL.iter().all(|k| pdfcraft_fonts::first_undrawable(&appearance::fold_extra(k.label_in(lang))).is_none()), "{lang:?}");
+    }
 }
 
 #[test]
@@ -1233,8 +1286,12 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     )
     .unwrap();
     assert_eq!(mark(&doc, f), Some('张'));
-    let stamp =
-        Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::DynApproved, by: Some("By 张三 at 2:14 pm, Oct 02, 2026".into()) };
+    let stamp = Shape::Stamp {
+        rect: [100.0, 100.0, 260.0, 142.0],
+        stamp: StampKind::DynApproved,
+        lang: StampLang::En,
+        by: Some("By 张三 at 2:14 pm, Oct 02, 2026".into()),
+    };
     let s = add_annotation(
         &mut doc,
         &NewAnnotation { page: 0, style: Style::default_for(&stamp), shape: stamp, contents: String::new(), author: "张三".into() },
