@@ -116,8 +116,10 @@ fn resampling_scratch_byte_len(
 
 /// PdfCraft patch: validate output, crossed intermediate and filter-work bounds before planning.
 /// Source width × target height also bounds PicScale's smaller single-threaded four-row scratch.
-/// Nearest-neighbour (`!interpolate`) has none of those: it copies source pixels into the target,
-/// so only the source and target buffers are bounded.
+/// Area averaging (`!interpolate`) has none of those: it streams source rows into the target, so
+/// only the source and target buffers are bounded here. Its sums (one source row of columns and
+/// a target row or two) are bounded by [`area_average`] itself, which knows the channel count
+/// it averages (four for an image with a soft mask), against [`MAX_AREA_SCRATCH_BYTES`].
 fn resampling_byte_len(
     source: (u32, u32),
     target: (u32, u32),
@@ -149,7 +151,7 @@ fn resampling_byte_len(
 /// PdfCraft patch: image dimensions selected before allocating resampling buffers.
 /// Exported for PdfCraft's small, metadata-only regression tests. `None` rejects invalid
 /// sources/scales or an over-budget target/intermediate; the caller may retain a valid source.
-/// `interpolate` selects the Catmull-Rom limits; nearest-neighbour (`false`) skips them.
+/// `interpolate` selects the Catmull-Rom limits; area averaging (`false`) skips them.
 #[doc(hidden)]
 pub fn image_resampling_size(
     width: u32,
@@ -193,18 +195,179 @@ fn image_buffer(len: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// PdfCraft patch (#624): the source index that PicScale's nearest-neighbour plan copies for
-/// destination `index` of `dst` samples taken from `src`. It is the same fixed-point centre
-/// sampling as `ResampleNearestPlan`, so these are the samples a nearest resize would copy.
-fn nearest_source_index(src: u32, dst: u32, index: u32) -> usize {
-    let step = (u64::from(src) << 32) / u64::from(dst);
-    ((u64::from(index) * step + (step >> 1)) >> 32) as usize
+/// PdfCraft patch: a zeroed buffer of `len` elements, or `None` if it cannot be allocated.
+fn zeroed_buffer<T: Copy + Default>(len: usize) -> Option<Vec<T>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    out.resize(len, T::default());
+    Some(out)
 }
 
-/// PdfCraft patch (#624): nearest-resizes a colour image and its same-sized soft mask straight
-/// into premultiplied RGBA of `target` size. Colour and mask come from the same source pixel, so
-/// this equals a nearest resize of the expanded RGBA followed by premultiplying each pixel.
-fn nearest_premultiplied_rgba(
+/// PdfCraft patch: most bytes of `u64` sums [`area_average`] keeps besides its output: 128 MiB,
+/// the budget of Catmull-Rom filter planning ([`MAX_RESAMPLING_PLAN_BYTES`]). Those sums take
+/// 8 bytes per sample of one source row, so a one-row strip needs 8× its decoded size, and a
+/// tiny Flate stream can decode to such a strip. Real images stay far below it: the budget is a
+/// row of about 16 M samples (a 16 M-pixel gray or 4 M-pixel RGBA strip). A source over it
+/// keeps its size, like any resize over its limit; one that wide cannot fit the backend's u16
+/// sides, so the image is skipped with a warning.
+const MAX_AREA_SCRATCH_BYTES: usize = 128 << 20;
+
+/// PdfCraft patch: the bytes of `u64` sums [`area_average`] keeps for an `N`-channel source
+/// `source_width` wide shrunk to `target_width`: the column sums of one source row, and one row
+/// of target sums, or two when the height is enlarged. `None` past [`MAX_AREA_SCRATCH_BYTES`].
+fn area_scratch_byte_len(
+    source_width: u32,
+    target_width: u32,
+    channels: usize,
+    enlarging: bool,
+) -> Option<usize> {
+    let columns = usize::try_from(source_width).ok()?.checked_mul(channels)?;
+    let target_rows = 1 + usize::from(enlarging);
+    let sums = usize::try_from(target_width)
+        .ok()?
+        .checked_mul(channels)?
+        .checked_mul(target_rows)?;
+    let len = columns.checked_add(sums)?.checked_mul(size_of::<u64>())?;
+    (len <= MAX_AREA_SCRATCH_BYTES).then_some(len)
+}
+
+/// PdfCraft patch: resizes an `N`-channel image to `target` by exact area averaging (a box
+/// filter): each target pixel is the mean of the source area it covers, weighted by coverage.
+/// Images that don't ask for `/Interpolate` use it. Nearest-neighbour kept one sample in N, so a
+/// shrunk 1-bit scan lost thin strokes (staff lines, serifs) and its edges turned jagged.
+/// Averaging never blends anything outside a target pixel's own area, so whole-ratio shrinks of
+/// blocks aligned to the target grid stay exact, flat colours (#624).
+///
+/// `add_row(y, weight, columns)` adds `weight ×` source row `y` (`source.0 × N` samples) into
+/// `columns`. Rows are visited in order. When shrinking (or keeping) the height, each source row
+/// is added once per target row it overlaps (at most twice): the source rows of one target row
+/// are summed down the columns first (a plain multiply-add over contiguous samples), and only
+/// then walked across once per *target* row, since walking every source row across cost about
+/// 4× as much on a 10718 × 13701 scan. When enlarging the height, a source row covers several
+/// target rows, so it is added and walked across once, and that row is reused for each of them:
+/// adding it again per target row cost source width × target height, about nine billion samples
+/// for a 1,100,000 × 1 strip drawn 16 × 8192. Either way the integer sums are the same. Memory is
+/// one row of column sums and one or two target rows of sums besides the output, within
+/// [`MAX_AREA_SCRATCH_BYTES`] (checked before anything is allocated or read). Coordinates are
+/// integers in units where a source pixel is `target` long and a target pixel `source` long, so
+/// every overlap is exact.
+fn area_average<const N: usize>(
+    source: (u32, u32),
+    target: (u32, u32),
+    mut add_row: impl FnMut(usize, u64, &mut [u64]) -> Option<()>,
+) -> Option<Vec<u8>> {
+    let ((sw, sh), (tw, th)) = (source, target);
+    // Each target pixel's weights sum to `sw × sh`, so sums stay below 255 × MAX_IMAGE_PIXELS
+    // and `total` is never zero.
+    let total = u64::from(sw).checked_mul(u64::from(sh))?;
+    if total == 0 || total > MAX_IMAGE_PIXELS || tw == 0 || th == 0 {
+        return None;
+    }
+    let out_len = image_byte_len(tw, th, N, MAX_IMAGE_PIXELS)?;
+    let enlarging = th > sh;
+    area_scratch_byte_len(sw, tw, N, enlarging)?;
+    let columns_len = (sw as usize).checked_mul(N)?;
+    let sums_len = (tw as usize).checked_mul(N)?;
+    let mut out = image_buffer(out_len)?;
+    let mut columns = zeroed_buffer::<u64>(columns_len)?;
+    let mut sums = zeroed_buffer::<u64>(sums_len)?;
+    let (sh, th) = (u64::from(sh), u64::from(th));
+    // Enlarging the height: the current source row walked across (each target column's sum,
+    // at most 255 × `sw`), filled when that row is first reached.
+    let mut row = if enlarging {
+        Some(zeroed_buffer::<u64>(sums_len)?)
+    } else {
+        None
+    };
+    let (mut pos, mut sy, mut ty, mut row_ready) = (0u64, 0u64, 0u64, false);
+    while sy < sh && ty < th {
+        let (source_end, target_end) = ((sy + 1) * th, (ty + 1) * sh);
+        let end = source_end.min(target_end);
+        let weight = end - pos;
+        // `sy < sh ≤ u32::MAX`, so it fits usize.
+        match &mut row {
+            Some(row) => {
+                if !row_ready {
+                    columns.fill(0);
+                    add_row(sy as usize, 1, &mut columns)?;
+                    area_average_row::<N>(&columns, sw, tw, row);
+                    row_ready = true;
+                }
+                for (sum, value) in sums.iter_mut().zip(row.iter()) {
+                    *sum += weight * value;
+                }
+            }
+            None => add_row(sy as usize, weight, &mut columns)?,
+        }
+        pos = end;
+        if end == target_end {
+            if row.is_none() {
+                area_average_row::<N>(&columns, sw, tw, &mut sums);
+                columns.fill(0);
+            }
+            // A mean of samples, so at most 255.
+            out.extend(
+                sums.iter()
+                    .map(|sum| ((sum + total / 2) / total).min(255) as u8),
+            );
+            if row.is_some() {
+                sums.fill(0);
+            }
+            ty += 1;
+        }
+        if end == source_end {
+            sy += 1;
+            row_ready = false;
+        }
+    }
+    (out.len() == out_len).then_some(out)
+}
+
+/// PdfCraft patch: [`area_average`] across one row: `sums` (`tw × N`) receives each target
+/// column's `columns` weighted by how much of it each source column covers (summing to `sw`).
+fn area_average_row<const N: usize>(columns: &[u64], sw: u32, tw: u32, sums: &mut [u64]) {
+    sums.fill(0);
+    let (columns, sums) = (columns.as_chunks::<N>().0, sums.as_chunks_mut::<N>().0);
+    let (sw, tw) = (u64::from(sw), u64::from(tw));
+    let (mut pos, mut sx, mut tx) = (0u64, 0usize, 0usize);
+    while let (Some(column), Some(sum)) = (columns.get(sx), sums.get_mut(tx)) {
+        let (source_end, target_end) = ((sx as u64 + 1) * tw, (tx as u64 + 1) * sw);
+        let end = source_end.min(target_end);
+        let weight = end - pos;
+        for (sum, column) in sum.iter_mut().zip(column) {
+            *sum += weight * column;
+        }
+        pos = end;
+        if end == source_end {
+            sx += 1;
+        }
+        if end == target_end {
+            tx += 1;
+        }
+    }
+}
+
+/// PdfCraft patch: [`area_average`] of packed `N`-channel samples.
+fn area_average_slice<const N: usize>(
+    data: &[u8],
+    source: (u32, u32),
+    target: (u32, u32),
+) -> Option<Vec<u8>> {
+    let row_len = source_byte_len(source.0, 1, N, MAX_IMAGE_PIXELS)?;
+    area_average::<N>(source, target, |y, weight, columns| {
+        let start = y.checked_mul(row_len)?;
+        let row = data.get(start..start.checked_add(row_len)?)?;
+        for (column, sample) in columns.iter_mut().zip(row) {
+            *column += weight * u64::from(*sample);
+        }
+        Some(())
+    })
+}
+
+/// PdfCraft patch: area-averages a colour image and its same-sized soft mask straight into
+/// premultiplied RGBA of `target` size. Averaging premultiplied samples keeps a transparent
+/// pixel's colour out of its neighbours, and the full-size RGBA copy is never made.
+fn area_premultiplied_rgba(
     color: &ImageData,
     alpha: &[u8],
     source: (u32, u32),
@@ -214,26 +377,34 @@ fn nearest_premultiplied_rgba(
         ImageData::Luma(luma) => (luma.data.as_slice(), 1),
         ImageData::Rgb(rgb) => (rgb.data.as_slice(), 3),
     };
-    let mut out = image_buffer(image_byte_len(target.0, target.1, 4, MAX_IMAGE_PIXELS)?)?;
-    for ty in 0..target.1 {
-        let sy = nearest_source_index(source.1, target.1, ty);
-        for tx in 0..target.0 {
-            let si = sy * source.0 as usize + nearest_source_index(source.0, target.0, tx);
-            let [r, g, b] = match samples.get(si * channels..si * channels + channels)? {
+    let width = source.0 as usize;
+    area_average::<4>(source, target, |y, weight, columns| {
+        let start = y.checked_mul(width)?;
+        let end = start.checked_add(width)?;
+        let colors = samples.get(start.checked_mul(channels)?..end.checked_mul(channels)?)?;
+        let alphas = alpha.get(start..end)?;
+        let pixels = columns.as_chunks_mut::<4>().0.iter_mut();
+        for ((column, color), a) in pixels.zip(colors.chunks_exact(channels)).zip(alphas) {
+            let [r, g, b] = match color {
                 [v] => [*v; 3],
                 [r, g, b] => [*r, *g, *b],
                 _ => return None,
             };
-            let a = *alpha.get(si)?;
-            out.extend_from_slice(
-                &AlphaColor::from_rgba8(r, g, b, a)
+            // Stencil masks and most soft masks are fully opaque or fully clear.
+            let pixel = match a {
+                255 => [r, g, b, 255],
+                0 => continue,
+                a => AlphaColor::from_rgba8(r, g, b, *a)
                     .premultiply()
                     .to_rgba8()
                     .to_u8_array(),
-            );
+            };
+            for (column, sample) in column.iter_mut().zip(pixel) {
+                *column += weight * u64::from(sample);
+            }
         }
-    }
-    Some(out)
+        Some(())
+    })
 }
 
 /// PdfCraft patch: most pieces one dashed stroke may be cut into. Stroke expansion keeps every
@@ -416,8 +587,12 @@ fn snap_minified_image(
     if !(a > 0.0 && d > 0.0 && b.abs() <= tiny && c.abs() <= tiny) {
         return None;
     }
+    // Halves round up, not away from zero as `f64::round` does, so shifting the page by whole
+    // pixels (a tile) shifts the rectangle without resizing it: with `round`, an image at
+    // x = 0.5 snapped to 1..5 on the page but −1..4 in a tile starting at x = 1.
+    let round = |v: f64| (v + 0.5).floor();
     let edge = |origin: f64, scale: f64, side: u32| {
-        let (lo, hi) = (origin.round(), (origin + scale * f64::from(side)).round());
+        let (lo, hi) = (round(origin), round(origin + scale * f64::from(side)));
         (hi - lo >= 1.0 && lo.abs() < 1e6 && hi.abs() < 1e6).then_some((lo, hi))
     };
     let (x0, x1) = edge(e, a, source.0)?;
@@ -434,6 +609,24 @@ fn snap_minified_image(
 enum PaintSetup {
     Clip(Option<BezPath>),
     Nothing,
+}
+
+/// PdfCraft patch: the transform that draws an image's final raster of `size` pixels. A snapped
+/// image (`snapped` from [`snap_minified_image`]) whose raster has its snapped size is drawn 1:1
+/// at the snapped corner. Any other raster is scaled by `additional` (source over raster size)
+/// and drawn with the image's `transform`. That includes a resize that fell back to the source
+/// (a failed allocation or resampler): drawn at the snapped corner, the source came out 1:1,
+/// many times too large.
+fn image_draw_transform(
+    transform: Affine,
+    additional: Affine,
+    size: (u32, u32),
+    snapped: Option<(u32, u32, f64, f64)>,
+) -> Affine {
+    match snapped {
+        Some((w, h, x0, y0)) if (w, h) == size => Affine::translate((x0, y0)),
+        _ => transform * additional,
+    }
 }
 
 pub(crate) struct Renderer {
@@ -645,15 +838,30 @@ impl Renderer {
     ) -> (Vec<u8>, u32, u32) {
         // PdfCraft patch (#624): `/Interpolate` governs the pre-minification pass too. Using
         // Catmull-Rom here for an image that did not request interpolation blends hard edges
-        // before ImageQuality::Low gets a chance to sample it. Keep the pre-resize (and its
-        // bounded memory/performance behaviour), but use nearest-neighbour when interpolation
-        // is disabled. PDF's default for `/Interpolate` is false.
-        let nearest = Scaler::new(ResamplingFunction::Nearest);
-        let scaler = if interpolate { &self.scaler } else { &nearest };
+        // across neighbouring pixels. Such an image is area-averaged instead, which only mixes
+        // what falls inside each target pixel. PDF's default for `/Interpolate` is false.
+        if !interpolate {
+            let source = (src_width, src_height);
+            let target = (new_width, new_height);
+            let resized = match pixel_format {
+                ImagePixelFormat::Luma => area_average_slice::<1>(&data, source, target),
+                ImagePixelFormat::Rgb => area_average_slice::<3>(&data, source, target),
+                ImagePixelFormat::Rgba => area_average_slice::<4>(&data, source, target),
+            };
+            return match resized {
+                Some(out) => (out, new_width, new_height),
+                None => {
+                    log::warn!(
+                        "Image area averaging failed or exceeded its buffer limit; falling back to source data"
+                    );
+                    (data, src_width, src_height)
+                }
+            };
+        }
+        let scaler = &self.scaler;
         let resized = match pixel_format {
             ImagePixelFormat::Luma => self.resize_image_data_impl::<1>(
                 scaler,
-                interpolate,
                 data,
                 src_width,
                 src_height,
@@ -665,7 +873,6 @@ impl Renderer {
             ),
             ImagePixelFormat::Rgb => self.resize_image_data_impl::<3>(
                 scaler,
-                interpolate,
                 data,
                 src_width,
                 src_height,
@@ -677,7 +884,6 @@ impl Renderer {
             ),
             ImagePixelFormat::Rgba => self.resize_image_data_impl::<4>(
                 scaler,
-                interpolate,
                 data,
                 src_width,
                 src_height,
@@ -702,7 +908,6 @@ impl Renderer {
     fn resize_image_data_impl<const N: usize>(
         &self,
         scaler: &Scaler,
-        interpolate: bool,
         data: Vec<u8>,
         src_width: u32,
         src_height: u32,
@@ -723,7 +928,7 @@ impl Renderer {
                 N,
                 data.len(),
                 MAX_IMAGE_PIXELS,
-                interpolate,
+                true,
             )?;
             let source_size = ImageSize::new(src_width as usize, src_height as usize);
             let target_size = ImageSize::new(new_width as usize, new_height as usize);
@@ -731,17 +936,12 @@ impl Renderer {
                 .ok()?;
             let plan = plan(scaler, source_size, target_size).ok()?;
             let scratch_len = plan.scratch_size();
-            // Nearest-neighbour needs no scratch, so any scratch it reports is refused.
-            let scratch_bound = if interpolate {
-                resampling_scratch_byte_len(
-                    (src_width, src_height),
-                    (new_width, new_height),
-                    N,
-                    MAX_IMAGE_PIXELS,
-                )?
-            } else {
-                0
-            };
+            let scratch_bound = resampling_scratch_byte_len(
+                (src_width, src_height),
+                (new_width, new_height),
+                N,
+                MAX_IMAGE_PIXELS,
+            )?;
             if scratch_len > scratch_bound {
                 return None;
             }
@@ -878,12 +1078,12 @@ impl Renderer {
         if requested_resize && self.in_type3_glyph && interpolate {
             quality = ImageQuality::High;
         }
-        // PdfCraft patch: an axis-aligned, interpolated image that is shrunk lands on whole device
-        // pixels. It is shrunk once to exactly its snapped device rectangle and drawn 1:1 at the
-        // snapped corner. Otherwise the shrunk raster (rounded up to a whole size) is sampled a
-        // second time at a fractional scale and offset, which blurs scans and photos.
-        let snapped = if interpolate
-            && requested_resize
+        // PdfCraft patch: an axis-aligned image that is shrunk lands on whole device pixels. It
+        // is shrunk once to exactly its snapped device rectangle and drawn 1:1 at the snapped
+        // corner. Otherwise the shrunk raster (rounded up to a whole size) is sampled a second
+        // time at a fractional scale and offset, which blurs scans and photos (interpolated) or
+        // drops and doubles columns of the averaged result (not interpolated).
+        let snapped = if requested_resize
             && !self.in_type3_glyph
             && (new_width, new_height) != (source_width, source_height)
         {
@@ -895,10 +1095,10 @@ impl Renderer {
         let needs_resize = (new_width, new_height) != (source_width, source_height);
 
         // PdfCraft patch (#624): a minified image with a soft mask that is not interpolated is
-        // nearest-sampled straight into premultiplied target RGBA. That skips the full-resolution
+        // area-averaged straight into premultiplied target RGBA. That skips the full-resolution
         // RGBA copy below and the premultiply pass after it.
         let direct = match &alpha_data {
-            Some(alpha) if needs_resize && !interpolate => nearest_premultiplied_rgba(
+            Some(alpha) if needs_resize && !interpolate => area_premultiplied_rgba(
                 &image_data,
                 &alpha.data,
                 (source_width, source_height),
@@ -1040,10 +1240,12 @@ impl Renderer {
             img_height as u16,
             may_have_transparency,
         );
-        let draw_transform = match snapped {
-            Some((_, _, x0, y0)) => Affine::translate((x0, y0)),
-            None => cur_transform * additional_transform,
-        };
+        let draw_transform = image_draw_transform(
+            cur_transform,
+            additional_transform,
+            (img_width, img_height),
+            snapped,
+        );
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
 
@@ -2184,5 +2386,158 @@ pub fn tiling_cell_scale(scale: f32, step: f32, max_pixels: f32) -> f32 {
         max_pixels / step
     } else {
         scale
+    }
+}
+
+// PdfCraft patch: unit tests for area averaging and the snapping of minified images.
+#[cfg(test)]
+mod area_average_tests {
+    use super::{
+        MAX_AREA_SCRATCH_BYTES, area_average, area_scratch_byte_len, image_draw_transform,
+        snap_minified_image,
+    };
+    use kurbo::{Affine, Rect};
+
+    /// A snapped image is drawn 1:1 at its snapped corner only when its raster has the snapped
+    /// size. A resize that falls back to the source (a failed allocation or resampler) keeps the
+    /// image's own transform: placed at the snapped corner, an 8 × 8 source meant for 4 × 4
+    /// device pixels covered 8 × 8.
+    #[test]
+    fn a_resize_that_falls_back_keeps_the_image_transform() {
+        let transform = Affine::new([0.5, 0.0, 0.0, 0.5, 1.0, 1.0]);
+        let snapped = snap_minified_image(&transform, (8, 8), (4, 4));
+        assert_eq!(snapped, Some((4, 4, 1.0, 1.0)));
+        let shrunk = image_draw_transform(transform, Affine::scale(2.0), (4, 4), snapped);
+        assert_eq!(shrunk, Affine::translate((1.0, 1.0)));
+        let fallback = image_draw_transform(transform, Affine::IDENTITY, (8, 8), snapped);
+        let device = fallback.transform_rect_bbox(Rect::new(0.0, 0.0, 8.0, 8.0));
+        let size = "the source keeps the image's size";
+        assert_eq!(device, Rect::new(1.0, 1.0, 5.0, 5.0), "{size}");
+        let unsnapped = image_draw_transform(transform, Affine::scale(2.0), (4, 4), None);
+        assert_eq!(unsnapped, transform * Affine::scale(2.0));
+    }
+
+    /// Every `u64` sum `area_average` keeps besides its output counts against one budget: the
+    /// column sums of a source row and the target row (two when enlarging the height). A cap on
+    /// the column sums alone let them reach 256 MiB, twice the Catmull-Rom planning budget, for a
+    /// one-row strip a tiny Flate stream decodes to. A strip over the budget is refused before
+    /// anything is allocated or a row is read.
+    #[test]
+    fn area_average_refuses_strips_over_its_scratch_budget() {
+        let samples = (MAX_AREA_SCRATCH_BYTES / 8) as u32;
+        let budget = Some(MAX_AREA_SCRATCH_BYTES);
+        assert_eq!(area_scratch_byte_len(samples - 1, 1, 1, false), budget);
+        assert_eq!(area_scratch_byte_len(samples - 2, 1, 1, true), budget);
+        assert_eq!(area_scratch_byte_len(samples, 1, 1, false), None);
+        assert_eq!(area_scratch_byte_len(samples - 1, 1, 1, true), None);
+        assert_eq!(area_scratch_byte_len(samples / 4 - 1, 1, 4, false), budget);
+        assert_eq!(area_scratch_byte_len(samples / 4, 1, 4, false), None);
+        assert_eq!(area_scratch_byte_len(u32::MAX, u32::MAX, 4, true), None);
+
+        let mut reads = 0;
+        let mut read = |_: usize, _: u64, _: &mut [u64]| {
+            reads += 1;
+            Some(())
+        };
+        assert_eq!(area_average::<1>((samples, 1), (16, 1), &mut read), None);
+        assert_eq!(
+            area_average::<4>((samples / 4, 1), (16, 1), &mut read),
+            None
+        );
+        assert_eq!(area_average::<1>((samples - 1, 1), (1, 2), &mut read), None);
+        assert_eq!(reads, 0, "a row was read past the budget");
+    }
+
+    /// An image shrunk across but enlarged down (a long strip drawn as a tall, narrow box) must
+    /// read each source row a bounded number of times. Repeating a source row once per target
+    /// row it covers walks the whole source width again for every target row: a validated
+    /// 1,100,000 × 1 image drawn 16 × 8192 visited about nine billion samples per pass, which
+    /// stalls the render (and the browser's inline renderer). A row straddling a target-row
+    /// boundary is read twice when shrinking, so two is the most allowed.
+    #[test]
+    fn area_average_reads_each_source_row_at_most_twice() {
+        for (source, target) in [((1024, 1), (4, 1024)), ((1024, 3), (4, 1000)), ((1024, 1024), (4, 4))] {
+            let mut reads = vec![0usize; source.1 as usize];
+            let out = area_average::<1>(source, target, |y, _, _| {
+                *reads.get_mut(y)? += 1;
+                Some(())
+            });
+            assert!(out.is_some(), "{source:?} → {target:?}");
+            let most = reads.iter().max().copied().unwrap_or(0);
+            assert!(most <= 2, "{source:?} → {target:?}: a source row was read {most} times");
+        }
+    }
+
+    /// Tiles are rendered with the page shifted by whole device pixels, so a shrunk image must
+    /// snap to the same rectangle, shifted by the same amount, whatever the tile's origin.
+    /// `f64::round`, used before, rounds halves away from zero: an 8-column image drawn 4 pixels
+    /// wide at x = 0.5 snapped to 1..5 in the full page, but to −1..4 (five columns) in a tile
+    /// starting at x = 1, so the tile averaged different source areas and seams showed at tile
+    /// edges.
+    #[test]
+    fn snapped_minified_image_is_invariant_under_whole_pixel_shifts() {
+        let snap = |x: f64, y: f64| {
+            snap_minified_image(&Affine::new([0.5, 0.0, 0.0, 0.5, x, y]), (8, 8), (4, 4))
+        };
+        for origin in [0.5, 1.5, 2.5, 0.25, 0.75, 3.0] {
+            for shift in [1.0, 2.0, 3.0] {
+                let page = snap(origin, origin);
+                let tile = snap(origin - shift, origin - shift);
+                let expected = page.map(|(w, h, x0, y0)| (w, h, x0 - shift, y0 - shift));
+                assert_eq!(tile, expected, "origin {origin}, tile shifted by {shift}");
+            }
+        }
+    }
+
+    /// The overlap of source span `s` and target span `t` along one axis, in units where a
+    /// source pixel is `target` long and a target pixel `source` long.
+    fn overlap(s: u64, t: u64, source: u64, target: u64) -> u64 {
+        let lo = (s * target).max(t * source);
+        let hi = ((s + 1) * target).min((t + 1) * source);
+        hi.saturating_sub(lo)
+    }
+
+    /// Both ways through [`area_average`] (shrinking the height, and enlarging it, which reuses
+    /// each source row) give each target pixel the coverage-weighted mean of the source, computed
+    /// here pixel by pixel, for every size up to 6 × 6 each way.
+    #[test]
+    fn area_average_matches_a_pixel_by_pixel_reference() {
+        const N: usize = 3;
+        for (sw, sh, tw, th) in (1..=6u32).flat_map(|sw| {
+            (1..=6u32).flat_map(move |sh| {
+                (1..=6u32).flat_map(move |tw| (1..=6u32).map(move |th| (sw, sh, tw, th)))
+            })
+        }) {
+            let samples: Vec<u8> = (0..sw * sh * N as u32)
+                .map(|i| (i * 37 % 251) as u8)
+                .collect();
+            let row_len = sw as usize * N;
+            let got = area_average::<N>((sw, sh), (tw, th), |y, weight, columns| {
+                let row = samples.get(y * row_len..(y + 1) * row_len)?;
+                for (column, sample) in columns.iter_mut().zip(row) {
+                    *column += weight * u64::from(*sample);
+                }
+                Some(())
+            });
+            let total = u64::from(sw * sh);
+            let mut want = Vec::new();
+            for ty in 0..u64::from(th) {
+                for tx in 0..u64::from(tw) {
+                    for c in 0..N {
+                        let mut sum = 0;
+                        for sy in 0..u64::from(sh) {
+                            for sx in 0..u64::from(sw) {
+                                let weight = overlap(sx, tx, sw.into(), tw.into())
+                                    * overlap(sy, ty, sh.into(), th.into());
+                                let i = (sy * u64::from(sw) + sx) as usize * N + c;
+                                sum += weight * u64::from(samples[i]);
+                            }
+                        }
+                        want.push(((sum + total / 2) / total) as u8);
+                    }
+                }
+            }
+            assert_eq!(got, Some(want), "{sw} × {sh} → {tw} × {th}");
+        }
     }
 }

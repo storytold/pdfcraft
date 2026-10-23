@@ -2369,8 +2369,9 @@ mod tests {
         assert_eq!(hayro::image_resampling_size(65_532 + 4, 1 + 4, 4, 65_536 * 5 * 4, 1.0, 1.0, 1 << 28, true), None);
     }
 
-    /// Nearest-neighbour copies source pixels and needs no filter tables, so a source wider than the
-    /// Catmull-Rom side cap still shrinks. The pixel budget applies to it all the same.
+    /// Area averaging (nearest-neighbour before it) needs no filter tables, so a source wider than
+    /// the Catmull-Rom side cap still shrinks. The pixel budget applies to it all the same; its
+    /// sums are bounded when averaging (`area_average_refuses_strips_over_its_scratch_budget`).
     #[test]
     fn image_resampling_nearest_accepts_wide_sources_the_filter_refuses() {
         let wide: u32 = (1 << 20) + 1;
@@ -2431,8 +2432,9 @@ mod tests {
         assert_eq!(&page.rgba[(20 + 3) * 4..][..4], &[255, 128, 128, 255]);
     }
 
-    /// A source wider than the filter's 2^20-pixel side cap is shrunk by nearest-neighbour rather
-    /// than refused and skipped (the default, `/Interpolate` omitted, is nearest).
+    /// A source wider than the filter's 2^20-pixel side cap is area-averaged rather than refused
+    /// and skipped (`/Interpolate` omitted, the default, means no filter). Its 1.1 M column sums
+    /// take 8.8 MB, well within the averaging budget.
     #[test]
     fn wide_non_interpolated_sources_draw_after_shrinking() {
         let data = "7f".repeat(1_100_000);
@@ -6032,27 +6034,121 @@ trailer << /Root 1 0 R >>
         assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), expected);
     }
 
+    /// Shrinking an image that does not ask for `/Interpolate` averages the area each device pixel
+    /// covers. Ten columns drawn six pixels wide: each pixel covers 1⅔ columns, e.g. pixel 0 is all
+    /// of column 0 and ⅔ of column 1, (10 × 3 + 20 × 2) / 5 = 14. Nearest-neighbour read single
+    /// columns (10, 30, 50, 60, 80, 100) and dropped the others.
     #[test]
-    fn non_integer_minification_samples_the_same_columns() {
-        // Ten columns drawn six pixels wide: centre sampling reads columns 0, 2, 4, 5, 7 and 9.
+    fn non_integer_minification_averages_the_covered_columns() {
         let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
         let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, None, (6, 1));
         let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
-        assert_eq!(grays, [10, 30, 50, 60, 80, 100]);
+        assert_eq!(grays, [14, 30, 46, 64, 80, 96]);
     }
 
     #[test]
-    fn non_integer_minification_samples_colour_and_mask_from_the_same_columns() {
-        // Ten gray columns with a soft mask, drawn six pixels wide: columns 0, 2, 4, 5, 7 and 9 are
-        // sampled, so the mask must pick the same columns as the colours.
+    fn non_integer_minification_averages_colour_and_mask_together() {
+        // Ten gray columns with a soft mask, drawn six pixels wide. Colour is averaged
+        // premultiplied, so a clear column adds no colour: pixel 0 covers opaque column 0 (gray 10)
+        // and ⅔ of clear column 1, so it is gray 10 at 60 % coverage over the white page.
         let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
         let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
         let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, Some(&mask), (6, 1));
-        // Opaque columns keep their gray; transparent columns show the white page.
-        assert_eq!(
-            page.rgba.as_chunks::<4>().0.to_vec(),
-            vec![[10, 10, 10, 255], [255, 255, 255, 255], [50, 50, 50, 255], [60, 60, 60, 255], [255, 255, 255, 255], [100, 100, 100, 255]]
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        // Premultiplied gray sums / 10 plus the 40 % of white showing through (102).
+        let expected = [6 + 102, 255, 30 + 102, 36 + 102, 255, 60 + 102];
+        for (got, want) in grays.iter().zip(expected) {
+            assert!(got.abs_diff(want) <= 1, "{grays:?} != {expected:?}");
+        }
+    }
+
+    /// A 2 × 2 page showing an 8 × 8, 1-bit image whose second row is ink: a one-pixel line of a
+    /// scan, like a staff line or a serif, shrunk 4:1. As a gray image (`/ImageMask` false) or as
+    /// a stencil mask painted black.
+    fn shrunk_one_bit_line(image_mask: bool) -> RenderedPage {
+        // Gray: 0 is black. Stencil: 0 paints.
+        let rows = "FF00FFFFFFFFFFFF";
+        let kind = if image_mask { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
+        let content = "q 2 0 0 2 0 0 cm /Im0 Do Q";
+        let pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 2 2] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj
+             4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+             5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 8 {kind} /BitsPerComponent 1 /Filter /ASCIIHexDecode /Length {} >> stream
+{rows}>
+endstream endobj
+             trailer << /Root 1 0 R >>
+%%EOF
+",
+            content.len(),
+            rows.len() + 1
         );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (2, 2));
+        page
+    }
+
+    /// A black-and-white scan shown below its resolution lost thin lines: nearest-neighbour kept
+    /// rows 2 and 6 of the 8 and dropped the line in row 1, so staff lines broke up and text turned
+    /// jagged when zoomed out. Averaging keeps the line as a quarter-coverage gray.
+    #[test]
+    fn shrunk_one_bit_scans_keep_thin_lines() {
+        for image_mask in [false, true] {
+            let page = shrunk_one_bit_line(image_mask);
+            let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+            // Top device row covers source rows 0–3, one of them ink: 3/4 of white.
+            for (i, gray) in grays.iter().enumerate() {
+                let want = if i < 2 { 191 } else { 255 };
+                assert!(gray.abs_diff(want) <= 1, "image_mask {image_mask}: {grays:?}");
+            }
+        }
+    }
+
+    /// A tile shows the same pixels as the full page under it. A shrunk image starting on a half
+    /// pixel snapped differently in the two: an 8-column ramp drawn 4 pixels wide at x = 0.5
+    /// snaps to columns 1..5 of the page, but `round` takes the tile starting at x = 1 to −1..4,
+    /// five columns, so the tile averaged other source areas and seams showed at tile edges.
+    #[test]
+    fn tiles_match_full_render_for_half_pixel_minified_images() {
+        let ramp: Vec<u8> = (0..8).map(|i| i * 32).collect();
+        let image = hex(&ramp);
+        let content = "q 4 0 0 1 0.5 0 cm /Im0 Do Q";
+        let mut mismatches = Vec::new();
+        for interp in ["", "/Interpolate true "] {
+            let pdf = format!(
+                "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 8 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {interp}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n",
+                content.len(),
+                image.len() + 1
+            );
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let full = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+            assert!(full.error.is_none(), "{:?}", full.error);
+            let part = r.render(RenderRequest {
+                page: 0,
+                kind: RequestKind::Pixels,
+                tile: Some(Tile { x: 1, y: 0, w: 7, h: 1 }),
+                scale: 1.0,
+                ..Default::default()
+            });
+            assert!(part.error.is_none(), "{:?}", part.error);
+            let grays = |page: &RenderedPage| page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect::<Vec<u8>>();
+            let (full, part) = (grays(&full), grays(&part));
+            if full.get(1..) != Some(part.as_slice()) {
+                mismatches.push(format!("{interp}page {full:?}, tile {part:?}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "the tile differs from the page under it: {mismatches:#?}");
     }
 
     #[test]
@@ -6106,48 +6202,45 @@ trailer << /Root 1 0 R >>
         assert_eq!(grays[3], 255, "{grays:?}");
     }
 
-    /// Type 3 glyph images used to be sampled bicubically (`ImageQuality::High`) whatever their
-    /// `/Interpolate`, which blends the nearest pre-resize back in. The glyph is 4.6 × 2.3 pixels
-    /// and its image pre-resizes to 5 × 3, so the final draw samples fractionally and bicubic
-    /// filtering would blend palette colours. Interior pixels must stay palette colours unless the
-    /// image asks for interpolation.
+    /// Type 3 glyph images (bitmap fonts, such as TeX's) are text: shrunk without `/Interpolate`,
+    /// they are averaged like other images rather than nearest-sampled, which dropped strokes
+    /// thinner than the shrink ratio. The glyph is an 8 × 1 bitmap with ink in column 1, drawn 2
+    /// pixels wide: nearest read columns 2 and 6 and lost the stroke.
     #[test]
-    fn non_interpolated_type3_glyph_images_are_not_smoothed_when_minified() {
-        let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
-        let data = hex(&block_source(palette).concat());
-        let render = |interp: &str| {
-            let content = "BT /F1 1 Tf 0 0.7 Td (A) Tj ET";
-            let glyph = "4.6 0 d0 q 4.6 0 0 2.3 0 0 cm /Im0 Do Q";
-            let pdf = format!(
-                "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 5 3] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
-                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-                 5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [5] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
-                 6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
-                 7 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 {interp}/Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
-                 trailer << /Root 1 0 R >>\n%%EOF\n",
-                content.len(),
-                glyph.len(),
-                data.len() + 1
-            );
-            let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
-            assert!(page.error.is_none(), "{:?}", page.error);
-            assert_eq!((page.width, page.height), (5, 3));
-            page
-        };
-        // The glyph fully covers columns 0–3 and rows 0–1.
-        let interior = |p: &RenderedPage| -> Vec<[u8; 3]> {
-            (0..2).flat_map(|y| (0..4).map(move |x| (y * 5 + x) * 4)).map(|i| [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]]).collect()
-        };
-
-        let omitted = render("");
-        for px in interior(&omitted) {
-            assert!(palette.contains(&px), "non-interpolated glyph image was smoothed to {px:?}");
-        }
-        let enabled = render("/Interpolate true ");
-        assert!(interior(&enabled).iter().any(|px| !palette.contains(px)), "/Interpolate true glyph image should still be sampled bicubically");
+    fn shrunk_type3_glyph_images_keep_thin_strokes() {
+        let data = hex(&[255, 0, 255, 255, 255, 255, 255, 255]);
+        let content = "BT /F1 1 Tf 0 0 Td (A) Tj ET";
+        let glyph = "2 0 d0 q 2 0 0 1 0 0 cm /Im0 Do Q";
+        let pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 3 1] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+             4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+             5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [2] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj
+             6 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+             7 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream
+{data}>
+endstream endobj
+             trailer << /Root 1 0 R >>
+%%EOF
+",
+            content.len(),
+            glyph.len(),
+            data.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (3, 1));
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        // Pixel 0 covers columns 0–3, one of them ink.
+        assert!(grays[0].abs_diff(191) <= 1, "the stroke is lost or not averaged: {grays:?}");
+        assert_eq!(grays[1..], [255, 255], "{grays:?}");
     }
 
     /// From `cargo xtask fuzz`: a CID font whose /W range spans every u32 inserted billions of
@@ -7183,7 +7276,7 @@ trailer << /Root 1 0 R >>
     /// and square caps, a sharp miter, a rotated and a stretched matrix, a hairline, dashes, a
     /// curve, text, and a page shown rotated.
     ///
-    /// Images are skipped the same way (vendored patch (10)): an image on a tile, one crossing
+    /// Images are skipped the same way (vendored patch (11)): an image on a tile, one crossing
     /// tile lines, and one fully off the page.
     #[test]
     fn skipping_paths_off_the_canvas_changes_no_pixel() {
@@ -7242,7 +7335,7 @@ trailer << /Root 1 0 R >>
         }
     }
 
-    /// Previews skip images that would cover only a few device pixels (vendored patch (11)):
+    /// Previews skip images that would cover only a few device pixels (vendored patch (12)):
     /// a tiny draw is missing from the preview but present in the final, while a large draw
     /// is in both. Finals never set the flag, so they draw everything.
     #[test]
