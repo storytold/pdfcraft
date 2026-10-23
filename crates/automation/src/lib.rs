@@ -934,6 +934,26 @@ impl Automation {
                 let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
                 json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
+            "sign_token_ids" => {
+                // The browser can't load a native module: say so, instead of a listing that
+                // claims the module has no identities.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(failed("PKCS #11 tokens aren't available in the browser"));
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let module_arg =
+                        a.opt_str("module")?.ok_or_else(|| ToolError::InvalidArgs("module: the PKCS #11 module (DLL) to list is required".into()))?;
+                    let module_path = self.resolve(module_arg, false)?;
+                    let module = pdfcraft_engine::sign::pkcs11::load_module(&module_path).map_err(failed)?;
+                    let listing = pdfcraft_engine::sign::pkcs11::list(&module, &pdfcraft_engine::sign::pkcs11::PinSource::None).map_err(failed)?;
+                    let ids: Vec<Value> =
+                        listing.ids.iter().map(|id| json!({ "id": id.reference(), "certificate": signing::cert_json(&id.id.certificate) })).collect();
+                    let unusable: Vec<Value> = listing.unusable.iter().map(|u| json!({ "subject": u.subject, "reason": u.reason })).collect();
+                    json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
+                }
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,

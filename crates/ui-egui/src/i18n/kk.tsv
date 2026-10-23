@@ -2513,3 +2513,9 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 модульдері
+	Token  ·  	Токен  ·  
+	Token PIN	Токен PIN-коды
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Токендер мен смарт-карталар PKCS #11 модулі арқылы қол қояды. Тек сенімді модульдерді қосыңыз: модуль өз кодын іске қосады.

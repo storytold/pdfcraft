@@ -5962,11 +5962,11 @@ title = "Sign with PKCS#11 tokens and smart cards"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["sign.digital"]
+tools = ["sign_token_ids", "sign_document"]
+evidence = ["crates/sign/src/pkcs11.rs::references_round_trip_as_rfc_7512", "crates/sign/src/pkcs11.rs::pkcs11_softhsm_token_round_trip", "crates/automation/tests/it/automation.rs::pkcs11_tools_refuse_bad_input_without_a_token", "crates/ui-egui/tests/it/signing.rs::a_token_identity_asks_for_a_pin_and_reports_a_bad_module", "crates/ui-egui/src/sign_ui.rs::preferences_signatures_lists_modules_and_removes"]
+notes = "Token identities by RFC 7512 URI (pkcs11:token=…;object=…;id=…;type=cert) from explicitly chosen modules (Preferences ▸ Signatures, sign_token_ids; sign_document takes pkcs11: with module and pin_env). RSA PKCS #1 v1.5 over a locally built DigestInfo and ECDSA P-256/P-384 over the digest (raw r ‖ s to DER) through cryptoki 0.12.1. The PIN is asked per signature (environment variable, dialog, or the reader's pinpad) and never stored; listing never logs in, so a PIN is tried only on the signing token, and one context per module lives for the process. Unusable certificates show greyed with the reason. The SoftHSM round-trip test (list without a PIN, sign, wrong PIN) runs in Linux CI against SoftHSM2 and skips elsewhere without PDFCRAFT_PKCS11_TEST_MODULE; no run against a real token yet. Still missing: GOST, RSA-PSS, session/PIN caching, nssdb/CryptoTokenKit, and translations outside the 17 full catalogs"
 
 [[feature]]
 id = "sign.self-signed-id"

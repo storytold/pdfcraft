@@ -77,9 +77,20 @@ jobs:
       # egui/winit/rfd, and the independent oracles (crates/oracle).
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
-        libgtk-3-dev qpdf poppler-utils
+        libgtk-3-dev qpdf poppler-utils softhsm2
       # cargo-deny for the deny step of `cargo xtask ci`, which requires it under CI.
       tools: cargo-nextest@0.9.149,cargo-deny@0.20.2
+      # Linux legs give the PKCS #11 token round trip a software token (SoftHSM2, installed
+      # above) in a scratch store, so it runs instead of skipping; the test initializes its
+      # own token there. Windows runs windows-command, without SoftHSM.
+      command: |
+        mkdir -p "$RUNNER_TEMP/softhsm/tokens"
+        printf 'directories.tokendir = %s\nobjectstore.backend = file\n' "$RUNNER_TEMP/softhsm/tokens" > "$RUNNER_TEMP/softhsm/softhsm2.conf"
+        export SOFTHSM2_CONF="$RUNNER_TEMP/softhsm/softhsm2.conf"
+        PDFCRAFT_PKCS11_TEST_MODULE="$(dpkg -L libsofthsm2 softhsm2 2>/dev/null | grep -m1 '/libsofthsm2\.so$' || true)"
+        test -n "$PDFCRAFT_PKCS11_TEST_MODULE" || { echo "libsofthsm2.so not found"; exit 1; }
+        export PDFCRAFT_PKCS11_TEST_MODULE
+        cargo xtask ci
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
       linux-env: PDFCRAFT_ORACLES_REQUIRED=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1

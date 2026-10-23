@@ -2521,3 +2521,9 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Λειτουργικές μονάδες PKCS #11
+	Token  ·  	Διακριτικό  ·  
+	Token PIN	PIN διακριτικού
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Τα διακριτικά και οι έξυπνες κάρτες υπογράφουν μέσω λειτουργικής μονάδας PKCS #11. Προσθέτετε μόνο μονάδες που εμπιστεύεστε: μια μονάδα εκτελεί δικό της κώδικα.

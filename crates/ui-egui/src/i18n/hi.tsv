@@ -2750,3 +2750,9 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 मॉड्यूल
+	Token  ·  	टोकन  ·  
+	Token PIN	टोकन PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	टोकन और स्मार्ट कार्ड PKCS #11 मॉड्यूल के माध्यम से हस्ताक्षर करते हैं। केवल विश्वसनीय मॉड्यूल जोड़ें: मॉड्यूल अपना स्वयं का कोड चलाता है।

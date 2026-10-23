@@ -2520,3 +2520,9 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Moduli PKCS #11
+	Token  ·  	Žeton  ·  
+	Token PIN	PIN žetona
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Žetoni in pametne kartice podpisujejo prek modula PKCS #11. Dodajte le module, ki jim zaupate: modul izvaja lastno kodo.

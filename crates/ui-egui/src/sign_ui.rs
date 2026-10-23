@@ -42,6 +42,58 @@ pub enum SignStep {
 pub const KEY_ALGORITHMS: [(&str, &str); 4] =
     [("2048-bit RSA", "rsa2048"), ("3072-bit RSA", "rsa3072"), ("4096-bit RSA", "rsa4096"), ("256-bit ECDSA (P-256)", "p256")];
 
+/// What the module picker shows: libraries on every desktop OS (advisory only).
+#[cfg(not(target_arch = "wasm32"))]
+const PKCS11_EXTENSIONS: &[&str] = &["dll", "so", "dylib"];
+
+/// File names to look for in a token driver's folder, for the current OS. Hints only: never
+/// probed or loaded without the user picking them (a module runs its own code).
+#[cfg(not(target_arch = "wasm32"))]
+fn pkcs11_hints() -> &'static str {
+    #[cfg(target_os = "windows")]
+    return "e.g. opensc-pkcs11.dll, rtPKCS11ECP.dll (Rutoken), jcPKCS11-2.dll (JaCarta), eTPKCS11.dll (SafeNet)";
+    #[cfg(target_os = "linux")]
+    return "e.g. opensc-pkcs11.so, librtpkcs11ecp.so (Rutoken), libjcPKCS11-2.so (JaCarta), libeTPkcs11.so (SafeNet)";
+    #[cfg(target_os = "macos")]
+    return "e.g. opensc-pkcs11.dylib (or the token driver's own library)";
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    return "e.g. the opensc-pkcs11 library (or the token driver's own library)";
+}
+
+/// Preferences ▸ Signatures: the PKCS #11 modules (token drivers) with Browse and Remove.
+/// Paths only: nothing here is loaded or probed, and the hints name files to look for.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pkcs11_preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    ui.label(egui::RichText::new(tl!("Signatures")).font(theme::semibold(13.0)));
+    ui.label(tl!("PKCS #11 modules"));
+    ui.label(
+        egui::RichText::new(tl!("Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code."))
+            .small()
+            .color(t.text_muted),
+    );
+    ui.label(egui::RichText::new(pkcs11_hints()).small().color(t.text_muted));
+    for (i, path) in app.pkcs11_modules.clone().iter().enumerate() {
+        ui.push_id(("pkcs11-module", i), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(path);
+                if ui.button(tl!("Remove")).clicked() {
+                    app.remove_pkcs11_module(i);
+                }
+            });
+        });
+    }
+    if ui.button(tl!("Browse…")).clicked() {
+        let dialog = rfd::AsyncFileDialog::new().add_filter("PKCS #11", PKCS11_EXTENSIONS);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            // The dialog below is Preferences itself: skip a pick finished after it closed.
+            if app.dialog_epoch() == epoch {
+                app.add_pkcs11_module(&p.to_string_lossy());
+            }
+        });
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewIdDraft {
     /// `true`: create a self-signed ID; `false`: use an ID from a file.
@@ -241,6 +293,74 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
+/// A token identity by its `pkcs11:` reference, looked up on every configured module: the
+/// reference names the token object, not the module holding it.
+fn pkcs11_id(modules: &[String], reference: &str, pin: &str) -> Result<DigitalId, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if modules.is_empty() {
+            return Err("There are no PKCS #11 modules configured.".into());
+        }
+        let uri = sign::pkcs11::parse_uri(reference).map_err(|e| e.to_string())?;
+        let pin = sign::pkcs11::PinSource::Value(secrecy::SecretString::new(pin.to_owned().into()));
+        // Listing never logs in, so the PIN is only tried when the one identity found signs,
+        // on its own token: never on the other cards plugged in.
+        let mut hits = Vec::new();
+        let mut load_error = None;
+        for path in modules {
+            // A module that broke since listing still shouldn't hide the others; when
+            // nothing matches at all, its failure is the error to report.
+            let listing = match sign::pkcs11::load_module(std::path::Path::new(path)).and_then(|module| sign::pkcs11::list(&module, &pin)) {
+                Ok(listing) => listing,
+                Err(e) => {
+                    load_error.get_or_insert_with(|| e.to_string());
+                    continue;
+                }
+            };
+            for id in listing.ids.into_iter().filter(|id| id.matches(&uri)) {
+                // One card is often reachable through two modules (OpenSC and the vendor's):
+                // the same certificate on the same token, with the same key, is one identity,
+                // signed through the first. Different certificates stay distinct, so a
+                // reference matching two of them is still refused as ambiguous.
+                let same = |h: &sign::pkcs11::Identity| {
+                    h.key_id == id.key_id
+                        && h.token.serial == id.token.serial
+                        && h.token.manufacturer == id.token.manufacturer
+                        && h.id.certificate.raw == id.id.certificate.raw
+                };
+                if !hits.iter().any(same) {
+                    hits.push(id);
+                }
+            }
+        }
+        match hits.len() {
+            1 => Ok(hits.into_iter().next().map(|id| id.id).ok_or_else(|| format!("no PKCS #11 identity {reference}"))?),
+            0 => Err(load_error.unwrap_or_else(|| format!("no PKCS #11 identity {reference}"))),
+            _ => Err(format!("the PKCS #11 reference {reference} matches several identities")),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (modules, pin);
+        Err(format!("{reference}: PKCS #11 tokens aren't available in the browser"))
+    }
+}
+
+/// A greyed entry for a token certificate that can't sign, with the reason.
+#[cfg(not(target_arch = "wasm32"))]
+fn entry_unusable_pkcs11(index: usize, subject: &str, reason: &str) -> DigitalIdEntry {
+    DigitalIdEntry {
+        // Never a real reference (it would not parse): only the prefix matters, for the
+        // store label and for keeping these out of the settings.
+        path: format!("pkcs11:unusable:{index}"),
+        name: subject.to_string(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: Some(reason.to_string()),
+    }
+}
+
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
@@ -289,7 +409,7 @@ impl PdfCraftApp {
 
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"));
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -322,6 +442,37 @@ impl PdfCraftApp {
                 Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
+        // Token identities from every configured module (the desktop app). Listing never
+        // asks for a PIN; a module that won't load says so and the rest still list.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut unusable = 0usize;
+            for path in self.pkcs11_modules.clone() {
+                let module = match sign::pkcs11::load_module(std::path::Path::new(&path)) {
+                    Ok(module) => module,
+                    Err(e) => {
+                        self.notify_fmt("The PKCS #11 module's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]);
+                        continue;
+                    }
+                };
+                match sign::pkcs11::list(&module, &sign::pkcs11::PinSource::None) {
+                    Ok(listing) => {
+                        for id in &listing.ids {
+                            // The same token through a second module lists once.
+                            let reference = id.reference();
+                            if !self.digital_ids.iter().any(|e| e.path == reference) {
+                                self.digital_ids.push(entry_for(&reference, &id.id.certificate));
+                            }
+                        }
+                        for u in &listing.unusable {
+                            self.digital_ids.push(entry_unusable_pkcs11(unusable, &u.subject, &u.reason));
+                            unusable += 1;
+                        }
+                    }
+                    Err(e) => self.notify_fmt("The PKCS #11 module's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+                }
+            }
+        }
     }
 
     /// Add a digital ID file to the list (or select it if it's there).
@@ -335,10 +486,14 @@ impl PdfCraftApp {
     }
 
     /// Take the digital ID file at `index` off the list (issue #1396). The file itself stays on
-    /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
-    /// signing, so they can't be removed here. The open dialog's selection follows the list.
+    /// disk. Keychain, Windows store and token IDs are listed again on every signing, so they
+    /// can't be removed here. The open dialog's selection follows the list.
     pub fn remove_digital_id(&mut self, index: usize) -> bool {
-        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+        if self
+            .digital_ids
+            .get(index)
+            .is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:") || e.path.starts_with("pkcs11:"))
+        {
             return false;
         }
         self.digital_ids.remove(index);
@@ -354,6 +509,25 @@ impl PdfCraftApp {
             }
         }
         true
+    }
+
+    /// Preferences ▸ Signatures ▸ Browse: remember a PKCS #11 module path. Empty paths and
+    /// duplicates change nothing; the list is capped so a runaway can never grow it.
+    pub fn add_pkcs11_module(&mut self, path: &str) {
+        let path = path.trim();
+        if path.is_empty() || self.pkcs11_modules.iter().any(|m| m == path) {
+            return;
+        }
+        if self.pkcs11_modules.len() < 32 && path.chars().count() <= 1024 {
+            self.pkcs11_modules.push(path.to_string());
+        }
+    }
+
+    /// Preferences ▸ Signatures ▸ Remove. An out-of-range index (a stale button) does nothing.
+    pub fn remove_pkcs11_module(&mut self, index: usize) {
+        if index < self.pkcs11_modules.len() {
+            self.pkcs11_modules.remove(index);
+        }
     }
 
     /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data
@@ -420,6 +594,14 @@ impl PdfCraftApp {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
+        } else if entry.path.starts_with("pkcs11:") {
+            // The PIN is used for this one signing only: cleared from the dialog whether
+            // signing then succeeds or fails, so it never carries over to another attempt.
+            let id = pkcs11_id(&self.pkcs11_modules, &entry.path, &d.password);
+            if let Some(draft) = self.sign_draft.as_mut() {
+                draft.password.clear();
+            }
+            id?
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
@@ -706,6 +888,8 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 tl!("Keychain  ·  ").to_string()
             } else if e.path.starts_with("windows:") {
                 tl!("Windows store  ·  ").to_string()
+            } else if e.path.starts_with("pkcs11:") {
+                tl!("Token  ·  ").to_string()
             } else {
                 String::new()
             };
@@ -729,6 +913,11 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 continue;
             }
             if resp.clicked() {
+                // A token PIN (or file password) typed for one identity never goes to another:
+                // a wrong PIN spends that token's retries.
+                if d.selected != Some(i) {
+                    d.password.clear();
+                }
                 d.selected = Some(i);
                 d.confirm_remove = None;
             }
@@ -755,7 +944,10 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
         ui.add_space(10.0);
     }
-    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    // Store and token IDs are listed again on every signing, so there's nothing to remove.
+    let removable = d.selected.filter(|&i| {
+        ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"))
+    });
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
@@ -1000,6 +1192,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ),
     );
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
+    let on_token = entry.path.starts_with("pkcs11:");
     let mut close = false;
     let mut go = false;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1085,6 +1278,13 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 .small()
                 .color(t.text_muted),
             );
+        } else if on_token {
+            // The token signs on request; the PIN below is hidden and never stored.
+            let l = ui.label(tl!("Token PIN"));
+            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
         } else {
             let l = ui.label(tl!("Digital ID password"));
             let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
@@ -1604,28 +1804,91 @@ mod tests {
         let file = dir.join("old.p12");
         std::fs::write(&file, b"not opened").unwrap();
         let mut app = PdfCraftApp::new();
-        app.digital_ids = vec![listed("windows:abc", "Store"), listed(&file.to_string_lossy(), "Old"), listed("/ids/new.p12", "New")];
+        app.digital_ids = vec![
+            listed("windows:abc", "Store"),
+            listed(&file.to_string_lossy(), "Old"),
+            listed("/ids/new.p12", "New"),
+            listed("pkcs11:token=x", "Token"),
+        ];
         let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
         draft.selected = Some(2);
         draft.confirm_remove = Some(1);
         app.sign_draft = Some(draft);
 
         assert!(!app.remove_digital_id(0), "OS key store IDs stay");
+        assert!(!app.remove_digital_id(3), "token IDs are listed again and stay too");
         assert!(!app.remove_digital_id(9), "an index past the list is refused");
         assert!(app.remove_digital_id(1));
-        assert_eq!(app.digital_ids.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Store", "New"]);
+        assert_eq!(app.digital_ids.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Store", "New", "Token"]);
         assert!(file.exists(), "the file itself is not deleted");
         let d = app.sign_draft.as_ref().unwrap();
         assert_eq!((d.selected, d.confirm_remove, d.step), (Some(1), None, SignStep::Choose), "still New, no pending question");
 
         // Removing the selected ID selects the first usable one; removing the last file ID
-        // leaves only the store ID, which isn't saved.
+        // leaves only listed-again IDs, which aren't saved.
         assert!(app.remove_digital_id(1));
         assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(0));
         let mut fresh = PdfCraftApp::new();
         fresh.restore(&app.persist());
         assert!(fresh.digital_ids.is_empty(), "the removal survives a restart: {:?}", fresh.digital_ids);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pkcs11_modules_add_dedupe_remove_and_round_trip() {
+        let mut app = PdfCraftApp::new();
+        app.add_pkcs11_module("");
+        app.add_pkcs11_module("  ");
+        assert!(app.pkcs11_modules.is_empty(), "blanks change nothing");
+        app.add_pkcs11_module("C:\\Vendor\\token.dll");
+        app.add_pkcs11_module("C:\\Vendor\\token.dll");
+        app.add_pkcs11_module(" /usr/lib/token.so ");
+        assert_eq!(app.pkcs11_modules, ["C:\\Vendor\\token.dll", "/usr/lib/token.so"], "trimmed and deduplicated");
+        app.remove_pkcs11_module(7);
+        assert_eq!(app.pkcs11_modules.len(), 2, "a stale index does nothing");
+        app.remove_pkcs11_module(0);
+        assert_eq!(app.pkcs11_modules, ["/usr/lib/token.so"]);
+        // The list survives a restart; garbage in the settings does not stick.
+        let mut back = PdfCraftApp::new();
+        back.restore(&app.persist());
+        assert_eq!(back.pkcs11_modules, ["/usr/lib/token.so"]);
+        back.restore(r#"{"pkcs11_modules":["/keep.so", 7, null, {"x": 1}]}"#);
+        assert_eq!(back.pkcs11_modules, ["/keep.so"]);
+        back.restore(r#"{"pkcs11_modules":"nope"}"#);
+        assert_eq!(back.pkcs11_modules, ["/keep.so"], "malformed keeps the list");
+    }
+
+    /// Preferences ▸ Signatures lists the modules with Remove, and Remove works.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn preferences_signatures_lists_modules_and_removes() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.add_pkcs11_module("/usr/lib/token.so");
+        let mut fonts = false;
+        let mut h = Harness::builder().with_size(egui::vec2(640.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = crate::theme::Tokens::get(ui.ctx());
+                super::pkcs11_preferences_section(ui, app, &t);
+            },
+            app,
+        );
+        h.run();
+        assert!(h.query_by_label("PKCS #11 modules").is_some());
+        assert!(h.query_by_label("/usr/lib/token.so").is_some());
+        assert!(h.query_by_label("Browse…").is_some());
+        h.get_by_label("Remove").click();
+        h.run();
+        assert!(h.query_by_label("/usr/lib/token.so").is_none(), "Remove took it off the list");
+        assert!(h.state().pkcs11_modules.is_empty());
     }
 
     /// The labels a signature is stamped with are all in the interface language, or all in

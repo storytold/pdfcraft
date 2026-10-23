@@ -2537,3 +2537,9 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Модулі PKCS #11
+	Token  ·  	Токен  ·  
+	Token PIN	PIN-код токена
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Токени та смарт-картки підписують через модуль PKCS #11. Додавайте лише модулі, яким довіряєте: модуль виконує власний код.

@@ -2424,3 +2424,9 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 మాడ్యూల్‌లు
+	Token  ·  	టోకెన్  ·  
+	Token PIN	టోకెన్ PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	టోకెన్‌లు మరియు స్మార్ట్ కార్డ్‌లు PKCS #11 మాడ్యూల్ ద్వారా సంతకం చేస్తాయి. మీరు నమ్మే మాడ్యూల్‌లను మాత్రమే జోడించండి: మాడ్యూల్ తన స్వంత కోడ్‌ను అమలు చేస్తుంది.

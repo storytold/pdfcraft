@@ -2774,3 +2774,9 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Module PKCS #11
+	Token  ·  	Token  ·  
+	Token PIN	PIN-ul tokenului
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Tokenurile și cardurile inteligente semnează printr-un modul PKCS #11. Adăugați doar module în care aveți încredere: un modul rulează propriul cod.

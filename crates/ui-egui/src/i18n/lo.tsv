@@ -2429,3 +2429,9 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	ໂມດູນ PKCS #11
+	Token  ·  	ໂທເຄັນ  ·  
+	Token PIN	PIN ຂອງໂທເຄັນ
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	ໂທເຄັນ ແລະ ສະມາດກາດ ລົງລາຍເຊັນຜ່ານໂມດູນ PKCS #11. ເພີ່ມສະເພາະໂມດູນທີ່ທ່ານໄວ້ໃຈ: ໂມດູນຈະແລ່ນລະຫັດຂອງມັນເອງ.

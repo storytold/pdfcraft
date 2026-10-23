@@ -2791,3 +2791,9 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	وحدات PKCS #11
+	Token  ·  	رمز مميز  ·  
+	Token PIN	رقم PIN للرمز المميز
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	توقّع الرموز المميزة والبطاقات الذكية عبر وحدة PKCS #11. لا تُضف إلا وحدات تثق بها: فالوحدة تشغّل شيفرتها الخاصة.

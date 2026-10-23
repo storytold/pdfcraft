@@ -2781,3 +2781,9 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Modules PKCS #11
+	Token  ·  	Jeton  ·  
+	Token PIN	Code PIN du jeton
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Les jetons et cartes à puce signent par l'intermédiaire d'un module PKCS #11. N'ajoutez que des modules de confiance : un module exécute son propre code.

@@ -2750,3 +2750,9 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 모듈
+	Token  ·  	토큰  ·  
+	Token PIN	토큰 PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	토큰과 스마트 카드는 PKCS #11 모듈을 통해 서명합니다. 신뢰할 수 있는 모듈만 추가하세요. 모듈은 자체 코드를 실행합니다.

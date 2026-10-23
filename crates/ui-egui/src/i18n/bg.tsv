@@ -2478,3 +2478,9 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Модули PKCS #11
+	Token  ·  	Токен  ·  
+	Token PIN	ПИН на токена
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Токените и смарт картите подписват чрез модул PKCS #11. Добавяйте само модули, на които имате доверие: модулът изпълнява собствен код.

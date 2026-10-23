@@ -2511,3 +2511,9 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 modülleri
+	Token  ·  	Belirteç  ·  
+	Token PIN	Belirteç PIN'i
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Belirteçler ve akıllı kartlar bir PKCS #11 modülü üzerinden imzalar. Yalnızca güvendiğiniz modülleri ekleyin: bir modül kendi kodunu çalıştırır.

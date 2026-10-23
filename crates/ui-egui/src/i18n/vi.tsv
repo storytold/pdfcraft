@@ -2780,3 +2780,9 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Mô-đun PKCS #11
+	Token  ·  	Token bảo mật  ·  
+	Token PIN	Mã PIN của token
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Token và thẻ thông minh ký thông qua mô-đun PKCS #11. Chỉ thêm các mô-đun bạn tin cậy: mô-đun chạy mã của chính nó.

@@ -491,7 +491,7 @@ fn the_signature_labels_follow_the_interface_language() {
 fn os_store_identities_are_not_persisted() {
     let mut app = PdfCraftApp::new();
     app.set_option("language", "en").unwrap();
-    for path in ["windows:Store signer", "keychain:Store signer", "file-id.p12"] {
+    for path in ["windows:Store signer", "keychain:Store signer", "pkcs11:token=Store", "file-id.p12"] {
         app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: path.into(),
             name: "Signer".into(),
@@ -660,6 +660,80 @@ fn an_imported_digital_id_can_be_removed() {
     // With no IDs left the dialog offers to configure one.
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure));
     h.get_by_label("Configure a Digital ID for Signing");
+}
+
+/// A token identity asks for its PIN (hidden, never stored) instead of a file password, and
+/// a module that won't load fails signing with its reason rather than a crash.
+#[test]
+fn a_token_identity_asks_for_a_pin_and_reports_a_bad_module() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    // A synthetic picker entry exercises the dialog without a real token. It goes in after
+    // signing starts: the refresh replaces every pkcs11: entry with the configured modules'.
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "pkcs11:token=Test;object=Signer;id=%01".into(),
+        name: "Token signer".into(),
+        issuer: "Test issuer".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+    });
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    h.get_by_label("Token signer").click();
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    let draft = h.state().sign_draft.as_ref().unwrap();
+    assert_eq!(draft.step, SignStep::SignAs);
+    assert!(h.query_by_label("Token PIN").is_some(), "a PIN field, hidden and never stored");
+    assert!(h.query_by_label("Digital ID password").is_none());
+    // No module knows this identity: signing reports the load failure, not a crash.
+    h.state_mut().add_pkcs11_module("definitely-not-a-module.dll");
+    h.get_by_label("Sign").click();
+    h.run_steps(3);
+    let error = h.state().sign_draft.as_ref().and_then(|d| d.error.clone()).unwrap_or_default();
+    assert!(error.contains("couldn't be loaded"), "the module failure explains itself: {error}");
+    assert!(h.state().dialog.is_some(), "the dialog stays open on the error");
+}
+
+/// A token certificate that can't sign is shown greyed with its reason and can never be
+/// chosen, like an unusable Windows store certificate (issue #179).
+#[test]
+fn an_unusable_token_id_is_shown_with_its_reason_and_cannot_be_chosen() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    // In after the refresh, as above: the refresh replaces every pkcs11: entry.
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "pkcs11:unusable:0".into(),
+        name: "Locked token cert".into(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: Some("the PIN is locked".into()),
+    });
+    h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
+    h.run_steps(3);
+    h.get_by_label("Locked token cert").click();
+    h.run_steps(3);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().selected, None);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::Choose);
+}
+
+/// A configured module that won't load says so when signing starts; the dialog still opens.
+#[test]
+fn an_unloadable_module_is_reported_not_silent() {
+    let mut h = harness(dir());
+    h.state_mut().add_pkcs11_module("definitely-not-a-module.dll");
+    h.state_mut().start_signing(0, None, None, None);
+    h.run_steps(3);
+    let toast = h.state().toast.clone().map(|(m, _)| m).unwrap_or_default();
+    assert!(toast.contains("couldn't be listed"), "the module failure explains itself: {toast}");
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::Configure, "no IDs at all: configure one");
 }
 
 /// Sign-and-save must use the same destination metadata policy as Save As.

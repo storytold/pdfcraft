@@ -2774,3 +2774,9 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Mòduls PKCS #11
+	Token  ·  	Testimoni  ·  
+	Token PIN	PIN del testimoni
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Els testimonis i les targetes intel·ligents signen a través d'un mòdul PKCS #11. Afegiu només mòduls de confiança: un mòdul executa el seu propi codi.

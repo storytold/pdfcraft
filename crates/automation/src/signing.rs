@@ -175,6 +175,11 @@ impl Automation {
     }
 
     fn open_id(&self, a: &Args) -> Result<DigitalId> {
+        // `module` and `pin_env` only mean something with a pkcs11: identity; any other
+        // identity silently ignoring them would lie about what signed.
+        if !a.str("id")?.starts_with("pkcs11:") && (a.opt_str("module")?.is_some() || a.opt_str("pin_env")?.is_some()) {
+            return Err(bad("module and pin_env need a pkcs11: identity"));
+        }
         // A macOS Keychain identity: "keychain:<fingerprint>" or "keychain:<common name>".
         if let Some(r) = a.str("id")?.strip_prefix("keychain:") {
             #[cfg(target_os = "macos")]
@@ -187,6 +192,26 @@ impl Automation {
             return sign::windows::find(&format!("windows:{r}")).map_err(failed);
             #[cfg(not(target_os = "windows"))]
             return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
+        }
+        if let Some(uri) = a.str("id")?.strip_prefix("pkcs11:") {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Caller-fixable argument errors come before anything touching the environment.
+                let module_arg = a.opt_str("module")?.ok_or_else(|| bad("a pkcs11: identity needs the module argument: the PKCS #11 DLL to use"))?;
+                // A malformed reference is refused before any native module is loaded.
+                let reference = format!("pkcs11:{uri}");
+                sign::pkcs11::parse_uri(&reference).map_err(|e| bad(e.to_string()))?;
+                let pin = match a.opt_str("pin_env")? {
+                    Some("") => return Err(bad("pin_env must not be empty")),
+                    Some(name) => sign::pkcs11::PinSource::Env(name.to_string()),
+                    None => sign::pkcs11::PinSource::None,
+                };
+                let module_path = self.resolve(module_arg, false)?;
+                let module = sign::pkcs11::load_module(&module_path).map_err(failed)?;
+                return sign::pkcs11::find(&module, &reference, &pin).map_err(failed);
+            }
+            #[cfg(target_arch = "wasm32")]
+            return Err(failed(format!("pkcs11:{uri}: PKCS #11 tokens aren't available in the browser")));
         }
         let path = self.resolve(a.str("id")?, false)?;
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;

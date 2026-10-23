@@ -2479,3 +2479,9 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 模块
+	Token  ·  	令牌  ·  
+	Token PIN	令牌 PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	令牌和智能卡通过 PKCS #11 模块签名。只添加您信任的模块：模块会运行它自己的代码。

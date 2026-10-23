@@ -2783,3 +2783,9 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 -moduulit
+	Token  ·  	Tunnus  ·  
+	Token PIN	Tunnuksen PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Tunnukset ja älykortit allekirjoittavat PKCS #11 -moduulin kautta. Lisää vain luotettuja moduuleja: moduuli suorittaa omaa koodiaan.

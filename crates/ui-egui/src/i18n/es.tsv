@@ -2838,3 +2838,9 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	Módulos PKCS #11
+	Token  ·  	Token  ·  
+	Token PIN	PIN del token
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	Los tokens y las tarjetas inteligentes firman a través de un módulo PKCS #11. Añada solo módulos de confianza: un módulo ejecuta su propio código.

@@ -33,6 +33,9 @@ crypto-bigint = { version = "0.7", default-features = false, features = ["alloc"
 rsa = { version = "=0.10.0-rc.18", default-features = false, features = ["std", "hazmat"] }
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 hmac = "0.13"
+# The signing PIN, held zeroized and only for the signing call (PKCS #11, and anything
+# else that asks for a secret, use this too).
+secrecy = "0.10"
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc", "block-padding"] }
 des = "0.9"
@@ -44,6 +47,9 @@ ed25519-dalek = "3.0.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 getrandom = "0.4"
+# PKCS #11 tokens through a maintained safe wrapper (Apache-2.0). The module path always
+# comes from the user; nothing here searches for or loads modules on its own.
+cryptoki = { version = "0.12.1", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows certificate store and CNG signing wrappers (MIT OR Apache-2.0).

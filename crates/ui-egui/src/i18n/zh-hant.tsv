@@ -2465,3 +2465,9 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	PKCS #11 模組
+	Token  ·  	權杖  ·  
+	Token PIN	權杖 PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	權杖與智慧卡透過 PKCS #11 模組簽署。只加入您信任的模組：模組會執行它自己的程式碼。

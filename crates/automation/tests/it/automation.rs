@@ -5686,6 +5686,42 @@ fn signing_with_translated_labels_through_tools() {
 }
 
 #[test]
+fn pkcs11_tools_refuse_bad_input_without_a_token() {
+    let dir = workdir("pkcs11");
+    let mut a = auto(&dir);
+    // The module argument is required.
+    assert!(matches!(a.call("sign_token_ids", &json!({})), Err(ToolError::InvalidArgs(_))));
+    // A module that isn't one is an error, not a crash — even for a hostile path.
+    assert!(matches!(a.call("sign_token_ids", &json!({ "module": "nope.dll" })), Err(ToolError::Failed(_))));
+    assert!(matches!(a.call("sign_token_ids", &json!({ "module": "../outside.dll" })), Err(ToolError::Failed(_))));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // A pkcs11: identity without its module, and an empty PIN variable name.
+    assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:token=x", "out": "s.pdf" })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:token=x", "module": "nope.dll", "pin_env": "", "out": "s.pdf" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    // module/pin_env with any other identity are refused instead of silently ignored.
+    assert!(matches!(
+        a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "module": "nope.dll", "out": "s.pdf" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    // A garbage reference is refused as the caller's mistake before any module is loaded
+    // (with a missing module, loading first would have answered Failed instead).
+    assert!(matches!(
+        a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:token=x?pin-value=1", "module": "nope.dll", "out": "s.pdf" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    // Keychain and Windows identities refuse module/pin_env too, on every platform.
+    for id in ["keychain:Ada", "windows:Ada"] {
+        assert!(
+            matches!(a.call("sign_document", &json!({ "doc": doc, "id": id, "pin_env": "PIN", "out": "s.pdf" })), Err(ToolError::InvalidArgs(_))),
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn optimizing_through_tools() {
     let dir = workdir("optimize");
     // A 2400 × 1600 photo-like JPEG at 600 dpi: a 4 × 2.67 inch page.

@@ -2713,3 +2713,9 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+
+# PKCS #11 tokens and smart cards (Preferences ▸ Signatures, the Sign dialog).
+	PKCS #11 modules	مۆدیولەکانی PKCS #11
+	Token  ·  	تۆکن  ·  
+	Token PIN	PINی تۆکن
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	تۆکن و کارتە زیرەکەکان لە ڕێگەی مۆدیولێکی PKCS #11ەوە واژوو دەکەن. تەنها ئەو مۆدیولانە زیاد بکە کە متمانەت پێیانە: مۆدیول کۆدی خۆی جێبەجێ دەکات.
