@@ -186,7 +186,8 @@ fn layout_draft(
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
     let source_rect = source.editing_rect();
-    let mut target_rect = source_rect;
+    let dir = source.direction();
+    let mut target_rect = source.editing_frame();
     if let Some(width) = style.width {
         target_rect[2] = target_rect[0] + width;
     }
@@ -195,12 +196,13 @@ fn layout_draft(
         target_rect[3] = top;
     }
     if let Some([dx, dy]) = style.offset {
+        let (dx, dy) = to_frame(dir, (dx, dy));
         target_rect = [target_rect[0] + dx, target_rect[1] + dy, target_rect[2] + dx, target_rect[3] + dy];
     }
     let outside =
         |r: [f64; 4]| r[0] < target_rect[0] - 0.5 || r[1] < target_rect[1] - 0.5 || r[2] > target_rect[2] + 0.5 || r[3] > target_rect[3] + 0.5;
     if text == source.editor_text && *style == BlockStyle::default() {
-        return Ok(TextEditLayout { source_rect, draft_rect: Some(source.rect), overflow: outside(source.rect) });
+        return Ok(TextEditLayout { source_rect, draft_rect: Some(source.rect), overflow: outside(source.ink_frame) });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
@@ -215,6 +217,7 @@ fn layout_draft(
     let mut draft = doc.clone();
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
+    let mut frame: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
         if let Some(count) = untouched.get_mut(&key(&line))
             && *count > 0
@@ -223,8 +226,15 @@ fn layout_draft(
             continue;
         }
         rect = Some(rect.map_or(line.rect, |r| [r[0].min(line.rect[0]), r[1].min(line.rect[1]), r[2].max(line.rect[2]), r[3].max(line.rect[3])]));
+        // Project the line's oriented corners, never its world-axis bounding box: rotating
+        // that already enlarged box would report overflow for text that fits its frame.
+        let local = frame_corners(line.frame_rect())
+            .map(|p| to_frame(dir, from_frame(line.direction(), p)))
+            .into_iter()
+            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)]);
+        frame = Some(frame.map_or(local, |r| union(r, local)));
     }
-    let overflow = rect.is_some_and(outside);
+    let overflow = frame.is_some_and(outside);
     Ok(TextEditLayout { source_rect, draft_rect: rect, overflow })
 }
 
@@ -356,9 +366,11 @@ pub struct TextBlock {
     /// The lines' text joined with spaces (lines that ended in a hyphen are joined directly).
     pub text: String,
     pub rect: [f64; 4],
-    /// Explicit left/right container edges in page space, when resized. `rect` remains ink.
+    /// Ink bounds along and normal to the baseline, in page-user-space points.
+    pub ink_frame: [f64; 4],
+    /// Explicit left/right edges along the baseline, when resized. `rect` remains world-axis ink.
     pub horizontal_frame: Option<[f64; 2]>,
-    /// Explicit bottom/top container edges in page user space. Text outside stays visible.
+    /// Explicit bottom/top edges normal to the baseline. Text outside stays visible.
     pub vertical_frame: Option<[f64; 2]>,
     /// Alignment within an explicit horizontal frame; absent for inferred source regions.
     pub horizontal_alignment: Option<crate::added::Align>,
@@ -385,11 +397,34 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
-    /// The frame used for editing: explicit edges, falling back to visible rows on each axis.
-    pub fn editing_rect(&self) -> [f64; 4] {
-        let [left, right] = self.horizontal_frame.unwrap_or([self.rect[0], self.rect[2]]);
-        let [bottom, top] = self.vertical_frame.unwrap_or([self.rect[1], self.rect[3]]);
+    /// The editing bounds in baseline coordinates: upright text uses ordinary page coordinates.
+    pub fn editing_frame(&self) -> [f64; 4] {
+        let [left, right] = self.horizontal_frame.unwrap_or([self.ink_frame[0], self.ink_frame[2]]);
+        let [bottom, top] = self.vertical_frame.unwrap_or([self.ink_frame[1], self.ink_frame[3]]);
         [left, bottom, right, top]
+    }
+
+    /// The editing frame's page-space corners, ordered bottom-left, bottom-right, top-right, top-left.
+    pub fn editing_quad(&self) -> [[f64; 2]; 4] {
+        frame_corners(self.editing_frame()).map(|p| {
+            let (x, y) = from_frame(self.direction(), p);
+            [x, y]
+        })
+    }
+
+    /// World-axis bounds of the editing frame, for inventories and rectangular selection.
+    pub fn editing_rect(&self) -> [f64; 4] {
+        if self.horizontal_frame.is_none() && self.vertical_frame.is_none() {
+            return self.rect;
+        }
+        self.editing_quad()
+            .into_iter()
+            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])])
+    }
+
+    fn direction(&self) -> (f64, f64) {
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        (cos, sin)
     }
 
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
@@ -570,13 +605,13 @@ impl TextLine {
     }
 
     fn rotation(&self) -> f64 {
-        let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
-        m[1].atan2(m[0]).to_degrees()
+        let (x, y) = self.direction();
+        y.atan2(x).to_degrees()
     }
 
     /// The unit direction its baseline runs in, in user space.
     fn direction(&self) -> (f64, f64) {
-        direction(&Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)))
+        self.horizontal_frame.map_or_else(|| direction(&Matrix(self.origin.tm).then(&Matrix(self.origin.ctm))), |f| f.direction)
     }
 
     /// Whether it reads left to right along the page's x axis (most text; a page drawn
@@ -609,6 +644,14 @@ fn direction(m: &Matrix) -> (f64, f64) {
 /// same way (#1443).
 fn to_frame(dir: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     (p.0 * dir.0 + p.1 * dir.1, p.1 * dir.0 - p.0 * dir.1)
+}
+
+fn from_frame(dir: (f64, f64), p: (f64, f64)) -> (f64, f64) {
+    (p.0 * dir.0 - p.1 * dir.1, p.0 * dir.1 + p.1 * dir.0)
+}
+
+fn frame_corners([left, bottom, right, top]: [f64; 4]) -> [(f64, f64); 4] {
+    [(left, bottom), (right, bottom), (right, top), (left, top)]
 }
 
 /// The box covering both `[x0, y0, x1, y1]` boxes.
@@ -1273,7 +1316,14 @@ fn interpret(
                     .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
                 // The same corners along and across the baseline: the run's own box, not its
                 // upright bounding box turned (which is wider by the box's height on a slant).
-                let dir = direction(&trm0);
+                let actual_dir = direction(&trm0);
+                // Metadata cannot assign baseline coordinates from another orientation to
+                // these glyphs. Ignore a mismatched marker, keeping the source ink editable.
+                let horizontal_frame = frames
+                    .last()
+                    .map(|(_, f)| *f)
+                    .filter(|f| (f.direction.0 - actual_dir.0).abs() < 1e-3 && (f.direction.1 - actual_dir.1).abs() < 1e-3);
+                let dir = horizontal_frame.map_or(actual_dir, |f| f.direction);
                 let frame = corners
                     .iter()
                     .map(|&p| to_frame(dir, p))
@@ -1330,7 +1380,7 @@ fn interpret(
                     visual_order: m.visual_order,
                     decodable,
                     scope: marked.last().copied().flatten(),
-                    horizontal_frame: frames.last().map(|(_, f)| *f),
+                    horizontal_frame,
                     paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
                     logical_order: false,
                     actual_text: false,
@@ -2678,10 +2728,11 @@ pub struct BlockStyle {
     pub scale: Option<f64>,
     /// Move the paragraph by `[dx, dy]` in user space (dragging its box).
     pub offset: Option<[f64; 2]>,
-    /// Rewrap to this width in user space (dragging the box's edge). Upright paragraphs retain
+    /// Rewrap to this width in user space (dragging the box's edge). Paragraphs retain
     /// the explicit frame across subsequent edits and saves, independently of glyph bounds.
     pub width: Option<f64>,
-    /// Set bottom/top frame edges in page user space without moving, scaling or clipping text.
+    /// Set bottom/top frame edges normal to the baseline, in page-user-space points,
+    /// without moving, scaling or clipping text. Upright text uses ordinary page y coordinates.
     /// Each edge must be finite and the height must be positive and at most 14,400 points.
     pub vertical_frame: Option<[f64; 2]>,
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
@@ -2742,10 +2793,11 @@ fn rewrite_block_from(
     }
     style.vertical_frame = style.vertical_frame.or(b.vertical_frame);
     if let Some([bottom, top]) = style.vertical_frame {
-        if ![bottom, top].iter().all(|v| v.is_finite() && v.abs() <= 1e9) || top <= bottom || top - bottom > 14_400.0 {
+        if ![bottom, top].iter().all(|v| v.is_finite() && v.abs() <= 1e9) || top <= bottom || top - bottom > 14_400.0 + 1e-6 {
             return Err(EditError::Invalid("the paragraph's height must be positive and at most 14400 points".into()));
         }
-        style.width.get_or_insert(b.editing_rect()[2] - b.editing_rect()[0]);
+        style.vertical_frame = Some([bottom, top.min(bottom + 14_400.0)]);
+        style.width.get_or_insert(b.editing_frame()[2] - b.editing_frame()[0]);
     }
     let style = &style;
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
@@ -2770,11 +2822,13 @@ fn rewrite_block_from(
     // Text turned on the page (a landscape page drawn a quarter turn round) is rewritten in its
     // own text space below; the styled region path lays rows out along the page's x axis.
     let upright = members.iter().all(|line| line.upright());
-    if !upright && style.vertical_frame.is_some() {
-        return Err(EditError::Invalid("resizing the height of turned text isn't supported yet".into()));
-    }
     if vertical_only && let Some(bounds) = style.vertical_frame {
         return text_frame::resize_vertical(doc, page, &b, &lines, bounds);
+    }
+    if !upright && members.iter().any(|line| line.font != first.font || line.size != first.size || line.color != first.color) {
+        return Err(EditError::Invalid(
+            "rewrapping mixed-style turned text isn't supported yet; its height can be changed without rewriting it".into(),
+        ));
     }
     if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
@@ -2801,6 +2855,18 @@ fn rewrite_block_from(
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
+    if !upright {
+        // One extracted line can contain several showing operators with different tracking,
+        // rise or rendering modes. The uniform turned-text writer cannot preserve those
+        // differences; refuse before embedding fonts instead of flattening the source style.
+        let selected: std::collections::HashSet<_> = members.iter().flat_map(|line| line.ops.iter().copied()).collect();
+        let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+        if shown.iter().filter(|s| selected.contains(&s.op)).any(|s| TextState::of(&s.state) != first.origin.state) {
+            return Err(EditError::Invalid(
+                "rewrapping turned text with mixed text states isn't supported yet; its height can be changed without rewriting it".into(),
+            ));
+        }
+    }
     // Explicit line breaks stay (#1443); within a line, runs of white space become one space.
     let text = text
         .unwrap_or(&b.text)
@@ -2846,11 +2912,9 @@ fn rewrite_block_from(
     let rtl = crate::bidi::rtl_base(&flat);
     let anchored_right = rtl && upright && style.width.is_none() && members.len() == 1;
     // The paragraph's width along its lines: in user space unless it is turned.
-    let frame = if upright {
-        b.editing_rect()
-    } else {
-        members.iter().map(|l| l.frame_rect()).reduce(|a, f| [a[0].min(f[0]), a[1].min(f[1]), a[2].max(f[2]), a[3].max(f[3])]).unwrap_or(b.rect)
-    };
+    let frame = b.editing_frame();
+    let dir = first.direction();
+    let (along_move, across_move) = to_frame(dir, (dx, dy));
     // A centred title is laid out in the box it already sits in, so it keeps its centre as it
     // grows or wraps, rather than being grown to the right up to the page's margin (#2581).
     // Turned text is left alone: its centre lives along its own baseline, not in page space.
@@ -2898,18 +2962,20 @@ fn rewrite_block_from(
         let back = Matrix([emit.ctm[0], emit.ctm[1], emit.ctm[2], emit.ctm[3], 0.0, 0.0])
             .invert()
             .ok_or_else(|| EditError::Invalid("the paragraph's frame has no area".into()))?;
-        let (x, y) = back.apply(frame[0] - first.origin.x, 0.0);
+        let correction = from_frame(dir, (frame[0] - first.frame_origin().0, 0.0));
+        let (x, y) = back.apply(correction.0, correction.1);
         tm[4] += x;
         tm[5] += y;
     }
-    let saved_frame = if upright && style.width.is_some() {
+    let saved_frame = if style.width.is_some() {
         Some(HorizontalFrame::start(
-            frame[0] + dx,
-            first.origin.baseline + dy,
+            frame[0] + along_move,
+            first.frame_origin().1 + across_move,
             width,
-            style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
+            style.vertical_frame.map(|[bottom, top]| [bottom + across_move, top + across_move]),
             align.unwrap_or(crate::added::Align::Left),
             Matrix(emit.ctm),
+            dir,
         )?)
     } else {
         None
@@ -3402,6 +3468,7 @@ mod tests {
         TextBlock {
             text: text.into(),
             rect,
+            ink_frame: rect,
             horizontal_frame: None,
             vertical_frame: None,
             horizontal_alignment: None,

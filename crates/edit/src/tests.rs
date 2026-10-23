@@ -3286,7 +3286,41 @@ fn changing_only_height_keeps_each_source_row_and_glyph_position() {
 }
 
 #[test]
-fn invalid_vertical_frames_and_turned_text_are_refused_without_mutation() {
+fn height_frame_nesting_preserves_separate_text_graphics_and_compatibility_objects() {
+    let mut doc = text_page(
+        "q /Span <</Lang (en)>> BDC BX BT /F1 12 Tf 72 700 Td (One) Tj ET EX EMC Q q /Span <</Lang (en)>> BDC BX BT /F1 12 Tf 72 686 Td (Two three four) Tj ET EX EMC Q",
+    );
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([650.0, 740.0]), ..Default::default() }).unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(after.iter().zip(&before).all(|(a, b)| a.text == b.text && a.rect == b.rect && a.ink == b.ink));
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let mut stack = Vec::new();
+    for op in &ops {
+        let (open, close) = match op.op.as_slice() {
+            b"q" => (Some("graphics"), None),
+            b"Q" => (None, Some("graphics")),
+            b"BT" => (Some("text"), None),
+            b"ET" => (None, Some("text")),
+            b"BX" => (Some("compatibility"), None),
+            b"EX" => (None, Some("compatibility")),
+            b"BDC" | b"BMC" => (Some("marked"), None),
+            b"EMC" => (None, Some("marked")),
+            _ => (None, None),
+        };
+        if let Some(open) = open {
+            stack.push(open);
+        }
+        if let Some(close) = close {
+            assert_eq!(stack.pop(), Some(close), "the frame must not cross object boundaries: {ops:?}");
+        }
+    }
+    assert!(stack.is_empty());
+}
+
+#[test]
+fn invalid_vertical_frames_are_refused_without_mutation() {
     for content in ["BT /F1 12 Tf 72 700 Td (Hi) Tj ET", "BT /F1 12 Tf 72 700 Td (Hi ) Tj 0 0 1 rg (there) Tj ET"] {
         for bounds in [[0.0, f64::NAN], [0.0, f64::INFINITY], [10.0, 10.0], [10.0, 9.0], [0.0, 14_401.0]] {
             let mut doc = text_page(content);
@@ -3298,10 +3332,6 @@ fn invalid_vertical_frames_and_turned_text_are_refused_without_mutation() {
             assert!(before.matches(&doc));
         }
     }
-    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 72 700 Tm (Hi) Tj ET");
-    let before = doc.read_state();
-    assert!(text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([600.0, 700.0]), ..Default::default() }).is_err());
-    assert!(before.matches(&doc));
     for vertical in ["[]", "[72 730 72 640]", "[72 640 90 730]", "[72 640 72 /bad]", "[72 0 72 14401]"] {
         let doc = text_page(&format!("/PCTextFrame << /Baseline [72 700 162 700] /Vertical {vertical} >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC"));
         let block = text::text_blocks(&doc, 0).unwrap().remove(0);
@@ -5245,6 +5275,141 @@ fn a_paragraph_at_a_slant_rewraps_at_the_width_it_has_upright() {
     for degrees in [30.0, 45.0, 60.0, 90.0, 135.0, 210.0, 330.0] {
         assert_eq!(rewrapped(degrees), upright, "{degrees}°");
     }
+}
+
+#[test]
+fn rotated_text_width_survives_reopening_retyping_and_moves() {
+    for degrees in [30.0_f64, 45.0, 90.0, 135.0, 180.0, 270.0, 330.0] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} 300 400 Tm (Hi) Tj ET", -sin));
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() }).unwrap();
+        let mut doc = reopen(&doc);
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let [left, right] = block.horizontal_frame.expect("a rotated width must survive reopening");
+        assert!((right - left - 90.0).abs() < 0.01, "{degrees} degrees: {block:?}");
+        text::replace_block(&mut doc, 0, 0, "One two three four five six seven").unwrap();
+        let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+        assert!(block.rows.len() > 1, "retyping must retain the chosen width at {degrees} degrees");
+        assert!((block.horizontal_frame.unwrap()[1] - right).abs() < 0.01);
+        text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+        let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+        let along = 14.0 * cos - 25.0 * sin;
+        assert!((moved.horizontal_frame.unwrap()[0] - left - along).abs() < 0.01);
+        assert!((moved.horizontal_frame.unwrap()[1] - right - along).abs() < 0.01);
+    }
+}
+
+#[test]
+fn rotated_text_height_keeps_each_source_glyph_and_reports_local_overflow() {
+    for degrees in [30.0_f64, 45.0, 90.0, 135.0, 180.0, 270.0, 330.0] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        for shown in ["[(Hello) 120 ( world)] TJ", "(Hello ) Tj 0 0 1 rg (world) Tj"] {
+            let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} 300 400 Tm {shown} ET", -sin));
+            let snapshot = |doc: &Document| {
+                text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text, l.rect, l.ink, l.font, l.size, l.color)).collect::<Vec<_>>()
+            };
+            let before = snapshot(&doc);
+            let baseline = 400.0 * cos - 300.0 * sin;
+            for (bounds, overflow) in [([baseline - 25.0, baseline + 30.0], false), ([baseline, baseline + 5.0], true)] {
+                let style = text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() };
+                text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+                let reopened = reopen(&doc);
+                assert_eq!(snapshot(&reopened), before, "height must preserve every glyph at {degrees} degrees");
+                let block = text::text_blocks(&reopened, 0).unwrap().remove(0);
+                assert!(block.vertical_frame.unwrap().iter().zip(bounds).all(|(a, b)| (a - b).abs() < 0.01));
+                let layout = text::text_edit_layout(&reopened, 0, 0, &block.editor_text, &Default::default()).unwrap();
+                assert_eq!(layout.overflow, overflow, "overflow is measured normal to the baseline at {degrees} degrees");
+            }
+            text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+            let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+            let across = -25.0 * cos - 14.0 * sin;
+            assert!((moved.vertical_frame.unwrap()[0] - baseline - across).abs() < 0.01);
+        }
+    }
+}
+
+#[test]
+fn rotated_text_mixed_style_width_is_refused_without_flattening_source_runs() {
+    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (Mixed ) Tj 0 0 1 rg (colour) Tj ET");
+    let before = doc.read_state();
+    assert!(text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() }).is_err());
+    assert!(before.matches(&doc));
+}
+
+#[test]
+fn rotated_text_tracking_resize_is_refused_without_mutation() {
+    for state in ["2 Tc", "50 Tz", "3 Ts", "1 Tr", "4 Tw"] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (One ) Tj {state} (two more) Tj ET"));
+        let before = doc.read_state();
+        assert!(
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(140.0), ..Default::default() }).is_err(),
+            "{state} must not be flattened"
+        );
+        assert!(before.matches(&doc));
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([-325.0, -275.0]), ..Default::default() }).unwrap();
+        let before = text_page(&format!("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (One ) Tj {state} (two more) Tj ET"));
+        let original = text::text_lines(&before, 0).unwrap();
+        let resized = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(original.len(), resized.len());
+        assert!(original.iter().zip(resized).all(|(a, b)| a.rect == b.rect && a.ink == b.ink && a.text == b.text), "height preserves {state}");
+    }
+}
+
+#[test]
+fn rotated_text_frame_uses_the_insertion_ctm_and_keeps_its_left_anchor() {
+    let mut doc = text_page("q 0 0.5 -0.5 0 40 50 cm BT /F1 12 Tf 72 700 Td (Hi) Tj ET Q");
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([300.0, 325.0]), ..Default::default() }).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!(close(block.rect, before[0].rect));
+    assert!(block.editing_frame().iter().zip([86.0, 300.0, 91.664, 325.0]).all(|(a, b)| (a - b).abs() < 0.01));
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(60.0), offset: Some([0.0, -10.0]), ..Default::default() }).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!(block.editing_frame().iter().zip([76.0, 300.0, 136.0, 325.0]).all(|(a, b)| (a - b).abs() < 0.01));
+    let expected_quad = [[-300.0, 76.0], [-300.0, 136.0], [-325.0, 136.0], [-325.0, 76.0]];
+    assert!(block.editing_quad().into_iter().flatten().zip(expected_quad.into_iter().flatten()).all(|(a, b)| (a - b).abs() < 0.01));
+    assert!((text::text_lines(&doc, 0).unwrap()[0].baseline()[1] - 76.0).abs() < 0.01);
+    text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+    let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!(moved.editing_frame().iter().zip([51.0, 286.0, 111.0, 311.0]).all(|(a, b)| (a - b).abs() < 0.01));
+}
+
+#[test]
+fn rotated_text_ignores_misaligned_or_nonperpendicular_frame_metadata() {
+    for marker in [
+        "/Baseline [300 400 390 400] /Vertical [300 380 300 420]",
+        "/Baseline [300 400 300 490] /Vertical [320 400 280 410]",
+        "/Baseline [300 400 300 490] /Vertical [280 400 320 400]",
+        "/Baseline [300 400 300 400]",
+    ] {
+        let doc = text_page(&format!("/PCTextFrame << {marker} >> BDC BT /F1 12 Tf 0 1 -1 0 300 400 Tm (Hi) Tj ET EMC"));
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert!(block.horizontal_frame.is_none() && block.vertical_frame.is_none(), "{marker}: {block:?}");
+        assert_eq!(block.editing_rect(), block.rect);
+    }
+}
+
+#[test]
+fn rotated_text_maximum_width_survives_numeric_roundoff() {
+    let (sin, cos) = 30.0_f64.to_radians().sin_cos();
+    let (x, y) = (300.0 * cos - 400.0 * sin, 300.0 * sin + 400.0 * cos);
+    let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} {x} {y} Tm (Hi) Tj ET", -sin));
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(14_400.0), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    text::replace_block(&mut doc, 0, 0, "Hi again").unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!((b.editing_frame()[2] - b.editing_frame()[0] - 14_400.0).abs() < 0.001);
+}
+
+#[test]
+fn rotated_text_maximum_height_survives_numeric_roundoff() {
+    let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+    let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} 300 400 Tm (Hi) Tj ET", -sin));
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([0.0, 14_400.0]), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    text::replace_block(&mut doc, 0, 0, "Hi again").unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!((b.editing_frame()[3] - b.editing_frame()[1] - 14_400.0).abs() < 0.001);
 }
 
 /// A paragraph in a Chrome-style subset font: `/W` leaves out the glyphs of the `/DW` width.

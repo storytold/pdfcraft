@@ -7643,6 +7643,76 @@ fn height_only_preserves_multiline_tj_text_and_rendering_through_tools() {
 }
 
 #[test]
+fn rotated_text_frames_survive_tools_reopen_typing_and_history() {
+    use pdfcraft_cos::{Document, Object};
+    for (angle, page_rotation) in [(30_f64, 90), (90.0, 180), (180.0, 270), (270.0, 0)] {
+        let dir = workdir(&format!("rotated-frame-{}", angle as i32));
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let content = format!("BT /F1 12 Tf {cos} {sin} {} {cos} 250 400 Tm (Hi) Tj ET", -sin);
+        let mut cos_doc = Document::open(std::sync::Arc::new(win_ansi_paragraph_pdf(&content))).unwrap();
+        let page = pdfcraft_model::pages(&cos_doc)[0].clone();
+        cos_doc.update_dict(page.obj, |d| d.set(b"Rotate".to_vec(), Object::Int(page_rotation))).unwrap();
+        std::fs::write(dir.join("source.pdf"), pdfcraft_cos::write_full(&cos_doc, &Default::default()).unwrap()).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+        let listed = |a: &mut Automation, doc| ok(a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0].clone();
+        ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"width":90,"height":10}));
+        let resized = listed(&mut a, doc);
+        let quad = resized["editing_quad"].as_array().expect("oriented geometry is available to automation");
+        let distance = |i: usize, j: usize| {
+            (quad[i][0].as_f64().unwrap() - quad[j][0].as_f64().unwrap()).hypot(quad[i][1].as_f64().unwrap() - quad[j][1].as_f64().unwrap())
+        };
+        assert!((distance(0, 1) - 90.0).abs() < 0.1, "{angle}: {resized}");
+        assert!((distance(1, 2) - 10.0).abs() < 0.1, "{angle}: {resized}");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/rotated.pdf"}));
+        let re = ok(&mut a, "doc_open", json!({"path":"out/rotated.pdf"}))["doc"].as_u64().unwrap();
+        assert_eq!(listed(&mut a, re), resized);
+        let text = "One two three four five six seven eight nine";
+        let draft = ok(&mut a, "text_edit_layout", json!({"doc":re,"page":1,"paragraph":1,"text":text}));
+        assert_eq!(draft["overflow"], true);
+        assert_eq!(listed(&mut a, re), resized, "preview is read-only");
+        ok(&mut a, "text_edit", json!({"doc":re,"page":1,"paragraph":1,"text":text}));
+        let typed = listed(&mut a, re);
+        assert_eq!(typed["editing_quad"], resized["editing_quad"], "typing preserves the rotated frame");
+        assert!(typed["rows"].as_array().unwrap().len() > 1);
+        a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap();
+        ok(&mut a, "edit_undo", json!({"doc":re}));
+        assert_eq!(listed(&mut a, re), resized);
+        ok(&mut a, "edit_redo", json!({"doc":re}));
+        assert_eq!(listed(&mut a, re), typed);
+    }
+}
+
+#[test]
+fn rotated_text_height_preserves_source_pixels_and_local_top_edge() {
+    for angle in [30_f64, 90.0, 180.0, 270.0] {
+        let dir = workdir(&format!("rotated-height-{}", angle as i32));
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let content =
+            format!("q {cos} {sin} {} {cos} 250 400 cm BT /F1 12 Tf 14.4 TL 0 0 Td [(One) -37 ( two)] TJ T* [(Three) 21 ( four)] TJ ET Q", -sin);
+        std::fs::write(dir.join("source.pdf"), win_ansi_paragraph_pdf(&content)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+        let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+        let lines = ok(&mut a, "text_lines", json!({"doc":doc,"page":1}));
+        let pixels = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+        for height in [10, 60, 15] {
+            ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"height":height}));
+            let after = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+            assert_eq!(after["count"], 1);
+            for corner in [2, 3] {
+                assert_eq!(
+                    after["paragraphs"][0]["editing_quad"][corner], before["paragraphs"][0]["editing_quad"][corner],
+                    "local top stays anchored at {angle} degrees"
+                );
+            }
+            assert_eq!(ok(&mut a, "text_lines", json!({"doc":doc,"page":1})), lines);
+            assert_eq!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap(), pixels);
+        }
+    }
+}
+
+#[test]
 fn clipped_image_bounds_and_text_edit_save_reopen_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
     let dir = workdir("clipped-artwork");

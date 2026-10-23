@@ -279,6 +279,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 editor_text: String::new(),
                 spans: Vec::new(),
                 rect,
+                ink_frame: frame,
                 horizontal_frame: first.horizontal_frame.map(|f| f.bounds),
                 vertical_frame: first.horizontal_frame.and_then(|f| f.vertical),
                 horizontal_alignment: first.horizontal_frame.map(|f| f.align),
@@ -325,6 +326,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         block.text.push_str(row_text.trim_matches(paragraph_separator));
         block.rect = union(block.rect, rect);
+        block.ink_frame = union(block.ink_frame, frame);
         block.rows.push(row);
     }
     blocks
@@ -564,6 +566,7 @@ pub(super) fn rewrite_styled_block(
             style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
             align,
             Matrix(lead.origin.ctm),
+            first.direction(),
         )?)
     } else {
         None

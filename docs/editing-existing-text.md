@@ -10,15 +10,23 @@ moved because an earlier row wrapped, are rewritten, and formatting a selection 
 only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
 every row.
 
-Resize a closed upright paragraph's frame to choose its wrap width and height.
+Resize a closed paragraph's frame to choose its wrap width and height. The four edge
+handles follow the text's angle, including slanted text and rotated pages.
 The chosen edges survive typing, moving, undo/redo and save/reopen. Height changes the
 editing frame without scaling, cropping or hiding the text: overflowing words remain visible,
 and the open editor shows an overflow warning beside the frame.
-Automation `text_paragraphs` returns both `rect` (ink bounds) and `editing_rect` (the editing
-frame). `text_edit.width` sets the wrap width; `text_edit.height` sets a positive height of at
-most 14,400 points while keeping the top edge fixed. `text_edit_layout` accepts the same
-height to preview a draft and its overflow without changing the document. Frames for turned
-text remain unsupported.
+Automation `text_paragraphs` returns `rect` (ink bounds), `editing_rect` (the frame's
+axis-aligned bounds), and `editing_quad` (its four corners in displayed page coordinates,
+ordered bottom-left, bottom-right, top-right, top-left in the text's own orientation).
+`text_edit.width` sets the wrap width along the baseline; `text_edit.height` sets a positive
+height of at most 14,400 points perpendicular to it, keeping the text-local top edge fixed.
+`text_edit_layout` accepts the same height to preview a draft and its overflow without
+changing the document. Changing only height preserves the source glyphs and drawing
+operators, including mixed styles. Reflow of rotated text with mixed styles is refused to
+avoid losing formatting; partial formatting and document-font selection for rotated text
+remain unsupported.
+Rotated paragraphs use a horizontal typing editor; applying the text preserves the PDF's
+original angle and the chosen frame.
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Draft boxes grow to the page edge

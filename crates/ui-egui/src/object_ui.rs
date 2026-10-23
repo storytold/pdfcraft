@@ -320,8 +320,12 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
     let text_blocks = doc.text_blocks(page);
     if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
         && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-        && (on_frame(screen(xf, info, page, object), p)
-            || text_blocks.get(block).is_some_and(|b| on_frame(xf.user_rect(info, page, b.editing_rect().map(|v| v as f32)), p)))
+        && text_blocks.get(block).is_some_and(|b| {
+            crate::edit_text_ui::paragraph_on_frame(xf, info, page, b, p)
+                || (b.rotation.abs() < 0.001
+                    && info.pages.get(page).is_some_and(|p| (p.rotation + xf.rot).is_multiple_of(360))
+                    && on_frame(screen(xf, info, page, object), p))
+        })
     {
         s.clear();
         s.page = Some(page);
@@ -334,11 +338,10 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
     s.clear();
     // A closed paragraph's edge handle reaches past its box; leave those presses to the
     // paragraph resize controls instead of starting an area selection (#2276).
-    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page)
-        && crate::edit_text_ui::grabs_edge(xf, info, page, text_blocks.iter().map(|b| b.editing_rect()), p);
-    let in_text_frame = text_blocks.iter().any(|b| {
-        (b.horizontal_frame.is_some() || b.vertical_frame.is_some()) && xf.user_rect(info, page, b.editing_rect().map(|v| v as f32)).contains(p)
-    });
+    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page) && crate::edit_text_ui::grabs_edge(xf, info, page, text_blocks.iter(), p);
+    let in_text_frame = text_blocks
+        .iter()
+        .any(|b| (b.horizontal_frame.is_some() || b.vertical_frame.is_some()) && crate::edit_text_ui::paragraph_contains(xf, info, page, b, p));
     if hit.is_some() || on_edge || in_text_frame {
         return false;
     }

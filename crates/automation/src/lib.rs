@@ -604,6 +604,7 @@ impl Automation {
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
                             "editing_rect": comments::rect_to_view(info, b.editing_rect().map(|v| v as f32)),
+                            "editing_quad": b.editing_quad().map(|p| info.user_to_view(p[0] as f32, p[1] as f32).map(r)),
                             "font": b.base_font,
                             "size": (b.size * 100.0).round() / 100.0,
                         })
@@ -2361,13 +2362,13 @@ fn foreign_share(path: &Path, root: &Path) -> bool {
 
 // ---- JSON helpers ----------------------------------------------------------------------------
 
-/// Automation's height anchors the top edge of the current frame in PDF user space.
+/// Automation's height anchors the top edge perpendicular to the paragraph's baseline.
 fn parse_text_height_frame(a: &Args<'_>, source: &pdfcraft_engine::TextBlock) -> Result<Option<[f64; 2]>> {
     let Some(height) = a.opt_num("height")? else { return Ok(None) };
     if !height.is_finite() || height <= 0.0 || height > 14_400.0 {
         return Err(ToolError::InvalidArgs("height must be finite, greater than 0 and at most 14400 points".into()));
     }
-    let top = source.editing_rect()[3];
+    let top = source.editing_frame()[3];
     let bottom = top - height;
     if !top.is_finite() || !bottom.is_finite() {
         return Err(ToolError::InvalidArgs("the paragraph's height has invalid geometry".into()));
