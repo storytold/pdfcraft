@@ -30,18 +30,27 @@ pub struct OcrDraft {
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
     pub text_pages: bool,
+    /// Turn scans that lie sideways or upside down upright, and level turned scans.
+    pub auto_rotate: bool,
+    pub deskew: bool,
 }
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false, auto_rotate: true, deskew: true }
     }
 }
 
 impl OcrDraft {
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
-        OcrSettings { dpi: self.dpi as f32, language: self.language.clone(), skip_text_pages: !self.text_pages }
+        OcrSettings {
+            dpi: self.dpi as f32,
+            language: self.language.clone(),
+            skip_text_pages: !self.text_pages,
+            auto_rotate: self.auto_rotate,
+            deskew: self.deskew,
+        }
     }
 }
 
@@ -122,6 +131,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add_space(4.0);
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
+        ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Auto-rotate pages")));
+        ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Deskew pages")));
     });
     if !available {
         ui.label(

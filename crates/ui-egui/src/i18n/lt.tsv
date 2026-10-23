@@ -272,6 +272,7 @@
 	Allow Rich Text Formatting	Leisti raiškiojo teksto formatavimą
 	Allow user to enter custom text	Leisti naudotojui įvesti pasirinktinį tekstą
 	Also recognize pages that already have text	Taip pat atpažinti puslapius, kuriuose jau yra teksto
+	Deskew pages	Ištiesinti puslapius
 	Alternate text	Alternatyvusis tekstas
 	An action with this name already exists.	Veiksmas tokiu pavadinimu jau yra.
 	An open-source PDF workbench — local, private, and scriptable.	Atvirojo kodo PDF aplinka — vietinė, privati ir valdoma scenarijais.

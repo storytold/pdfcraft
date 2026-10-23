@@ -636,6 +636,7 @@
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Prenos priponk v spletni različici pride z M3.10 (pripravljenih bajtov: {n})
 	Downsample to	Zmanjšaj vzorčenje na
 	Also recognize pages that already have text	Prepoznaj tudi strani, ki že vsebujejo besedilo
+	Deskew pages	Poravnaj strani
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Prepoznane bodo tudi slike na teh straneh; besede, ki so že v besedilu strani, ne bodo dodane znova
 	Drag a rectangle around the area to copy	Povlecite pravokotnik okoli območja, ki ga želite kopirati
 	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Povlecite pravokotnik na strani, da jo obrežete; dvokliknite stran za nastavitev okvirjev strani
