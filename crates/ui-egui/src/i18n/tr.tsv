@@ -96,6 +96,8 @@
 	Next view	Sonraki görünüm
 	Page display	Sayfa görünümü
 	Continuous scrolling	Sürekli kaydırma
+	Turn on continuous scrolling	Sürekli kaydırmayı aç
+	Turn off continuous scrolling	Sürekli kaydırmayı kapat
 	Show gaps between pages	Sayfalar arasındaki boşlukları göster
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Sayfa kenarlarını birleştirmek için boşlukları gizleyin. PDF içindeki kenar boşlukları değişmez.
 	Two-page view	İki sayfa görünümü

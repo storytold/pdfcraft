@@ -125,6 +125,8 @@
 	About PdfCraft	O aplikaci PdfCraft
 	Auto	Automaticky
 	Continuous scrolling	Plynulé posouvání
+	Turn on continuous scrolling	Zapnout plynulé posouvání
+	Turn off continuous scrolling	Vypnout plynulé posouvání
 	Show gaps between pages	Zobrazovat mezery mezi stránkami
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skrytím mezer spojíte okraje stránek. Okraje uvnitř PDF zůstanou beze změny.
 	Single page	Jednostránkové zobrazení

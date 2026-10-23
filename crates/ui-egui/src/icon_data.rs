@@ -1,7 +1,10 @@
-//! Lucide icons (ISC licence, see assets/icons/LICENSE-lucide.txt), embedded and tinted at runtime.
+//! Embedded icons, tinted at runtime. Lucide icons use ISC; local scrolling icons use MIT OR Apache-2.0.
+//! See ATTRIBUTION.toml for per-file provenance.
 //! Generated from the contents of assets/icons/.
 
 pub static ICONS: &[(&str, &[u8])] = &[
+    ("scroll-continuous", include_bytes!("../../../assets/icons/scroll-continuous.svg")),
+    ("scroll-normal", include_bytes!("../../../assets/icons/scroll-normal.svg")),
     ("accessibility", include_bytes!("../../../assets/icons/accessibility.svg")),
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
     ("align-justify", include_bytes!("../../../assets/icons/align-justify.svg")),

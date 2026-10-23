@@ -138,6 +138,8 @@
 	Next view	العرض التالي
 	Page display	عرض الصفحات
 	Continuous scrolling	تمرير متواصل
+	Turn on continuous scrolling	تشغيل التمرير المتواصل
+	Turn off continuous scrolling	إيقاف التمرير المتواصل
 	Show gaps between pages	إظهار الفراغات بين الصفحات
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	أخفِ الفراغات لوصل حواف الصفحات. تبقى الهوامش داخل ملف PDF دون تغيير.
 	Two-page view	عرض صفحتين

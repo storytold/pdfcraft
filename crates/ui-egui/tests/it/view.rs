@@ -989,7 +989,7 @@ fn rail_page_display_menu_offers_acrobats_view_choices() {
     let pick = |h: &mut Harness<'static, PdfCraftApp>, item: &str| {
         h.get_by_label_contains("Page display:").click();
         h.run_steps(3);
-        h.get_by_label(item).click();
+        h.get_all_by_label(item).last().unwrap().click();
         h.run_steps(4);
     };
     let shown = |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].layout, h.state().views[0].continuous(), h.state().views[0].fit);
@@ -1017,7 +1017,7 @@ fn rail_page_display_button_switches_layouts() {
     h.run_steps(4);
     h.get_by_label_contains("Page display").click();
     h.run_steps(3);
-    h.get_by_label("Single page").click();
+    h.get_all_by_label("Single page").last().unwrap().click();
     h.run_steps(4);
     assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
 }
@@ -1031,7 +1031,7 @@ fn view_menu_page_display_uses_the_same_commands() {
     h.run_steps(2);
     h.get_by_label("View ⏵").hover();
     h.run_steps(3);
-    h.get_by_label("Single page").click();
+    h.get_all_by_label("Single page").last().unwrap().click();
     h.run_steps(4);
     assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
 }
@@ -1042,7 +1042,7 @@ fn palette_runs_page_display_commands_from_the_keyboard() {
     let mut h = harness(&[]);
     h.state_mut().set_option("palette", "single page").unwrap();
     h.run_steps(3);
-    h.get_by_label("Single page");
+    h.get_all_by_label("Single page").last().unwrap();
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().palette_open, "Enter runs the top hit and closes the palette");

@@ -671,9 +671,10 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if icons::button(ui, "zoom-in", 32.0, false, &tip).clicked() {
                         view.zoom_step(true);
                     }
-                    // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
+                    // Between rotate and zoom, as in Acrobat: the Page display menu (scrolling, cover
+                    // page and zoom options). Its command runs once `view` is free.
                     let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
-                    let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
+                    let resp = icons::button(ui, "settings", 32.0, false, &tip);
                     page_display = egui::Popup::menu(&resp)
                         .show(|ui| {
                             ui.set_min_width(220.0);
@@ -782,6 +783,9 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 });
             });
+            // Read before the panel buttons borrow `app`; the toggles below sit with those buttons so the
+            // navigation cluster stays as short as it can in a short window (#3282).
+            let (continuous, layout) = (app.views[index].continuous(), app.views[index].layout);
             egui::ScrollArea::vertical().id_salt("rail-panels").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {
@@ -806,6 +810,21 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
                 }
                 rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
+                // Page display toggles, closest to the navigation below. Each label names what a click
+                // selects, so it also tells the current mode without relying on the icon.
+                ui.add_space(6.0);
+                let scroll_icon = if continuous { "scroll-continuous" } else { "scroll-normal" };
+                let scroll_label = if continuous { tl!("Turn off continuous scrolling") } else { tl!("Turn on continuous scrolling") };
+                if icons::button(ui, scroll_icon, 34.0, false, scroll_label).clicked() {
+                    page_display = Some("view.continuous");
+                }
+                let next_layout = match layout {
+                    PageLayout::Single => PageLayout::TwoUp,
+                    PageLayout::TwoUp => PageLayout::Single,
+                };
+                if icons::button(ui, layout.icon(), 34.0, false, tl!(next_layout.label())).clicked() {
+                    page_display = Some(next_layout.command());
+                }
             });
             if let Some(id) = page_display {
                 app.execute(id);

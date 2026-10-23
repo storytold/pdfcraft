@@ -131,6 +131,8 @@
 	Next view	Следующий вид
 	Page display	Отображение страниц
 	Continuous scrolling	Непрерывная прокрутка
+	Turn on continuous scrolling	Включить непрерывную прокрутку
+	Turn off continuous scrolling	Выключить непрерывную прокрутку
 	Show gaps between pages	Показывать промежутки между страницами
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Скройте промежутки, чтобы соединить края страниц. Поля внутри PDF останутся без изменений.
 	Two-page view	Двухстраничный вид

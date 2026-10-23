@@ -74,6 +74,8 @@
 	Single page	Vienas puslapis
 	Two-page view	Dviejų puslapių rodinys
 	Continuous scrolling	Nepertraukiamas slinkimas
+	Turn on continuous scrolling	Įjungti nepertraukiamą slinkimą
+	Turn off continuous scrolling	Išjungti nepertraukiamą slinkimą
 	Show gaps between pages	Rodyti tarpus tarp puslapių
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Paslėpkite tarpus, kad puslapių kraštai susiliestų. Paraštės PDF viduje nesikeičia.
 	Page display	Puslapių rodymas
