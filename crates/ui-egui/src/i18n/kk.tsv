@@ -2513,3 +2513,5 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	G-SYNC/FreeSync жыпылықтауын болдырмау (келесі іске қосқанда)
+	Display	Дисплей

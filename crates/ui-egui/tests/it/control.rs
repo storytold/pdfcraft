@@ -1891,3 +1891,19 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
 }
+
+#[test]
+fn vrr_preference_can_be_saved_through_the_control_channel() {
+    let (mut h, c) = harness();
+    assert!(!h.state().compose_window);
+    ok(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "on"}));
+    assert!(h.state().compose_window);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["compose_window"], true);
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "invalid"})).is_err());
+    assert!(h.state().compose_window);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(restored.compose_window);
+    ok(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "off"}));
+    assert!(!h.state().compose_window);
+}

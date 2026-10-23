@@ -148,3 +148,16 @@ Relative includes resolve beside the config that contains them. Included directo
 digit-prefixed `*.conf` files, in lexical order; backups and disabled files are ignored. The scan
 limits each config to 1 MiB, visits at most 256 config files/directories, and bounds include depth
 to 16 and directory entries to 32,768. Cyclic includes are skipped.
+
+### Windows VRR flicker
+
+Preferences ▸ Display (at the bottom) offers **Prevent G-SYNC/FreeSync flicker (applies at next launch)** on Windows.
+It defaults to off. Enable it and restart to use a transparency-capable DX12 composition window;
+the rendered background remains opaque, including while dialogs dim the UI. DirectComposition
+also remains the default with this preference off, preserving the resize-artifact fix (#2738).
+`WGPU_BACKEND` and `WGPU_DX12_PRESENTATION_SYSTEM` overrides suppress automatic activation.
+OpenGL, including the startup fallback, keeps an opaque window. The persisted `compose_window`
+preference is accessible through `ui.set` with `on` or `off`; changing it requires restart.
+Adapted from https://github.com/storytold/lightcraft/pull/2421. Windows startup, restart persistence,
+light/dark modal opacity, resizing, and forced OpenGL were checked through the opt-in control
+channel on 2026-10-23. The user confirmed on 2026-10-23 that the fix works on a VRR monitor.

@@ -2516,3 +2516,5 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	G-SYNC/FreeSync-Flackern verhindern (ab dem nächsten Start)
+	Display	Anzeige

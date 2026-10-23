@@ -2774,3 +2774,5 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	Previne pâlpâirea G-SYNC/FreeSync (la următoarea pornire)
+	Display	Afișare

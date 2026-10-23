@@ -2515,3 +2515,5 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	G-SYNC/FreeSync のちらつきを防ぐ（次回起動時に適用）
+	Display	ディスプレイ

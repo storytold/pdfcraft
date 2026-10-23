@@ -2428,3 +2428,5 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)
+	Display	Экран

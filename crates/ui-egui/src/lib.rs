@@ -551,6 +551,8 @@ pub struct PdfCraftApp {
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
+    /// Opt-in Windows VRR workaround; takes effect at next launch.
+    pub compose_window: bool,
     /// Whether the system asked for no animations, and how the desktop app asks it.
     pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
@@ -967,6 +969,7 @@ impl PdfCraftApp {
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             animation_effects: motion::AnimationEffects::default(),
+            compose_window: false,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -2426,6 +2429,7 @@ impl PdfCraftApp {
             "right_panel_closed": self.right_panel_closed,
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
+        v["compose_window"] = serde_json::Value::Bool(self.compose_window);
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
@@ -2482,6 +2486,7 @@ impl PdfCraftApp {
         if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {
             self.scroll_speed = speed;
         }
+        self.compose_window = v.get("compose_window").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
         }
@@ -2641,6 +2646,13 @@ impl PdfCraftApp {
             }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
+            }
+            ("compose_window", _) => {
+                self.compose_window = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("compose_window must be on or off".into()),
+                };
             }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
@@ -3121,6 +3133,12 @@ impl PdfCraftApp {
 }
 
 impl eframe::App for PdfCraftApp {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        // Composition needs a transparency-capable window, but modal dimming must not reveal the desktop.
+        let background = visuals.panel_fill;
+        egui::Color32::from_rgb(background.r(), background.g(), background.b()).to_normalized_gamma_f32()
+    }
+
     /// While files are dragged over the window the system sends no pointer moves, so egui
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
@@ -3419,6 +3437,54 @@ impl PdfCraftApp {
             {
                 view.finish_render_frame(ctx, &doc.info, &doc.renderer);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod vrr_tests {
+    use super::*;
+
+    #[test]
+    fn vrr_preference_round_trips_and_rejects_invalid_options() {
+        let mut app = PdfCraftApp::new();
+        assert!(!app.compose_window);
+        app.set_option("compose_window", "on").unwrap();
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&app.persist());
+        assert!(restored.compose_window);
+        assert!(restored.set_option("compose_window", "invalid").is_err());
+        assert!(restored.compose_window);
+        restored.set_option("compose_window", "off").unwrap();
+        assert!(!restored.compose_window);
+        for json in ["{}", r#"{"compose_window":"on"}"#, r#"{"compose_window":null}"#] {
+            restored.compose_window = true;
+            restored.restore(json);
+            assert!(!restored.compose_window);
+        }
+    }
+
+    #[test]
+    fn vrr_preference_is_translated_in_every_shipped_language() {
+        let label = "Prevent G-SYNC/FreeSync flicker (applies at next launch)";
+        for lang in i18n::Lang::all() {
+            assert!(lang.code() == "en" || i18n::tr(lang, label) != label, "{}", lang.code());
+        }
+    }
+
+    #[test]
+    fn vrr_modal_background_remains_opaque_in_both_themes() {
+        let mut app = PdfCraftApp::new();
+        app.dialog = Some(Dialog::Preferences);
+        for mut visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            let background = visuals.panel_fill;
+            visuals.panel_fill = egui::Color32::from_rgba_unmultiplied(background.r(), background.g(), background.b(), 128);
+            let clear = eframe::App::clear_color(&app, &visuals);
+            assert_eq!(clear[3], 1.0);
+            assert_eq!(
+                clear,
+                egui::Color32::from_rgb(visuals.panel_fill.r(), visuals.panel_fill.g(), visuals.panel_fill.b()).to_normalized_gamma_f32()
+            );
         }
     }
 }

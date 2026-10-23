@@ -92,7 +92,9 @@ fn a_very_tall_window_does_not_leave_a_blank_gap_above_ok() {
     let mut h = harness(2600.0);
     h.run_steps(6);
     let ok = h.get_by_label("OK").rect();
-    let last = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
+    let last_label =
+        if cfg!(target_os = "windows") { "Prevent G-SYNC/FreeSync flicker (applies at next launch)" } else { "Enable Acrobat JavaScript" };
+    let last = h.get_by_label_contains(last_label).rect();
     assert!(on_screen(ok, 2600.0) && on_screen(last, 2600.0), "{last:?} {ok:?}");
     assert!(ok.min.y - last.max.y < 120.0, "a gap of {} pt between the last setting and OK", ok.min.y - last.max.y);
 }

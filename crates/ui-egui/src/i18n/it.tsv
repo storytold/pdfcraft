@@ -2747,3 +2747,5 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	Evita lo sfarfallio G-SYNC/FreeSync (al prossimo avvio)
+	Display	Schermo

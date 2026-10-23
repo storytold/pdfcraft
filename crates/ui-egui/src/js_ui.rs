@@ -503,6 +503,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
                 .color(t.text_muted),
         );
     });
+    #[cfg(target_os = "windows")]
+    {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(tl!("Display")).font(theme::semibold(13.0)));
+        ui.add(widgets::checkbox(&mut app.compose_window, tl!("Prevent G-SYNC/FreeSync flicker (applies at next launch)")));
+    }
 }
 
 /// The Preferences dialog's OK row. Returns `true` to close.

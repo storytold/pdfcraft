@@ -9834,7 +9834,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "Windows has an opt-in restart-required G-SYNC/FreeSync flicker workaround, controllable through ui.set compose_window on/off. Regression coverage: vrr_preference_round_trips_and_rejects_invalid_options and vrr_modal_background_remains_opaque_in_both_themes. VRR monitor fix confirmed by the user on 2026-10-23; general preferences remain incomplete."
 
 [[feature]]
 id = "misc.prefs-page-display"

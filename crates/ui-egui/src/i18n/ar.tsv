@@ -2791,3 +2791,5 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	منع وميض G-SYNC/FreeSync (يسري عند التشغيل التالي)
+	Display	العرض

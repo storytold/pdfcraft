@@ -2537,3 +2537,5 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)
+	Display	Екран

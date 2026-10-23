@@ -2681,3 +2681,5 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	ป้องกันการกะพริบของ G-SYNC/FreeSync (มีผลเมื่อเปิดครั้งถัดไป)
+	Display	การแสดงผล
