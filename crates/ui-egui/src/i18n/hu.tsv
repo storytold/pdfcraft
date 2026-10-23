@@ -797,6 +797,10 @@
 	Box	Keret
 	Units	Mértékegységek
 	Set to zero	Nullázás
+	Remove white margins	Fehér margók eltávolítása
+	Remove white margins is already running	A fehér margók eltávolítása már fut
+	Removing white margins… page {d} of {t}	Fehér margók eltávolítása… {d}. oldal / {t}
+	The document changed while its margins were measured; nothing was cropped	A dokumentum megváltozott a margók mérése közben; semmi sem lett körbevágva
 	Current page ({n})	Aktuális oldal ({n})
 	Subset	Részhalmaz
 	Update	Frissítés

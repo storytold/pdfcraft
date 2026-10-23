@@ -820,6 +820,10 @@
 	Box	Поле
 	Units	Единицы
 	Set to zero	Установить в ноль
+	Remove white margins	Удалить белые поля
+	Remove white margins is already running	Удаление белых полей уже выполняется
+	Removing white margins… page {d} of {t}	Удаление белых полей… страница {d} из {t}
+	The document changed while its margins were measured; nothing was cropped	Документ изменился во время измерения полей; ничего не обрезано
 	Current page ({n})	Текущая страница ({n})
 	Subset	Подмножество
 	Update	Обновить

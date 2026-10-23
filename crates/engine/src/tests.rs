@@ -2548,6 +2548,133 @@ fn crop_and_duplicate_pages_show_in_the_viewer() {
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Duplicate page"));
 }
 
+/// A document of 200×300 pt pages, each with its own extra page-dictionary entries and content.
+fn drawn_pages(pages: &[(&str, &str)]) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {} /MediaBox [0 0 200 300] >>", kids.join(" "), pages.len()).into_bytes());
+    for (i, (extra, body)) in pages.iter().enumerate() {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R {extra} >>", 4 + 2 * i).into_bytes());
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes());
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// #1156: Remove White Margins crops each page of the range to what it shows that is not white,
+/// in one undo step. A white backdrop is margin, a blank page and pages outside the range keep
+/// their boxes, a turned page is measured as displayed, and a crop box never grows.
+#[test]
+fn remove_white_margins_crops_each_page_to_its_content() {
+    let source = drawn_pages(&[
+        // A page that paints its own white backdrop under a dark rectangle.
+        ("", "1 1 1 rg 0 0 200 300 re f 0 0 0 rg 50 100 80 60 re f"),
+        ("", ""),
+        ("/Rotate 90", "0.2 0.4 0.8 rg 20 30 40 170 re f"),
+        // The rectangle runs past the crop box: only what shows counts.
+        ("/CropBox [0 0 100 300]", "0 0 0 rg 50 100 100 60 re f"),
+        // Outside the range.
+        ("", "0 0 0 rg 50 100 80 60 re f"),
+    ]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("drawn.pdf", None, Arc::new(source), None).unwrap();
+    let rects = s.get(id).unwrap().white_margin_crops(&[0, 1, 2, 3]);
+    assert_eq!(rects.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [0, 2, 3], "a blank page has nothing to trim to");
+    s.apply(id, Edit::RemoveWhiteMargins { which: PageBox::Crop, rects }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.can_undo(), Some("Remove white margins"));
+    let boxes = d.page_boxes();
+    // Within a point outside the content on every side, and never cutting into it.
+    let around = |page: usize, content: [f64; 4]| {
+        let c = boxes[page][1];
+        let fits = c[0] <= content[0] && c[1] <= content[1] && c[2] >= content[2] && c[3] >= content[3];
+        let tight = (0..4).all(|k| (c[k] - content[k]).abs() <= 1.0);
+        assert!(fits && tight, "page {}: crop {c:?}, content {content:?}", page + 1);
+    };
+    around(0, [50.0, 100.0, 130.0, 160.0]);
+    assert_eq!(boxes[1][1], [0.0, 0.0, 200.0, 300.0]);
+    around(2, [20.0, 30.0, 60.0, 200.0]);
+    let turned = &d.info.pages[2];
+    assert!((turned.width - 170.0).abs() <= 2.0 && (turned.height - 40.0).abs() <= 2.0, "{}×{}", turned.width, turned.height);
+    around(3, [50.0, 100.0, 100.0, 160.0]);
+    assert_eq!(boxes[4][1], [0.0, 0.0, 200.0, 300.0]);
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().page_boxes().iter().take(3).all(|b| b[1] == [0.0, 0.0, 200.0, 300.0]), "one step undoes every page");
+    // Nothing to trim to: no edit, no undo step.
+    let blank = s.get(id).unwrap().white_margin_crops(&[1]);
+    s.apply(id, Edit::RemoveWhiteMargins { which: PageBox::Crop, rects: blank }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+}
+
+/// #1156: a page already cropped to its content, or whose content fills it, is left alone: running
+/// Remove White Margins again adds no undo step. The A4 page's measure differs from its box only
+/// by float noise.
+#[test]
+fn remove_white_margins_leaves_a_page_already_at_its_content() {
+    let source = drawn_pages(&[("", "0 0 0 rg 50 100 80 60 re f"), ("/MediaBox [0 0 595.276 841.89]", "0 0 0 rg 0 0 595.276 841.89 re f")]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("drawn.pdf", None, Arc::new(source), None).unwrap();
+    let full = s.get(id).unwrap().white_margin_crops(&[1]);
+    assert_eq!(full.len(), 1, "the full page is measured");
+    s.apply(id, Edit::RemoveWhiteMargins { which: PageBox::Crop, rects: full }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), None, "content that fills the page: nothing to trim");
+    let first = s.get(id).unwrap().white_margin_crops(&[0]);
+    s.apply(id, Edit::RemoveWhiteMargins { which: PageBox::Crop, rects: first }).unwrap();
+    let trimmed = s.get(id).unwrap().page_boxes()[0][1];
+    let again = s.get(id).unwrap().white_margin_crops(&[0, 1]);
+    assert_eq!(again.len(), 2, "both pages are measured again");
+    s.apply(id, Edit::RemoveWhiteMargins { which: PageBox::Crop, rects: again }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_boxes()[0][1], trimmed);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().page_boxes()[0][1], [0.0, 0.0, 200.0, 300.0], "one undo goes back past the first trim");
+}
+
+/// #1156: a content edge that falls inside a pixel, covering too little of it to darken it, is
+/// still inside the crop: the measured box is padded by a pixel.
+#[test]
+fn remove_white_margins_keeps_a_content_edge_between_pixels() {
+    let source = drawn_pages(&[("", "0 0 0 rg 50.49 100.49 80 60 re f")]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("drawn.pdf", None, Arc::new(source), None).unwrap();
+    let rects = s.get(id).unwrap().white_margin_crops(&[0]);
+    let [(0, c)] = rects[..] else { panic!("{rects:?}") };
+    assert!(c[0] <= 50.49 && c[0] >= 49.49, "left {}", c[0]);
+    assert!(c[1] <= 100.49 && c[1] >= 99.49, "bottom {}", c[1]);
+}
+
+/// #1156: the background job measures the same rectangles as the dialog, and a cancelled one
+/// leaves nothing to apply.
+#[test]
+fn white_margins_job_matches_the_direct_measure_and_cancels() {
+    let source = drawn_pages(&[("", "0 0 0 rg 50 100 80 60 re f"), ("", ""), ("/Rotate 90", "0 0 0 rg 20 30 40 170 re f")]);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("drawn.pdf", None, Arc::new(source), None).unwrap();
+    let direct = s.get(id).unwrap().white_margin_crops(&[0, 1, 2]);
+    let mut seen = Vec::new();
+    let edit = s.white_margins_job(id, &[0, 1, 2, 9], PageBox::Crop).unwrap().run(|done, total| {
+        seen.push((done, total));
+        true
+    });
+    assert_eq!(edit, Some(Edit::RemoveWhiteMargins { which: PageBox::Crop, rects: direct }));
+    assert_eq!(seen, [(0, 3), (1, 3), (2, 3)], "a page past the end is dropped");
+    let cancelled = s.white_margins_job(id, &[0, 1, 2], PageBox::Crop).unwrap().run(|done, _| done < 1);
+    assert_eq!(cancelled, None);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+}
+
 #[test]
 fn headers_footers_watermarks_and_backgrounds_show_update_and_remove() {
     let (mut s, id) = session_with(2);

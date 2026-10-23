@@ -899,7 +899,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_set_box",
             "Set page boxes / crop",
-            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins in points from the media box [left, bottom, right, top], or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
+            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins in points from the media box [left, bottom, right, top], or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. remove_white_margins: true instead sets the box of each page to the bounds of what it shows that is not white (Acrobat's Remove White Margins); blank pages keep their box, and trimmed_pages lists the pages changed (1-based). Undoable.",
         )
         .cmd("page.boxes")
         .with(schema(
@@ -909,6 +909,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "box": { "type": "string", "enum": ["crop", "trim", "bleed", "art", "media"] },
                 "margins": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 4, "maxItems": 4 },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                "remove_white_margins": { "type": "boolean" },
             }),
             &["doc"],
         )),

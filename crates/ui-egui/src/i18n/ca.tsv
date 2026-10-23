@@ -786,6 +786,10 @@
 	Box	Quadre
 	Units	Unitats
 	Set to zero	Posa a zero
+	Remove white margins	Elimina els marges blancs
+	Remove white margins is already running	L'eliminació dels marges blancs ja s'està executant
+	Removing white margins… page {d} of {t}	S'estan eliminant els marges blancs… pàgina {d} de {t}
+	The document changed while its margins were measured; nothing was cropped	El document ha canviat mentre se'n mesuraven els marges; no s'ha escapçat res
 	Current page ({n})	Pàgina actual ({n})
 	Subset	Subconjunt
 	Update	Actualitza

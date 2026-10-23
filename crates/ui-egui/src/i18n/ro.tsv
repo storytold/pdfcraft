@@ -1054,6 +1054,10 @@
 	Set status	Setare stare
 	Set to current page ({n})	Setare la pagina curentă ({n})
 	Set to zero	Setare la zero
+	Remove white margins	Elimină marginile albe
+	Remove white margins is already running	Eliminarea marginilor albe rulează deja
+	Removing white margins… page {d} of {t}	Se elimină marginile albe… pagina {d} din {t}
+	The document changed while its margins were measured; nothing was cropped	Documentul s-a schimbat în timp ce i se măsurau marginile; nu s-a decupat nimic
 	Shared Field Properties	Proprietăți comune ale câmpurilor
 	Sheet {s} of {n}	Foaia {s} din {n}
 	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift limitează la 45 de grade. Backspace elimină un vârf. Escape anulează.

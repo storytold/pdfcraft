@@ -819,6 +819,10 @@
 	Box	Obszar
 	Units	Jednostki
 	Set to zero	Wyzeruj
+	Remove white margins	Usuń białe marginesy
+	Remove white margins is already running	Usuwanie białych marginesów już trwa
+	Removing white margins… page {d} of {t}	Usuwanie białych marginesów… strona {d} z {t}
+	The document changed while its margins were measured; nothing was cropped	Dokument zmienił się podczas mierzenia marginesów; nic nie zostało przycięte
 	Current page ({n})	Bieżąca strona ({n})
 	Subset	Podzbiór
 	Update	Aktualizuj

@@ -38,6 +38,7 @@ pub mod signature_scan;
 mod stamp_preview;
 pub mod text_fonts;
 mod text_preview;
+mod white_margins;
 pub mod word_count;
 pub mod xfa;
 
@@ -45,6 +46,7 @@ pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::StampPreview;
 pub use text_preview::TextEditPreview;
+pub use white_margins::WhiteMarginsJob;
 
 pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, split_ranges};
 
@@ -1366,6 +1368,12 @@ pub enum Edit {
         which: PageBox,
         spec: BoxSpec,
     },
+    /// Remove White Margins (Set Page Boxes): set `which` on each page to its own rectangle in
+    /// user space, the bounds of its content ([`Document::white_margin_crops`]).
+    RemoveWhiteMargins {
+        which: PageBox,
+        rects: Vec<(usize, [f64; 4])>,
+    },
     /// Set or remove the page transition and display time of pages (ISO 32000-2 §12.4.4),
     /// Organize ▸ Page Transitions.
     SetTransition {
@@ -2044,6 +2052,7 @@ impl Edit {
             Edit::ReplacePages { pages, .. } => plural("Replace page", "Replace pages", pages.len()),
             Edit::SetPageBox { pages, which: PageBox::Crop, .. } => plural("Crop page", "Crop pages", pages.len()),
             Edit::SetPageBox { .. } => Label::of("Set page boxes"),
+            Edit::RemoveWhiteMargins { .. } => Label::of("Remove white margins"),
             Edit::SetTransition { .. } => Label::of("Set page transitions"),
             // The four `/Info` keys PdfCraft itself offers get a wording of their own, so each can
             // be said in another language; any other key is the document's and goes in as it stands.
@@ -2219,6 +2228,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::DuplicatePages { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
+        | Edit::RemoveWhiteMargins { .. }
         | Edit::SetTransition { .. }
         | Edit::InsertPagesFrom { .. }
         // "Assemble the document: insert, rotate or delete pages and create bookmarks" (Table 22).
@@ -2443,6 +2453,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
+        Edit::RemoveWhiteMargins { which, rects } => {
+            for (page, rect) in rects {
+                pdfcraft_organize::set_page_box(doc, &[*page], *which, BoxSpec::Rect(*rect))?;
+            }
+        }
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
             let src = open_source(name, bytes)?;
@@ -3791,10 +3806,18 @@ impl Session {
                 }
                 Edit::EditTextBlock { page, block, text, style }
             }
+            // A page already at its content keeps its box: the measure only differs by float noise.
+            Edit::RemoveWhiteMargins { which, mut rects } => {
+                let boxes = pdfcraft_organize::page_boxes(&editor.cos).unwrap_or_default();
+                rects.retain(|(p, r)| boxes.get(*p).is_none_or(|b| (0..4).any(|k| (b[which.index()][k] - r[k]).abs() > 1e-3)));
+                Edit::RemoveWhiteMargins { which, rects }
+            }
             other => other,
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
-        if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
+        if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos)
+            || matches!(&edit, Edit::RemoveWhiteMargins { rects, .. } if rects.is_empty())
+        {
             return Ok(());
         }
         let mut next = editor.cos.clone();

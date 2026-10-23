@@ -796,6 +796,10 @@
 	Box	سندووق
 	Units	یەکەکان
 	Set to zero	دانان بە سفر
+	Remove white margins	لابردنی پەراوێزە سپییەکان
+	Remove white margins is already running	لابردنی پەراوێزە سپییەکان پێشتر لە کاردایە
+	Removing white margins… page {d} of {t}	لابردنی پەراوێزە سپییەکان… پەڕەی {d} لە {t}
+	The document changed while its margins were measured; nothing was cropped	بەڵگەنامەکە گۆڕا لە کاتی پێوانی پەراوێزەکانیدا؛ هیچ نەبڕدرایەوە
 	Current page ({n})	پەڕەی ئێستا ({n})
 	Subset	ژێرکۆمەڵە
 	Update	نوێکردنەوە

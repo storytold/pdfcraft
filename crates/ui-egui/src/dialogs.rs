@@ -1401,9 +1401,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         app.apply_edit(edit);
     }
     if boxes_now && let Some((i, id)) = app.active_ids() {
-        let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        let edit = app.boxes_draft.edit(app.views[i].current, count);
-        app.apply_edit(edit);
+        let (current, count) = (app.views[i].current, app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0));
+        if app.boxes_draft.remove_white {
+            app.start_white_margins(app.boxes_draft.pages(current, count), app.boxes_draft.which);
+        } else {
+            app.apply_edit(app.boxes_draft.edit(current, count));
+        }
         app.boxes_draft.seeded = None;
     }
     if protect_now && app.apply_edit(app.protect_draft.edit()) {

@@ -1054,6 +1054,10 @@
 	Set status	Angi status
 	Set to current page ({n})	Sett til gjeldende side ({n})
 	Set to zero	Sett til null
+	Remove white margins	Fjern hvite marger
+	Remove white margins is already running	Fjerning av hvite marger kjører allerede
+	Removing white margins… page {d} of {t}	Fjerner hvite marger … side {d} av {t}
+	The document changed while its margins were measured; nothing was cropped	Dokumentet ble endret mens margene ble målt; ingenting ble beskåret
 	Shared Field Properties	Delte feltegenskaper
 	Sheet {s} of {n}	Ark {s} av {n}
 	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift låser til 45 grader. Tilbaketast fjerner et punkt. Esc avbryter.

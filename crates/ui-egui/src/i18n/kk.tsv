@@ -783,6 +783,10 @@
 	Box	Аумақ
 	Units	Өлшем бірліктері
 	Set to zero	Нөлге орнату
+	Remove white margins	Ақ жиектерді жою
+	Remove white margins is already running	Ақ жиектерді жою жүріп жатыр
+	Removing white margins… page {d} of {t}	Ақ жиектер жойылуда… {t} беттің {d}-і
+	The document changed while its margins were measured; nothing was cropped	Жиектері өлшеніп жатқанда құжат өзгерді; ештеңе қиылмады
 	Current page ({n})	Ағымдағы бет ({n})
 	Subset	Ішкі жиын
 	Update	Жаңарту

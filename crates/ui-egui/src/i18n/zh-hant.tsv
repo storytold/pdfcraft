@@ -457,6 +457,10 @@
 	Box	框
 	Units	單位
 	Set to zero	置零
+	Remove white margins	移除白邊
+	Remove white margins is already running	移除白邊已在進行中
+	Removing white margins… page {d} of {t}	正在移除白邊… 第 {d} 頁，共 {t} 頁
+	The document changed while its margins were measured; nothing was cropped	測量頁邊距時文件已變更，未進行裁切
 	Current page ({n})	目前頁（第 {n} 頁）
 	Subset	子集
 	Update	更新

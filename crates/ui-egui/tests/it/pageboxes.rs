@@ -13,10 +13,16 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    harness_with(FIXTURE)
+}
+
+fn harness_with(pdf: &'static [u8]) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        // Remove White Margins measures on a worker elsewhere.
+        app.run_inline = true;
+        app.open_bytes("doc.pdf", None, pdf.to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -80,6 +86,38 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(size(&h, 0), (300.0, 400.0));
+}
+
+/// Page 1 shows a rectangle from (60, 100) to (160, 180); page 2 is blank.
+const DRAWN: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 5 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Length 27 >> stream
+0 0 0 rg 60 100 100 80 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// #1156: ticking Remove white margins shows the current page's content margins, and OK crops
+/// every page of the range to its own content, leaving a blank page as it was.
+#[test]
+fn set_page_boxes_removes_white_margins() {
+    let mut h = harness_with(DRAWN);
+    assert!(h.state_mut().execute("page.boxes"));
+    h.run_steps(3);
+    h.get_by_label("Remove white margins").click();
+    h.run_steps(2);
+    let m = h.state().boxes_draft.margins;
+    let want = [60.0, 100.0, 140.0, 220.0];
+    assert!(m.iter().zip(want).all(|(m, w)| *m <= w && w - *m <= 1.0), "margins {m:?}, content margins {want:?}");
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    let (w, hh) = size(&h, 0);
+    assert!((100.0..=102.0).contains(&w) && (80.0..=82.0).contains(&hh), "{w}×{hh}");
+    assert_eq!(size(&h, 1), (300.0, 400.0), "a blank page keeps its box");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Remove white margins"));
 }
 
 #[test]

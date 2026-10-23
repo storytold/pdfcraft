@@ -28,6 +28,17 @@ impl PageBox {
         }
     }
 
+    /// Where this box sits in each entry of [`page_boxes`].
+    pub fn index(self) -> usize {
+        match self {
+            PageBox::Media => 0,
+            PageBox::Crop => 1,
+            PageBox::Bleed => 2,
+            PageBox::Trim => 3,
+            PageBox::Art => 4,
+        }
+    }
+
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().trim_end_matches("box") {
             "media" => Some(Self::Media),

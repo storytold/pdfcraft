@@ -827,6 +827,10 @@
 	Box	ボックス
 	Units	単位
 	Set to zero	ゼロに設定
+	Remove white margins	白い余白を削除
+	Remove white margins is already running	白い余白の削除はすでに実行中です
+	Removing white margins… page {d} of {t}	白い余白を削除中… ページ {d} / {t}
+	The document changed while its margins were measured; nothing was cropped	余白の測定中に文書が変更されたため、トリミングしませんでした
 	Current page ({n})	現在のページ（{n}）
 	Subset	対象範囲
 	Update	更新

@@ -826,6 +826,10 @@
 	Box	المربع
 	Units	الوحدات
 	Set to zero	تصفير
+	Remove white margins	إزالة الهوامش البيضاء
+	Remove white margins is already running	إزالة الهوامش البيضاء قيد التشغيل بالفعل
+	Removing white margins… page {d} of {t}	جارٍ إزالة الهوامش البيضاء… الصفحة {d} من {t}
+	The document changed while its margins were measured; nothing was cropped	تغيّر المستند أثناء قياس هوامشه؛ لم يُقتطع شيء
 	Current page ({n})	الصفحة الحالية ({n})
 	Subset	مجموعة جزئية
 	Update	تحديث

@@ -1045,6 +1045,10 @@
 	Set status	Tetapkan status
 	Set to current page ({n})	Samakan dengan halaman saat ini ({n})
 	Set to zero	Samakan dengan nol
+	Remove white margins	Hapus margin putih
+	Remove white margins is already running	Penghapusan margin putih sedang berjalan
+	Removing white margins… page {d} of {t}	Menghapus margin putih… halaman {d} dari {t}
+	The document changed while its margins were measured; nothing was cropped	Dokumen berubah saat marginnya diukur; tidak ada yang dipangkas
 	Shared Field Properties	Properti Kolom Bersama
 	Sheet {s} of {n}	Lembar {s} dari {n}
 	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift membatasi ke 45 derajat. Backspace menghapus simpul. Escape membatalkan.

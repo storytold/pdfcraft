@@ -2429,6 +2429,23 @@ fn duplicating_and_cropping_through_tools() {
     assert_eq!(r["page_sizes"][0], json!([200.0, 300.0]));
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "margins": [150, 0, 150, 0] })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
+    // #1156: Remove White Margins crops page 3 to its line of text, one undo step, the others untouched.
+    let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [3], "remove_white_margins": true }));
+    assert_eq!(r["trimmed_pages"], json!([3]));
+    let [w, h] = [0, 1].map(|k| r["page_sizes"][2][k].as_f64().unwrap());
+    assert!(w > 50.0 && w < 120.0 && h > 10.0 && h < 30.0, "page 3 is now {w}×{h}");
+    assert_eq!(r["page_sizes"][1], json!([100.0, 150.0]));
+    assert_eq!(page_text(&mut a, doc)[2], "Page 2", "the text is still inside");
+    // Page 3 is already at its content: running it again changes no page.
+    let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [3], "remove_white_margins": true }));
+    assert_eq!(r["trimmed_pages"], json!([]));
+    assert!(
+        matches!(
+            a.call("page_set_box", &json!({ "doc": doc, "remove_white_margins": true, "margins": [1, 1, 1, 1] })),
+            Err(ToolError::InvalidArgs(_))
+        ),
+        "one way to set the box at a time"
+    );
 }
 
 #[test]

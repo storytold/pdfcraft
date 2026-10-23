@@ -1101,6 +1101,10 @@
 	Set status	Nustatyti būseną
 	Set to current page ({n})	Nustatyti į dabartinį puslapį ({n})
 	Set to zero	Nustatyti į nulį
+	Remove white margins	Pašalinti baltas paraštes
+	Remove white margins is already running	Baltų paraščių šalinimas jau vyksta
+	Removing white margins… page {d} of {t}	Šalinamos baltos paraštės… {d} psl. iš {t}
+	The document changed while its margins were measured; nothing was cropped	Dokumentas pasikeitė matuojant paraštes; niekas neapkirpta
 	Shared Field Properties	Bendrosios laukų savybės
 	Sheet {s} of {n}	{s} lapas iš {n}
 	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	„Shift“ apriboja kampą iki 45 laipsnių. „Backspace“ pašalina viršūnę. „Escape“ atšaukia veiksmą.

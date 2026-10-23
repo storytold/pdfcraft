@@ -824,6 +824,10 @@
 	Box	Область
 	Units	Одиниці
 	Set to zero	Установити нуль
+	Remove white margins	Вилучити білі поля
+	Remove white margins is already running	Вилучення білих полів уже виконується
+	Removing white margins… page {d} of {t}	Вилучення білих полів… сторінка {d} з {t}
+	The document changed while its margins were measured; nothing was cropped	Документ змінився під час вимірювання полів; нічого не обрізано
 	Current page ({n})	Поточна сторінка ({n})
 	Subset	Підмножина
 	Update	Оновити

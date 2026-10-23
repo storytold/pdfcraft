@@ -1690,6 +1690,10 @@
 	Set the image of {name}	Nastavi sliko za {name}
 	Set to current page ({n})	Nastavi na trenutno stran ({n})
 	Set to zero	Nastavi na nič
+	Remove white margins	Odstrani bele robove
+	Remove white margins is already running	Odstranjevanje belih robov že poteka
+	Removing white margins… page {d} of {t}	Odstranjevanje belih robov … stran {d} od {t}
+	The document changed while its margins were measured; nothing was cropped	Dokument se je spremenil med merjenjem robov; nič ni bilo obrezano
 	Settings	Nastavitve
 	Shadings	Senčenja
 	Sheet {s} of {n}	List {s} od {n}

@@ -769,6 +769,10 @@
 	Box	बॉक्स
 	Units	इकाइयाँ
 	Set to zero	शून्य पर सेट करें
+	Remove white margins	सफ़ेद हाशिए हटाएँ
+	Remove white margins is already running	सफ़ेद हाशिए हटाना पहले से चल रहा है
+	Removing white margins… page {d} of {t}	सफ़ेद हाशिए हटाए जा रहे हैं… पृष्ठ {d} / {t}
+	The document changed while its margins were measured; nothing was cropped	हाशिए मापते समय दस्तावेज़ बदल गया; कुछ भी क्रॉप नहीं किया गया
 	Current page ({n})	मौजूदा पृष्ठ ({n})
 	Subset	उपसमुच्चय
 	Update	अपडेट करें

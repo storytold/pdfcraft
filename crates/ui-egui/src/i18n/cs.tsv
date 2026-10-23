@@ -902,6 +902,10 @@ key	Space	Mezerník
 	Box	Rámeček
 	Units	Jednotky
 	Set to zero	Nastavit na nulu
+	Remove white margins	Odstranit bílé okraje
+	Remove white margins is already running	Odstraňování bílých okrajů už probíhá
+	Removing white margins… page {d} of {t}	Odstraňování bílých okrajů… stránka {d} z {t}
+	The document changed while its margins were measured; nothing was cropped	Dokument se změnil během měření okrajů; nic nebylo oříznuto
 	Current page ({n})	Aktuální stránka ({n})
 	Subset	Podmnožina
 	Update	Aktualizovat

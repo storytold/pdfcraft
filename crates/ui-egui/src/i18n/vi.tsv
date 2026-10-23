@@ -1092,6 +1092,10 @@ theme	Appearance	Giao diện
 	Set status	Đặt trạng thái
 	Set to current page ({n})	Đặt thành trang hiện tại ({n})
 	Set to zero	Đặt về 0
+	Remove white margins	Xóa lề trắng
+	Remove white margins is already running	Đang xóa lề trắng rồi
+	Removing white margins… page {d} of {t}	Đang xóa lề trắng… trang {d} / {t}
+	The document changed while its margins were measured; nothing was cropped	Tài liệu đã thay đổi trong khi đo lề; không có gì bị cắt
 	Shared Field Properties	Thuộc tính trường dùng chung
 	Sheet {s} of {n}	Tờ {s} trên {n}
 	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift giới hạn ở góc 45 độ. Backspace xóa một đỉnh. Escape để hủy.

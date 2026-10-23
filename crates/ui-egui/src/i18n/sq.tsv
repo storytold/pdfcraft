@@ -1638,6 +1638,10 @@
 	Set the image of {name}	Cakto imazhin e {name}
 	Set to current page ({n})	Cakto në faqen aktuale ({n})
 	Set to zero	Cakto në zero
+	Remove white margins	Hiq kufijtë e bardhë
+	Remove white margins is already running	Heqja e kufijve të bardhë po ekzekutohet tashmë
+	Removing white margins… page {d} of {t}	Po hiqen kufijtë e bardhë… faqja {d} nga {t}
+	The document changed while its margins were measured; nothing was cropped	Dokumenti ndryshoi ndërsa i matej kufijtë; nuk u pre asgjë
 	Settings	Cilësimet
 	Shadings	Hijëzimet
 	Sheet {s} of {n}	Fleta {s} nga {n}

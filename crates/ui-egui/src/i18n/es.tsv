@@ -820,6 +820,10 @@
 	Box	Cuadro
 	Units	Unidades
 	Set to zero	Poner a cero
+	Remove white margins	Quitar márgenes blancos
+	Remove white margins is already running	Ya se están quitando los márgenes blancos
+	Removing white margins… page {d} of {t}	Quitando márgenes blancos… página {d} de {t}
+	The document changed while its margins were measured; nothing was cropped	El documento cambió mientras se medían sus márgenes; no se ha recortado nada
 	Current page ({n})	Página actual ({n})
 	Subset	Subconjunto
 	Update	Actualizar

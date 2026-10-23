@@ -769,6 +769,10 @@
 	Box	박스
 	Units	단위
 	Set to zero	0으로 설정
+	Remove white margins	흰색 여백 제거
+	Remove white margins is already running	흰색 여백 제거가 이미 실행 중입니다
+	Removing white margins… page {d} of {t}	흰색 여백 제거 중… {t}페이지 중 {d}페이지
+	The document changed while its margins were measured; nothing was cropped	여백을 측정하는 동안 문서가 변경되어 아무것도 자르지 않았습니다
 	Current page ({n})	현재 페이지({n})
 	Subset	하위 집합
 	Update	업데이트

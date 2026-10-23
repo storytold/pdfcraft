@@ -801,6 +801,10 @@ comment menu	Edit	సవరించు
 	Box	బాక్స్
 	Units	యూనిట్‌లు
 	Set to zero	సున్నాకు సెట్ చేయి
+	Remove white margins	తెల్లని అంచులను తొలగించు
+	Remove white margins is already running	తెల్లని అంచుల తొలగింపు ఇప్పటికే జరుగుతోంది
+	Removing white margins… page {d} of {t}	తెల్లని అంచులు తొలగిస్తోంది… పేజీ {d} / {t}
+	The document changed while its margins were measured; nothing was cropped	అంచులను కొలుస్తున్నప్పుడు పత్రం మారింది; ఏదీ కత్తిరించబడలేదు
 	Current page ({n})	ప్రస్తుత పేజీ ({n})
 	Subset	ఉపసమితి
 	Update	అప్‌డేట్ చేయి

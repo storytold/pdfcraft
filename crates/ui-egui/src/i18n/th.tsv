@@ -780,6 +780,10 @@
 	Box	กรอบ
 	Units	หน่วย
 	Set to zero	ตั้งเป็นศูนย์
+	Remove white margins	ลบขอบสีขาว
+	Remove white margins is already running	กำลังลบขอบสีขาวอยู่แล้ว
+	Removing white margins… page {d} of {t}	กำลังลบขอบสีขาว… หน้า {d} จาก {t}
+	The document changed while its margins were measured; nothing was cropped	เอกสารเปลี่ยนไประหว่างวัดขอบ จึงไม่ได้ครอปสิ่งใด
 	Current page ({n})	หน้าปัจจุบัน ({n})
 	Subset	เซตย่อย
 	Update	อัปเดต

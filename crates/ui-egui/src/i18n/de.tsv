@@ -804,6 +804,10 @@
 	Box	Rahmen
 	Units	Einheiten
 	Set to zero	Auf null setzen
+	Remove white margins	Weiße Ränder entfernen
+	Remove white margins is already running	Weiße Ränder werden bereits entfernt
+	Removing white margins… page {d} of {t}	Weiße Ränder werden entfernt… Seite {d} von {t}
+	The document changed while its margins were measured; nothing was cropped	Das Dokument hat sich geändert, während seine Ränder gemessen wurden; nichts wurde zugeschnitten
 	Current page ({n})	Aktuelle Seite ({n})
 	Subset	Teilmenge
 	Update	Aktualisieren

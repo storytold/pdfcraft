@@ -795,6 +795,10 @@
 	Box	ກ່ອງ
 	Units	ຫົວໜ່ວຍ
 	Set to zero	ຕັ້ງເປັນສູນ
+	Remove white margins	ລຶບຂອບສີຂາວ
+	Remove white margins is already running	ການລຶບຂອບສີຂາວກຳລັງດຳເນີນຢູ່ແລ້ວ
+	Removing white margins… page {d} of {t}	ກຳລັງລຶບຂອບສີຂາວ… ໜ້າ {d} ຈາກ {t}
+	The document changed while its margins were measured; nothing was cropped	ເອກະສານປ່ຽນແປງໃນຂະນະວັດແທກຂອບ; ບໍ່ໄດ້ຕັດຫຍັງ
 	Current page ({n})	ໜ້າປັດຈຸບັນ ({n})
 	Subset	ກຸ່ມຍ່ອຍ
 	Update	ອັບເດດ

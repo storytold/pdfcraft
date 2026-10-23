@@ -498,6 +498,10 @@
 	Box	Поле
 	Units	Мерни единици
 	Set to zero	Задай нула
+	Remove white margins	Премахни белите полета
+	Remove white margins is already running	Премахването на белите полета вече се изпълнява
+	Removing white margins… page {d} of {t}	Премахване на белите полета… страница {d} от {t}
+	The document changed while its margins were measured; nothing was cropped	Документът се промени, докато се измерваха полетата му; нищо не е изрязано
 	Current page ({n})	Текуща страница ({n})
 	Subset	Подмножество
 	Update	Актуализирай

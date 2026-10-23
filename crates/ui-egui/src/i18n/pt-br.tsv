@@ -452,6 +452,10 @@
 	Box	Caixa
 	Units	Unidades
 	Set to zero	Definir como zero
+	Remove white margins	Remover margens brancas
+	Remove white margins is already running	A remoção de margens brancas já está em andamento
+	Removing white margins… page {d} of {t}	Removendo margens brancas… página {d} de {t}
+	The document changed while its margins were measured; nothing was cropped	O documento mudou enquanto as margens eram medidas; nada foi cortado
 	Current page ({n})	Página atual ({n})
 	Subset	Subconjunto
 	Update	Atualizar

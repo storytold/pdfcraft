@@ -782,6 +782,10 @@
 	Box	Kutu
 	Units	Birimler
 	Set to zero	Sıfırla
+	Remove white margins	Beyaz kenar boşluklarını kaldır
+	Remove white margins is already running	Beyaz kenar boşluklarını kaldırma zaten çalışıyor
+	Removing white margins… page {d} of {t}	Beyaz kenar boşlukları kaldırılıyor… sayfa {d} / {t}
+	The document changed while its margins were measured; nothing was cropped	Kenar boşlukları ölçülürken belge değişti; hiçbir şey kırpılmadı
 	Current page ({n})	Geçerli sayfa ({n})
 	Subset	Alt küme
 	Update	Güncelle

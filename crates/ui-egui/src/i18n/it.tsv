@@ -823,6 +823,10 @@
 	Box	Riquadro
 	Units	Unità
 	Set to zero	Azzera
+	Remove white margins	Rimuovi margini bianchi
+	Remove white margins is already running	La rimozione dei margini bianchi è già in corso
+	Removing white margins… page {d} of {t}	Rimozione margini bianchi… pagina {d} di {t}
+	The document changed while its margins were measured; nothing was cropped	Il documento è cambiato mentre se ne misuravano i margini; non è stato ritagliato nulla
 	Current page ({n})	Pagina corrente ({n})
 	Subset	Sottoinsieme
 	Update	Aggiorna

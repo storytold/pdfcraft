@@ -800,6 +800,10 @@
 	Box	Zone
 	Units	Unités
 	Set to zero	Mettre à zéro
+	Remove white margins	Supprimer les marges blanches
+	Remove white margins is already running	La suppression des marges blanches est déjà en cours
+	Removing white margins… page {d} of {t}	Suppression des marges blanches… page {d} sur {t}
+	The document changed while its margins were measured; nothing was cropped	Le document a changé pendant la mesure de ses marges ; rien n'a été recadré
 	Current page ({n})	Page actuelle ({n})
 	Subset	Sous-ensemble
 	Update	Mettre à jour

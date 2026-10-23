@@ -412,6 +412,10 @@
 	Verify	Επαλήθευση
 	Box	Πλαίσιο
 	Set to zero	Ορισμός σε μηδέν
+	Remove white margins	Αφαίρεση λευκών περιθωρίων
+	Remove white margins is already running	Η αφαίρεση λευκών περιθωρίων εκτελείται ήδη
+	Removing white margins… page {d} of {t}	Αφαίρεση λευκών περιθωρίων… σελίδα {d} από {t}
+	The document changed while its margins were measured; nothing was cropped	Το έγγραφο άλλαξε ενώ μετρούνταν τα περιθώριά του· δεν περικόπηκε τίποτα
 	Current page ({n})	Τρέχουσα σελίδα ({n})
 	Subset	Υποσύνολο
 	Update	Ενημέρωση

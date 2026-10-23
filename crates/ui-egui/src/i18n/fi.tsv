@@ -785,6 +785,10 @@
 	Box	Ruutu
 	Units	Yksiköt
 	Set to zero	Nollaa
+	Remove white margins	Poista valkoiset reunukset
+	Remove white margins is already running	Valkoisten reunusten poisto on jo käynnissä
+	Removing white margins… page {d} of {t}	Poistetaan valkoisia reunuksia… sivu {d}/{t}
+	The document changed while its margins were measured; nothing was cropped	Asiakirja muuttui reunuksia mitattaessa; mitään ei rajattu
 	Current page ({n})	Nykyinen sivu ({n})
 	Subset	Osajoukko
 	Update	Päivitä
