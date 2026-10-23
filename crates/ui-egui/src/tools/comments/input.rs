@@ -406,7 +406,7 @@ impl Gestures<'_> {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
         // Snapping (shapes and lines, not freehand): the marker shows where a point would
-        // land; Shift holds a line to the nearest 45°.
+        // land.
         if tool.snaps()
             && let Some(p) = pointer.filter(|_| over_page)
             && let (u, Some(kind)) = cx.snapped(p)
@@ -427,26 +427,13 @@ impl Gestures<'_> {
         {
             let p = clamp_to(page_rect, p);
             if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
-                let mut u = cx.snapped(p).0;
-                // Shift holds the next segment to the nearest 45° from the last point.
-                if ui.input(|i| i.modifiers.shift)
-                    && let Some(Gesture::Draw { points, .. }) = &cv.gesture
-                    && let Some(last) = points.last()
-                {
-                    u = measure::snap::constrain(*last, u);
-                }
+                let u = cx.snapped(p).0;
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
                     points.push(u);
                 }
             } else {
-                let mut u = cx.snapped(p).0;
-                if matches!(*tool, CommentTool::Line | CommentTool::Arrow)
-                    && ui.input(|i| i.modifiers.shift)
-                    && let Some(first) = points.first()
-                {
-                    u = measure::snap::constrain(*first, u);
-                }
+                let u = cx.snapped(p).0;
                 points.truncate(1);
                 points.push(u);
             }
