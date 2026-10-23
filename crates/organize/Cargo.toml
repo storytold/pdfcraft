@@ -13,6 +13,9 @@ pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [dev-dependencies]
 pdfcraft-oracle = { workspace = true }
 hayro-syntax = { workspace = true }

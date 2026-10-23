@@ -85,6 +85,8 @@ pub struct DocInfo {
     pub keywords: Option<String>,
     pub creator: Option<String>,
     pub producer: Option<String>,
+    pub creation_date: Option<String>,
+    pub mod_date: Option<String>,
     /// Custom document properties: `/Info` entries with a key the spec does not name and a text
     /// value, as (name, text), in the dictionary's order (at most 256).
     pub custom: Vec<(String, String)>,
@@ -674,6 +676,8 @@ impl<'a> Inspector<'a> {
             info.keywords = self.text(d, b"Keywords");
             info.creator = self.text(d, b"Creator");
             info.producer = self.text(d, b"Producer");
+            info.creation_date = self.text(d, b"CreationDate");
+            info.mod_date = self.text(d, b"ModDate");
             const STANDARD: [&[u8]; 9] =
                 [b"Title", b"Author", b"Subject", b"Keywords", b"Creator", b"Producer", b"CreationDate", b"ModDate", b"Trapped"];
             // The same rule as the engine's list after an edit (`pdfcraft_organize::custom_info`,

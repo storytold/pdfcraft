@@ -35,6 +35,11 @@ real_name = "Eduardo Soares"
 display_name = "Eduardo Soares"
 sync_github_name = false
 
+[people.FrosterDL]
+real_name = "Taha Muhammad Shafiq"
+display_name = "FrosterDL"
+sync_github_name = false
+
 [people.guillehr2]
 real_name = "Guillem Hermida"
 

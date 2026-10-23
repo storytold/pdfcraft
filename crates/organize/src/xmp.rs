@@ -36,6 +36,27 @@ enum Shape {
     Text,
 }
 
+/// A PDF date (`D:YYYYMMDDHHmmSS...`) as an XMP (ISO 8601) date.
+pub fn iso_date(pdf: &str) -> Option<String> {
+    let d = pdf.trim().trim_start_matches("D:").trim_start_matches("d:");
+    let digits: String = d.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.len() < 4 {
+        return None;
+    }
+    let part = |a: usize, b: usize, def: &str| digits.get(a..b).unwrap_or(def).to_string();
+    let (y, mo, da, h, mi, s) = (part(0, 4, "0000"), part(4, 6, "01"), part(6, 8, "01"), part(8, 10, "00"), part(10, 12, "00"), part(12, 14, "00"));
+    let rest = &d[digits.len()..];
+    let tz = match rest.chars().next() {
+        Some('Z' | 'z') | None => "Z".to_string(),
+        Some(sign @ ('+' | '-')) => {
+            let t: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+            format!("{sign}{}:{}", t.get(0..2).unwrap_or("00"), t.get(2..4).unwrap_or("00"))
+        }
+        _ => "Z".to_string(),
+    };
+    Some(format!("{y}-{mo}-{da}T{h}:{mi}:{s}{tz}"))
+}
+
 /// The XMP property (qualified name, namespace) that mirrors a document information key.
 fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
     Some(match key {
@@ -45,6 +66,8 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
         "Keywords" => ("pdf:Keywords", PDF, Shape::Text),
         "Creator" => ("xmp:CreatorTool", XMP, Shape::Text),
         "Producer" => ("pdf:Producer", PDF, Shape::Text),
+        "CreationDate" => ("xmp:CreateDate", XMP, Shape::Text),
+        "ModDate" => ("xmp:ModifyDate", XMP, Shape::Text),
         _ => return None,
     })
 }
@@ -54,6 +77,13 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 /// that can't be edited safely.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     let Some((name, ns, shape)) = property(key) else { return Ok(()) };
+    let iso;
+    let value = if (key == "CreationDate" || key == "ModDate") && !value.is_empty() {
+        iso = iso_date(value).unwrap_or_else(|| value.to_string());
+        &iso
+    } else {
+        value
+    };
     edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
 }
 

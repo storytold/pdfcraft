@@ -647,8 +647,8 @@ pub struct PdfCraftApp {
     pub pending_overwrite: Option<editing::PendingOverwrite>,
     /// Save to this path instead of asking (tests and automation).
     pub save_override: Option<String>,
-    /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
-    pub props_draft: Option<(DocId, [String; 4])>,
+    /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords/CreationDate/ModDate).
+    pub props_draft: Option<(DocId, [String; 6])>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Files picked asynchronously for combine / insert (web).

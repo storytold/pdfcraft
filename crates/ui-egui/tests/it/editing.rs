@@ -38,7 +38,38 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+fn fixture_with_info(n: usize, info: &str) -> Vec<u8> {
+    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
+        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    objs.push(info.to_string());
+    let info_obj = objs.len();
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info {info_obj} 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    harness_bytes(fixture(pages), setup)
+}
+
+fn harness_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
     if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
         builder = builder.wgpu();
@@ -46,7 +77,7 @@ fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harn
     let mut h = builder.build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
+        app.open_bytes("doc.pdf", None, bytes).expect("fixture opens");
         setup(&mut app);
         app
     });
@@ -1094,6 +1125,93 @@ fn document_properties_edit_is_one_undoable_step() {
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.title, None);
     assert_eq!(doc.info_value("Author"), None);
+}
+
+#[test]
+fn document_properties_edit_dates_is_one_undoable_step() {
+    let mut h = harness(1, |app| app.set_option("dialog", "properties").unwrap());
+    let created = h.get_by_role_and_label(Role::TextInput, "Created");
+    created.focus();
+    created.type_text("2024-01-15 10:30:00Z");
+    h.run_steps(2);
+    let modified = h.get_by_role_and_label(Role::TextInput, "Modified");
+    modified.focus();
+    modified.type_text("2024-02-20 14:45:00Z");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info.creation_date.as_deref(), Some("D:20240115103000Z"));
+    assert_eq!(doc.info.mod_date.as_deref(), Some("D:20240220144500Z"));
+    assert_eq!(doc.can_undo(), Some("Change document properties"));
+    assert!(app.dialog.is_none());
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info.creation_date, None);
+    assert_eq!(doc.info.mod_date, None);
+}
+
+#[test]
+fn document_properties_date_validation_shows_error_and_disables_ok() {
+    let mut h = harness(1, |app| app.set_option("dialog", "properties").unwrap());
+    let created = h.get_by_role_and_label(Role::TextInput, "Created");
+    created.focus();
+    created.type_text("not-a-valid-date");
+    h.run_steps(2);
+
+    // Error text is displayed
+    h.get_by_label_contains("Please follow pattern: MM/DD/YY, h:mm:ss AM/PM");
+
+    // Clicking OK while invalid does nothing / is disabled
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    // Dialog should still be open because OK is disabled
+    assert!(h.state().dialog.is_some());
+
+    // Fix the date to a valid format
+    if let Some((_, draft)) = h.state_mut().props_draft.as_mut() {
+        draft[4] = "10/20/26, 4:16:49 PM Z".into();
+    }
+    h.run_steps(2);
+
+    // Clicking OK now succeeds
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info.creation_date.as_deref(), Some("D:20261020161649Z"));
+    assert!(app.dialog.is_none());
+}
+
+#[test]
+fn untouched_malformed_dates_do_not_disable_ok_or_show_error() {
+    let pdf = fixture_with_info(1, "<< /CreationDate (not-a-valid-date) /ModDate (invalid-mod-date) >>");
+    let mut h = harness_bytes(pdf, |app| app.set_option("dialog", "properties").unwrap());
+
+    // Untouched malformed dates do not show inline errors:
+    assert!(h.query_by_label_contains("Please follow pattern: MM/DD/YY, h:mm:ss AM/PM").is_none());
+
+    // Changing another property (Title) while leaving malformed dates untouched allows OK:
+    let title = h.get_by_role_and_label(Role::TextInput, "Title");
+    title.focus();
+    title.type_text("New Title");
+    h.run_steps(2);
+
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // Dialog closes because OK was enabled:
+    assert!(h.state().dialog.is_none());
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info.title.as_deref(), Some("New Title"));
+    // Untouched malformed dates remained intact in info:
+    assert_eq!(doc.info_value("CreationDate").as_deref(), Some("not-a-valid-date"));
+    assert_eq!(doc.info_value("ModDate").as_deref(), Some("invalid-mod-date"));
 }
 
 #[test]
@@ -2284,7 +2402,7 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
     support::wait_until(&mut h, "unlocked document", |app| app.views.len() == 1);
     assert_eq!(h.state().views.len(), 1);
     h.state_mut().set_option("dialog", "properties").unwrap();
-    h.run_steps(2);
+    h.run_steps(4);
     h.get_by_label("Security").click();
     h.run_steps(3);
     h.get_by_label("AES, 256-bit");
@@ -2341,7 +2459,7 @@ fn the_security_notice_unlocks_with_the_permissions_password() {
     assert!(h.state().unlock_prompt.is_none());
     assert!(h.query_by_label_contains("This document is secured").is_none(), "the restrictions are lifted");
     h.state_mut().set_option("dialog", "properties").unwrap();
-    h.run_steps(2);
+    h.run_steps(4);
     h.get_by_label("Security").click();
     h.run_steps(3);
     h.get_by_label("Owner password (no restrictions apply)");

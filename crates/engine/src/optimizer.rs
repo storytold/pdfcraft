@@ -64,11 +64,12 @@ impl Session {
             return Err(EditError::Signed);
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let mod_date = if editor.manual_mod_date { None } else { self.now().map(pdfcraft_cos::pdf_date) };
         Ok(OptimizeJob {
             cos: editor.cos.clone(),
             settings: settings.clone(),
             discard: discard.to_vec(),
-            opts: SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() },
+            opts: SaveOptions { mod_date, ..SaveOptions::default() },
         })
     }
 }

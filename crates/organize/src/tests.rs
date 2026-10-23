@@ -629,6 +629,155 @@ fn document_info_edits_update_the_xmp_packet() {
 }
 
 #[test]
+fn creation_and_mod_date_edits_round_trip_and_update_xmp() {
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+    // Edit with human-readable and PDF date formats
+    set_info(&mut doc, "CreationDate", "2024-05-10 14:30:00Z").unwrap();
+    set_info(&mut doc, "ModDate", "D:20261020193210Z").unwrap();
+    let saved = save_and_reopen(&doc);
+    assert_eq!(info(&saved, "CreationDate").as_deref(), Some("D:20240510143000Z"));
+    assert_eq!(info(&saved, "ModDate").as_deref(), Some("D:20261020193210Z"));
+
+    // Case-insensitive key test
+    assert_eq!(info(&saved, "creationdate").as_deref(), Some("D:20240510143000Z"));
+    assert_eq!(info(&saved, "moddate").as_deref(), Some("D:20261020193210Z"));
+
+    // Check XMP synchronization
+    let xmp = xmp_text(&saved).unwrap();
+    assert_eq!(xmp_values(&xmp, "xmp:CreateDate"), ["2024-05-10T14:30:00Z"]);
+    assert_eq!(xmp_values(&xmp, "xmp:ModifyDate"), ["2026-10-20T19:32:10Z"]);
+
+    // Test clearing dates
+    let mut doc2 = saved;
+    set_info(&mut doc2, "CreationDate", "").unwrap();
+    let saved2 = save_and_reopen(&doc2);
+    assert_eq!(info(&saved2, "CreationDate"), None);
+    let xmp2 = xmp_text(&saved2).unwrap();
+    assert!(xmp_values(&xmp2, "xmp:CreateDate").is_empty());
+}
+
+#[test]
+fn format_pdf_date_formats_and_normalizes_correctly() {
+    use crate::{format_pdf_date, normalize_pdf_date};
+
+    // User's exact case:
+    assert_eq!(format_pdf_date("D:20261020161649+03'00'"), "10/20/26, 4:16:49 PM +03:00");
+    let local_suffix = crate::local_tz_suffix();
+    assert_eq!(normalize_pdf_date("10/20/26, 4:16:49 PM"), format!("D:20261020161649{local_suffix}"));
+    assert_eq!(normalize_pdf_date("10/20/26, 4:16:49\u{202f}PM"), format!("D:20261020161649{local_suffix}"));
+    assert_eq!(normalize_pdf_date("10/20/26, 4:16:49 PM Z"), "D:20261020161649Z");
+    assert_eq!(normalize_pdf_date("10/20/26, 4:16:49 PM +03:00"), "D:20261020161649+03'00'");
+
+    // Morning and midnight/noon cases
+    assert_eq!(format_pdf_date("D:20240508090503Z"), "5/8/24, 9:05:03 AM Z");
+    assert_eq!(normalize_pdf_date("5/8/24, 9:05:03 AM Z"), "D:20240508090503Z");
+    assert_eq!(format_pdf_date("D:20240101000000Z"), "1/1/24, 12:00:00 AM Z");
+    assert_eq!(normalize_pdf_date("1/1/24, 12:00:00 AM Z"), "D:20240101000000Z");
+    assert_eq!(format_pdf_date("D:20240101120000Z"), "1/1/24, 12:00:00 PM Z");
+    assert_eq!(normalize_pdf_date("1/1/24, 12:00:00 PM Z"), "D:20240101120000Z");
+
+    // Year outside 1970..2070 preserved as 4 digits
+    assert_eq!(format_pdf_date("D:19650101120000Z"), "1/1/1965, 12:00:00 PM Z");
+    assert_eq!(format_pdf_date("D:20750101120000Z"), "1/1/2075, 12:00:00 PM Z");
+
+    // Without timezone suffix
+    assert_eq!(format_pdf_date("D:20261020161649"), "10/20/26, 4:16:49 PM");
+
+    // 4-digit year format
+    assert_eq!(normalize_pdf_date("10/20/2026, 4:16:49 PM Z"), "D:20261020161649Z");
+
+    // ISO format
+    assert_eq!(format_pdf_date("2026-10-20T16:16:49Z"), "10/20/26, 4:16:49 PM Z");
+
+    // Explicit timezone offset:
+    assert_eq!(crate::normalize_pdf_date_with("10/20/26, 4:16:49 PM", 0), "D:20261020161649Z");
+    assert_eq!(crate::normalize_pdf_date_with("10/20/26, 4:16:49 PM", 7200), "D:20261020161649+02'00'");
+    assert_eq!(crate::normalize_pdf_date_with("10/20/26, 4:16:49 PM", -18000), "D:20261020161649-05'00'");
+
+    // Non-dates are returned unchanged
+    assert_eq!(format_pdf_date(""), "");
+    assert_eq!(format_pdf_date("yesterday"), "yesterday");
+}
+
+#[test]
+fn is_valid_pdf_date_input_checks_pattern_correctly() {
+    use crate::{is_valid_pdf_date_input, set_info};
+
+    // Valid formats:
+    assert!(is_valid_pdf_date_input(""));
+    assert!(is_valid_pdf_date_input("   "));
+    assert!(is_valid_pdf_date_input("10/20/26, 4:16:49 PM"));
+    assert!(is_valid_pdf_date_input("10/20/26, 4:16:49\u{202f}PM"));
+    assert!(is_valid_pdf_date_input("10/20/26, 4:16:49 PM Z"));
+    assert!(is_valid_pdf_date_input("10/20/26, 4:16:49 PM +03:00"));
+    assert!(is_valid_pdf_date_input("5/8/24, 9:05:03 AM"));
+    assert!(is_valid_pdf_date_input("1/1/24, 12:00:00 AM"));
+    assert!(is_valid_pdf_date_input("10/20/2026, 4:16:49 PM"));
+    assert!(is_valid_pdf_date_input("2026-10-20 16:16:49"));
+    assert!(is_valid_pdf_date_input("2026-10-20T16:16:49Z"));
+    assert!(is_valid_pdf_date_input("D:20261020161649+03'00'"));
+    assert!(is_valid_pdf_date_input("D:20261020161649Z"));
+    assert!(is_valid_pdf_date_input("D:2026"));
+    assert!(is_valid_pdf_date_input("D:202610"));
+    assert!(is_valid_pdf_date_input("D:20261020"));
+
+    // 4-digit year format preservation (e.g. 0085 vs 2-digit 85)
+    assert_eq!(normalize_pdf_date("1/1/0085, 12:00:00 PM Z"), "D:00850101120000Z");
+    assert_eq!(normalize_pdf_date("1/1/85, 12:00:00 PM Z"), "D:19850101120000Z");
+
+    // Pure digits
+    assert!(is_valid_pdf_date_input("2026"));
+    assert!(is_valid_pdf_date_input("202610"));
+    assert!(is_valid_pdf_date_input("20261020"));
+    assert!(!is_valid_pdf_date_input("20261")); // 5 digits (partial)
+    assert!(!is_valid_pdf_date_input("202610201")); // 9 digits (partial)
+
+    // Slash and ISO invalid timezone offsets and malformed separators:
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:49 PM +99:99"));
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:49 PM +03:60"));
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:49 PM +03::00"));
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:49 PM +03''00'"));
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:49 PM +:0300"));
+    assert!(!is_valid_pdf_date_input("2026-10-20 16:16:49+99:99"));
+    assert!(!is_valid_pdf_date_input("2026-10-20T16:16:49+03:60"));
+    assert!(!is_valid_pdf_date_input("2026-10-20 16:16:49+03::00"));
+
+    // Invalid formats:
+    assert!(!is_valid_pdf_date_input("1/1/0000, 12:00:00 PM Z")); // year zero in slash format
+    assert_eq!(normalize_pdf_date("1/1/0000, 12:00:00 PM Z"), "");
+    assert!(!is_valid_pdf_date_input("not-a-date"));
+    assert!(!is_valid_pdf_date_input("random words"));
+    assert!(!is_valid_pdf_date_input("10/20"));
+    assert!(!is_valid_pdf_date_input("13/20/26, 4:16:49 PM")); // month 13
+    assert!(!is_valid_pdf_date_input("10/32/26, 4:16:49 PM")); // day 32
+    assert!(!is_valid_pdf_date_input("2/29/26, 4:16:49 PM")); // 2026 is not a leap year
+    assert!(is_valid_pdf_date_input("2/29/24, 4:16:49 PM")); // 2024 is a leap year
+    assert!(!is_valid_pdf_date_input("10/20/26, 13:16:49 PM")); // hour 13 with PM
+    assert!(!is_valid_pdf_date_input("10/20/26, 0:16:49 PM")); // hour 0 with PM
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:60:49 PM")); // minute 60
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:60 PM")); // second 60
+    assert!(!is_valid_pdf_date_input("10/20/26, 4:16:49 XM")); // invalid AM/PM
+    assert!(!is_valid_pdf_date_input("D:invalid"));
+    assert!(!is_valid_pdf_date_input("D:20261301")); // month 13 in PDF date
+    assert!(!is_valid_pdf_date_input("D:20261")); // 5 digits (partial)
+    assert!(!is_valid_pdf_date_input("D:202610201")); // 9 digits (partial)
+    assert!(!is_valid_pdf_date_input("D:2026 hello")); // trailing text
+    assert!(!is_valid_pdf_date_input("D:20261020xyz")); // trailing text
+    assert!(!is_valid_pdf_date_input("D:20261020161649+99'99'")); // invalid offset hour
+    assert!(!is_valid_pdf_date_input("D:20261020161649+03'60'")); // invalid offset minute
+
+    // set_info rejects invalid date format with error:
+    let mut doc = open(fixture());
+    let err = set_info(&mut doc, "CreationDate", "bad-date-string").unwrap_err();
+    assert!(matches!(err, crate::OrganizeError::Invalid(_)));
+
+    // set_info_with_offset normalizes with provided offset:
+    let mut doc2 = open(fixture());
+    crate::set_info_with_offset(&mut doc2, "CreationDate", "2026-10-20 16:16:49", 7200).unwrap();
+    assert_eq!(crate::info(&doc2, "CreationDate").as_deref(), Some("D:20261020161649+02'00'"));
+}
+
+#[test]
 fn document_info_edits_leave_files_without_usable_xmp_alone() {
     // No packet: none is added.
     let mut doc = open(fixture());

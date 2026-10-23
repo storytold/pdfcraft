@@ -328,6 +328,25 @@ fn custom_document_properties_are_set_listed_and_cleared_through_the_tools() {
     assert_eq!(info["custom"][0]["value"], "7", "{}", info["custom"]);
 }
 
+#[test]
+fn creation_and_mod_date_set_and_listed_through_tools() {
+    let dir = workdir("date-info");
+    std::fs::write(dir.join("a.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "CreationDate", "value": "2024-05-10 14:30:00Z" }));
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "ModDate", "value": "2024-06-12 18:45:00Z" }));
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["creation_date"], "D:20240510143000Z");
+    assert_eq!(info["mod_date"], "D:20240612184500Z");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out/dated.pdf" }));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({ "path": "out/dated.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut b, "doc_info", json!({ "doc": re }));
+    assert_eq!(info["creation_date"], "D:20240510143000Z");
+    assert_eq!(info["mod_date"], "D:20240612184500Z");
+}
+
 /// The custom list `doc_info` shows when a file opens is the one it shows after an unrelated
 /// edit: a name value, a blank or NUL-padded string and a number are judged the same way by the
 /// open-time reader and by the engine's refresh.

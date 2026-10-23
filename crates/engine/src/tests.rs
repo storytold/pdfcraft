@@ -639,6 +639,38 @@ fn save_is_incremental_stamps_mod_date_and_rebases() {
     assert_eq!(reopened.revisions().len(), 3);
 }
 
+#[test]
+fn edit_creation_and_mod_date_persists_across_save_and_undo() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::SetInfo { key: "CreationDate".into(), value: "2021-03-15 09:00:00Z".into() }).unwrap();
+    s.apply(id, Edit::SetInfo { key: "ModDate".into(), value: "2022-07-20 18:30:00Z".into() }).unwrap();
+
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.creation_date.as_deref(), Some("D:20210315090000Z"));
+    assert_eq!(doc.info.mod_date.as_deref(), Some("D:20220720183000Z"));
+    assert_eq!(doc.info_value("CreationDate").as_deref(), Some("D:20210315090000Z"));
+    assert_eq!(doc.info_value("ModDate").as_deref(), Some("D:20220720183000Z"));
+
+    // Save should NOT overwrite ModDate with clock time because manual_mod_date is true
+    let saved = s.save_bytes(id).unwrap();
+    let text = String::from_utf8_lossy(&saved);
+    assert!(text.contains("/ModDate (D:20220720183000Z)"), "manual mod date preserved: {text}");
+    assert!(!text.contains("D:20231114221320Z"), "clock date was not stamped over manual date");
+
+    // Undo should restore previous ModDate and reset manual_mod_date
+    let label = s.undo(id).unwrap();
+    assert_eq!(label.to_string(), "Change Modified Date");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.mod_date, None);
+    assert_eq!(doc.info.creation_date.as_deref(), Some("D:20210315090000Z"));
+
+    // Redo restores manual ModDate
+    let label = s.redo(id).unwrap();
+    assert_eq!(label.to_string(), "Change Modified Date");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.mod_date.as_deref(), Some("D:20220720183000Z"));
+}
+
 /// #1937: a file whose cross-reference data had to be rebuilt saved as its original bytes when
 /// nothing was edited, so the damage Document Properties reported as repaired was still in the
 /// file. Save writes the rebuilt file in full; reopened, it needs no repair.

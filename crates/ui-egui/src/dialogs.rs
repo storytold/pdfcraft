@@ -7,7 +7,7 @@ use pdfcraft_engine::Edit;
 
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
-const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
+const INFO_KEYS: [&str; 6] = ["Title", "Author", "Subject", "Keywords", "CreationDate", "ModDate"];
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     dialogs(app, ctx);
@@ -47,7 +47,13 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         && app.props_draft.as_ref().is_none_or(|(d, _)| *d != id)
         && let Some(doc) = app.session.get(id)
     {
-        app.props_draft = Some((id, INFO_KEYS.map(|k| doc.info_value(k).unwrap_or_default())));
+        app.props_draft = Some((
+            id,
+            INFO_KEYS.map(|k| {
+                let val = doc.info_value(k).unwrap_or_default();
+                if k == "CreationDate" || k == "ModDate" { pdfcraft_engine::format_pdf_date(&val) } else { val }
+            }),
+        ));
         app.view_draft = Some((id, doc.initial_view()));
     }
     let mut apply = false;
@@ -144,9 +150,32 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             match app.props_draft.as_mut() {
                                 Some((_, draft)) if doc.allows_modification() => {
                                     for (k, v) in INFO_KEYS.iter().zip(draft.iter_mut()) {
-                                        let l = ui.label(egui::RichText::new(tl!(k)).color(t.text_muted));
-                                        ui.add(widgets::line(v).desired_width(420.0).background_color(t.field).id_salt(("info", *k)))
-                                            .labelled_by(l.id);
+                                        let label = match *k {
+                                            "CreationDate" => tl!("Created"),
+                                            "ModDate" => tl!("Modified"),
+                                            other => tl!(other),
+                                        };
+                                        let l = ui.label(egui::RichText::new(label).color(t.text_muted));
+                                        let is_date = *k == "CreationDate" || *k == "ModDate";
+                                        let seeded = if is_date {
+                                            doc.info_value(k).map(|e| pdfcraft_engine::format_pdf_date(&e)).unwrap_or_default()
+                                        } else {
+                                            String::new()
+                                        };
+                                        let is_err = is_date && v.trim() != seeded && !pdfcraft_engine::is_valid_pdf_date_input(v);
+                                        ui.vertical(|ui| {
+                                            ui.add(widgets::line(v).desired_width(420.0).background_color(t.field).id_salt(("info", *k)))
+                                                .labelled_by(l.id);
+                                            if is_err {
+                                                ui.label(
+                                                    egui::RichText::new(tl!(
+                                                        "Please follow pattern: MM/DD/YY, h:mm:ss AM/PM (e.g. 10/20/26, 4:16:49 PM)"
+                                                    ))
+                                                    .color(egui::Color32::from_rgb(220, 60, 60))
+                                                    .small(),
+                                                );
+                                            }
+                                        });
                                         ui.end_row();
                                     }
                                 }
@@ -155,6 +184,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                                     row(ui, "Author", i.author.clone().unwrap_or_default());
                                     row(ui, "Subject", i.subject.clone().unwrap_or_default());
                                     row(ui, "Keywords", i.keywords.clone().unwrap_or_default());
+                                    row(ui, "Created", i.creation_date.as_deref().map(pdfcraft_engine::format_pdf_date).unwrap_or_default());
+                                    row(ui, "Modified", i.mod_date.as_deref().map(pdfcraft_engine::format_pdf_date).unwrap_or_default());
                                 }
                             }
                             row(ui, "Application", i.creator.clone().unwrap_or_default());
@@ -1234,7 +1265,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     close = true;
                 }
             } else if changed {
-                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                let has_error = app.props_draft.as_ref().is_some_and(|(id, draft)| {
+                    let doc = app.session.get(*id);
+                    INFO_KEYS.iter().zip(draft.iter()).any(|(k, v)| {
+                        let seeded = doc.and_then(|d| d.info_value(k)).map(|e| pdfcraft_engine::format_pdf_date(&e)).unwrap_or_default();
+                        (*k == "CreationDate" || *k == "ModDate") && v.trim() != seeded && !pdfcraft_engine::is_valid_pdf_date_input(v)
+                    })
+                });
+                if ui.add_enabled_ui(!has_error, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
                     apply = true;
                     close = true;
                 }
@@ -1467,7 +1505,20 @@ fn draft_changes(app: &PdfCraftApp) -> Option<Vec<Edit>> {
     let mut edits: Vec<Edit> = INFO_KEYS
         .iter()
         .zip(draft.iter())
-        .filter(|(k, v)| doc.info_value(k).unwrap_or_default().trim() != v.trim())
+        .filter(|(k, v)| {
+            let existing = doc.info_value(k).unwrap_or_default();
+            if **k == "CreationDate" || **k == "ModDate" {
+                let v_trimmed = v.trim();
+                if v_trimmed.is_empty() {
+                    !existing.is_empty()
+                } else {
+                    let formatted_existing = pdfcraft_engine::format_pdf_date(&existing);
+                    if formatted_existing == v_trimmed { false } else { pdfcraft_engine::normalize_pdf_date(v_trimmed) != existing }
+                }
+            } else {
+                existing.trim() != v.trim()
+            }
+        })
         .map(|(k, v)| Edit::SetInfo { key: (*k).to_string(), value: v.clone() })
         .collect();
     if let Some((vid, v)) = &app.view_draft
