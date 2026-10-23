@@ -270,6 +270,7 @@ theme	Appearance	Giao diện
 	Allow Rich Text Formatting	Cho phép định dạng văn bản phong phú
 	Allow user to enter custom text	Cho phép người dùng nhập văn bản tùy ý
 	Also recognize pages that already have text	Nhận dạng cả các trang đã có văn bản
+	Deskew pages	Chỉnh nghiêng trang
 	Alternate text	Văn bản thay thế
 	An action with this name already exists.	Đã có hành động với tên này.
 	An open-source PDF workbench — local, private, and scriptable.	Bộ công cụ PDF mã nguồn mở — chạy cục bộ, riêng tư và có thể viết kịch bản.
