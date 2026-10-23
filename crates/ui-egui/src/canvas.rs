@@ -3037,7 +3037,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
     let mut open_boxes = false;
-    let signature = app.signature.clone();
+    let signature = app.signatures.active().cloned();
     let initials = app.initials.clone();
     let mut open_initials = false;
     let author = app.comment_prefs.author.clone();
@@ -4376,7 +4376,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.notify_error(why);
     }
     if open_signature || open_initials {
-        app.signature_draft = crate::fill_sign::SigDraft::new(open_initials, &app.comment_prefs.author);
+        app.signature_draft = app.new_signature_draft(open_initials);
         app.dialog = Some(crate::Dialog::Signature);
     }
     if open_boxes {

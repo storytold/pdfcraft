@@ -2750,3 +2750,9 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	फ़िल और साइन: एक और सहेजा गया हस्ताक्षर जोड़ें
+	Signature {n}	हस्ताक्षर {n}
+	Work, Personal, a name…	कार्य, निजी, कोई नाम…
+	You can keep up to {n} signatures. Remove one to add another.	आप अधिकतम {n} हस्ताक्षर रख सकते हैं। दूसरा जोड़ने के लिए एक हटाएँ।

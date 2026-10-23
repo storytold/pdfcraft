@@ -2774,3 +2774,9 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Emplena i signa: afegeix una altra signatura desada
+	Signature {n}	Signatura {n}
+	Work, Personal, a name…	Feina, Personal, un nom…
+	You can keep up to {n} signatures. Remove one to add another.	Es poden desar fins a {n} signatures. Elimina'n una per afegir-ne una altra.

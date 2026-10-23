@@ -802,15 +802,17 @@ pub struct PdfCraftApp {
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.
     export_status: Option<export_ui::ExportStatus>,
-    /// The saved Fill & Sign signature and initials (drawn or typed).
-    pub signature: Option<fill_sign::SavedSig>,
+    /// The saved Fill & Sign signatures (each with a label; [`Self::signature`] is the active one)
+    /// and initials, drawn, typed or imported.
+    pub signatures: fill_sign::SignatureLibrary,
     pub initials: Option<fill_sign::SavedSig>,
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
     /// The Scan tab's photo, keyed by its version.
     pub(crate) signature_photo: Option<(u64, egui::TextureHandle)>,
-    pub(crate) saved_signature_previews: [Option<(fill_sign::SavedSig, egui::TextureHandle)>; 2],
+    /// The saved cards' previews: initials first, then one per saved signature.
+    pub(crate) saved_signature_previews: Vec<Option<(fill_sign::SavedSig, egui::TextureHandle)>>,
     /// What visible digital signatures show on their left, and its preview in Sign as.
     pub sign_graphic: sign_ui::SignGraphic,
     pub(crate) sign_graphic_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
@@ -895,6 +897,12 @@ impl Default for PdfCraftApp {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A drawn signature the pad would keep: every point a finite number, and at least one stroke
+/// long enough to show (two points), as the pad requires before saving.
+fn strokes_drawn(strokes: &[Vec<[f32; 2]>]) -> bool {
+    strokes.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite()))) && strokes.iter().any(|st| st.len() > 1)
 }
 
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
@@ -1109,12 +1117,12 @@ impl PdfCraftApp {
             marks_draft: Default::default(),
             export_draft: Default::default(),
             export_status: None,
-            signature: None,
+            signatures: Default::default(),
             initials: None,
             signature_draft: Default::default(),
             signature_preview: None,
             signature_photo: None,
-            saved_signature_previews: [None, None],
+            saved_signature_previews: Vec::new(),
             sign_graphic: sign_ui::SignGraphic::Name,
             sign_graphic_preview: None,
             #[cfg(target_arch = "wasm32")]
@@ -2407,10 +2415,11 @@ impl PdfCraftApp {
                     "fill": s.fill,
                 }))
                 .collect::<Vec<_>>(),
-            // Drawn signatures keep their original form (older settings read the same).
-            "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
-            "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
-            "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
+            // The active signature (the list is added below) in the single-signature keys, so older
+            // versions still find it. Drawn signatures keep their original form (older settings read the same).
+            "signature": match self.signature() { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
+            "signature_text": match self.signature() { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
+            "signature_image": match self.signature() { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
@@ -2433,6 +2442,8 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["signatures"] = serde_json::json!(self.signatures.entries());
+        v["active_signature"] = serde_json::json!(self.signatures.active_index());
         v.to_string()
     }
 
@@ -2582,16 +2593,48 @@ impl PdfCraftApp {
                 }
             }
         }
-        if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
-            && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
-        {
-            self.signature = Some(fill_sign::SavedSig::Drawn(s));
-        }
-        if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
-            self.signature = Some(fill_sign::SavedSig::Typed(t.to_string()));
-        }
-        if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
-            self.signature = Some(s);
+        if let Some(list) = v["signatures"].as_array() {
+            // One damaged entry (a bad image, a non-finite stroke) is dropped, not the whole list.
+            // The active one stays active, or the nearest kept one before it if it was dropped.
+            let saved_active = v["active_signature"].as_u64().and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
+            let mut active = 0;
+            let mut entries = Vec::new();
+            for (i, e) in list.iter().enumerate() {
+                if entries.len() >= fill_sign::MAX_SAVED_SIGNATURES {
+                    break;
+                }
+                let Ok(e) = serde_json::from_value::<fill_sign::LabelledSig>(e.clone()) else { continue };
+                let usable = match &e.sig {
+                    fill_sign::SavedSig::Drawn(s) => strokes_drawn(s),
+                    fill_sign::SavedSig::Typed(t) => !t.trim().is_empty(),
+                    fill_sign::SavedSig::Image(_) => true,
+                };
+                if usable {
+                    if i <= saved_active {
+                        active = entries.len();
+                    }
+                    entries.push(e);
+                }
+            }
+            self.signatures = fill_sign::SignatureLibrary::new(entries, active);
+        } else {
+            // Settings from before the signature list: one signature, which becomes the first entry.
+            let mut legacy = None;
+            if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
+                && strokes_drawn(&s)
+            {
+                legacy = Some(fill_sign::SavedSig::Drawn(s));
+            }
+            if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
+                legacy = Some(fill_sign::SavedSig::Typed(t.to_string()));
+            }
+            if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
+                legacy = Some(s);
+            }
+            if let Some(s) = legacy {
+                self.signatures = fill_sign::SignatureLibrary::default();
+                self.signatures.add("", s);
+            }
         }
         if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
             self.initials = Some(i);
@@ -2617,12 +2660,35 @@ impl PdfCraftApp {
         self.views.iter().any(|v| v.render_pending())
     }
 
+    /// The active saved Fill & Sign signature: the one Sign places.
+    pub fn signature(&self) -> Option<&fill_sign::SavedSig> {
+        self.signatures.active()
+    }
+
+    /// A Create signature / initials draft; a new signature is offered the next free label.
+    pub(crate) fn new_signature_draft(&self, initials: bool) -> fill_sign::SigDraft {
+        let label = if initials { String::new() } else { self.signatures.next_label() };
+        fill_sign::SigDraft { label, ..fill_sign::SigDraft::new(initials, &self.comment_prefs.author) }
+    }
+
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
+            ("signature", _) => {
+                // The saved signature to sign with: its number in the list (from 1) or its label.
+                let n = value.trim().parse::<usize>().ok().and_then(|n| n.checked_sub(1));
+                if !n.is_some_and(|i| self.signatures.select(i)) && !self.signatures.select_label(value) {
+                    let labels: Vec<&str> = self.signatures.entries().iter().map(|e| e.label.as_str()).collect();
+                    return Err(if labels.is_empty() {
+                        "no signature is saved".to_string()
+                    } else {
+                        format!("signature must be a number from 1 to {} or one of the labels: {}", labels.len(), labels.join(", "))
+                    });
+                }
+            }
             ("language", _) => {
                 let language = i18n::normalize_pref(value).ok_or_else(|| {
                     let codes: Vec<&str> = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect();

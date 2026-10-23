@@ -2774,3 +2774,9 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Completare și semnare: adăugare altă semnătură salvată
+	Signature {n}	Semnătură {n}
+	Work, Personal, a name…	Serviciu, Personal, un nume…
+	You can keep up to {n} signatures. Remove one to add another.	Puteți păstra cel mult {n} semnături. Eliminați una pentru a adăuga alta.

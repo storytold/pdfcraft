@@ -2429,3 +2429,9 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	ຕື່ມ ແລະ ເຊັນ: ເພີ່ມລາຍເຊັນທີ່ບັນທຶກໄວ້ອີກອັນໜຶ່ງ
+	Signature {n}	ລາຍເຊັນ {n}
+	Work, Personal, a name…	ວຽກ, ສ່ວນຕົວ, ຊື່…
+	You can keep up to {n} signatures. Remove one to add another.	ທ່ານສາມາດເກັບລາຍເຊັນໄດ້ສູງສຸດ {n} ອັນ. ລຶບອອກອັນໜຶ່ງເພື່ອເພີ່ມອັນໃໝ່.

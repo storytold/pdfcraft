@@ -2783,3 +2783,9 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Täytä ja allekirjoita: lisää uusi tallennettu allekirjoitus
+	Signature {n}	Allekirjoitus {n}
+	Work, Personal, a name…	Työ, Henkilökohtainen, nimi…
+	You can keep up to {n} signatures. Remove one to add another.	Voit tallentaa enintään {n} allekirjoitusta. Poista yksi lisätäksesi uuden.

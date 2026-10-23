@@ -2681,3 +2681,9 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	กรอกและเซ็น: เพิ่มลายเซ็นที่บันทึกไว้อีกรายการ
+	Signature {n}	ลายเซ็น {n}
+	Work, Personal, a name…	งาน, ส่วนตัว, ชื่อ…
+	You can keep up to {n} signatures. Remove one to add another.	เก็บลายเซ็นได้ไม่เกิน {n} รายการ โปรดเอาออกหนึ่งรายการเพื่อเพิ่มรายการใหม่

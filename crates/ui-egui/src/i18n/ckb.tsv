@@ -2713,3 +2713,9 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	پڕکردنەوە و واژووکردن: زیادکردنی واژوویەکی پاشەکەوتکراوی تر
+	Signature {n}	واژوو {n}
+	Work, Personal, a name…	کار، کەسی، ناوێک…
+	You can keep up to {n} signatures. Remove one to add another.	دەتوانیت تا {n} واژوو هەڵبگریت. یەکێکیان لابە بۆ زیادکردنی یەکێکی تر.

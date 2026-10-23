@@ -2751,3 +2751,9 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Isi & Tanda Tangani: tambahkan tanda tangan tersimpan lainnya
+	Signature {n}	Tanda tangan {n}
+	Work, Personal, a name…	Kantor, Pribadi, sebuah nama…
+	You can keep up to {n} signatures. Remove one to add another.	Anda dapat menyimpan hingga {n} tanda tangan. Hapus satu untuk menambahkan yang lain.
