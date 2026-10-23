@@ -2438,6 +2438,7 @@ animation effects	Off	معطّلة
 	Restore	استعادة
 	Use system title bar	استخدام شريط عنوان النظام
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	إظهار شريط عنوان بسيط لأزرار النافذة بدلًا من شريط الألسنة. لا يرسم GNOME أشرطة العناوين للتطبيقات، لذلك لا يتبع هذا الشريط سمته.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	إبقاء شريط عنوان Windows فوق شريط الألسنة. عند إيقافه، يصبح شريط الألسنة هو شريط العنوان، مع أزرار النافذة على يمينه؛ وتحتاج تخطيطات الانطباق (Snap Layouts) على زر التكبير إلى شريط عنوان Windows.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	السماح

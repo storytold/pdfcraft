@@ -2431,6 +2431,7 @@ animation effects	Off	Desativados
 	Restore	Restaurar
 	Use system title bar	Usar a barra de título do sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostrar uma barra de título simples para os botões da janela em vez da barra de abas. O GNOME não desenha barras de título para os aplicativos, então esta não segue o tema dele.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Manter a barra de título do Windows acima da barra de abas. Desativado, a barra de abas é a barra de título, com os botões da janela à direita; os layouts de ajuste (Snap Layouts) no botão de maximizar precisam da barra de título do Windows.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir

@@ -2381,6 +2381,7 @@ animation effects	Off	关
 	Restore	还原
 	Use system title bar	使用系统标题栏
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	用简单的标题栏显示窗口按钮，而不是在标签栏中。GNOME 不为应用绘制标题栏，因此此标题栏不会跟随其主题。
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	将 Windows 标题栏保留在标签栏上方。关闭后，标签栏即为标题栏，窗口按钮位于其右侧；最大化按钮上的贴靠布局（Snap Layouts）需要 Windows 标题栏。
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	允许

@@ -2330,6 +2330,7 @@ animation effects	Off	Выкл
 	Restore	Восстановить
 	Use system title bar	Использовать системный заголовок окна
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показывать простой заголовок окна с кнопками вместо полосы вкладок. GNOME не рисует заголовки для приложений, поэтому этот заголовок не следует его теме.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Оставить заголовок окна Windows над полосой вкладок. Если выключено, заголовком становится полоса вкладок с кнопками окна справа; макетам прикрепления (Snap Layouts) на кнопке развёртывания нужен заголовок Windows.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разрешить

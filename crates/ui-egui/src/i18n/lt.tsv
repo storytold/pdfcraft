@@ -2667,6 +2667,7 @@ key	Space	Tarpas
 	Restore	Atkurti
 	Use system title bar	Naudoti sistemos pavadinimo juostą
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Rodyti paprastą pavadinimo juostą su lango mygtukais vietoj kortelių juostos. GNOME nepiešia programoms pavadinimo juostų, todėl ši neatitinka jo temos.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Palikti „Windows“ pavadinimo juostą virš kortelių juostos. Išjungus kortelių juosta tampa pavadinimo juosta su lango mygtukais dešinėje; „Snap Layouts“ išdėstymams ant didinimo mygtuko reikia „Windows“ pavadinimo juostos.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Leisti

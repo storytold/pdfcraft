@@ -2413,6 +2413,7 @@ animation effects	Off	Kapalı
 	Restore	Geri yükle
 	Use system title bar	Sistem başlık çubuğunu kullan
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Sekme çubuğu yerine pencere düğmeleri için basit bir başlık çubuğu göster. GNOME uygulamalar için başlık çubuğu çizmez, bu yüzden bu çubuk onun temasına uymaz.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Windows başlık çubuğunu sekme çubuğunun üstünde tut. Kapalıyken sekme çubuğu başlık çubuğu olur ve pencere düğmeleri sağında yer alır; ekranı kapla düğmesindeki Snap Layouts için Windows başlık çubuğu gerekir.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	İzin ver

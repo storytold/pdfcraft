@@ -2596,6 +2596,7 @@ key	Space	Space
 	Remove "{name}" from this list? The file itself is not deleted.	Hapus "{name}" dari daftar ini? File itu sendiri tidak dihapus.
 	Restore	Pulihkan
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Tampilkan bilah judul sederhana untuk tombol jendela alih-alih strip tab. GNOME tidak menggambar bilah judul untuk aplikasi, jadi yang ini tidak mengikuti temanya.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Pertahankan bilah judul Windows di atas strip tab. Jika dimatikan, strip tab menjadi bilah judul, dengan tombol jendela di sebelah kanannya; Snap Layouts pada tombol maksimalkan memerlukan bilah judul Windows.
 	This document is trying to open a local file:	Dokumen ini mencoba membuka file lokal:
 	Use system title bar	Gunakan bilah judul sistem
 	Hide hover previews for highlights without comment text	Sembunyikan pratinjau saat kursor diarahkan ke sorotan tanpa teks komentar

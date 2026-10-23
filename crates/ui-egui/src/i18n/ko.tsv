@@ -2595,6 +2595,7 @@ certificate	SHA-256 digest	SHA-256 다이제스트
 	Remove "{name}" from this list? The file itself is not deleted.	"{name}"을(를) 이 목록에서 제거하시겠습니까? 파일 자체는 삭제되지 않습니다.
 	Restore	복원
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	탭 스트립 대신 창 버튼이 있는 기본 제목 표시줄을 표시합니다. GNOME은 앱에 제목 표시줄을 그리지 않으므로 이 표시줄은 해당 테마를 따르지 않습니다.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	탭 스트립 위에 Windows 제목 표시줄을 유지합니다. 끄면 탭 스트립이 제목 표시줄이 되고 창 버튼은 오른쪽 끝에 놓입니다. 최대화 버튼의 스냅 레이아웃(Snap Layouts)을 쓰려면 Windows 제목 표시줄이 필요합니다.
 	This document is trying to open a local file:	이 문서가 로컬 파일을 열려고 합니다:
 	Use system title bar	시스템 제목 표시줄 사용
 	Hide hover previews for highlights without comment text	주석 텍스트가 없는 강조 표시의 마우스오버 미리 보기 숨기기

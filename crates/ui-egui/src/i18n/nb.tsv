@@ -2536,6 +2536,7 @@
 	Restore	Gjenopprett
 	Use system title bar	Bruk systemets tittellinje
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Vis en enkel tittellinje for vindusknappene i stedet for fanelinjen. GNOME tegner ikke tittellinjer for apper, så denne følger ikke temaet.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Behold Windows-tittellinjen over fanelinjen. Slått av blir fanelinjen tittellinjen, med vindusknappene til høyre; fest-oppsett (Snap Layouts) på maksimer-knappen trenger Windows-tittellinjen.
 	Move tag earlier	Flytt tagg tidligere
 	Move tag later	Flytt tagg senere
 	Next tab	Neste fane

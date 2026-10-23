@@ -2599,6 +2599,7 @@ key	Space	Spațiu
 	Restore	Restabilire
 	Use system title bar	Folosire bară de titlu a sistemului
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Afișează o bară de titlu simplă pentru butoanele ferestrei în locul barei de file. GNOME nu desenează bare de titlu pentru aplicații, așa că aceasta nu urmează tema sa.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Păstrează bara de titlu Windows deasupra barei de file. Dezactivat, bara de file devine bara de titlu, cu butoanele ferestrei în dreapta ei; aspectele de fixare (Snap Layouts) de pe butonul de maximizare au nevoie de bara de titlu Windows.
 	Allow	Permitere
 	Only allow this if you trust the source document.	Permiteți acest lucru doar dacă aveți încredere în documentul sursă.
 	Open this local PDF?	Deschideți acest PDF local?

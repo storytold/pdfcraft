@@ -1,4 +1,4 @@
-//! Window buttons and resize edges for desktops that leave the window frame to the app.
+//! Window buttons and resize edges for windows whose frame the app draws.
 //!
 //! GNOME on Wayland has no server-side decorations (the compositor offers no
 //! `zxdg_decoration_manager_v1`), so winit drew its own imitation frame. Instead the app turns the
@@ -6,6 +6,13 @@
 //! minimize, maximize and close buttons in the desktop's order (GNOME's `button-layout`), and
 //! thin zones along the window's edges resize it. Desktops with server-side decorations (KDE,
 //! Sway, Hyprland, X11) keep their own frame and never get here.
+//!
+//! On Windows the same strip is offered as a choice (Preferences ▸ Use system title bar, on by
+//! default there): the title bar's row goes to the tabs, as in the browsers and Windows Terminal.
+//! The buttons then take the caption buttons' shape, flat and the strip's full height, with the
+//! close button's red hover. winit keeps the styles Windows needs for Aero Snap, the drop shadow
+//! and edge resizing on an undecorated window; only the Snap Layouts flyout, which Windows 11
+//! shows over its own maximize button, needs the system title bar.
 
 use crate::theme::Tokens;
 use egui::viewport::ResizeDirection;
@@ -24,6 +31,24 @@ pub enum Button {
 pub struct Layout {
     pub left: Vec<Button>,
     pub right: Vec<Button>,
+}
+
+/// Use system title bar when nothing is saved: on where Windows' own title bar is the norm, off
+/// on GNOME, whose frame winit only imitates.
+pub const SYSTEM_TITLE_BAR_DEFAULT: bool = cfg!(target_os = "windows");
+
+/// The saved Use system title bar preference in PdfCraft's settings JSON: `title_bar`, `"system"`
+/// or `"app"`. Settings from before Windows offered the preference hold the boolean
+/// `system_title_bar` instead, which every platform wrote as `false` while only GNOME showed the
+/// checkbox; it still counts there, but on Windows it was never a choice, so it is left alone and
+/// the default stands rather than every upgrade losing the title bar.
+pub fn saved_system_title_bar(settings: &serde_json::Value) -> Option<bool> {
+    match settings.get("title_bar").and_then(serde_json::Value::as_str) {
+        Some("system") => Some(true),
+        Some("app") => Some(false),
+        _ if cfg!(target_os = "windows") => None,
+        _ => settings.get("system_title_bar")?.as_bool(),
+    }
 }
 
 impl Default for Layout {
@@ -65,29 +90,93 @@ impl Layout {
     }
 }
 
+/// How the buttons look: the desktop's own caption buttons, so the strip reads as a title bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    /// Round washes of the text colour with symbolic glyphs, as in GNOME's header bars.
+    Adwaita,
+    /// Flat rectangles the strip's full height, as Windows draws its caption buttons; the close
+    /// button turns red on hover.
+    Windows,
+}
+
+impl Style {
+    /// The style for the platform this build runs on.
+    pub fn current() -> Self {
+        if cfg!(target_os = "windows") { Self::Windows } else { Self::Adwaita }
+    }
+
+    /// Each button's width.
+    pub fn button_width(self) -> f32 {
+        match self {
+            Self::Adwaita => BUTTON,
+            Self::Windows => WINDOWS_BUTTON_WIDTH,
+        }
+    }
+
+    /// Between two window buttons.
+    pub fn gap(self) -> f32 {
+        match self {
+            Self::Adwaita => GAP,
+            Self::Windows => 0.0,
+        }
+    }
+
+    /// Between the window buttons and the rest of the strip.
+    pub fn side_gap(self) -> f32 {
+        match self {
+            Self::Adwaita => SIDE_GAP,
+            Self::Windows => WINDOWS_SIDE_GAP,
+        }
+    }
+
+    /// Whether the buttons sit flush against the window's edge, with no strip margin outside them.
+    pub fn flush_with_edge(self) -> bool {
+        matches!(self, Self::Windows)
+    }
+
+    /// The width `buttons` take in the strip, including the gap to the rest of it.
+    pub fn width(self, buttons: &[Button]) -> f32 {
+        match buttons.len() {
+            0 => 0.0,
+            n => n as f32 * self.button_width() + (n - 1) as f32 * self.gap() + self.side_gap(),
+        }
+    }
+}
+
 /// The round button's diameter, as in Adwaita.
 pub const BUTTON: f32 = 24.0;
 /// Between two window buttons.
 pub const GAP: f32 = 6.0;
 /// Between the window buttons and the rest of the strip.
 pub const SIDE_GAP: f32 = 10.0;
+/// A Windows caption button's width (46 px at 100 %, from the system's own title bars).
+const WINDOWS_BUTTON_WIDTH: f32 = 46.0;
+/// Between the Windows buttons and the rest of the strip.
+const WINDOWS_SIDE_GAP: f32 = 8.0;
+/// Windows' close button on hover and press.
+const WINDOWS_CLOSE_HOVER: Color32 = Color32::from_rgb(0xC4, 0x2B, 0x1C);
+const WINDOWS_CLOSE_PRESSED: Color32 = Color32::from_rgb(0xB1, 0x2A, 0x1E);
 
 /// The width `buttons` take in the strip, including the gap to the rest of it.
 pub fn width(buttons: &[Button]) -> f32 {
-    match buttons.len() {
-        0 => 0.0,
-        n => n as f32 * BUTTON + (n - 1) as f32 * GAP + SIDE_GAP,
-    }
+    Style::current().width(buttons)
 }
 
 /// Draw the window buttons for one end of the strip, in reading order, inside a horizontal
 /// layout running left to right; the caller adds [`SIDE_GAP`] where the strip continues.
 pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
     let t = Tokens::get(ui.ctx());
+    let style = Style::current();
     let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+    // Windows' buttons stand the strip's full height, so a hover fills it top to bottom.
+    let size = match style {
+        Style::Adwaita => Vec2::splat(BUTTON),
+        Style::Windows => Vec2::new(WINDOWS_BUTTON_WIDTH, ui.available_height().max(BUTTON)),
+    };
     for (n, &button) in buttons.iter().enumerate() {
         if n > 0 {
-            ui.add_space(GAP);
+            ui.add_space(style.gap());
         }
         let label = match button {
             Button::Minimize => tl!("Minimize"),
@@ -95,11 +184,14 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
             Button::Maximize => tl!("Maximize"),
             Button::Close => tl!("Close"),
         };
-        let (rect, response) = ui.allocate_exact_size(Vec2::splat(BUTTON), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
         let response = response.on_hover_text(label);
         if ui.is_rect_visible(rect) {
-            paint(ui.painter(), rect, button, maximized, &t, &response);
+            match style {
+                Style::Adwaita => paint(ui.painter(), rect, button, maximized, &t, &response),
+                Style::Windows => paint_windows(ui.painter(), rect, button, maximized, &t, &response),
+            }
         }
         if response.clicked() {
             let command = match button {
@@ -149,6 +241,52 @@ fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t
         Button::Close => {
             painter.line_segment([at(4.0, 4.0), at(11.0, 11.0)], stroke);
             painter.line_segment([at(11.0, 4.0), at(4.0, 11.0)], stroke);
+        }
+    }
+}
+
+/// Windows' look: a flat wash over the whole button on hover and press (the close button's is
+/// red, with a white glyph), and a 10-pixel glyph drawn with 1-pixel lines on pixel centres.
+fn paint_windows(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t: &Tokens, response: &egui::Response) {
+    let pressed = response.is_pointer_button_down_on();
+    let hovered = response.hovered();
+    let close = button == Button::Close;
+    let fill = match (close, pressed, hovered) {
+        (true, true, _) => WINDOWS_CLOSE_PRESSED,
+        (true, false, true) => WINDOWS_CLOSE_HOVER,
+        (false, true, _) => t.text.gamma_multiply(0.06),
+        (false, false, true) => t.text.gamma_multiply(0.10),
+        _ => Color32::TRANSPARENT,
+    };
+    if fill != Color32::TRANSPARENT {
+        painter.rect_filled(rect, 0.0, fill);
+    }
+    if response.has_focus() {
+        painter.rect_stroke(rect.shrink(1.0), 0.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+    }
+    let colour = if close && (hovered || pressed) { Color32::WHITE } else { t.text };
+    let stroke = Stroke::new(1.0, colour);
+    // The glyph's 10-pixel square, its corners on pixel centres so lines stay crisp.
+    let c = rect.center();
+    let at = |x: f32, y: f32| Pos2::new((c.x - 5.0 + x).round() + 0.5, (c.y - 5.0 + y).round() + 0.5);
+    match button {
+        Button::Minimize => {
+            painter.line_segment([at(0.0, 5.0), at(10.0, 5.0)], stroke);
+        }
+        Button::Maximize if maximized => {
+            // Restore: the window in front of the one it was restored from.
+            painter.rect_stroke(Rect::from_two_pos(at(0.0, 2.0), at(8.0, 10.0)), 1.0, stroke, egui::StrokeKind::Middle);
+            painter.line_segment([at(2.0, 2.0), at(2.0, 0.0)], stroke);
+            painter.line_segment([at(2.0, 0.0), at(10.0, 0.0)], stroke);
+            painter.line_segment([at(10.0, 0.0), at(10.0, 8.0)], stroke);
+            painter.line_segment([at(10.0, 8.0), at(8.0, 8.0)], stroke);
+        }
+        Button::Maximize => {
+            painter.rect_stroke(Rect::from_two_pos(at(0.0, 0.0), at(10.0, 10.0)), 1.0, stroke, egui::StrokeKind::Middle);
+        }
+        Button::Close => {
+            painter.line_segment([at(0.0, 0.0), at(10.0, 10.0)], stroke);
+            painter.line_segment([at(10.0, 0.0), at(0.0, 10.0)], stroke);
         }
     }
 }
@@ -221,7 +359,11 @@ pub fn resize_edges(ctx: &egui::Context) {
                 }
             }
             // Without the desktop's frame or shadow, a hairline keeps the window apart from
-            // what's behind it.
+            // what's behind it. Windows keeps the drop shadow on an undecorated window (winit's
+            // undecorated-shadow style), so the hairline would only double its own border.
+            if Style::current() == Style::Windows {
+                return;
+            }
             ui.painter().rect_stroke(
                 screen,
                 0.0,
@@ -254,10 +396,34 @@ mod tests {
     }
 
     #[test]
+    fn the_saved_preference_is_read_with_its_history() {
+        use super::saved_system_title_bar as saved;
+        use serde_json::json;
+        assert_eq!(saved(&json!({"title_bar": "system"})), Some(true));
+        assert_eq!(saved(&json!({"title_bar": "app", "system_title_bar": true})), Some(false));
+        assert_eq!(saved(&json!({"title_bar": "sideways"})), None);
+        assert_eq!(saved(&json!({"theme": "Dark"})), None);
+        assert_eq!(saved(&json!("not an object")), None);
+        // The boolean of older builds: a choice on GNOME, where the checkbox was, and on Windows
+        // only the default every save wrote.
+        let legacy = if cfg!(target_os = "windows") { None } else { Some(false) };
+        assert_eq!(saved(&json!({"system_title_bar": false})), legacy);
+        assert_eq!(saved(&json!({"system_title_bar": true})), legacy.map(|_| true));
+        assert_eq!(saved(&json!({"system_title_bar": "true"})), None);
+    }
+
+    #[test]
     fn widths_cover_the_buttons_and_their_gaps() {
-        assert_eq!(super::width(&[]), 0.0);
-        assert_eq!(super::width(&[Button::Close]), super::BUTTON + super::SIDE_GAP);
-        assert_eq!(super::width(&Layout::default().right), 3.0 * super::BUTTON + 2.0 * super::GAP + super::SIDE_GAP);
+        use super::Style::{Adwaita, Windows};
+        assert_eq!(Adwaita.width(&[]), 0.0);
+        assert_eq!(Adwaita.width(&[Button::Close]), super::BUTTON + super::SIDE_GAP);
+        assert_eq!(Adwaita.width(&Layout::default().right), 3.0 * super::BUTTON + 2.0 * super::GAP + super::SIDE_GAP);
+        // Windows' caption buttons touch each other and the window's edge.
+        assert_eq!(Windows.width(&[]), 0.0);
+        assert_eq!(Windows.width(&[Button::Close]), super::WINDOWS_BUTTON_WIDTH + super::WINDOWS_SIDE_GAP);
+        assert_eq!(Windows.width(&Layout::default().right), 3.0 * super::WINDOWS_BUTTON_WIDTH + super::WINDOWS_SIDE_GAP);
+        assert!(Windows.flush_with_edge() && !Adwaita.flush_with_edge());
+        assert_eq!(super::width(&[Button::Close]), super::Style::current().width(&[Button::Close]));
     }
 
     #[test]

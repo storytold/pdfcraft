@@ -2380,6 +2380,7 @@ animation effects	Off	Изключени
 	Restore	Възстановяване
 	Use system title bar	Използване на системната заглавна лента
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показване на обикновена заглавна лента за бутоните на прозореца вместо лентата с раздели. GNOME не рисува заглавни ленти за приложенията, затова тази не следва темата му.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Запазване на заглавната лента на Windows над лентата с раздели. Изключено, лентата с раздели е заглавната лента, с бутоните на прозореца вдясно; подредбите Snap Layouts върху бутона за максимизиране изискват заглавната лента на Windows.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разреши

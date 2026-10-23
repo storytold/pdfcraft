@@ -2291,6 +2291,7 @@ animation effects	Off	關
 	Restore	還原
 	Use system title bar	使用系統標題列
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	以簡單的標題列顯示視窗按鈕，而不是在分頁列中。GNOME 不為應用程式繪製標題列，因此此標題列不會跟隨其佈景主題。
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	將 Windows 標題列保留在分頁列上方。關閉後，分頁列即為標題列，視窗按鈕位於其右側；最大化按鈕上的貼齊版面配置（Snap Layouts）需要 Windows 標題列。
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	允許

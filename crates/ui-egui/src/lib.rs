@@ -615,7 +615,8 @@ pub struct PdfCraftApp {
     /// carries these window buttons and the window's edges resize it.
     pub window_controls: Option<window_controls::Layout>,
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
-    /// winit's frame instead of drawing the header bar (#1001).
+    /// winit's frame instead of drawing the header bar (#1001). Off by default on GNOME, whose
+    /// frame winit only imitates, and on by default on Windows, whose own title bar is the norm.
     pub system_title_bar: bool,
     /// Whether the window currently has the app's header bar (`None` until the first frame).
     app_frame_shown: Option<bool>,
@@ -1003,7 +1004,7 @@ impl PdfCraftApp {
             toast: None,
             integrated_titlebar: false,
             window_controls: None,
-            system_title_bar: false,
+            system_title_bar: window_controls::SYSTEM_TITLE_BAR_DEFAULT,
             app_frame_shown: None,
             password_prompt: None,
             unlock_prompt: None,
@@ -1633,15 +1634,24 @@ impl PdfCraftApp {
         self.window_controls.is_some() && !self.system_title_bar
     }
 
-    /// Follow Use system title bar at once: the window starts without winit's frame wherever the
-    /// app may draw its own, and gets it back (or loses it again) when the preference changes.
+    /// The window buttons the app may draw, and whether the window was opened without winit's
+    /// frame (the launcher reads the saved preference before it creates the window, so the frame
+    /// is right from the first frame).
+    pub fn set_window_controls(&mut self, controls: Option<window_controls::Layout>, app_frame: bool) {
+        self.window_controls = controls;
+        self.app_frame_shown = Some(app_frame);
+    }
+
+    /// Follow Use system title bar at once: the window gets winit's frame back (or loses it
+    /// again) when the preference changes.
     fn sync_window_frame(&mut self, ctx: &egui::Context) {
         if self.window_controls.is_none() {
             return;
         }
         let app_frame = self.draws_window_frame();
         if self.app_frame_shown != Some(app_frame) {
-            // The window opens undecorated, so only a change from that needs a command.
+            // Without `set_window_controls` the window opened undecorated, so only a change from
+            // that needs a command.
             if self.app_frame_shown.is_some() || !app_frame {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
             }
@@ -2373,7 +2383,7 @@ impl PdfCraftApp {
             // Kept only while the preference is on.
             "last_session": self.reopen_last_session.then(|| self.session_to_save()),
             "reload_changed_files": self.reload_changed_files,
-            "system_title_bar": self.system_title_bar,
+            "title_bar": if self.system_title_bar { "system" } else { "app" },
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
@@ -2469,7 +2479,7 @@ impl PdfCraftApp {
             self.reopen_last_session = on;
         }
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
-        if let Some(on) = v["system_title_bar"].as_bool() {
+        if let Some(on) = window_controls::saved_system_title_bar(&v) {
             self.system_title_bar = on;
         }
         if let Some(on) = v["reload_changed_files"].as_bool() {

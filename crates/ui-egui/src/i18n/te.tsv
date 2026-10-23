@@ -2330,6 +2330,7 @@ animation effects	Off	ఆఫ్
 	Restore	పునరుద్ధరించు
 	Use system title bar	సిస్టమ్ శీర్షిక పట్టీని ఉపయోగించు
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	ట్యాబ్ పట్టీకి బదులుగా విండో బటన్‌ల కోసం సాధారణ శీర్షిక పట్టీని చూపించు. GNOME యాప్‌లకు శీర్షిక పట్టీలను గీయదు, కాబట్టి ఇది దాని థీమ్‌ను అనుసరించదు.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Windows శీర్షిక పట్టీని ట్యాబ్ పట్టీ పైన ఉంచు. ఆఫ్ చేస్తే, ట్యాబ్ పట్టీయే శీర్షిక పట్టీ అవుతుంది, విండో బటన్‌లు దాని కుడి వైపున ఉంటాయి; గరిష్ఠీకరణ బటన్‌పై Snap Layouts కోసం Windows శీర్షిక పట్టీ అవసరం.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	అనుమతించు

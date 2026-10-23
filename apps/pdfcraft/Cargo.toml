@@ -21,6 +21,8 @@ pdfcraft-engine = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
+# Reads `app.ron` (eframe's settings file) before the window exists, for the title-bar choice.
+ron = "0.12"
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
 # The log timestamp goes through chrono (no hand-rolled calendar code).

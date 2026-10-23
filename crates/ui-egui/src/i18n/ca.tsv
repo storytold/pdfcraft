@@ -2452,6 +2452,7 @@ animation effects	Off	Desactivats
 	Restore	Restaura
 	Use system title bar	Utilitza la barra de títol del sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostra una barra de títol bàsica per als botons de la finestra en lloc de la tira de pestanyes. GNOME no dibuixa barres de títol per a les aplicacions, de manera que aquesta no segueix el seu tema.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Manté la barra de títol de Windows a sobre de la tira de pestanyes. Desactivat, la tira de pestanyes fa de barra de títol, amb els botons de la finestra a la dreta; els dissenys d'ajust (Snap Layouts) del botó de maximitzar necessiten la barra de títol de Windows.
 	Allow	Permet
 	Only allow this if you trust the source document.	Permet-ho només si confies en el document d'origen.
 	Open this local PDF?	Vols obrir aquest PDF local?

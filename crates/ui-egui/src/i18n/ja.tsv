@@ -2417,6 +2417,7 @@ animation effects	Off	オフ
 	Restore	元のサイズに戻す
 	Use system title bar	システムのタイトルバーを使う
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	タブバーの代わりに、ウィンドウボタン用のシンプルなタイトルバーを表示します。GNOME はアプリのタイトルバーを描画しないため、このタイトルバーは GNOME のテーマに従いません。
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Windows のタイトルバーをタブバーの上に残します。オフにすると、タブバーがタイトルバーになり、ウィンドウボタンはその右端に並びます。最大化ボタンのスナップレイアウトには Windows のタイトルバーが必要です。
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	許可

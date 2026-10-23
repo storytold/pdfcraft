@@ -2415,6 +2415,7 @@ animation effects	Off	Өшірулі
 	Restore	Қалпына келтіру
 	Use system title bar	Жүйелік тақырып жолағын пайдалану
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Терезе батырмалары үшін қойындылар жолағының орнына қарапайым тақырып жолағын көрсету. GNOME қолданбаларға тақырып жолағын салмайды, сондықтан бұл жолақ оның тақырыбына сәйкес келмейді.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Windows тақырып жолағын қойындылар жолағының үстінде қалдыру. Өшірілген кезде қойындылар жолағы тақырып жолағы болады, терезе батырмалары оның оң жағында орналасады; үлкейту батырмасындағы Snap Layouts үшін Windows тақырып жолағы қажет.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Рұқсат беру

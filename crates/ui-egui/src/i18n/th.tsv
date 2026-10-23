@@ -2587,6 +2587,7 @@ key	Space	Space
 	Restore	คืนขนาด
 	Use system title bar	ใช้แถบชื่อเรื่องของระบบ
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	แสดงแถบชื่อเรื่องแบบพื้นฐานสำหรับปุ่มหน้าต่างแทนแถบแท็บ GNOME ไม่วาดแถบชื่อเรื่องให้แอป แถบนี้จึงไม่ใช้ธีมของ GNOME
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	คงแถบชื่อเรื่องของ Windows ไว้เหนือแถบแท็บ เมื่อปิด แถบแท็บจะเป็นแถบชื่อเรื่องและมีปุ่มหน้าต่างอยู่ทางขวา Snap Layouts บนปุ่มขยายเต็มจอต้องใช้แถบชื่อเรื่องของ Windows
 	Allow	อนุญาต
 	Only allow this if you trust the source document.	อนุญาตเฉพาะเมื่อคุณเชื่อถือเอกสารต้นทางเท่านั้น
 	Open this local PDF?	เปิด PDF ในเครื่องนี้หรือไม่?

@@ -2595,6 +2595,7 @@ certificate	SHA-256 digest	SHA-256 डाइजेस्ट
 	Remove "{name}" from this list? The file itself is not deleted.	"{name}" को इस सूची से हटाएँ? फ़ाइल स्वयं नहीं मिटती।
 	Restore	पुनर्स्थापित करें
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	विंडो बटनों के लिए एक साधारण शीर्षक पट्टी दिखाएँ, टैब स्ट्रिप के बजाय। GNOME ऐप्स के लिए शीर्षक पट्टी नहीं बनाता, इसलिए यह उसकी थीम का पालन नहीं करता।
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	टैब स्ट्रिप के ऊपर Windows की शीर्षक पट्टी रखें। बंद होने पर टैब स्ट्रिप ही शीर्षक पट्टी बन जाती है, और विंडो बटन उसके दाईं ओर होते हैं; अधिकतम करें बटन पर Snap Layouts के लिए Windows की शीर्षक पट्टी चाहिए।
 	This document is trying to open a local file:	यह दस्तावेज़ एक स्थानीय फ़ाइल खोलने का प्रयास कर रहा है:
 	Use system title bar	सिस्टम शीर्षक पट्टी का उपयोग करें
 	Hide hover previews for highlights without comment text	बिना टिप्पणी टेक्स्ट वाली हाइलाइट का होवर पूर्वावलोकन छिपाएँ

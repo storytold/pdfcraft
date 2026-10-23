@@ -2351,6 +2351,7 @@ animation effects	Off	Ei käytössä
 	Restore	Palauta
 	Use system title bar	Käytä järjestelmän otsikkoriviä
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Näytä ikkunan painikkeille yksinkertainen otsikkorivi välilehtirivin sijaan. GNOME ei piirrä sovelluksille otsikkorivejä, joten tämä ei noudata sen teemaa.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Pidä Windowsin otsikkorivi välilehtirivin yläpuolella. Pois päältä välilehtirivi toimii otsikkorivinä ja ikkunan painikkeet ovat sen oikeassa reunassa; Suurenna-painikkeen Snap Layouts -asettelut tarvitsevat Windowsin otsikkorivin.
 	Allow	Salli
 	Only allow this if you trust the source document.	Salli tämä vain, jos luotat lähdeasiakirjaan.
 	Open this local PDF?	Avataanko tämä paikallinen PDF?

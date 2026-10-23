@@ -2346,6 +2346,7 @@ animation effects	Off	Joaktiv
 	Restore	Rikthe
 	Use system title bar	Përdor shiritin e titullit të sistemit
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Shfaq një shirit bazë titulli për butonat e dritares në vend të shiritit të skedave. GNOME nuk vizaton shirita titulli për aplikacionet, prandaj ky nuk e ndjek temën e tij.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Mbaje shiritin e titullit të Windows mbi shiritin e skedave. Kur çaktivizohet, shiriti i skedave bëhet shiriti i titullit, me butonat e dritares në të djathtë; Snap Layouts te butoni i maksimizimit kanë nevojë për shiritin e titullit të Windows.
 	Allow	Lejo
 	Only allow this if you trust the source document.	Lejoje vetëm nëse i beson dokumentit burimor.
 	Open this local PDF?	Të hapet ky PDF lokal?

@@ -2491,6 +2491,7 @@ animation effects	Off	Vypnuto
 	Restore	Obnovit
 	Use system title bar	Použít systémové záhlaví okna
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Zobrazit jednoduché záhlaví s tlačítky okna místo pruhu karet. GNOME aplikacím záhlaví nekreslí, proto toto záhlaví nesleduje jeho motiv.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Ponechat záhlaví Windows nad pruhem karet. Při vypnutí je záhlavím pruh karet s tlačítky okna vpravo; rozložení Snap Layouts na tlačítku maximalizace vyžadují záhlaví Windows.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Povolit

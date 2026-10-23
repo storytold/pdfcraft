@@ -2659,6 +2659,7 @@ key	Space	Space
 	Restore	Khôi phục
 	Use system title bar	Dùng thanh tiêu đề hệ thống
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Hiện thanh tiêu đề đơn giản cho các nút cửa sổ thay vì dải tab. GNOME không vẽ thanh tiêu đề cho ứng dụng, nên thanh này không theo chủ đề của nó.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Giữ thanh tiêu đề của Windows phía trên dải tab. Khi tắt, dải tab trở thành thanh tiêu đề, với các nút cửa sổ ở bên phải; Snap Layouts trên nút phóng to cần thanh tiêu đề của Windows.
 	Turn upside down (180°)	Lật ngược (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Nhãn 4 × 6 in (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Cắt mỗi trang theo vùng được in, xoay thẳng và vừa với tờ giấy mà không kéo giãn. Mỗi tờ một nhãn.

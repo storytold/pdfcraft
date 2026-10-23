@@ -2422,6 +2422,7 @@ animation effects	Off	Izklopljeni
 	Restore	Obnovi
 	Use system title bar	Uporabi sistemsko naslovno vrstico
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Prikaži preprosto naslovno vrstico za gumbe okna namesto vrstice zavihkov. GNOME aplikacijam ne riše naslovnih vrstic, zato ta ne sledi njegovi temi.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Ohrani naslovno vrstico sistema Windows nad vrstico zavihkov. Izklopljeno je vrstica zavihkov naslovna vrstica z gumbi okna na desni; postavitve Snap Layouts na gumbu za razpenjanje potrebujejo naslovno vrstico sistema Windows.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Dovoli

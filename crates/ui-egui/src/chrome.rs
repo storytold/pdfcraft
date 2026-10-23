@@ -33,9 +33,21 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mac = cfg!(target_os = "macos") && app.integrated_titlebar;
     let left = if mac { MAC_CONTENT_LEFT as i8 } else { 8 };
     let (tab_h, button) = if mac { (MAC_TITLE_BAR - 2.0, 24.0) } else { (TAB_HEIGHT, STRIP_BUTTON) };
+    // GNOME on Wayland, and Windows by choice: the strip is the title bar, with the window
+    // buttons at its ends.
+    let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+    let controls = app
+        .window_controls
+        .clone()
+        .filter(|_| app.draws_window_frame() && !fullscreen)
+        .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new() });
+    let style = window_controls::Style::current();
+    // Windows' caption buttons touch the window's edge and top, so the strip keeps no margin there.
+    let flush_right = style.flush_with_edge() && !controls.right.is_empty();
+    let right = if flush_right { 0 } else { 10 };
     egui::Panel::top("tab_strip")
         .exact_size(if mac { MAC_TITLE_BAR } else { TAB_STRIP })
-        .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
             let drag = ui.interact(full, ui.id().with("titledrag"), Sense::click_and_drag());
@@ -46,13 +58,6 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            // GNOME on Wayland: the strip is the header bar, with the window buttons at its ends.
-            let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
-            let controls = app
-                .window_controls
-                .clone()
-                .filter(|_| app.draws_window_frame() && !fullscreen)
-                .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new() });
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if !controls.left.is_empty() {
@@ -60,7 +65,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         window_controls::buttons(ui, &controls.left);
                     });
-                    ui.add_space(window_controls::SIDE_GAP - 4.0);
+                    ui.add_space(style.side_gap() - 4.0);
                 }
                 if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
                     app.active = None;
@@ -273,12 +278,13 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if !controls.right.is_empty() {
                         // Laid out left to right inside the right-to-left run, so they read in
                         // the desktop's order.
-                        let size = egui::vec2(window_controls::width(&controls.right) - window_controls::SIDE_GAP, window_controls::BUTTON);
+                        let height = if style.flush_with_edge() { ui.available_height() } else { window_controls::BUTTON };
+                        let size = egui::vec2(style.width(&controls.right) - style.side_gap(), height);
                         ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             window_controls::buttons(ui, &controls.right);
                         });
-                        ui.add_space(window_controls::SIDE_GAP - 4.0);
+                        ui.add_space(style.side_gap() - 4.0);
                     }
                     let (icon, label) = match app.theme_preference {
                         ThemePreference::System => ("monitor", tl!("Use system setting")),

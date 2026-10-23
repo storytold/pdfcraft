@@ -2418,6 +2418,7 @@ animation effects	Off	Aus
 	Restore	Wiederherstellen
 	Use system title bar	System-Titelleiste verwenden
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Eine einfache Titelleiste für die Fensterknöpfe statt der Tableiste anzeigen. GNOME zeichnet für Apps keine Titelleisten, daher folgt diese nicht seinem Design.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	Die Windows-Titelleiste über der Tableiste behalten. Ausgeschaltet ist die Tableiste die Titelleiste, mit den Fensterknöpfen rechts; die Snap-Layouts am Maximieren-Knopf brauchen die Windows-Titelleiste.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	Zulassen

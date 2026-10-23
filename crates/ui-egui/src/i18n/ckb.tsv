@@ -2393,6 +2393,7 @@ animation effects	Off	ناچالاک
 	Restore	گەڕاندنەوە
 	Use system title bar	بەکارهێنانی شریتی ناونیشانی سیستەم
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	شریتێکی ناونیشانی سادە بۆ دوگمەکانی پەنجەرە پیشان بدە لە جیاتی شریتی بازدەرەکان. GNOME شریتی ناونیشان بۆ ئەپەکان ناکێشێت، بۆیە ئەمە شوێنی تیمی خۆی ناکەوێت.
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	شریتی ناونیشانی Windows لە سەرووی شریتی بازدەرەکان بهێڵەوە. کە کوژایەوە، شریتی بازدەرەکان دەبێتە شریتی ناونیشان و دوگمەکانی پەنجەرە لە لای ڕاستییەوەن؛ Snap Layouts لەسەر دوگمەی گەورەکردنەوە پێویستی بە شریتی ناونیشانی Windows هەیە.
 
 # Absolute local GoToR confirmation (#1364).
 	Allow	ڕێگەدان
