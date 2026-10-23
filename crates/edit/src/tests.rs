@@ -2837,6 +2837,32 @@ fn a_one_row_title_keeps_its_centre_when_it_grows_and_when_it_wraps() {
 }
 
 #[test]
+fn height_only_preserves_inferred_title_alignment_after_reopen_and_typing() {
+    for title in ["(Centered title) Tj", "(Centered ) Tj /F1 12 Tf (title) Tj"] {
+        let src = format!(
+            "BT /F1 18 Tf 1 0 0 1 252.477 700 Tm {title} ET\n\
+             BT /F1 12 Tf 1 0 0 1 72 640 Tm (Body text below the heading starts here and runs) Tj ET\n\
+             BT /F1 12 Tf 1 0 0 1 72 625.6 Tm (on for a second row of ordinary words.) Tj ET"
+        );
+        let mut doc = text_page(&src);
+        let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+        let centre = (before.rect[0] + before.rect[2]) / 2.0;
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([680.0, 730.0]), ..Default::default() }).unwrap();
+        let mut doc = reopen(&doc);
+        assert!(close(text::text_blocks(&doc, 0).unwrap()[0].rect, before.rect), "height alone leaves the title ink in place");
+        text::replace_block(&mut doc, 0, 0, "Centered title with many more words added so that the single row has to become much longer").unwrap();
+        let doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert!(blocks[0].rows.len() > 1, "the title wraps within its original width");
+        for row in &blocks[0].rows {
+            let rect = row.iter().map(|i| lines[*i].rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).unwrap();
+            assert!(((rect[0] + rect[2]) / 2.0 - centre).abs() < 2.0, "{title}: row {rect:?} must stay centred on {centre}");
+        }
+    }
+}
+
+#[test]
 fn a_new_paragraph_colour_does_not_spill_into_the_text_after_it() {
     let mut doc = text_page("BT /F1 10 Tf 72 700 Td (First paragraph) Tj 0 -40 Td (Second paragraph) Tj ET");
     let style = text::BlockStyle { color: Some([1.0, 0.0, 0.0]), ..Default::default() };
@@ -3181,6 +3207,133 @@ fn malformed_private_text_frames_fall_back_to_ink_bounds() {
         assert_eq!(blocks[0].text, "Hi");
         assert_eq!(blocks[0].horizontal_frame, None);
         assert_eq!(blocks[0].editing_rect(), blocks[0].rect);
+    }
+}
+
+#[test]
+fn an_explicit_vertical_frame_is_independent_of_the_text_ink() {
+    let doc = text_page("/PCTextFrame << /Baseline [72 700 162 700] /Vertical [72 640 72 730] >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC");
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert_eq!(block.editing_rect(), [72.0, 640.0, 162.0, 730.0]);
+    assert!(block.rect[1] > 640.0 && block.rect[3] < 730.0, "the empty frame does not enlarge the ink");
+}
+
+#[test]
+fn vertical_frames_preserve_ink_and_survive_retyping_and_moves() {
+    for content in ["(Hi there) Tj", "(Hi ) Tj 0 0 1 rg (there) Tj"] {
+        let mut doc = text_page(&format!("q 2 0 0 2 10 20 cm BT /F1 12 Tf 36 340 Td {content} ET Q"));
+        let original = text::text_blocks(&doc, 0).unwrap().remove(0);
+        for bounds in [[640.0, 750.0], [700.0, 710.0], [650.0, 760.0]] {
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() }).unwrap();
+            let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+            assert_eq!(block.vertical_frame, Some(bounds));
+            for (before, after) in original.rect.into_iter().zip(block.rect) {
+                assert!((before - after).abs() < 0.1, "resizing the frame must not move ink: {original:?}, {block:?}");
+            }
+            assert_eq!(block.size, original.size);
+        }
+        let mut doc = reopen(&doc);
+        text::replace_block(&mut doc, 0, 0, "Hi there and many more words wrapping into several rows").unwrap();
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert!(block.rows.len() > 1);
+        assert_eq!(block.vertical_frame, Some([650.0, 760.0]));
+        text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+        let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+        assert_eq!(moved.vertical_frame, Some([625.0, 735.0]));
+        assert!((moved.editing_rect()[0] - block.editing_rect()[0] - 14.0).abs() < 0.1);
+        let layout = text::text_edit_layout(&doc, 0, 0, &moved.editor_text, &Default::default()).unwrap();
+        assert!(layout.overflow, "wrapped text below the frame must remain visible and report overflow: {layout:?}");
+    }
+}
+
+#[test]
+fn vertical_frame_preview_measures_the_requested_height_without_changing_text() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (Hi) Tj ET");
+    let before = doc.read_state();
+    for (bounds, overflow) in [([690.0, 730.0], false), ([700.0, 705.0], true)] {
+        let layout = text::text_edit_layout(&doc, 0, 0, "Hi", &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() }).unwrap();
+        assert_eq!(layout.overflow, overflow, "{layout:?}");
+        assert_eq!(layout.draft_rect, Some([72.0, 697.0, 83.328, 710.8]));
+        assert!(before.matches(&doc));
+    }
+}
+
+#[test]
+fn changing_only_height_keeps_each_source_row_and_glyph_position() {
+    for content in [
+        "BT /F1 12 Tf 14 TL 72 700 Td (One) Tj T* (Two three four) Tj ET",
+        "BT /F1 12 Tf 72 700 Td [(Hello) 120 ( world)] TJ ET",
+        "BT /F1 12 Tf 72 700 Td (Hello) Tj [120] TJ () Tj ( world) Tj ET",
+        "BT /F1 12 Tf 72 700 Td (Hi ) Tj 0 0 1 rg [(there) 120 ( friend)] TJ ET",
+        "/P BMC BT /F1 12 Tf 14 TL 72 700 Td /Span <</Lang (en)>> BDC (One) Tj EMC T* /Span <</Lang (en)>> BDC (Two three four) Tj EMC ET EMC",
+        "/P BMC /Span <</Lang (en)>> BDC q 2 0 0 2 0 0 cm BT /F1 6 Tf 36 350 Td (One) Tj ET Q EMC /Span <</Lang (en)>> BDC q 2 0 0 2 0 0 cm BT /F1 6 Tf 36 343 Td (Two three four) Tj ET Q EMC EMC",
+    ] {
+        let mut doc = text_page(content);
+        let snapshot = |doc: &Document| {
+            text::text_lines(doc, 0)
+                .unwrap()
+                .into_iter()
+                .map(|line| (line.text, line.rect, line.ink, line.font, line.size, line.color))
+                .collect::<Vec<_>>()
+        };
+        let before = snapshot(&doc);
+        for bounds in [[600.0, 750.0], [695.0, 720.0]] {
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() }).unwrap();
+            assert_eq!(snapshot(&reopen(&doc)), before, "height alone cannot rewrite any glyph: {content}");
+        }
+        assert_eq!(streams(&doc, 0).join("\n").matches("/PCTextFrame").count(), 1, "repeated height edits replace their metadata");
+    }
+}
+
+#[test]
+fn invalid_vertical_frames_and_turned_text_are_refused_without_mutation() {
+    for content in ["BT /F1 12 Tf 72 700 Td (Hi) Tj ET", "BT /F1 12 Tf 72 700 Td (Hi ) Tj 0 0 1 rg (there) Tj ET"] {
+        for bounds in [[0.0, f64::NAN], [0.0, f64::INFINITY], [10.0, 10.0], [10.0, 9.0], [0.0, 14_401.0]] {
+            let mut doc = text_page(content);
+            let before = doc.read_state();
+            assert!(
+                text::rewrite_block(&mut doc, 0, 0, Some("Hi Ω there"), &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() })
+                    .is_err()
+            );
+            assert!(before.matches(&doc));
+        }
+    }
+    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 72 700 Tm (Hi) Tj ET");
+    let before = doc.read_state();
+    assert!(text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([600.0, 700.0]), ..Default::default() }).is_err());
+    assert!(before.matches(&doc));
+    for vertical in ["[]", "[72 730 72 640]", "[72 640 90 730]", "[72 640 72 /bad]", "[72 0 72 14401]"] {
+        let doc = text_page(&format!("/PCTextFrame << /Baseline [72 700 162 700] /Vertical {vertical} >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC"));
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert_eq!(block.editing_rect(), block.rect);
+    }
+    let mut doc = text_page(
+        "/Span BMC BT /F1 12 Tf 300 700 Td (Neighbour) Tj ET BT /F1 12 Tf 72 700 Td (One) Tj ET EMC /Span BMC BT /F1 12 Tf 72 686 Td (Two three four) Tj ET EMC",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 2);
+    let before = doc.read_state();
+    let error =
+        text::rewrite_block(&mut doc, 0, 1, None, &text::BlockStyle { vertical_frame: Some([600.0, 750.0]), ..Default::default() }).unwrap_err();
+    assert!(error.to_string().contains("unrelated text"), "{error}");
+    assert!(before.matches(&doc), "a wrapper must not silently claim the neighbouring paragraph");
+}
+
+#[test]
+fn height_only_refuses_surplus_operand_text_outside_the_target() {
+    for neighbour in ["() (Neighbour) Tj", "[] [(Neighbour)] TJ", "() (Neighbour) '", "0 0 () (Neighbour) \""] {
+        let mut doc = text_page(&format!(
+            "/Span BMC BT /F1 12 Tf 300 700 Td {neighbour} ET BT /F1 12 Tf 72 700 Td (One) Tj ET EMC /Span BMC BT /F1 12 Tf 72 686 Td (Two three four) Tj ET EMC"
+        ));
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 2, "{neighbour}: {blocks:?}");
+        assert_eq!(blocks[0].text, "Neighbour", "the last operand is the displayed text");
+        assert_eq!(blocks[1].text, "One Two three four");
+        let before = doc.read_state();
+        let error =
+            text::rewrite_block(&mut doc, 0, 1, None, &text::BlockStyle { vertical_frame: Some([600.0, 750.0]), ..Default::default() }).unwrap_err();
+        assert!(error.to_string().contains("unrelated text"), "{neighbour}: {error}");
+        assert!(before.matches(&doc), "{neighbour}: a refused frame must not change the document");
     }
 }
 

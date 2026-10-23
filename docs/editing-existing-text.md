@@ -3,18 +3,22 @@
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
 source font programs, colour, size and baseline anchors stay intact. A textless preview
-prevents a second copy underneath. The frame shows the live extent as text grows or shrinks.
+prevents a second copy underneath. The frame follows the live text extent until explicitly resized.
 Rows a text edit doesn't reach keep their original operators, so their kerning, `TJ` word
 gaps and glyph widths stay exactly as they were. Only rows whose characters changed, or that
 moved because an earlier row wrapped, are rewritten, and formatting a selection rewrites
 only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
 every row.
 
-Drag either horizontal edge of a closed upright paragraph to choose its wrap width.
-The frame stays at that width even when its text is shorter, and survives typing, moving,
-undo/redo and save/reopen. Its height continues to follow the rows; vertical resize handles
-are not available. Automation `text_paragraphs` returns both `rect` (ink bounds) and
-`editing_rect` (the editing frame); `text_edit.width` sets the persistent width.
+Resize a closed upright paragraph's frame to choose its wrap width and height.
+The chosen edges survive typing, moving, undo/redo and save/reopen. Height changes the
+editing frame without scaling, cropping or hiding the text: overflowing words remain visible,
+and the open editor shows an overflow warning beside the frame.
+Automation `text_paragraphs` returns both `rect` (ink bounds) and `editing_rect` (the editing
+frame). `text_edit.width` sets the wrap width; `text_edit.height` sets a positive height of at
+most 14,400 points while keeping the top edge fixed. `text_edit_layout` accepts the same
+height to preview a draft and its overflow without changing the document. Frames for turned
+text remain unsupported.
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Draft boxes grow to the page edge

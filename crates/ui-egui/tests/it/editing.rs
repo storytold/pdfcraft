@@ -3898,7 +3898,11 @@ fn paragraph_drag_fixture(content: &str, rotation: i64, unit: i64) -> Vec<u8> {
 }
 
 fn paragraph_drag_harness(bytes: Vec<u8>, view_rotation: u16) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
+    let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 1100.0));
+    if std::env::var_os("PDFCRAFT_VERTICAL_SNAPSHOT").is_some() {
+        builder = builder.wgpu();
+    }
+    let mut h = builder.build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option("language", "en").unwrap();
@@ -4378,6 +4382,110 @@ fn a_paragraph_rewraps_from_the_outer_half_of_its_edge_handles() {
     drag(&mut h, grip, grip + egui::vec2(inward * k, 0.0));
     assert_eq!(lines(&h), ["Page", "1"], "narrowed from the left handle");
     assert!((block(&h).rect[0] - (before.rect[0] + f64::from(inward))).abs() < 1.5, "{:?} → {:?}", before.rect, block(&h).rect);
+}
+
+fn paragraph_frame_screen(h: &Harness<'static, PdfCraftApp>, rect: [f64; 4]) -> egui::Rect {
+    let app = h.state();
+    let view = &app.views[0];
+    let doc = app.session.get(view.id).unwrap();
+    let xf = pdfcraft_ui_egui::canvas::PageXform {
+        rect: view.page_screen_rect(0).unwrap(),
+        rot: view.rotation,
+        pw: doc.info.pages[0].width,
+        ph: doc.info.pages[0].height,
+    };
+    xf.user_rect(&doc.info, 0, rect.map(|v| v as f32))
+}
+
+fn check_vertical_frame_drag(rotation: i64) {
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture("BT /F1 18 Tf 80 240 Td (Fixed baseline) Tj ET", rotation, 1), 0);
+    let original = dragged_paragraphs(&h).remove(0);
+    let k = h.state().views[0].page_screen_rect(0).unwrap().width() / 360.0;
+    let before = original.editing_rect();
+    // Both controls are grabbed on their outer half, where an unhandled press becomes a marquee.
+    let top = paragraph_frame_screen(&h, before).center_top() - egui::vec2(0.0, 5.0);
+    flick(&mut h, top, top - egui::vec2(0.0, 30.0 * k));
+    let taller = dragged_paragraphs(&h).remove(0);
+    let expected =
+        if rotation == 0 { [before[0], before[1], before[2], before[3] + 30.0] } else { [before[0], before[1] - 30.0, before[2], before[3]] };
+    assert!(taller.editing_rect().iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.5), "top handle: {taller:?}");
+    assert!(taller.rect.iter().zip(original.rect).all(|(a, b)| (a - b).abs() < 0.01), "resizing must not move glyphs");
+    assert_eq!((taller.text.as_str(), taller.size), (original.text.as_str(), original.size));
+    let bottom = paragraph_frame_screen(&h, taller.editing_rect()).center_bottom() + egui::vec2(0.0, 5.0);
+    drag(&mut h, bottom, bottom + egui::vec2(0.0, 25.0 * k));
+    let grown = dragged_paragraphs(&h).remove(0);
+    let expected = if rotation == 0 {
+        [before[0], before[1] - 25.0, before[2], before[3] + 30.0]
+    } else {
+        [before[0], before[1] - 30.0, before[2], before[3] + 25.0]
+    };
+    assert!(grown.editing_rect().iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.5), "bottom handle: {grown:?}");
+    assert!(grown.rect.iter().zip(original.rect).all(|(a, b)| (a - b).abs() < 0.01));
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(dragged_paragraphs(&h)[0].editing_rect(), taller.editing_rect());
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(dragged_paragraphs(&h)[0].editing_rect(), grown.editing_rect());
+    let id = h.state().views[0].id;
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let rid = reopened.open("height.pdf", None, saved, None).unwrap();
+    assert_eq!(reopened.get(rid).unwrap().text_blocks(0)[0].editing_rect(), grown.editing_rect());
+    // The extra space above the ink belongs to the paragraph, including after selection and movement.
+    let frame = paragraph_frame_screen(&h, grown.editing_rect());
+    let ink = paragraph_frame_screen(&h, grown.rect);
+    let empty = egui::pos2(frame.center().x, (frame.top() + ink.top()) / 2.0);
+    click_at(&mut h, empty);
+    assert!(h.state().views[0].line_editor.is_some(), "empty vertical space opens the editor");
+    click_at(&mut h, frame.center_top() - egui::vec2(0.0, 4.0));
+    assert!(h.state().views[0].line_editor.is_none(), "the open frame becomes a movable selection");
+    drag(&mut h, empty, empty + egui::vec2(12.0 * k, 15.0 * k));
+    let moved = dragged_paragraphs(&h).remove(0);
+    let offset = if rotation == 0 { [12.0, -15.0] } else { [-12.0, 15.0] };
+    for axis in 0..4 {
+        assert!((moved.editing_rect()[axis] - grown.editing_rect()[axis] - offset[axis % 2]).abs() < 0.5);
+        assert!((moved.rect[axis] - grown.rect[axis] - offset[axis % 2]).abs() < 0.5);
+    }
+}
+
+#[test]
+fn vertical_frame_handles_preserve_glyphs_and_empty_space() {
+    check_vertical_frame_drag(0);
+}
+
+#[test]
+fn vertical_frame_handles_respect_an_upside_down_page() {
+    check_vertical_frame_drag(180);
+}
+
+#[test]
+fn vertical_frame_can_shrink_below_ink_without_hiding_or_losing_text() {
+    let mut h = paragraph_drag_harness(paragraph_drag_fixture("BT /F1 36 Tf 80 240 Td (Still visible) Tj ET", 0, 1), 0);
+    let before = dragged_paragraphs(&h).remove(0);
+    let screen = paragraph_frame_screen(&h, before.editing_rect());
+    let k = h.state().views[0].page_screen_rect(0).unwrap().width() / 360.0;
+    let bottom = screen.center_bottom() + egui::vec2(0.0, 5.0);
+    drag(&mut h, bottom, bottom - egui::vec2(0.0, 16.0 * k));
+    let shrunk = dragged_paragraphs(&h).remove(0);
+    assert!((shrunk.editing_rect()[1] - before.editing_rect()[1] - 16.0).abs() < 0.5, "the lower edge follows the pointer: {shrunk:?}");
+    assert_eq!(shrunk.rect, before.rect, "overflow keeps the original glyph geometry");
+    assert_eq!(shrunk.text, before.text);
+    let ink = paragraph_frame_screen(&h, shrunk.rect);
+    click_at(&mut h, egui::pos2(ink.center().x, ink.bottom() - 1.0));
+    assert!(h.state().views[0].line_editor.is_some(), "overflow below the frame remains editable");
+    assert!(h.state().views[0].line_editor.as_ref().unwrap().overflow, "a frame smaller than its ink reports overflow");
+    if let Some(path) = std::env::var_os("PDFCRAFT_VERTICAL_SNAPSHOT") {
+        for _ in 0..60 {
+            h.run_steps(2);
+            if !h.state().render_pending() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().render_pending(), "the snapshot shows the resized paragraph");
+        h.render().unwrap().save(path).unwrap();
+    }
 }
 
 /// #3474: widening must retain the container even when the glyphs do not move.

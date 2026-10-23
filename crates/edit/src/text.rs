@@ -186,8 +186,19 @@ fn layout_draft(
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
     let source_rect = source.editing_rect();
+    let mut target_rect = source_rect;
+    if let Some(width) = style.width {
+        target_rect[2] = target_rect[0] + width;
+    }
+    if let Some([bottom, top]) = style.vertical_frame {
+        target_rect[1] = bottom;
+        target_rect[3] = top;
+    }
+    if let Some([dx, dy]) = style.offset {
+        target_rect = [target_rect[0] + dx, target_rect[1] + dy, target_rect[2] + dx, target_rect[3] + dy];
+    }
     let outside =
-        |r: [f64; 4]| r[0] < source_rect[0] - 0.5 || r[1] < source_rect[1] - 0.5 || r[2] > source_rect[2] + 0.5 || r[3] > source_rect[3] + 0.5;
+        |r: [f64; 4]| r[0] < target_rect[0] - 0.5 || r[1] < target_rect[1] - 0.5 || r[2] > target_rect[2] + 0.5 || r[3] > target_rect[3] + 0.5;
     if text == source.editor_text && *style == BlockStyle::default() {
         return Ok(TextEditLayout { source_rect, draft_rect: Some(source.rect), overflow: outside(source.rect) });
     }
@@ -347,6 +358,8 @@ pub struct TextBlock {
     pub rect: [f64; 4],
     /// Explicit left/right container edges in page space, when resized. `rect` remains ink.
     pub horizontal_frame: Option<[f64; 2]>,
+    /// Explicit bottom/top container edges in page user space. Text outside stays visible.
+    pub vertical_frame: Option<[f64; 2]>,
     /// Alignment within an explicit horizontal frame; absent for inferred source regions.
     pub horizontal_alignment: Option<crate::added::Align>,
     pub base_font: String,
@@ -372,10 +385,11 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
-    /// The frame used for editing: explicit horizontal edges, height from the visible rows.
+    /// The frame used for editing: explicit edges, falling back to visible rows on each axis.
     pub fn editing_rect(&self) -> [f64; 4] {
         let [left, right] = self.horizontal_frame.unwrap_or([self.rect[0], self.rect[2]]);
-        [left, self.rect[1], right, self.rect[3]]
+        let [bottom, top] = self.vertical_frame.unwrap_or([self.rect[1], self.rect[3]]);
+        [left, bottom, right, top]
     }
 
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
@@ -2667,6 +2681,9 @@ pub struct BlockStyle {
     /// Rewrap to this width in user space (dragging the box's edge). Upright paragraphs retain
     /// the explicit frame across subsequent edits and saves, independently of glyph bounds.
     pub width: Option<f64>,
+    /// Set bottom/top frame edges in page user space without moving, scaling or clipping text.
+    /// Each edge must be finite and the height must be positive and at most 14,400 points.
+    pub vertical_frame: Option<[f64; 2]>,
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
@@ -2715,10 +2732,20 @@ fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    let vertical_only = style.vertical_frame.is_some()
+        && text.is_none_or(|text| text == b.editor_text)
+        && BlockStyle { vertical_frame: None, ..style.clone() } == BlockStyle::default();
     let mut style = style.clone();
     if let Some([left, right]) = b.horizontal_frame {
         style.width.get_or_insert(right - left);
         style.align = style.align.or(b.horizontal_alignment);
+    }
+    style.vertical_frame = style.vertical_frame.or(b.vertical_frame);
+    if let Some([bottom, top]) = style.vertical_frame {
+        if ![bottom, top].iter().all(|v| v.is_finite() && v.abs() <= 1e9) || top <= bottom || top - bottom > 14_400.0 {
+            return Err(EditError::Invalid("the paragraph's height must be positive and at most 14400 points".into()));
+        }
+        style.width.get_or_insert(b.editing_rect()[2] - b.editing_rect()[0]);
     }
     let style = &style;
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
@@ -2743,6 +2770,12 @@ fn rewrite_block_from(
     // Text turned on the page (a landscape page drawn a quarter turn round) is rewritten in its
     // own text space below; the styled region path lays rows out along the page's x axis.
     let upright = members.iter().all(|line| line.upright());
+    if !upright && style.vertical_frame.is_some() {
+        return Err(EditError::Invalid("resizing the height of turned text isn't supported yet".into()));
+    }
+    if vertical_only && let Some(bounds) = style.vertical_frame {
+        return text_frame::resize_vertical(doc, page, &b, &lines, bounds);
+    }
     if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
@@ -2870,7 +2903,14 @@ fn rewrite_block_from(
         tm[5] += y;
     }
     let saved_frame = if upright && style.width.is_some() {
-        Some(HorizontalFrame::start(frame[0] + dx, first.origin.baseline + dy, width, align.unwrap_or(crate::added::Align::Left), Matrix(emit.ctm))?)
+        Some(HorizontalFrame::start(
+            frame[0] + dx,
+            first.origin.baseline + dy,
+            width,
+            style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
+            align.unwrap_or(crate::added::Align::Left),
+            Matrix(emit.ctm),
+        )?)
     } else {
         None
     };
@@ -3363,6 +3403,7 @@ mod tests {
             text: text.into(),
             rect,
             horizontal_frame: None,
+            vertical_frame: None,
             horizontal_alignment: None,
             base_font: String::new(),
             size: 12.0,

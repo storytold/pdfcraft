@@ -280,6 +280,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 spans: Vec::new(),
                 rect,
                 horizontal_frame: first.horizontal_frame.map(|f| f.bounds),
+                vertical_frame: first.horizontal_frame.and_then(|f| f.vertical),
                 horizontal_alignment: first.horizontal_frame.map(|f| f.align),
                 base_font: first.base_font.clone(),
                 size: first.size,
@@ -556,7 +557,14 @@ pub(super) fn rewrite_styled_block(
     // frame before embedding any fallback fonts: a refused edit must leave no new objects.
     let saved_frame = if style.width.is_some() {
         let lead = block.lines.last().and_then(|i| lines.get(*i)).unwrap_or(first);
-        Some(HorizontalFrame::start(frame_left + dx, first.origin.baseline + dy, width, align, Matrix(lead.origin.ctm))?)
+        Some(HorizontalFrame::start(
+            frame_left + dx,
+            first.origin.baseline + dy,
+            width,
+            style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
+            align,
+            Matrix(lead.origin.ctm),
+        )?)
     } else {
         None
     };
