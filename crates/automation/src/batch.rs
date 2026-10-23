@@ -244,7 +244,7 @@ impl Automation {
 }
 
 /// Publish atomically without replacing any existing name, even if another writer wins a race.
-fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
+pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
     std::fs::create_dir_all(dir).map_err(failed)?;
     let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;

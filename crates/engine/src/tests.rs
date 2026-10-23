@@ -4012,6 +4012,309 @@ fn recognize_text_reads_a_picture_on_a_page_that_has_text() {
     assert_eq!((count(&s, "invoice"), count(&s, "brown")), (1, 1));
 }
 
+#[test]
+fn unicode_ocr_layer_preserves_pixels_copy_save_and_undo() {
+    let (mut s, id) = session_with(1);
+    let before = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
+    // Cross the 255-code font boundary and include a UTF-16 surrogate pair.
+    let mut lines = vec!["中文 English 2026".to_string()];
+    let chars: Vec<char> = (0x4e00..0x4f10).filter_map(char::from_u32).chain(['𠮷']).collect();
+    lines.extend(chars.chunks(90).map(|c| c.iter().collect()));
+    let text = lines.join("\n");
+    let words: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| ocr::PlacedWord { text: line.clone(), origin: [20.0, 80.0 - 10.0 * i as f64], across: [160.0, 0.0], up: [0.0, 5.0] })
+        .collect();
+    s.apply(id, Edit::AddOcrText { page: 0, words: words.clone() }).unwrap();
+    assert!(page_texts(&s, id)[0].contains(&text), "{:?}", page_texts(&s, id));
+    assert_eq!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap(), before, "search text changes no pixels");
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("searchable.pdf", None, saved, None).unwrap();
+    assert!(page_texts(&s, reopened)[0].contains(&text), "Unicode survives save/reopen");
+    assert_eq!(export::Exporter::new(s.get(reopened).unwrap()).png(0, 72.0).unwrap(), before);
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), ["Page 1"]);
+    s.redo(id).unwrap();
+    assert!(page_texts(&s, id)[0].contains(&text));
+    // A second layer gets fresh resource names rather than replacing the first layer's fonts.
+    let mut second = words;
+    second[0].text = "另一行".into();
+    second.truncate(1);
+    second[0].origin[1] = 100.0;
+    s.apply(id, Edit::AddOcrText { page: 0, words: second.clone() }).unwrap();
+    let extracted = page_texts(&s, id);
+    assert!(extracted[0].contains(&text) && extracted[0].contains("另一行"));
+    second[0].origin[0] = f64::NAN;
+    assert!(s.apply(id, Edit::AddOcrText { page: 0, words: second }).is_err());
+    assert_eq!(page_texts(&s, id), extracted, "invalid coordinates leave the document unchanged");
+}
+
+/// #3029: the Unicode layer's invisible mode and font end with the layer. `3 Tr` is graphics
+/// state, and `ET` does not reset it, so a page with nothing to wrap would leave later text invisible.
+#[test]
+fn unicode_ocr_text_restores_the_graphics_state() {
+    let (mut s, id) = session_with(1);
+    let words = vec![ocr::PlacedWord { text: "中文".into(), origin: [20.0, 80.0], across: [80.0, 0.0], up: [0.0, 12.0] }];
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let doc = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let contents = page.dict.get(b"Contents").and_then(|c| c.as_array()).unwrap();
+    let layer = contents
+        .iter()
+        .filter_map(|object| match &*doc.resolve(object) {
+            pdfcraft_cos::Object::Stream(stream) => String::from_utf8(stream.decoded().unwrap()).ok(),
+            _ => None,
+        })
+        .find(|text| text.contains("/OCR BMC"))
+        .expect("the Unicode OCR stream");
+    let mut depth = 0_i32;
+    for token in layer.split_ascii_whitespace() {
+        match token {
+            "q" => depth += 1,
+            "Q" => depth -= 1,
+            "Tr" | "Tf" | "Tm" => assert!(depth > 0, "`{token}` outside q … Q in {layer:?}"),
+            _ => {}
+        }
+        assert!(depth >= 0, "unbalanced Q in {layer:?}");
+    }
+    assert_eq!(depth, 0, "the layer leaves a q open: {layer:?}");
+}
+
+#[test]
+fn chinese_ocr_makes_mixed_scans_searchable() {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    if !ocr::available_for("zh") {
+        eprintln!("skipped: Chinese OCR models not installed");
+        return;
+    }
+    // Original fixture, rendered only with the permitted craft-fonts build input.
+    let Some(face) = pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.family == "BIZ UDPGothic" && f.style == "Regular") else {
+        eprintln!("skipped: set CRAFT_FONTS_DIR to generate the Chinese fixture");
+        return;
+    };
+    let font = FontRef::try_from_slice(face.bytes).unwrap();
+    let scaled = font.as_scaled(PxScale::from(64.0));
+    let mut image = image::RgbaImage::from_pixel(1000, 160, image::Rgba([255; 4]));
+    let mut x = 40.0;
+    for ch in "中文文本 2026 Hello".chars() {
+        let id = scaled.glyph_id(ch);
+        assert_ne!(id.0, 0, "fixture font must cover {ch}");
+        let glyph = id.with_scale_and_position(64.0, point(x, 105.0));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bounds = outline.px_bounds();
+            outline.draw(|gx, gy, coverage| {
+                let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                if px >= 0 && py >= 0 && px < 1000 && py < 160 {
+                    let v = (255.0 * (1.0 - coverage)) as u8;
+                    image.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
+                }
+            });
+        }
+        x += scaled.h_advance(id);
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("original.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let before = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "zh".into(), ..Default::default() }).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].skipped, None);
+    assert_eq!(found[0].text(), "中文文本 2026 Hello");
+    assert_eq!(page_texts(&s, id), ["中文文本 2026 Hello"]);
+    let doc = s.get(id).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+    let text = renderer.render(RenderRequestFor::text(0)).text.unwrap();
+    let hit = text.find("中文文本").into_iter().next().unwrap();
+    let rect = text.line_rects(hit)[0];
+    let word = &found[0].words[0];
+    let page_height = doc.info.pages[0].height as f64;
+    assert!((rect[1] as f64 - (page_height - word.origin[1] - word.up[1])).abs() < 0.1);
+    assert!((rect[3] as f64 - (page_height - word.origin[1])).abs() < 0.1, "search highlight covers the detected line");
+    assert_eq!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap(), before);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("result.pdf", None, saved, None).unwrap();
+    assert_eq!(page_texts(&s, reopened), ["中文文本 2026 Hello"]);
+    let again = s.recognize_text(id, &[], ocr::OcrSettings { language: "zh".into(), ..Default::default() }).unwrap();
+    assert!(again[0].skipped.is_some());
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), [""]);
+}
+
+#[test]
+fn latin_ocr_keeps_german_accents_searchable() {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    if !ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    // Fixture rendered with the committed Inter face (covers the accented Latin letters).
+    let font = FontRef::try_from_slice(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 64.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let lines = ["Gerne übersenden wir Ihnen unser Angebot für den", "Großformat-Drucker mit Förderband. Mit freundlichen Grüßen"];
+    let (w, h) = (1900, 340);
+    let mut image = image::RgbaImage::from_pixel(w, h, image::Rgba([255; 4]));
+    for (row, line) in lines.iter().enumerate() {
+        let mut x = 40.0;
+        let baseline = 110.0 + 150.0 * row as f32;
+        for ch in line.chars() {
+            let id = scaled.glyph_id(ch);
+            assert_ne!(id.0, 0, "fixture font must cover {ch}");
+            let glyph = id.with_scale_and_position(size, point(x, baseline));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let bounds = outline.px_bounds();
+                outline.draw(|gx, gy, coverage| {
+                    let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                    if px >= 0 && py >= 0 && px < w as i32 && py < h as i32 {
+                        let v = (255.0 * (1.0 - coverage)) as u8;
+                        image.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
+                    }
+                });
+            }
+            x += scaled.h_advance(id);
+        }
+    }
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("angebot.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let before = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "la".into(), ..Default::default() }).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].skipped, None);
+    let boxes: Vec<_> = found[0].words.iter().map(|w| w.text.as_str()).collect();
+    assert!(boxes.iter().any(|t| t.contains("übersenden") && t.contains(' ')), "a Latin line stays one box: {boxes:?}");
+    assert!(boxes.iter().any(|t| t.contains("Förderband") && t.contains(' ')), "a Latin line stays one box: {boxes:?}");
+    // The accents the English models drop as "?" (#524): umlauts, ß and the ö of Förderband.
+    let text = found[0].text();
+    for word in ["übersenden", "für", "Großformat", "Förderband", "Grüßen"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    let extracted = page_texts(&s, id);
+    assert!(extracted[0].contains("Förderband"), "search for Förderband must hit: {extracted:?}");
+    assert_eq!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap(), before, "search text changes no pixels");
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("result.pdf", None, saved, None).unwrap();
+    let reopened_text = page_texts(&s, reopened);
+    assert!(reopened_text[0].contains("Grüßen"), "accents survive save/reopen: {reopened_text:?}");
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), [""]);
+}
+
+/// Draw `lines` in the committed Inter face. `jpeg_quality` re-encodes the page as a JPEG scan.
+fn inter_scan(lines: &[&str], jpeg_quality: Option<u8>) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 64.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let (w, h) = (2000u32, 160 + 120 * lines.len() as u32);
+    let mut image = image::RgbaImage::from_pixel(w, h, image::Rgba([255; 4]));
+    for (row, line) in lines.iter().enumerate() {
+        let mut x = 40.0;
+        let baseline = 110.0 + 120.0 * row as f32;
+        for ch in line.chars() {
+            let id = scaled.glyph_id(ch);
+            assert_ne!(id.0, 0, "fixture font must cover {ch}");
+            let glyph = id.with_scale_and_position(size, point(x, baseline));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let bounds = outline.px_bounds();
+                outline.draw(|gx, gy, coverage| {
+                    let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                    if px >= 0 && py >= 0 && px < w as i32 && py < h as i32 {
+                        let v = (255.0 * (1.0 - coverage)) as u8;
+                        image.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
+                    }
+                });
+            }
+            x += scaled.h_advance(id);
+        }
+    }
+    let mut bytes = Vec::new();
+    if let Some(quality) = jpeg_quality {
+        use image::ImageEncoder;
+        let rgb = image::DynamicImage::ImageRgba8(image).into_rgb8();
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality);
+        encoder.write_image(rgb.as_raw(), w, h, image::ExtendedColorType::Rgb8).unwrap();
+    } else {
+        image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    }
+    bytes
+}
+
+/// #3264: the German document language, not only `la`, keeps the umlauts and ß.
+#[test]
+fn german_document_language_keeps_umlauts_and_eszett() {
+    if !ocr::available_for("de") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Gerne übersenden wir Ihnen unser Angebot für den", "Großformat-Drucker mit Förderband. Mit freundlichen Grüßen"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("angebot.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "de".into(), ..Default::default() }).unwrap()[0].text();
+    for word in ["übersenden", "für", "Großformat", "Förderband", "Grüßen"] {
+        assert!(text.contains(word), "missing {word:?} in {text:?}");
+    }
+    assert!(!text.contains('?'), "{text}");
+}
+
+/// #524: `ç` and `ù` must come back as themselves. A reading of `facade` or `ou` has no `?` and
+/// would pass a test that only rejects question marks.
+#[test]
+fn latin_ocr_keeps_french_cedilla_and_grave() {
+    if !ocr::available_for("fr") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["Réponse à la demande de l'élève, où", "la façade rénovée"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("french.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { language: "fr".into(), ..Default::default() }).unwrap();
+    let text = found[0].text();
+    // `façade` → `facade` and `où` → `ou` drop the accent with no `?`, so the letters themselves
+    // have to be present.
+    assert!(text.contains('ç') && text.contains('ù') && text.contains('é'), "{text}");
+    assert!(!text.contains('?'), "{text}");
+    assert!(page_texts(&s, id)[0].contains('ç') && page_texts(&s, id)[0].contains('ù'), "{:?}", page_texts(&s, id));
+}
+
+/// A JPEG scan, the way a photographed page arrives, still keeps the French accents.
+#[test]
+fn latin_ocr_keeps_french_on_a_jpeg_scan() {
+    if !ocr::available_for("fr") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let jpeg = inter_scan(&["Café été, façade, où"], Some(70));
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("scan.jpg".into(), jpeg)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "fr".into(), ..Default::default() }).unwrap()[0].text();
+    assert!(text.contains('ç') && text.contains('ù') && text.contains('é') && !text.contains('?'), "{text}");
+}
+
+/// Spanish names and an amount, including ñ and the accented vowels.
+#[test]
+fn latin_ocr_keeps_spanish_names_and_amounts() {
+    if !ocr::available_for("es") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let png = inter_scan(&["José Muñoz, María Núñez y Óscar Gómez", "México, año. Total: $16,858.66 MXN"], None);
+    let mut s = Session::new();
+    let scan = s.create_from_images(&[("spanish.png".into(), png)]).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "es".into(), ..Default::default() }).unwrap()[0].text();
+    assert!(text.contains("José") && text.contains("Muñoz") && text.contains("Núñez") && text.contains("Óscar"), "{text}");
+    assert!(text.contains("México") && text.contains("año") && text.contains("16,858.66"), "{text}");
+}
+
 /// A form whose scripts are custom JavaScript: total = price × qty (calculate, through a
 /// document-level function), shown with a custom format; qty is validated; a button script.
 fn scripted_form() -> Vec<u8> {

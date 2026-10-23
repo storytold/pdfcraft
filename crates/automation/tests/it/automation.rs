@@ -5725,6 +5725,10 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert_eq!(status["languages"][1]["code"], "zh");
+    assert_eq!(status["languages"][1]["available"], pdfcraft_engine::ocr::available_for("zh"));
+    assert_eq!(status["languages"][2]["code"], "la");
+    assert_eq!(status["languages"][2]["available"], pdfcraft_engine::ocr::available_for("la"));
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -5739,6 +5743,17 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    if pdfcraft_engine::ocr::available_for("zh") {
+        ok(&mut a, "edit_undo", json!({ "doc": scan }));
+        let mixed = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "zh" }));
+        assert!(mixed["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{mixed}");
+        assert!(page_text(&mut a, scan)[0].to_lowercase().contains("searchable"));
+    }
+    if pdfcraft_engine::ocr::available_for("la") {
+        ok(&mut a, "edit_undo", json!({ "doc": scan }));
+        let latin = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "la" }));
+        assert!(latin["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{latin}");
+    }
 }
 
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
@@ -5800,6 +5815,36 @@ fn ocr_recognize_files_writes_searchable_copies() {
     let out = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();
     let found = ok(&mut a, "text_find", json!({ "doc": out, "query": "recognition" }));
     assert!(found.to_string().contains("\"page\""), "{found}");
+}
+
+/// #1795: recognizing several files never replaces a file that is already in the output folder.
+#[test]
+fn ocr_recognize_files_keeps_existing_and_same_named_outputs() {
+    let dir = workdir("ocr-files-clobber");
+    let mut a = auto(&dir);
+    let language = if pdfcraft_engine::ocr::available_for("la") {
+        "la"
+    } else if ok(&mut a, "ocr_status", json!({}))["available"] == true {
+        "en"
+    } else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Batch recognition works" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "one/report.pdf" }));
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "two/report.pdf" }));
+    let original = std::fs::read(dir.join("one/report.pdf")).unwrap();
+    std::fs::write(dir.join("one/report (2).pdf"), b"keep me").unwrap();
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["one/report.pdf", "two/report.pdf"], "folder": "one", "language": language }));
+    let first = r["files"][0]["output"].as_str().unwrap();
+    let second = r["files"][1]["output"].as_str().unwrap();
+    assert_ne!(first, second, "{r}");
+    assert_eq!(std::path::Path::new(first).file_name().unwrap(), "report (3).pdf", "{r}");
+    assert_eq!(std::fs::read(dir.join("one/report.pdf")).unwrap(), original, "the source stays as it was");
+    assert_eq!(std::fs::read(dir.join("one/report (2).pdf")).unwrap(), b"keep me");
 }
 
 #[test]

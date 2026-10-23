@@ -44,6 +44,110 @@ fn recognize_text_dialog_adds_searchable_text() {
 }
 
 #[test]
+fn chinese_ocr_language_runs_from_the_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(1);
+    h.get_by_label("Chinese (Simplified) and English").click();
+    // The menu closes on the following frame. A click before that hits the menu.
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "zh");
+    assert!(h.query_by_label("Polish").is_none(), "the language menu stayed open");
+    if !pdfcraft_engine::ocr::available_for("zh") {
+        eprintln!("skipped: Chinese OCR models not installed");
+        return;
+    }
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_run.is_none());
+    let app = h.state();
+    let id = app.active_ids().unwrap().1;
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+}
+
+/// #3264: German is a document language in the Recognize Text dialog.
+#[test]
+fn german_is_a_document_language() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(1);
+    h.get_by_label("German").click();
+    h.run_steps(1);
+    assert_eq!(h.state().ocr_draft.language, "de");
+}
+
+/// #1819: when the worker thread cannot start, the run is not left active and a retry works.
+#[test]
+fn recognition_that_cannot_start_a_thread_reports_an_error_and_can_retry() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("scan.pdf", None, scan()).unwrap();
+    app.fail_spawn = true;
+    app.start_ocr();
+    assert!(app.ocr_run.is_none(), "single run not left active");
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread");
+    app.toast = None;
+    app.start_ocr();
+    assert!(app.ocr_run.is_none());
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread", "not refused as already running");
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-spawn-{}", std::process::id()));
+    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+    app.toast = None;
+    app.ocr_files(vec![("one.pdf".into(), scan())]);
+    assert!(app.ocr_batch.is_none(), "batch not left active");
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread");
+    app.toast = None;
+    app.ocr_files(vec![("one.pdf".into(), scan())]);
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread", "not refused as already running");
+}
+
+#[test]
+fn latin_ocr_language_runs_from_the_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(1);
+    h.get_by_label("Latin (accented)").click();
+    // The menu closes on the following frame. A click before that hits the menu.
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "la");
+    assert!(h.query_by_label("Polish").is_none(), "the language menu stayed open");
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_run.is_none());
+    let app = h.state();
+    let id = app.active_ids().unwrap().1;
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "{:?}", app.toast);
+}
+
+#[test]
 fn recognize_text_in_multiple_files_writes_searchable_copies() {
     if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");

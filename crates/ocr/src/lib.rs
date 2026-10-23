@@ -2,29 +2,96 @@
 //!
 //! Recognition runs the ocrs engine (MIT/Apache-2.0) with its pre-trained models (CC-BY-SA-4.0,
 //! fetched by `cargo xtask models`; see ATTRIBUTION.toml). The caller renders a page to pixels;
-//! [`Ocr::recognize`] finds the words in them, and [`text_layer`] turns words placed in user space
-//! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
-//! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
+//! [`Ocr::recognize`] finds text in them. The engine writes placed text as an invisible layer
+//! (rendering mode 3), making a searchable image without changing the original image.
+//! [`text_layer`] is the legacy WinAnsi writer; the engine supplies Unicode fonts for text
+//! outside WinAnsi (Chinese, and Latin letters no standard font encodes).
 //!
-//! The models read the Latin alphabet (English and other languages written without accents).
+//! English uses ocrs; Chinese (`zh`) and accented Latin (`la`) use PP-OCR models on the same
+//! local runtime, each with its own recognition model and character dictionary.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use rten_imageproc::BoundingRect;
 use std::path::{Path, PathBuf};
+
+mod ppocr;
 
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.rten";
 pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
+pub const CHINESE_MODEL: &str = "chinese-recognition.onnx";
+pub const CHINESE_DICTIONARY: &str = "chinese-keys.txt";
+pub const LATIN_MODEL: &str = "latin-recognition.onnx";
+pub const LATIN_DICTIONARY: &str = "latin-keys.txt";
+
+/// The PP-OCR languages: (code, model file, dictionary file, output classes = CTC blank +
+/// one per dictionary line + the appended space). The class count is pinned per model, so a
+/// wrong or truncated dictionary fails at load instead of decoding garbage.
+const PP_OCR: &[(&str, &str, &str, usize)] = &[
+    ("zh", CHINESE_MODEL, CHINESE_DICTIONARY, 6625),
+    ("la", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("fr", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("de", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("es", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("pt", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("it", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("nl", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("da", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("no", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("sv", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("is", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("fi", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("cs", LATIN_MODEL, LATIN_DICTIONARY, 504),
+    ("pl", LATIN_MODEL, LATIN_DICTIONARY, 504),
+];
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The languages the models read (ISO 639-1). `la` uses the Latin dictionary; a listed letter can still be misread.
+/// The named languages use that same model and, when two letters score close together, prefer
+/// the ones that language writes (`å` for Danish, `à` for French) without forbidding the others.
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("zh", "Chinese (Simplified) and English"),
+    ("la", "Latin (accented)"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("es", "Spanish"),
+    ("pt", "Portuguese"),
+    ("it", "Italian"),
+    ("nl", "Dutch"),
+    ("da", "Danish"),
+    ("no", "Norwegian"),
+    ("sv", "Swedish"),
+    ("is", "Icelandic"),
+    ("fi", "Finnish"),
+    ("cs", "Czech"),
+    ("pl", "Polish"),
+];
+
+/// Letters a document language prefers when the recogniser is unsure. Empty means no preference.
+pub fn preferred_letters(language: &str) -> &'static str {
+    match language {
+        "fr" => "àâæçéèêëîïôœùûüÿÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸ",
+        "de" => "äöüßÄÖÜ",
+        "es" => "áéíñóúü¿¡ÁÉÍÑÓÚÜ",
+        "pt" => "áàâãçéêíóôõúÁÀÂÃÇÉÊÍÓÔÕÚ",
+        "it" => "àèéìíîòóùÀÈÉÌÍÎÒÓÙ",
+        "nl" => "áéëïóöüÁÉËÏÓÖÜ",
+        "da" | "no" => "åæøÅÆØ",
+        "sv" | "fi" => "åäöÅÄÖ",
+        "is" => "áðéíóúýþæöÁÐÉÍÓÚÝÞÆÖ",
+        "cs" => "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ",
+        "pl" => "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ",
+        _ => "",
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -38,26 +105,48 @@ pub enum OcrError {
     Recognize(String),
     #[error("the image is empty")]
     EmptyImage,
+    #[error("unsupported OCR language {0:?}; choose a language from ocr_status")]
+    Language(String),
 }
 
-/// Where the two model files are.
+/// Where a language's detector and recogniser are. The PP-OCR languages also require their
+/// character dictionary beside the recognition model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
     pub detection: PathBuf,
     pub recognition: PathBuf,
+    pub language: &'static str,
 }
 
 impl Models {
     /// The models in `dir`, if both files are there.
     pub fn in_dir(dir: &Path) -> Option<Models> {
-        let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
+        Self::in_dir_for(dir, "en")
+    }
+
+    pub fn in_dir_for(dir: &Path, language: &str) -> Option<Models> {
+        let language = LANGUAGES.iter().find(|l| l.0 == language)?.0;
+        let recognition = if language == "en" {
+            RECOGNITION_MODEL
+        } else {
+            let &(_, model, dictionary, _) = PP_OCR.iter().find(|(code, ..)| *code == language)?;
+            if !dir.join(dictionary).is_file() {
+                return None;
+            }
+            model
+        };
+        let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(recognition), language };
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
-        Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+        Self::find_for("en")
+    }
+
+    pub fn find_for(language: &str) -> Option<Models> {
+        Self::search_dirs().iter().find_map(|d| Self::in_dir_for(d, language))
     }
 
     /// The directories [`Models::find`] looks in, in order.
@@ -84,7 +173,8 @@ impl Models {
     }
 }
 
-/// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
+/// A recognised text segment and its box in image pixels `[left, top, right, bottom]`.
+/// English segments are words; Chinese and Latin segments are whole lines.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub text: String,
@@ -106,34 +196,61 @@ impl Line {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    ppocr: Option<ppocr::PpOcr>,
+    /// Letters this document language prefers when two readings are close. Empty for English,
+    /// Chinese and the unrestricted Latin choice.
+    preferred: &'static str,
 }
 
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        let name = models.recognition.file_name().and_then(|f| f.to_str()).unwrap_or_default();
+        let ppocr = PP_OCR
+            .iter()
+            .find(|(_, model, _, _)| *model == name)
+            .map(|(_, _, dictionary, classes)| ppocr::PpOcr::load(&models.recognition, &models.recognition.with_file_name(dictionary), *classes))
+            .transpose()?;
         let params = ocrs::OcrEngineParams {
             detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            recognition_model: if ppocr.is_none() { Some(load(&models.recognition)?) } else { None },
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine, ppocr, preferred: preferred_letters(models.language) })
     }
 
     /// Load the models found by [`Models::find`].
     pub fn find() -> Result<Ocr, OcrError> {
-        Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+        Self::find_for("en")
+    }
+
+    pub fn find_for(language: &str) -> Result<Ocr, OcrError> {
+        if !LANGUAGES.iter().any(|l| l.0 == language) {
+            return Err(OcrError::Language(language.into()));
+        }
+        Self::load(&Models::find_for(language).ok_or(OcrError::NoModels)?)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
+        let count = (width as usize)
+            .checked_mul(height as usize)
+            .filter(|n| *n <= 64 * 1024 * 1024)
+            .ok_or_else(|| OcrError::Recognize("image exceeds 64 megapixels".into()))?;
+        if count == 0 || pixels.is_empty() {
             return Err(OcrError::EmptyImage);
         }
+        let channels = pixels.len() / count;
+        if !pixels.len().is_multiple_of(count) || !matches!(channels, 1 | 3 | 4) {
+            return Err(OcrError::Recognize("image must contain exactly 1, 3 or 4 channels per pixel".into()));
+        }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let rgb: std::borrow::Cow<[u8]> = if channels == 4 {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+        } else if channels == 1 && self.ppocr.is_some() {
+            pixels.iter().flat_map(|p| [*p; 3]).collect::<Vec<_>>().into()
         } else {
             pixels.into()
         };
@@ -142,6 +259,25 @@ impl Ocr {
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
         let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
         let lines = self.engine.find_text_lines(&input, &found);
+        if let Some(ppocr) = &self.ppocr {
+            if lines.len() > 4096 {
+                return Err(OcrError::Recognize("page has more than 4096 text lines".into()));
+            }
+            let mut result = Vec::new();
+            for line in lines {
+                let rect = line
+                    .iter()
+                    .map(|r| r.bounding_rect())
+                    .fold(None, |rect: Option<rten_imageproc::Rect<f32>>, r| Some(rect.map_or(r, |b| b.union(r))));
+                let Some(r) = rect else { continue };
+                let rect = [r.left(), r.top(), r.right(), r.bottom()];
+                let text = ppocr.recognize(&rgb, width, height, rect, self.preferred)?;
+                if !text.is_empty() {
+                    result.push(Line { words: vec![Word { text, rect }] });
+                }
+            }
+            return Ok(result);
+        }
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
         Ok(read
@@ -359,6 +495,60 @@ mod tests {
         // The euro sign follows the ASCII punctuation (class 44; 0 is the CTC blank), not a second E.
         assert_eq!(chars.iter().position(|&c| c == '€'), Some(43));
         assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
+    }
+
+    /// #524 and #3264: German is a named language on the accented Latin model, and it prefers
+    /// ä ö ü ß. The same model serves the other European names. English stays on its own model.
+    #[test]
+    fn named_european_languages_use_the_latin_model() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-langs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in [DETECTION_MODEL, RECOGNITION_MODEL, LATIN_MODEL, LATIN_DICTIONARY, CHINESE_MODEL, CHINESE_DICTIONARY] {
+            std::fs::write(dir.join(file), b"x").unwrap();
+        }
+        for (code, _) in LANGUAGES {
+            let models = Models::in_dir_for(&dir, code).unwrap_or_else(|| panic!("{code} was not found"));
+            let expect = if *code == "en" {
+                RECOGNITION_MODEL
+            } else if *code == "zh" {
+                CHINESE_MODEL
+            } else {
+                LATIN_MODEL
+            };
+            assert!(models.recognition.ends_with(expect), "{code}: {}", models.recognition.display());
+            if !matches!(*code, "en" | "zh" | "la") {
+                assert!(!preferred_letters(code).is_empty(), "{code} has no preferred letters");
+            }
+        }
+        let german = preferred_letters("de");
+        assert!(german.contains('ä') && german.contains('ö') && german.contains('ü') && german.contains('ß'), "{german}");
+        assert!(Models::in_dir_for(&dir, "xx").is_none());
+        assert!(matches!(Ocr::find_for("xx"), Err(OcrError::Language(_))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A language can only prefer a letter the Latin dictionary actually contains.
+    #[test]
+    fn preferred_letters_are_in_the_latin_dictionary() {
+        let Some(models) = Models::find_for("la") else {
+            eprintln!("skipped: Latin OCR models not installed");
+            return;
+        };
+        let path = models.recognition.with_file_name(LATIN_DICTIONARY);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let have: std::collections::BTreeSet<char> = text.chars().collect();
+        for (code, _) in LANGUAGES {
+            for ch in preferred_letters(code).chars() {
+                assert!(have.contains(&ch), "{code} prefers {ch} (U+{:04X}), which {} does not contain", u32::from(ch), path.display());
+            }
+        }
+    }
+
+    #[test]
+    fn french_prefers_cedilla_and_grave_and_does_not_claim_the_nordic_ring() {
+        assert!(preferred_letters("fr").contains('ç') && preferred_letters("fr").contains('ù'));
+        assert!(preferred_letters("da").contains('å') && !preferred_letters("da").contains('à'));
+        assert!(preferred_letters("la").is_empty() && preferred_letters("en").is_empty());
     }
 
     #[test]
