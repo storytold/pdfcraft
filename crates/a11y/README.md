@@ -25,4 +25,12 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
 - The report is a self-contained HTML page. Fixes that edit the document (language, title, tab
   order) live in the engine (`Document::accessibility_fix`).
 
+- **PDF/UA verification** (`pdfua::verify`): every failure condition of the Matterhorn Protocol
+  1.1 for PDF/UA-1 (ISO 14289-1), each Passed or Failed (with the page, tag or object), Needs
+  manual check (the 47 a person must judge) or Not checked (the machine conditions not checked
+  yet, mostly the font-program ones). Several are the checker's own rules read as conditions; the
+  rest are PDF/UA's own (metadata and identification, role mapping to PDF 1.7 types, languages,
+  annotations, optional content, embedded files, fonts…). PDF/UA-2 in part: its identification,
+  PDF 2.0 and the conditions it keeps unchanged.
+
 Not yet: autotagging, the Tags/Order/Content panels, the Reading Order tool (M12.1–M12.2).

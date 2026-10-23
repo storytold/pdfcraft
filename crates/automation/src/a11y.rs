@@ -29,24 +29,22 @@ fn category_id(c: Category) -> &'static str {
     }
 }
 
+fn finding_json(f: &pdfcraft_engine::a11y::Finding) -> Value {
+    json!({
+        "page": f.page.map(|p| p + 1),
+        "object": f.object.map(|r| r.num),
+        "object_generation": f.object.map(|r| r.generation),
+        "bbox_user_space": f.bbox,
+        "message": f.message,
+    })
+}
+
 pub(crate) fn report_json(r: &Report) -> Value {
     let results: Vec<Value> = r
         .results
         .iter()
         .map(|x| {
-            let findings: Vec<Value> = x
-                .findings
-                .iter()
-                .map(|f| {
-                    json!({
-                        "page": f.page.map(|p| p + 1),
-                        "object": f.object.map(|r| r.num),
-                        "object_generation": f.object.map(|r| r.generation),
-                        "bbox_user_space": f.bbox,
-                        "message": f.message,
-                    })
-                })
-                .collect();
+            let findings: Vec<Value> = x.findings.iter().map(finding_json).collect();
             json!({ "rule": x.rule.id(), "name": x.rule.name(), "category": category_id(x.rule.category()), "status": status_id(x.status), "findings": findings })
         })
         .collect();
@@ -284,6 +282,49 @@ impl Automation {
         let o = self.a11y_options(a)?;
         let r = self.doc(a)?.accessibility_check(&o).ok_or_else(|| failed("the document can't be read for checking"))?;
         Ok(report_json(&r))
+    }
+
+    /// Verify PDF/UA: every failure condition of the part, as failed (with findings), passed,
+    /// manual (a person's judgement) or not checked.
+    pub(crate) fn a11y_pdfua_verify(&self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::a11y::pdfua::{Condition, Outcome, Part};
+        let doc = self.doc(a)?;
+        let part = match a.opt_int("part")? {
+            None => Part::for_declared(doc.standards().pdfua),
+            Some(n) => {
+                u8::try_from(n).ok().and_then(Part::from_number).ok_or_else(|| ToolError::InvalidArgs(format!("part must be 1 or 2, not {n}")))?
+            }
+        };
+        let r = doc.pdfua_verify(part).ok_or_else(|| failed("the document can't be read for checking"))?;
+        let condition = |c: &Condition| {
+            json!({
+                "condition": c.id, "matterhorn": c.matterhorn, "checkpoint": c.checkpoint,
+                "clause": c.clause(), "section": c.section, "description": c.text,
+            })
+        };
+        let listed = |outcome: Outcome| r.with(outcome).map(|x| condition(x.condition)).collect::<Vec<_>>();
+        let failures: Vec<Value> = r
+            .with(Outcome::Failed)
+            .map(|x| {
+                let mut v = condition(x.condition);
+                v["findings"] = json!(x.findings.iter().map(finding_json).collect::<Vec<_>>());
+                v
+            })
+            .collect();
+        Ok(json!({
+            "part": part.label(),
+            "declared": r.declared,
+            "machine_checks_pass": r.machine_checks_pass(),
+            "counts": {
+                "failed": r.count(Outcome::Failed), "passed": r.count(Outcome::Passed),
+                "manual": r.count(Outcome::Manual), "not_checked": r.count(Outcome::NotChecked),
+            },
+            "failed": failures,
+            "manual": listed(Outcome::Manual),
+            "not_checked": listed(Outcome::NotChecked),
+            "passed": listed(Outcome::Passed),
+            "note": "Machine checks only. Conditions under manual need a person, and those under not_checked another validator, before the file can be called PDF/UA conformant.",
+        }))
     }
 
     /// Report only untagged page content, annotations, and AcroForm widgets.

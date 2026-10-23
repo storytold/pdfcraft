@@ -16,10 +16,16 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
+use crate::content;
 use crate::{Finding, MAX_FINDINGS, Rule};
 
 /// Why a table's rows are irregular; `{min}` and `{max}` are the narrowest and widest row.
 const IRREGULAR: &str = "rows have between {min} and {max} columns";
+
+/// What is wrong with a first heading that is not an H1, and with a heading that skips a level
+/// below the one before it. PDF/UA tells the two apart, so they are named.
+pub(crate) const FIRST_HEADING: &str = "the first heading is an H{n}; headings should not skip levels";
+pub(crate) const SKIPPED_HEADING: &str = "H{n} follows an H{d}; headings should not skip levels";
 
 /// Standard structure types (PDF 1.7 and 2.0); anything else goes through the role map.
 const STANDARD: &[&[u8]] = &[
@@ -111,7 +117,7 @@ const RULES: [Rule; 13] = [
 
 /// The standard types the rules tell apart. Any other type is `Other`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Figure,
     Formula,
     Table,
@@ -155,25 +161,41 @@ fn kind_of(ty: &[u8]) -> Kind {
 #[derive(Debug)]
 pub(crate) struct Frame {
     /// Indirect object holding this tag, if it is not an inline dictionary.
-    object: Option<ObjRef>,
+    pub(crate) object: Option<ObjRef>,
+    /// The type as written (/S), before the role map.
+    pub(crate) raw: Vec<u8>,
     /// The standard type after the role map, or the type as written when it maps to nothing.
-    ty: Vec<u8>,
-    kind: Kind,
+    pub(crate) ty: Vec<u8>,
+    pub(crate) kind: Kind,
     /// Its position in document order: the number it has in the tree read in full.
-    index: usize,
+    pub(crate) index: usize,
     /// Its page: its own /Pg, else its parent's.
-    page: Option<usize>,
+    pub(crate) page: Option<usize>,
     /// Has /Alt or /ActualText.
-    alt: bool,
+    pub(crate) alt: bool,
     /// An element above it has alternate text.
     alt_above: bool,
+    /// Has /E, the expansion of an abbreviation.
+    pub(crate) expansion: bool,
+    /// Has /Lang, a language tag ([`crate::content::is_language_tag`]).
+    pub(crate) lang: bool,
+    /// Has a /Lang that isn't a language tag.
+    pub(crate) bad_lang: bool,
     /// Has a /Summary attribute.
     summary: bool,
+    /// A table cell with a /Scope attribute, and one with a /Headers attribute.
+    pub(crate) scope: bool,
+    pub(crate) headers: bool,
+    /// A Note's /ID, when it has one (read for notes only).
+    pub(crate) id: Option<Vec<u8>>,
     /// ColSpan and RowSpan, each read as 1 to `MAX_SPAN`.
     col_span: usize,
     row_span: usize,
     /// Marked content, or an object reference, directly under it.
-    content: bool,
+    pub(crate) content: bool,
+    /// Marked content (an MCID or an MCR) directly under it: page content, which an object
+    /// reference alone isn't.
+    pub(crate) marked: bool,
     /// An annotation (OBJR) directly under it.
     annot: bool,
     /// Content, or an annotation, under it: set as its children close.
@@ -201,6 +223,13 @@ pub(crate) trait Visitor {
     /// `e` closes, and everything below it has closed already. `ancestors` are the elements
     /// still open.
     fn exit(&mut self, ancestors: &[Frame], e: &Frame);
+
+    /// An object reference (OBJR) to `obj` sits directly in the innermost of the `open` elements.
+    fn object_reference(&mut self, _open: &[Frame], _obj: ObjRef) {}
+
+    /// Marked content `mcid` of page `page`'s own content stream sits directly in the innermost
+    /// of the `open` elements. Marked content in another stream (an MCR with /Stm) is not told.
+    fn marked_content(&mut self, _open: &[Frame], _page: Option<usize>, _mcid: i64) {}
 }
 
 /// The dictionary (or stream) that `/StructTreeRoot` names in the catalog, when there is one.
@@ -215,10 +244,15 @@ pub(crate) fn has_struct_tree(doc: &Document) -> bool {
     struct_root(doc).is_some()
 }
 
+/// The structure tree root's role map, when it has one.
+pub(crate) fn role_map(doc: &Document) -> Dict {
+    struct_root(doc).and_then(|root| root.as_dict()?.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default()
+}
+
 /// Walks the structure tree in document order, telling `v` about each element.
-fn walk<V: Visitor>(doc: &Document, pages: &[Page], v: &mut V) {
+pub(crate) fn walk<V: Visitor>(doc: &Document, pages: &[Page], v: &mut V) {
     let Some(root) = struct_root(doc) else { return };
-    let role_map = root.as_dict().and_then(|d| d.get(b"RoleMap")).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let role_map = role_map(doc);
     let page_index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let mut w = Walker { doc, role_map, page_index, seen: HashSet::new(), frames: Vec::new(), tasks: Vec::new(), opened: 0 };
     if root.as_dict().is_some_and(|d| d.contains(b"K")) {
@@ -314,7 +348,10 @@ impl Walker<'_> {
             Object::Array(items) if !items.is_empty() => {
                 self.tasks.push(Task::Items { loc: loc.clone(), next: 0, len: items.len(), depth: depth + 1, page });
             }
-            Object::Int(_) => self.mark_content(),
+            Object::Int(mcid) => {
+                self.mark_content(true);
+                v.marked_content(&self.frames, page, *mcid);
+            }
             Object::Ref(r) => self.reference(*r, depth, page, v),
             Object::Dict(_) => self.dict(loc, depth, page, None, v),
             _ => {}
@@ -337,15 +374,25 @@ impl Walker<'_> {
     fn dict<V: Visitor>(&mut self, loc: &Loc, depth: usize, page: Option<usize>, object: Option<ObjRef>, v: &mut V) {
         let Some(d) = loc.value().and_then(|o| o.as_dict()) else { return };
         match d.name(b"Type") {
-            Some(b"MCR") => return self.mark_content(),
+            Some(b"MCR") => {
+                self.mark_content(true);
+                let mcid = d.get(b"MCID").map(|m| self.doc.resolve(m)).and_then(|m| m.as_int());
+                if let Some(mcid) = mcid
+                    && !d.contains(b"Stm")
+                {
+                    v.marked_content(&self.frames, self.page_of(d).or(page), mcid);
+                }
+                return;
+            }
             Some(b"OBJR") => {
-                self.mark_content();
-                let annotation = d
-                    .get(b"Obj")
-                    .and_then(Object::as_ref)
-                    .is_some_and(|o| self.doc.get(o).as_dict().is_some_and(|a| a.contains(b"Subtype") && a.contains(b"Rect")));
+                self.mark_content(false);
+                let obj = d.get(b"Obj").and_then(Object::as_ref);
+                let annotation = obj.is_some_and(|o| self.doc.get(o).as_dict().is_some_and(|a| a.contains(b"Subtype") && a.contains(b"Rect")));
                 if annotation && let Some(parent) = self.frames.last_mut() {
                     parent.annot = true;
+                }
+                if let Some(obj) = obj {
+                    v.object_reference(&self.frames, obj);
                 }
                 return;
             }
@@ -354,21 +401,35 @@ impl Walker<'_> {
         let Some(s) = d.name(b"S") else { return };
         let page = self.page_of(d).or(page);
         let alt = self.has_text(d, b"Alt") || self.has_text(d, b"ActualText");
+        let lang = content::text_of(self.doc, d, b"Lang").map(|l| content::is_language_tag(&l));
         let ty = self.standard(s);
         let kind = kind_of(&ty);
         let attrs = if matches!(kind, Kind::Table | Kind::Td | Kind::Th) { self.attr_dicts(d) } else { Vec::new() };
+        let id = if ty.as_slice() == b"Note" {
+            d.get(b"ID").map(|o| self.doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.bytes.clone())).filter(|id| !id.is_empty())
+        } else {
+            None
+        };
         let frame = Frame {
             object,
+            raw: s.to_vec(),
             ty,
             kind,
             index: self.opened,
             page,
             alt,
             alt_above: self.frames.last().is_some_and(|p| p.alt || p.alt_above),
+            expansion: self.has_text(d, b"E"),
+            lang: lang == Some(true),
+            bad_lang: lang == Some(false),
             summary: attr_int(&attrs, b"Summary").is_some(),
+            scope: attrs.iter().any(|a| a.as_dict().is_some_and(|a| a.contains(b"Scope"))),
+            headers: attrs.iter().any(|a| a.as_dict().is_some_and(|a| a.contains(b"Headers"))),
+            id,
             col_span: span(&attrs, b"ColSpan"),
             row_span: span(&attrs, b"RowSpan"),
             content: false,
+            marked: false,
             annot: false,
             sub_content: false,
             sub_annot: false,
@@ -394,10 +455,11 @@ impl Walker<'_> {
         v.exit(&self.frames, &frame);
     }
 
-    /// Marked content, or an object reference, directly under the open element.
-    fn mark_content(&mut self) {
+    /// Marked content (`marked`), or an object reference, directly under the open element.
+    fn mark_content(&mut self, marked: bool) {
         if let Some(parent) = self.frames.last_mut() {
             parent.content = true;
+            parent.marked |= marked;
         }
     }
 
@@ -463,7 +525,7 @@ fn row_owner(path: &[Frame]) -> Option<usize> {
 /// `what` is a wording, not a finished sentence, and `extra` fills any holes it has of its own.
 /// With and without a page are separate wordings so each reads the way the language reads it;
 /// `{ty}` is the structure tag's own name and goes in as it stands.
-fn worded(e: &Frame, what: &'static str, extra: Vec<(&'static str, String)>) -> Finding {
+pub(crate) fn worded(e: &Frame, what: &'static str, extra: Vec<(&'static str, String)>) -> Finding {
     let mut values = extra;
     values.push(("{ty}", String::from_utf8_lossy(&e.ty).into_owned()));
     let mut finding = match e.page {
@@ -478,7 +540,7 @@ fn worded(e: &Frame, what: &'static str, extra: Vec<(&'static str, String)>) -> 
 }
 
 /// A finding whose `{what}` wording has no holes of its own.
-fn finding(e: &Frame, what: &'static str) -> Finding {
+pub(crate) fn finding(e: &Frame, what: &'static str) -> Finding {
     worded(e, what, Vec::new())
 }
 
@@ -589,7 +651,7 @@ impl Table {
 /// One rule's findings during the walk: how many there are, and the first `MAX_FINDINGS` of them
 /// in document order. The text of the others is never built.
 #[derive(Default)]
-struct Found {
+pub(crate) struct Found {
     total: usize,
     kept: BinaryHeap<Kept>,
 }
@@ -623,7 +685,7 @@ impl Ord for Kept {
 
 impl Found {
     /// Counts a finding at document position `index`. Its text is built only if it is kept.
-    fn add(&mut self, index: usize, make: impl FnOnce() -> Finding) {
+    pub(crate) fn add(&mut self, index: usize, make: impl FnOnce() -> Finding) {
         self.total = self.total.saturating_add(1);
         let keep = self.kept.len() < MAX_FINDINGS || self.kept.peek().is_some_and(|last| index < last.index);
         if keep {
@@ -634,7 +696,12 @@ impl Found {
         }
     }
 
-    fn into_result(self) -> (Vec<Finding>, usize) {
+    /// Counts `n` findings whose text is not kept: they lie past the limit already.
+    pub(crate) fn skip(&mut self, n: usize) {
+        self.total = self.total.saturating_add(n);
+    }
+
+    pub(crate) fn into_result(self) -> (Vec<Finding>, usize) {
         let findings = self.kept.into_sorted_vec().into_iter().map(|k| k.finding).collect();
         (findings, self.total)
     }
@@ -716,10 +783,10 @@ impl Visitor for Checks {
                         // wrong with a later one are not the same remark with a word swapped.
                         let mut values = vec![("{n}", level.to_string())];
                         let what = if prev == 0 {
-                            "the first heading is an H{n}; headings should not skip levels"
+                            FIRST_HEADING
                         } else {
                             values.push(("{d}", prev.to_string()));
-                            "H{n} follows an H{d}; headings should not skip levels"
+                            SKIPPED_HEADING
                         };
                         worded(e, what, values)
                     });

@@ -274,6 +274,8 @@
 	Recognize text…	Tunnista teksti…
 	Recognize text in multiple files…	Tunnista teksti useista tiedostoista…
 	Check for accessibility…	Tarkista saavutettavuus…
+	Verify PDF/UA	Tarkista PDF/UA
+	Not checked	Ei tarkistettu
 	Open accessibility report	Avaa saavutettavuusraportti
 	Change reading options…	Muuta lukuasetuksia…
 	Add alternate text…	Lisää vaihtoehtoinen teksti…
@@ -2451,6 +2453,65 @@ animation effects	Off	Ei käytössä
 	not in an LI (list item)	ei ole LI-elementissä (luettelokohde)
 	the first heading is an H{n}; headings should not skip levels	ensimmäinen otsikko on H{n}; otsikkotasoja ei pidä ohittaa
 	H{n} follows an H{d}; headings should not skip levels	H{n} seuraa otsikkoa H{d}; otsikkotasoja ei pidä ohittaa
+	The catalog has no metadata stream (XMP)	Katalogissa ei ole metatietovirtaa (XMP)
+	The metadata doesn't identify the file as PDF/UA (pdfuaid:part)	Metatiedot eivät tunnista tiedostoa PDF/UA-tiedostoksi (pdfuaid:part)
+	The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}	Metatiedot tunnistavat tiedoston PDF/UA-{n}:ksi, ei PDF/UA-{want}:ksi
+	The metadata has no PDF/UA revision year (pdfuaid:rev)	Metatiedoissa ei ole PDF/UA-revision vuotta (pdfuaid:rev)
+	The file is PDF {v}, not PDF 2.0	Tiedosto on PDF {v}, ei PDF 2.0
+	The metadata has no title (dc:title)	Metatiedoissa ei ole otsikkoa (dc:title)
+	The viewer preferences have no DisplayDocTitle entry	Katseluohjelman asetuksissa ei ole DisplayDocTitle-avainta
+	DisplayDocTitle isn't true: the window shows the file name	DisplayDocTitle ei ole tosi: ikkuna näyttää tiedostonimen
+	MarkInfo Suspects is true: the tags are marked as unreliable	MarkInfo Suspects on tosi: tagit on merkitty epäluotettaviksi
+	The document sets no language (Lang), and neither do its tags	Asiakirja ei määritä kieltä (Lang), eivätkä sen tagit myöskään
+	The bookmarks have no language: the document sets none (Lang)	Kirjanmerkeillä ei ole kieltä: asiakirja ei määritä sitä (Lang)
+	The metadata has no language: the document sets none (Lang) and the metadata no xml:lang	Metatiedoilla ei ole kieltä: asiakirja ei määritä sitä (Lang), eikä metatiedoissa ole xml:langia
+	The document's language (Lang) {} isn't a language tag	Asiakirjan kieli (Lang) {} ei ole kielitunniste
+	Standard structure type {} is remapped to {to}	Vakiorakennetyyppi {} on yhdistetty uudelleen tyyppiin {to}
+	Role map entry {} leads round in a circle	Roolikartan avain {} johtaa kehään
+	Structure type {} doesn't map to a standard type	Rakennetyyppi {} ei vastaa mitään vakiotyyppiä
+	The document uses both H and numbered headings (H1–H6)	Asiakirjassa käytetään sekä H-otsikoita että numeroituja otsikoita (H1–H6)
+	its alternate text, actual text or expansion has no language (Lang)	sen vaihtoehtoisella tekstillä, todellisella tekstillä tai laajennuksella ei ole kieltä (Lang)
+	no language (Lang) on it, above it or on the document	ei kieltä (Lang) siinä, sen yläpuolella eikä asiakirjassa
+	its language (Lang) isn't a language tag	sen kieli (Lang) ei ole kielitunniste
+	more than one H heading in it	siinä on useampi kuin yksi H-otsikko
+	not in a TOC	ei TOC:n sisällä
+	not allowed directly in a TOC	ei sallittu suoraan TOC:ssa
+	not in a Ruby	ei Rubyn sisällä
+	not in a Warichu	ei Warichun sisällä
+	not in a Table	ei Tablen sisällä
+	not allowed directly inside {in}	ei sallittu suoraan tyypin {in} sisällä
+	a second {} in its table	toinen {} taulukossaan
+	rows both directly in it and in THead, TBody or TFoot	rivejä sekä suoraan siinä että THeadissa, TBodyssa tai TFootissa
+	not the first or last child of its table	ei taulukkonsa ensimmäinen eikä viimeinen lapsi
+	not the first child of its list	ei luettelonsa ensimmäinen lapsi
+	a header cell with no Scope, in a table that doesn't use Headers	otsikkosolu ilman Scopea taulukossa, joka ei käytä Headersia
+	no ID	ei ID:tä
+	its ID is another Note's too	sen ID on myös toisen Noten
+	Page {p} has annotations but no tab order (Tabs)	Sivulla {p} on merkintöjä mutta ei sarkainjärjestystä (Tabs)
+	Page {p} has annotations and tabs in {} order, not structure order (S)	Sivulla {p} on merkintöjä ja sarkainjärjestys {}, ei rakennejärjestys (S)
+	File attachment annotation on page {p}: its file specification lacks F or UF	Sivun {p} liitetiedostomerkintä: sen tiedostomäärityksestä puuttuu F tai UF
+	Page {p} has a trap network annotation (TrapNet)	Sivulla {p} on trappausverkkomerkintä (TrapNet)
+	Printer's mark annotation on page {p} is in the structure tree	Sivun {p} painomerkkimerkintä on rakennepuussa
+	{} annotation on page {p} is in a {ty} tag, not {want}	Sivun {p} {}-merkintä on {ty}-tagissa, ei {want}-tagissa
+	Field "{}" on page {p} has no description (TU), and its tag no alternate text	Sivun {p} kentällä "{}" ei ole kuvausta (TU), eikä sen tagilla vaihtoehtoista tekstiä
+	Field "{}" on page {p}: its description has no language (Lang)	Sivun {p} kenttä "{}": sen kuvauksella ei ole kieltä (Lang)
+	Link annotation on page {p} has no description (Contents)	Sivun {p} linkkimerkinnällä ei ole kuvausta (Contents)
+	{} annotation on page {p}: its description has no language (Lang)	Sivun {p} {}-merkintä: sen kuvauksella ei ole kieltä (Lang)
+	{} annotation on page {p} has no description (Contents), and its tag no alternate text	Sivun {p} {}-merkinnällä ei ole kuvausta (Contents), eikä sen tagilla vaihtoehtoista tekstiä
+	Page {p}: {n} artifact inside tagged content	Sivu {p}: {n} artefakti tagatun sisällön sisällä
+	Page {p}: {n} artifacts inside tagged content	Sivu {p}: {n} artefaktia tagatun sisällön sisällä
+	Page {p}: {n} tagged content item inside an artifact	Sivu {p}: {n} tagattu sisältökohde artefaktin sisällä
+	Page {p}: {n} tagged content items inside an artifact	Sivu {p}: {n} tagattua sisältökohdetta artefaktin sisällä
+	A form XObject with marked content (MCIDs) is drawn {n} times	Lomake-XObject, jossa on merkittyä sisältöä (MCID), piirretään {n} kertaa
+	Font {} on page {p} isn't embedded	Sivun {p} fonttia {} ei ole upotettu
+	Font (unnamed) on page {p} isn't embedded	Sivun {p} nimetöntä fonttia ei ole upotettu
+	The default optional content configuration (D) has no Name	Valinnaisen sisällön oletusmäärityksellä (D) ei ole Namea
+	An optional content configuration has an AS entry	Valinnaisen sisällön määrityksessä on AS-avain
+	Optional content configuration {n} has no Name	Valinnaisen sisällön määrityksellä {n} ei ole Namea
+	The XFA form requires dynamic rendering (dynamicRender)	XFA-lomake vaatii dynaamisen hahmonnuksen (dynamicRender)
+	The file is encrypted but its encryption dictionary has no permissions (P)	Tiedosto on salattu, mutta sen salaussanakirjassa ei ole oikeuksia (P)
+	The file has a reference XObject (Ref)	Tiedostossa on viittaus-XObject (Ref)
+	Embedded file "{}": its file specification lacks F or UF	Upotettu tiedosto "{}": sen tiedostomäärityksestä puuttuu F tai UF
 	… and {n} more	… ja {n} muuta
 	Accessibility Report	Saavutettavuusraportti
 	Filename	Tiedostonimi

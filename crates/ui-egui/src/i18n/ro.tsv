@@ -1353,6 +1353,8 @@
 	Change signature	Schimbare semnătură
 	Check for accessibility	Verificare accesibilitate
 	Check for accessibility…	Verificare accesibilitate…
+	Verify PDF/UA	Verificare PDF/UA
+	Not checked	Neverificat
 	Checkbox	Casetă de selectare
 	Checkmark	Bifă
 	Clear form	Golire formular
@@ -1640,6 +1642,65 @@
 	Font {} on page {p} doesn't map its characters to Unicode	Fontul {} de pe pagina {p} nu își asociază caracterele cu Unicode
 	Form field on page {p} isn't tagged	Câmpul de formular de pe pagina {p} nu este etichetat
 	H{n} follows an H{d}; headings should not skip levels	H{n} urmează după un H{d}; titlurile nu ar trebui să sară niveluri
+	The catalog has no metadata stream (XMP)	Catalogul nu are flux de metadate (XMP)
+	The metadata doesn't identify the file as PDF/UA (pdfuaid:part)	Metadatele nu identifică fișierul ca PDF/UA (pdfuaid:part)
+	The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}	Metadatele identifică fișierul ca PDF/UA-{n}, nu PDF/UA-{want}
+	The metadata has no PDF/UA revision year (pdfuaid:rev)	Metadatele nu au anul reviziei PDF/UA (pdfuaid:rev)
+	The file is PDF {v}, not PDF 2.0	Fișierul este PDF {v}, nu PDF 2.0
+	The metadata has no title (dc:title)	Metadatele nu au titlu (dc:title)
+	The viewer preferences have no DisplayDocTitle entry	Preferințele de vizualizare nu au intrarea DisplayDocTitle
+	DisplayDocTitle isn't true: the window shows the file name	DisplayDocTitle nu este true: fereastra afișează numele fișierului
+	MarkInfo Suspects is true: the tags are marked as unreliable	MarkInfo Suspects este true: etichetele sunt marcate ca nesigure
+	The document sets no language (Lang), and neither do its tags	Documentul nu setează nicio limbă (Lang) și nici etichetele sale
+	The bookmarks have no language: the document sets none (Lang)	Semnele de carte nu au limbă: documentul nu setează niciuna (Lang)
+	The metadata has no language: the document sets none (Lang) and the metadata no xml:lang	Metadatele nu au limbă: documentul nu setează niciuna (Lang), iar metadatele nu au xml:lang
+	The document's language (Lang) {} isn't a language tag	Limba documentului (Lang) {} nu este o etichetă de limbă
+	Standard structure type {} is remapped to {to}	Tipul de structură standard {} este reasociat cu {to}
+	Role map entry {} leads round in a circle	Intrarea {} din harta de roluri formează un cerc
+	Structure type {} doesn't map to a standard type	Tipul de structură {} nu corespunde unui tip standard
+	The document uses both H and numbered headings (H1–H6)	Documentul folosește atât H, cât și titluri numerotate (H1–H6)
+	its alternate text, actual text or expansion has no language (Lang)	textul său alternativ, textul real sau expansiunea nu are limbă (Lang)
+	no language (Lang) on it, above it or on the document	nicio limbă (Lang) pe el, deasupra lui sau pe document
+	its language (Lang) isn't a language tag	limba sa (Lang) nu este o etichetă de limbă
+	more than one H heading in it	mai mult de un titlu H în el
+	not in a TOC	nu este într-un TOC
+	not allowed directly in a TOC	nepermis direct într-un TOC
+	not in a Ruby	nu este într-un Ruby
+	not in a Warichu	nu este într-un Warichu
+	not in a Table	nu este într-un Table
+	not allowed directly inside {in}	nepermis direct în {in}
+	a second {} in its table	un al doilea {} în tabelul său
+	rows both directly in it and in THead, TBody or TFoot	rânduri atât direct în el, cât și în THead, TBody sau TFoot
+	not the first or last child of its table	nu este nici primul, nici ultimul copil al tabelului său
+	not the first child of its list	nu este primul copil al listei sale
+	a header cell with no Scope, in a table that doesn't use Headers	o celulă de antet fără Scope, într-un tabel care nu folosește Headers
+	no ID	fără ID
+	its ID is another Note's too	ID-ul său este și al altei Note
+	Page {p} has annotations but no tab order (Tabs)	Pagina {p} are adnotări, dar nu are ordine de tabulare (Tabs)
+	Page {p} has annotations and tabs in {} order, not structure order (S)	Pagina {p} are adnotări și tabulare în ordinea {}, nu în ordinea structurii (S)
+	File attachment annotation on page {p}: its file specification lacks F or UF	Adnotarea de fișier atașat de pe pagina {p}: specificației sale de fișier îi lipsește F sau UF
+	Page {p} has a trap network annotation (TrapNet)	Pagina {p} are o adnotare de rețea de trapping (TrapNet)
+	Printer's mark annotation on page {p} is in the structure tree	Adnotarea de marcaj de tipar de pe pagina {p} este în arborele de structură
+	{} annotation on page {p} is in a {ty} tag, not {want}	Adnotarea {} de pe pagina {p} este într-o etichetă {ty}, nu {want}
+	Field "{}" on page {p} has no description (TU), and its tag no alternate text	Câmpul „{}” de pe pagina {p} nu are descriere (TU), iar eticheta sa nu are text alternativ
+	Field "{}" on page {p}: its description has no language (Lang)	Câmpul „{}” de pe pagina {p}: descrierea sa nu are limbă (Lang)
+	Link annotation on page {p} has no description (Contents)	Adnotarea de link de pe pagina {p} nu are descriere (Contents)
+	{} annotation on page {p}: its description has no language (Lang)	Adnotarea {} de pe pagina {p}: descrierea sa nu are limbă (Lang)
+	{} annotation on page {p} has no description (Contents), and its tag no alternate text	Adnotarea {} de pe pagina {p} nu are descriere (Contents), iar eticheta sa nu are text alternativ
+	Page {p}: {n} artifact inside tagged content	Pagina {p}: {n} artefact în conținut etichetat
+	Page {p}: {n} artifacts inside tagged content	Pagina {p}: {n} artefacte în conținut etichetat
+	Page {p}: {n} tagged content item inside an artifact	Pagina {p}: {n} element de conținut etichetat într-un artefact
+	Page {p}: {n} tagged content items inside an artifact	Pagina {p}: {n} elemente de conținut etichetat într-un artefact
+	A form XObject with marked content (MCIDs) is drawn {n} times	Un XObject de formular cu conținut marcat (MCID) este desenat de {n} ori
+	Font {} on page {p} isn't embedded	Fontul {} de pe pagina {p} nu este încorporat
+	Font (unnamed) on page {p} isn't embedded	Fontul (fără nume) de pe pagina {p} nu este încorporat
+	The default optional content configuration (D) has no Name	Configurația implicită de conținut opțional (D) nu are Name
+	An optional content configuration has an AS entry	O configurație de conținut opțional are o intrare AS
+	Optional content configuration {n} has no Name	Configurația de conținut opțional {n} nu are Name
+	The XFA form requires dynamic rendering (dynamicRender)	Formularul XFA necesită randare dinamică (dynamicRender)
+	The file is encrypted but its encryption dictionary has no permissions (P)	Fișierul este criptat, dar dicționarul său de criptare nu are permisiuni (P)
+	The file has a reference XObject (Ref)	Fișierul are un XObject de referință (Ref)
+	Embedded file "{}": its file specification lacks F or UF	Fișierul încorporat „{}”: specificației sale de fișier îi lipsește F sau UF
 	Inserted text	Text inserat
 	Key Agreement	Acord de chei
 	Key Encipherment	Cifrare chei

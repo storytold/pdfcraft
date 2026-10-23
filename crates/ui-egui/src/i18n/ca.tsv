@@ -274,6 +274,8 @@
 	Recognize text…	Reconeix el text…
 	Recognize text in multiple files…	Reconeix el text en diversos fitxers…
 	Check for accessibility…	Comprova l'accessibilitat…
+	Verify PDF/UA	Verifica PDF/UA
+	Not checked	No comprovat
 	Open accessibility report	Obre l'informe d'accessibilitat
 	Change reading options…	Canvia les opcions de lectura…
 	Add alternate text…	Afegeix text alternatiu…
@@ -2238,6 +2240,65 @@ action wizard	Start	Inicia
 	not in an LI (list item)	no és dins d'un LI (element de llista)
 	the first heading is an H{n}; headings should not skip levels	el primer encapçalament és un H{n}; els encapçalaments no haurien de saltar nivells
 	H{n} follows an H{d}; headings should not skip levels	H{n} va després d'un H{d}; els encapçalaments no haurien de saltar nivells
+	The catalog has no metadata stream (XMP)	El catàleg no té flux de metadades (XMP)
+	The metadata doesn't identify the file as PDF/UA (pdfuaid:part)	Les metadades no identifiquen el fitxer com a PDF/UA (pdfuaid:part)
+	The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}	Les metadades identifiquen el fitxer com a PDF/UA-{n}, no PDF/UA-{want}
+	The metadata has no PDF/UA revision year (pdfuaid:rev)	Les metadades no tenen l'any de revisió de PDF/UA (pdfuaid:rev)
+	The file is PDF {v}, not PDF 2.0	El fitxer és PDF {v}, no PDF 2.0
+	The metadata has no title (dc:title)	Les metadades no tenen títol (dc:title)
+	The viewer preferences have no DisplayDocTitle entry	Les preferències del visualitzador no tenen l'entrada DisplayDocTitle
+	DisplayDocTitle isn't true: the window shows the file name	DisplayDocTitle no és cert: la finestra mostra el nom del fitxer
+	MarkInfo Suspects is true: the tags are marked as unreliable	MarkInfo Suspects és cert: les etiquetes estan marcades com a poc fiables
+	The document sets no language (Lang), and neither do its tags	El document no estableix cap idioma (Lang), ni tampoc les seves etiquetes
+	The bookmarks have no language: the document sets none (Lang)	Els marcadors no tenen idioma: el document no n'estableix cap (Lang)
+	The metadata has no language: the document sets none (Lang) and the metadata no xml:lang	Les metadades no tenen idioma: el document no n'estableix cap (Lang) i les metadades no tenen xml:lang
+	The document's language (Lang) {} isn't a language tag	L'idioma del document (Lang) {} no és una etiqueta d'idioma
+	Standard structure type {} is remapped to {to}	El tipus d'estructura estàndard {} es torna a assignar a {to}
+	Role map entry {} leads round in a circle	L'entrada {} del mapa de rols forma un cercle
+	Structure type {} doesn't map to a standard type	El tipus d'estructura {} no s'assigna a cap tipus estàndard
+	The document uses both H and numbered headings (H1–H6)	El document fa servir alhora H i encapçalaments numerats (H1–H6)
+	its alternate text, actual text or expansion has no language (Lang)	el seu text alternatiu, text real o expansió no té idioma (Lang)
+	no language (Lang) on it, above it or on the document	sense idioma (Lang) en ell, per sobre seu ni al document
+	its language (Lang) isn't a language tag	el seu idioma (Lang) no és una etiqueta d'idioma
+	more than one H heading in it	més d'un encapçalament H
+	not in a TOC	no és dins d'un TOC
+	not allowed directly in a TOC	no permès directament en un TOC
+	not in a Ruby	no és dins d'un Ruby
+	not in a Warichu	no és dins d'un Warichu
+	not in a Table	no és dins d'una Table
+	not allowed directly inside {in}	no permès directament dins de {in}
+	a second {} in its table	un segon {} a la seva taula
+	rows both directly in it and in THead, TBody or TFoot	files tant directament dins seu com dins de THead, TBody o TFoot
+	not the first or last child of its table	no és el primer ni l'últim fill de la seva taula
+	not the first child of its list	no és el primer fill de la seva llista
+	a header cell with no Scope, in a table that doesn't use Headers	una cel·la de capçalera sense Scope, en una taula que no fa servir Headers
+	no ID	sense ID
+	its ID is another Note's too	el seu ID també és el d'una altra Note
+	Page {p} has annotations but no tab order (Tabs)	La pàgina {p} té anotacions però no té ordre de tabulació (Tabs)
+	Page {p} has annotations and tabs in {} order, not structure order (S)	La pàgina {p} té anotacions i les tabulacions en ordre {}, no en ordre d'estructura (S)
+	File attachment annotation on page {p}: its file specification lacks F or UF	Anotació de fitxer adjunt de la pàgina {p}: a la seva especificació de fitxer li falta F o UF
+	Page {p} has a trap network annotation (TrapNet)	La pàgina {p} té una anotació de xarxa de reventats (TrapNet)
+	Printer's mark annotation on page {p} is in the structure tree	L'anotació de marca d'impremta de la pàgina {p} és a l'arbre d'estructura
+	{} annotation on page {p} is in a {ty} tag, not {want}	L'anotació {} de la pàgina {p} és en una etiqueta {ty}, no {want}
+	Field "{}" on page {p} has no description (TU), and its tag no alternate text	El camp "{}" de la pàgina {p} no té descripció (TU), i la seva etiqueta no té text alternatiu
+	Field "{}" on page {p}: its description has no language (Lang)	Camp "{}" de la pàgina {p}: la seva descripció no té idioma (Lang)
+	Link annotation on page {p} has no description (Contents)	L'anotació d'enllaç de la pàgina {p} no té descripció (Contents)
+	{} annotation on page {p}: its description has no language (Lang)	Anotació {} de la pàgina {p}: la seva descripció no té idioma (Lang)
+	{} annotation on page {p} has no description (Contents), and its tag no alternate text	L'anotació {} de la pàgina {p} no té descripció (Contents), i la seva etiqueta no té text alternatiu
+	Page {p}: {n} artifact inside tagged content	Pàgina {p}: {n} artefacte dins de contingut etiquetat
+	Page {p}: {n} artifacts inside tagged content	Pàgina {p}: {n} artefactes dins de contingut etiquetat
+	Page {p}: {n} tagged content item inside an artifact	Pàgina {p}: {n} element de contingut etiquetat dins d'un artefacte
+	Page {p}: {n} tagged content items inside an artifact	Pàgina {p}: {n} elements de contingut etiquetat dins d'un artefacte
+	A form XObject with marked content (MCIDs) is drawn {n} times	Un XObject de formulari amb contingut marcat (MCID) es dibuixa {n} vegades
+	Font {} on page {p} isn't embedded	El tipus de lletra {} de la pàgina {p} no està incrustat
+	Font (unnamed) on page {p} isn't embedded	El tipus de lletra (sense nom) de la pàgina {p} no està incrustat
+	The default optional content configuration (D) has no Name	La configuració de contingut opcional per defecte (D) no té Name
+	An optional content configuration has an AS entry	Una configuració de contingut opcional té una entrada AS
+	Optional content configuration {n} has no Name	La configuració de contingut opcional {n} no té Name
+	The XFA form requires dynamic rendering (dynamicRender)	El formulari XFA requereix renderització dinàmica (dynamicRender)
+	The file is encrypted but its encryption dictionary has no permissions (P)	El fitxer està xifrat, però el seu diccionari de xifratge no té permisos (P)
+	The file has a reference XObject (Ref)	El fitxer té un XObject de referència (Ref)
+	Embedded file "{}": its file specification lacks F or UF	Fitxer incrustat "{}": a la seva especificació de fitxer li falta F o UF
 	… and {n} more	… i {n} més
 	Accessibility Report	Informe d'accessibilitat
 	Filename	Nom del fitxer
