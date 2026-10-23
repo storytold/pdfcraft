@@ -30,6 +30,26 @@ macro_rules! tl_ctx {
     };
 }
 
+// File dialogs (`rfd`) and the system clipboard (`arboard`) are desktop/web-only. On Android
+// neither crate has a backend, so this re-exports the real crates where they exist and the no-op
+// stand-ins in `src/rfd.rs` / `src/arboard.rs` otherwise. Call sites use `crate::rfd` /
+// `crate::arboard`, so the editor degrades gracefully (no file dialog, no clipboard) on Android.
+// The single-component `use` is not redundant: it pins the external crate to the `crate::rfd` /
+// `crate::arboard` path that the Android stand-ins also occupy.
+#[cfg(not(target_os = "android"))]
+#[allow(clippy::single_component_path_imports)]
+pub(crate) use rfd;
+#[cfg(target_os = "android")]
+pub(crate) mod rfd;
+
+// `arboard` is not a wasm dependency (the web build has no system clipboard either): it is only
+// reachable through the Android stand-in or the native crate.
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[allow(clippy::single_component_path_imports)]
+pub(crate) use arboard;
+#[cfg(target_os = "android")]
+pub(crate) mod arboard;
+
 mod a11y_ui;
 mod actions_ui;
 mod appearance;
@@ -1605,7 +1625,7 @@ impl PdfCraftApp {
             (Ok(bytes), false) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.ask_one(
-                    pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
+                    pickers::Ask::Save(crate::rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
                     None,
                     move |app, path| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
                         Ok(()) => app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
@@ -1966,8 +1986,8 @@ impl PdfCraftApp {
 
     /// The File ▸ Open picker: PDFs, and images and text that become PDFs.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_picker() -> rfd::AsyncFileDialog {
-        rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
+    fn open_picker() -> crate::rfd::AsyncFileDialog {
+        crate::rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
     }
 
     pub fn open_dialog(&mut self) {
@@ -1975,7 +1995,9 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
             pickers::PickFor::Open,
-            rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
+            crate::rfd::AsyncFileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
             true,
         );
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
@@ -1984,7 +2006,7 @@ impl PdfCraftApp {
             let inbox = self.inbox.clone();
             let ctx = self.ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                if let Some(h) = rfd::AsyncFileDialog::new()
+                if let Some(h) = crate::rfd::AsyncFileDialog::new()
                     .add_filter("PDF", &["pdf"])
                     .add_filter(tl!("Images and text"), &create_ui::CONVERTIBLE)
                     .pick_file()

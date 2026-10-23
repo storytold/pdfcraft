@@ -3938,12 +3938,16 @@ dependencies = [
 name = "pdfcraft"
 version = "0.13.0"
 dependencies = [
+ "android-activity",
  "chrono",
  "craft-quit",
  "eframe",
  "egui",
  "fmv-macos-events",
+ "jni",
  "log",
+ "ndk",
+ "ndk-context",
  "pdfcraft-engine",
  "pdfcraft-ui-egui",
  "pollster 1.0.1",

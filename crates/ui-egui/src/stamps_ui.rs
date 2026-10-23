@@ -144,7 +144,7 @@ impl PdfCraftApp {
                 Some(p) if [".png", ".jpg", ".pdf"].iter().any(|e| p.ends_with(e)) => read(self, p.into()),
                 Some(_) => {}
                 None => {
-                    let dialog = rfd::AsyncFileDialog::new()
+                    let dialog = crate::rfd::AsyncFileDialog::new()
                         .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
                         .set_title(tl!("Select a file for the stamp"));
                     self.ask_one(crate::pickers::Ask::File(dialog), None, read);

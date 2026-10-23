@@ -1,0 +1,70 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The Rust workspace root (apps/pdfcraft/Cargo.toml is the workspace root's apps/pdfcraft; the
+// android/ dir sits next to apps/, so the workspace root is ../..).
+def rustRoot = file('../..').absolutePath
+
+android {
+    namespace 'ai.storyteller.pdfcraft'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "ai.storyteller.pdfcraft"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "0.5.0"
+        ndk {
+            // Keep in sync with the ABI list in cargoNdkBuild below.
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// Build the Rust `cdylib` (libpdfcraft.so) for each ABI with cargo-ndk and drop the results into
+// `src/main/jniLibs/<abi>/`, where the Android Gradle Plugin packages them. Requires the Rust
+// Android targets (`rustup target add aarch64-linux-android armv7-linux-androideabi
+// x86_64-linux-android`) and an NDK (ANDROID_NDK_HOME / ANDROID_NDK_ROOT, or `~/android-ndk-r23c`).
+tasks.register('cargoNdkBuild') {
+    group = 'build'
+    description = 'Build the Rust cdylib with cargo-ndk into src/main/jniLibs.'
+    doLast {
+        def ndkHome = System.getenv('ANDROID_NDK_HOME')
+            ?: System.getenv('ANDROID_NDK_ROOT')
+            ?: new File(System.getProperty('user.home'), 'android-ndk-r23c').absolutePath
+        ['arm64-v8a', 'armeabi-v7a', 'x86_64'].each { abi ->
+            exec {
+                commandLine 'cargo', 'ndk',
+                    '-t', abi,
+                    '-o', file('src/main/jniLibs').absolutePath,
+                    'build', '--release', '--lib'
+                environment 'ANDROID_NDK_HOME', ndkHome
+                workingDir rustRoot
+            }
+        }
+    }
+}
+
+// Building the APK depends on the native library being present.
+tasks.named('preBuild') {
+    dependsOn 'cargoNdkBuild'
+}

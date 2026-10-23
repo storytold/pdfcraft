@@ -56,7 +56,7 @@ impl PdfCraftApp {
             None => {
                 // Attached on a later frame, and only to the document it was started on.
                 let target = self.active_ids().map(|(_, id)| id);
-                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Attach a file"));
+                let dialog = crate::rfd::AsyncFileDialog::new().set_title(tl!("Attach a file"));
                 self.ask_one(crate::pickers::Ask::File(dialog), target, move |app, p| match std::fs::read(&p) {
                     Ok(data) => {
                         app.add_attachment_comment(page, at, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data)

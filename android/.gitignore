@@ -1,0 +1,13 @@
+# Gradle
+.gradle/
+build/
+
+# Local SDK/NDK location (machine-specific)
+local.properties
+
+# Native libs are produced by `cargoNdkBuild`; they are build artifacts, not sources.
+app/src/main/jniLibs/
+
+# IDE
+.idea/
+*.iml

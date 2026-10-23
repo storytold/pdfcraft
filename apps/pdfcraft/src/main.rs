@@ -25,43 +25,60 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// On Android the crate builds the `cdylib` in lib.rs instead; this binary's desktop modules and
+// dependencies are compiled out, and `fn main` below is an empty stub. Everything desktop-only is
+// gated on `not(target_os = "android")` so the bin still type-checks for the Android target.
+#[cfg(not(target_os = "android"))]
 use std::cell::Cell;
+#[cfg(not(target_os = "android"))]
 use std::rc::Rc;
 
+#[cfg(not(target_os = "android"))]
 use pdfcraft_ui_egui::PdfCraftApp;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(not(target_os = "android"), target_os = "macos"))]
 mod apple_events;
+#[cfg(not(target_os = "android"))]
 mod compositor_gpu;
+#[cfg(not(target_os = "android"))]
 mod decorations;
+#[cfg(not(target_os = "android"))]
 mod logging;
-#[cfg(target_os = "windows")]
+#[cfg(all(not(target_os = "android"), target_os = "windows"))]
 mod motion;
+#[cfg(not(target_os = "android"))]
 mod reopen;
+#[cfg(not(target_os = "android"))]
 mod settings;
+#[cfg(not(target_os = "android"))]
 mod single_instance;
+#[cfg(not(target_os = "android"))]
 mod text_scale;
+#[cfg(not(target_os = "android"))]
 mod updates;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
 
 /// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
+#[cfg(not(target_os = "android"))]
 const APP_ID: &str = "ai.storyteller.pdfcraft";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
 /// transparent margin; Windows and Linux get the full-bleed tile.
-#[cfg(target_os = "macos")]
+#[cfg(all(not(target_os = "android"), target_os = "macos"))]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft-1024.png");
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "android"), not(target_os = "macos")))]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
 
 /// The app was called PrintCraft before; settings saved then are under this key.
+#[cfg(not(target_os = "android"))]
 const LEGACY_STORAGE_KEY: &str = "printcraft";
 
 /// The preferences folder (`app.ron`, docs/development.md). In portable mode
 /// it is `PdfCraftData` beside the executable (#157). XDG desktops use the configuration base;
 /// other platforms retain eframe's PdfCraft folder. Logs and recovery stay in the data folder.
+#[cfg(not(target_os = "android"))]
 fn settings_dir() -> Option<std::path::PathBuf> {
     let legacy = eframe::storage_dir("PdfCraft");
     match settings::directory(
@@ -83,6 +100,7 @@ fn settings_dir() -> Option<std::path::PathBuf> {
 /// name once, so an upgrade keeps recent files, preferences and unsaved work. Best effort: a
 /// folder is left alone when the new one already exists or the move fails. A portable copy leaves
 /// the per-user folders alone.
+#[cfg(not(target_os = "android"))]
 fn migrate_legacy_folders() {
     if pdfcraft_ui_egui::portable::data_dir().is_some() {
         return;
@@ -114,6 +132,7 @@ fn migrate_legacy_folders() {
 /// `file://` argument (`file:///path` or `file://localhost/path`) to a plain path here so the rest
 /// of the app, which only ever opens paths, is unaffected. Other schemes (`http://`, `mailto:`…),
 /// URIs naming another host, and plain paths pass through untouched.
+#[cfg(not(target_os = "android"))]
 fn path_from_arg(arg: String) -> String {
     let Some(rest) = arg.strip_prefix("file://") else { return arg };
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
@@ -143,6 +162,7 @@ fn path_from_arg(arg: String) -> String {
 /// so a path with spaces arrives split into several arguments (Acrobat accepts this). When an
 /// argument names no file but it and the ones after it, joined with one space, do, rejoin them
 /// (the longest such run). Anything else is kept as given. Runs of several spaces can't be recovered: the split has lost them.
+#[cfg(not(target_os = "android"))]
 fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<String> {
     let mut out = Vec::with_capacity(args.len());
     let mut i = 0;
@@ -168,6 +188,7 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
     out
 }
 
+#[cfg(not(target_os = "android"))]
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -283,7 +304,14 @@ fn main() -> eframe::Result {
     }
 }
 
+/// Android: the real entry point is `android_main` in `lib.rs` (the `cdylib`, built by
+/// `cargo ndk --lib`). This stub `main` exists only so the `pdfcraft` binary target also
+/// type-checks for the Android target instead of failing with "no `main` function".
+#[cfg(target_os = "android")]
+fn main() {}
+
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
+#[cfg(not(target_os = "android"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RendererChoice {
     /// wgpu, then OpenGL if wgpu can't start (unset, or anything unrecognised).
@@ -294,6 +322,7 @@ enum RendererChoice {
     Gl,
 }
 
+#[cfg(not(target_os = "android"))]
 fn renderer_choice(value: Option<&str>) -> RendererChoice {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("wgpu") => RendererChoice::Wgpu,
@@ -304,11 +333,13 @@ fn renderer_choice(value: Option<&str>) -> RendererChoice {
 
 /// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of
 /// nobody, and it failed before the app was created (so while starting the renderer, not later).
+#[cfg(not(target_os = "android"))]
 fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
     choice == RendererChoice::Auto && !app_started
 }
 
 /// The window and renderer settings for one run.
+#[cfg(not(target_os = "android"))]
 fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
@@ -339,6 +370,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
 }
 
 /// What the command line asked for, kept so a second run (with OpenGL) can start the same way.
+#[cfg(not(target_os = "android"))]
 #[derive(Clone)]
 struct Launch {
     files: Vec<String>,
@@ -351,17 +383,18 @@ struct Launch {
 }
 
 /// Whether the window is a native Wayland one (not X11 or XWayland).
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(not(target_os = "android"), unix, not(target_os = "macos")))]
 fn native_wayland(cc: &eframe::CreationContext<'_>) -> bool {
     use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
     cc.display_handle().is_ok_and(|handle| matches!(handle.as_raw(), RawDisplayHandle::Wayland(_)))
 }
 
-#[cfg(not(all(unix, not(target_os = "macos"))))]
+#[cfg(all(not(target_os = "android"), not(all(unix, not(target_os = "macos")))))]
 fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+#[cfg(not(target_os = "android"))]
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
@@ -459,6 +492,7 @@ fn app_creator<'a>(
 /// a GPU, which makes everything slower. egui-wgpu only logs it, so the reporter of #519 had to find
 /// it in pdfcraft.log. The OpenGL fallback isn't covered: glow only reports its renderer through
 /// `unsafe` calls.
+#[cfg(not(target_os = "android"))]
 fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
     if device_type == eframe::wgpu::DeviceType::Cpu {
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
@@ -471,6 +505,7 @@ fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::De
 /// script driving nothing, and the file that couldn't be replaced may be another user's, planted
 /// at a shared path such as `/tmp/pc.json` to receive the commands. This runs before any document
 /// opens, so nothing is lost.
+#[cfg(not(target_os = "android"))]
 fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::control::Endpoint>) -> Result<(), String> {
     match endpoint.and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
         // Never the token (AGENTS.md §3): it stays in the owner-only file.
@@ -492,6 +527,7 @@ fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::
 /// replaces `path`. Opening `path` itself would follow a link planted there and truncate whatever
 /// it points at; a rename replaces the link and leaves its target alone. A reader polling for the
 /// file also never sees it half-written.
+#[cfg(not(target_os = "android"))]
 fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()> {
     use std::io::{ErrorKind, Write};
     let json = serde_json::json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
@@ -563,6 +599,7 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
 ///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
 ///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
+#[cfg(not(target_os = "android"))]
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
@@ -617,12 +654,14 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
 
 /// How Direct3D 12 presents on Windows: through a DirectComposition visual (issue #2738), unless
 /// `WGPU_DX12_PRESENTATION_SYSTEM` asked for something else (`asked`).
+#[cfg(not(target_os = "android"))]
 fn dx12_presentation(asked: Option<eframe::wgpu::Dx12SwapchainKind>) -> eframe::wgpu::Dx12SwapchainKind {
     asked.unwrap_or(eframe::wgpu::Dx12SwapchainKind::DxgiFromVisual)
 }
 
 /// Surface textures must fit the device's enabled limits, not just the physical GPU's limits.
 /// Clamp egui-wgpu's backend-specific requirements before enabling the adapter's full 2D extent.
+#[cfg(not(target_os = "android"))]
 fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe::wgpu::Limits) -> eframe::wgpu::Limits {
     required = required.or_worse_values_from(supported);
     required.max_texture_dimension_2d = supported.max_texture_dimension_2d;
@@ -630,6 +669,7 @@ fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe
 }
 
 /// A GPU with a connected monitor.
+#[cfg(not(target_os = "android"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DisplayGpu {
     /// PCI `(vendor, device)` ids.
@@ -641,6 +681,7 @@ struct DisplayGpu {
 
 /// The GPUs with a connected monitor, as far as the system says: Linux reads the DRM connectors
 /// in sysfs, Windows asks for the display devices attached to the desktop. Empty elsewhere.
+#[cfg(not(target_os = "android"))]
 fn display_gpus() -> Vec<DisplayGpu> {
     #[cfg(target_os = "linux")]
     {
@@ -657,6 +698,7 @@ fn display_gpus() -> Vec<DisplayGpu> {
 }
 
 /// Records one display of GPU `pci`; a GPU driving several displays is one entry.
+#[cfg(not(target_os = "android"))]
 #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 fn add_display_gpu(gpus: &mut Vec<DisplayGpu>, pci: (u32, u32), primary: bool) {
     match gpus.iter_mut().find(|g| g.pci == pci) {
@@ -742,6 +784,7 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
 /// primary display (a hybrid laptop's panel, #8; the primary display on Windows, #378), or else,
 /// with no primary display known (a Linux desktop with a monitor on each GPU, #445), the discrete
 /// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software.
+#[cfg(not(target_os = "android"))]
 fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu], compositor: Option<(u32, u32)>) -> Option<usize> {
     use eframe::wgpu::DeviceType;
     let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);
@@ -769,6 +812,7 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
 }
 
 #[cfg(test)]
+#[cfg(not(target_os = "android"))]
 mod tests {
     use pdfcraft_ui_egui::control::Endpoint;
 

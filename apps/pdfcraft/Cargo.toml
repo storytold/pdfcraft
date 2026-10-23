@@ -5,26 +5,62 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lints]
-workspace = true
+# Android: the cdylib exports `android_main` (src/lib.rs) for the Gradle/NativeActivity skeleton;
+# the desktop binary stays src/main.rs. `rlib` keeps the lib linkable from integration tests.
+[lib]
+name = "pdfcraft"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdfcraft"
+path = "src/main.rs"
+
+# Like the shared `unsafe_code = "forbid"`, relaxed to `deny` here: android-activity's glue links
+# `extern "Rust" { fn android_main }`, so the Android entry (lib.rs) must export the unmangled
+# symbol with `#[unsafe(no_mangle)]` — the crate's only unsafe op, scoped with `#[allow(unsafe_code)]`.
+# The clippy lints mirror `[workspace.lints]`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
 
 [dependencies]
-# Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
-# trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
-ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
-rustls-native-certs = "0.8"
 pdfcraft-ui-egui = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
-# wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
-# driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links"] }
+# wgpu draws. Android and the web drop the desktop-only backends and the OpenGL fallback; the
+# `cfg(not(android))` table below re-adds them where they apply. Cargo merges its features with
+# this base set.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
 # The log timestamp goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
+
+# Desktop (non-Android) only: the OpenGL fallback, accessibility, Wayland/X11 windowing, the update
+# check and its TLS roots. None of these exist on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { workspace = true, features = ["accesskit", "wayland", "x11", "glow"] }
+# Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
+# trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+
+# Android: android-activity bridges JNI to `android_main` (src/lib.rs). ndk/ndk-context/jni are the
+# glue eframe 0.36 / winit 0.30 already use; versions match Cargo.lock exactly. The NativeActivity
+# backend is chosen by `eframe/android-native-activity` -> egui-winit -> winit ->
+# android-activity/native-activity (android-activity has no default backend).
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { workspace = true, features = ["android-native-activity"] }
+android-activity = "0.6.1"
+ndk = "0.9.0"
+ndk-context = "0.1.1"
+jni = "0.22.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
