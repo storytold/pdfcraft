@@ -26,10 +26,18 @@ impl JsOutput {
         self.alerts.is_empty() && self.console.is_empty() && self.requests.is_empty() && self.errors.is_empty()
     }
 
+    /// Collect automatic field-script effects (Keystroke, Validate, Calculate and Format).
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
-        self.requests.extend(o.requests.iter().cloned());
+        for request in &o.requests {
+            match request {
+                Request::Print => self
+                    .console
+                    .push("Print requested by an automatic field script was ignored; use a button or the JavaScript console to print".into()),
+                request => self.requests.push(request.clone()),
+            }
+        }
         self.errors.extend(o.error.iter().cloned());
     }
 
