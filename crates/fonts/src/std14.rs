@@ -93,7 +93,25 @@ impl Std14 {
     /// The advance of one character `code`, in thousandths of an em. Zero where the font's
     /// encoding leaves the code undefined.
     pub fn width(self, code: u8) -> f64 {
-        f64::from(crate::std14_metrics::WIDTHS[self as usize][code as usize])
+        let idx = if matches!(self, Self::Symbol | Self::ZapfDingbats) {
+            code
+        } else {
+            // The six Turkish letters (`Ğ` `ğ` `İ` `ı` `Ş` `ş`) placed in WinAnsiEncoding's six
+            // unassigned 0x7F–0x9F slots have the Core14 AFM advance widths of their base letters
+            // (`dotlessi` is 278 in Helvetica and Helvetica-Oblique, the width of `I`, and the
+            // width of `i` in every other standard text face).
+            match code {
+                0x7f => b'G',
+                0x81 => b'g',
+                0x8d => b'I',
+                0x8f if matches!(self, Self::Helvetica | Self::HelveticaOblique) => b'I',
+                0x8f => b'i',
+                0x90 => b'S',
+                0x9d => b's',
+                c => c,
+            }
+        };
+        f64::from(crate::std14_metrics::WIDTHS[self as usize][idx as usize])
     }
 
     /// The advance of `code` at `size` points.

@@ -1248,6 +1248,9 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
     };
+    if values.iter().chain(&shown).any(|s| pdfcraft_fonts::has_turkish(s)) || f.options.iter().any(|(_, d)| pdfcraft_fonts::has_turkish(d)) {
+        author::ensure_turkish_dr(doc);
+    }
     let mut undrawn = false;
     for w in &f.widgets {
         let (stream, missing) = match &shown {

@@ -822,8 +822,10 @@ impl Metrics {
         }
         match self.std14 {
             // A font with no /Widths is one of the standard 14; use its published metrics.
+            // When /Encoding or /Differences maps a code to a known character, measure that
+            // character's glyph rather than whatever WinAnsiEncoding has at the raw byte.
             // Codes the font's encoding leaves undefined fall back to /MissingWidth.
-            Some(f) => match u8::try_from(self.std14_code(f, code)).map(|c| f.width(c)).unwrap_or(0.0) {
+            Some(f) => match self.std14_code(f, code).map(|c| f.width(c)).unwrap_or(0.0) {
                 0.0 => self.default * self.scale,
                 w => w / 1000.0,
             },
@@ -834,12 +836,18 @@ impl Metrics {
     /// Where the standard-14 table, indexed by WinAnsi, holds the glyph `code` draws in this font:
     /// its encoding (base and `/Differences`) names the glyph, so a remapped code is measured as
     /// the glyph it now shows (#2894). Symbol and ZapfDingbats are indexed by their own encodings,
-    /// and a glyph WinAnsi has no code for keeps the code itself.
-    fn std14_code(&self, face: crate::Std14, code: u32) -> u32 {
+    /// and a glyph WinAnsi has no code for keeps the code itself (except the six unassigned WinAnsi
+    /// bytes reserved for Turkish `/Differences`, which stay undefined under plain `/WinAnsiEncoding`).
+    fn std14_code(&self, face: crate::Std14, code: u32) -> Option<u8> {
         if matches!(face, crate::Std14::Symbol | crate::Std14::ZapfDingbats) {
-            return code;
+            return u8::try_from(code).ok();
         }
-        self.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(crate::win_ansi_byte).map_or(code, u32::from)
+        self.unicode
+            .encoding
+            .get(&code)
+            .and_then(|t| only_char(t))
+            .and_then(crate::win_ansi_byte)
+            .or_else(|| u8::try_from(code).ok().filter(|b| !crate::has_turkish_bytes(&[*b])))
     }
 
     /// Word spacing applies to the single-byte code 32 (§9.3.3).

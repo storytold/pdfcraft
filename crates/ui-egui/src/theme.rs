@@ -228,6 +228,8 @@ pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
 pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
+/// The name of the installed CJK face [`installed_font_definitions`] may add in builds without craft-fonts.
+pub const SYSTEM_CJK_FALLBACK: &str = "system-cjk-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
@@ -240,10 +242,11 @@ pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
-/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
-/// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
-/// without such faces.
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew, Hangul and (when built without
+/// craft-fonts) CJK faces, when there are, end every family just before that one, so Hindi,
+/// Telugu (#1531), Sinhala and Tamil (#1688) and Korean text, such as a file name or a tab title,
+/// Hebrew file names (#586) and CJK text (such as `日本語`, `简体中文` and `繁體中文` in
+/// Preferences) draw in a build without such faces.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -252,6 +255,21 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::system_fonts::{Need, fallback};
+        let need = match cjk {
+            _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
+            CjkPreference::SimplifiedChinese => Need::Hans,
+            CjkPreference::TraditionalChinese => Need::Hant,
+            CjkPreference::Default => Need::Other,
+        };
+        let extra = match need {
+            Need::Other if pdfcraft_fonts::ui_japanese_fonts().is_empty() => {
+                fallback(Need::Japanese).or_else(|| fallback(Need::Hans)).or_else(|| fallback(Need::Hant))
+            }
+            // In Chinese mode without craft-fonts (where no embedded Arabic face is present),
+            // SYSTEM_FALLBACK is taken by the Chinese face, so keep the general fallback here too.
+            Need::Hans | Need::Hant if pdfcraft_fonts::ui_arabic_fonts().is_empty() => fallback(Need::Other),
+            _ => None,
+        };
         // Before the general installed face, which stays the last fallback outside Chinese.
         for (name, data) in [
             (SYSTEM_DEVANAGARI_FALLBACK, crate::system_fonts::devanagari_fallback()),
@@ -260,6 +278,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
             (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
             (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
+            (SYSTEM_CJK_FALLBACK, extra),
         ] {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
@@ -267,18 +286,12 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                 stack.push(name.to_owned());
             }
         }
-        let need = match cjk {
-            _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
-            CjkPreference::SimplifiedChinese => Need::Hans,
-            CjkPreference::TraditionalChinese => Need::Hant,
-            CjkPreference::Default => Need::Other,
-        };
         if let Some(data) = fallback(need) {
             fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
             let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
             for stack in fonts.families.values_mut() {
                 let at = match need {
-                    Need::Other => None,
+                    Need::Other | Need::Japanese => None,
                     Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
                 };
                 stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());

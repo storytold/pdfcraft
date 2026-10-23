@@ -317,10 +317,16 @@ fn chinese_ui_uses_an_installed_chinese_face() {
             assert!(missing.is_empty(), "{cjk:?} {id:?} lacks {missing}");
         }
     }
-    // Other languages keep the installed face last, as before.
+    // Other languages keep the installed face last, as before, and still cover CJK language names in Preferences.
     let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
     for stack in defs.families.values() {
         assert!(stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).is_none_or(|i| i + 1 == stack.len()), "{stack:?}");
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        for name in ["日本語", "简体中文", "繁體中文"] {
+            assert!(fonts.has_glyphs(&id, name), "{id:?} lacks {name}");
+        }
     }
 }
 

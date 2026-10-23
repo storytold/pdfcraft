@@ -716,7 +716,7 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
     font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    font.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(text));
     let fr = doc.add(font);
     let mut page_lines: Vec<Vec<String>> = vec![Vec::new()];
     for l in lines.iter().take(lines.len().saturating_sub(1)) {
