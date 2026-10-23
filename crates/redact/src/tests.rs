@@ -2319,7 +2319,6 @@ fn a_redacted_or_sanitized_copy_gets_a_new_identifier() {
     assert!(crate::sanitize::sanitize(&mut doc).unwrap().is_empty());
     assert_new(&saved_ids(&doc), "sanitizing without hidden information");
 }
-}
 
 /// A copy that lost hidden information through `remove_hidden` itself is a different file from its
 /// source, so it does not keep the source's identifier either: the remove-hidden edit and the
