@@ -2479,3 +2479,20 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	复制注释
+	Copy comments	复制注释
+	Paste comments	粘贴注释
+	Delete comments	删除注释
+	Move comments	移动注释
+	Complete	完成
+	Undo last point	撤销最后一个点
+	Cancel drawing	取消绘制
+	Copy comments first	请先复制注释
+	Click where the copied comments go; Escape lets them go	点击复制的注释要放置的位置；按 Escape 放弃
+	The copied comments are larger than this page; they were placed as they are	复制的注释比此页面大，已按原样放置
+	The clipboard holds no comments	剪贴板中没有注释
+	Comments: {n}	注释：{n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	此处的更改将应用于所有 {n} 条选中的注释

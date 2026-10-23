@@ -26,6 +26,9 @@ pub struct PropsDraft {
     /// Acrobat's Make Properties Default box: on OK, new comments of this kind take the edited
     /// colour, opacity and line width too.
     pub make_default: bool,
+    /// The other selected comments, each with its own properties: OK makes the same changes to
+    /// them where they apply (a colour to every one, a font size to text boxes, …).
+    pub others: Vec<(usize, usize, CommentProps)>,
 }
 
 const ICONS: [NoteIcon; 14] = NoteIcon::ALL;
@@ -116,48 +119,105 @@ impl PdfCraftApp {
         self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))]);
     }
 
-    /// Open Comment Properties for the comment at `(page, index)` of the active document.
+    /// Give every selected comment of the active document `color`, as one undo step.
+    pub fn colour_selected_comments(&mut self, color: pdfcraft_engine::Rgb) {
+        self.colour_selection(color, |_| true);
+    }
+
+    /// Give the selected comments that `only` picks `color`, as one undo step: those whose look can
+    /// change and that aren't locked (a locked one would refuse the whole step).
+    pub(crate) fn colour_selection(&mut self, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let keys = self.views.get(i).map(|v| v.comments.selection()).unwrap_or_default();
+        let mut edits: Vec<Edit> = keys
+            .into_iter()
+            .filter(|(p, ix)| doc.info.annotations.iter().any(|a| a.page == *p && a.index == *ix && a.in_reply_to.is_none() && only(a)))
+            .filter(|(p, ix)| doc.comment_props(*p, *ix).is_some_and(|c| c.restylable && !c.locked))
+            .map(|(page, index)| Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None })
+            .collect();
+        match edits.len() {
+            0 => {}
+            1 => {
+                self.apply_edit(edits.remove(0));
+            }
+            _ => {
+                self.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+            }
+        }
+    }
+
+    /// Open Comment Properties for the comment at `(page, index)` of the active document. When it
+    /// is one of several selected comments, the changes go to all of them.
     pub fn open_comment_props(&mut self, page: usize, index: usize) {
-        let Some((_, id)) = self.active_ids() else { return };
-        let Some(p) = self.session.get(id).and_then(|d| d.comment_props(page, index)) else { return };
-        self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false });
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let Some(p) = doc.comment_props(page, index) else { return };
+        let selection = self.views.get(i).map(|v| &v.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
+        let others =
+            selection.into_iter().filter(|k| *k != (page, index)).filter_map(|(pg, ix)| doc.comment_props(pg, ix).map(|c| (pg, ix, c))).collect();
+        self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false, others });
         self.dialog = Some(crate::Dialog::CommentProps);
     }
 }
 
-/// The edits that make the comment match the draft (empty when nothing changed).
+/// The edits that make the comment match the draft (empty when nothing changed), and make the
+/// same changes to the other selected comments where they apply. Locks come off first and go on
+/// last, as a locked comment refuses other changes; another comment that stays locked is left
+/// as it is.
 pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     let (o, e) = (&d.original, &d.edited);
+    let targets: Vec<(usize, usize, &CommentProps)> =
+        std::iter::once((d.page, d.index, o)).chain(d.others.iter().map(|(p, i, c)| (*p, *i, c))).collect();
     let mut out = Vec::new();
-    // A locked comment refuses other changes: unlock first, lock last.
-    if o.locked && !e.locked {
-        out.push(Edit::LockAnnotation { page: d.page, index: d.index, locked: false });
+    // Unticking Locked unlocks every selected comment.
+    let unlocking = o.locked && !e.locked;
+    for &(page, index, t) in &targets {
+        if unlocking && t.locked {
+            out.push(Edit::LockAnnotation { page, index, locked: false });
+        }
     }
+    for (n, &(page, index, t)) in targets.iter().enumerate() {
+        if n > 0 && t.locked && !unlocking {
+            continue;
+        }
+        changes(o, e, page, index, t, &mut out);
+    }
+    for &(page, index, t) in &targets {
+        if !o.locked && e.locked && !t.locked {
+            out.push(Edit::LockAnnotation { page, index, locked: true });
+        }
+    }
+    out
+}
+
+/// The changes from `o` to `e` (the draft) for the comment at `(page, index)`, whose own
+/// properties are `t`: only those its kind has (a line width for shapes and lines, a fill for
+/// shapes, a font size for text, …).
+fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &CommentProps, out: &mut Vec<Edit>) {
     let color = (e.color != o.color).then_some(e.color).flatten();
     let opacity = ((e.opacity - o.opacity).abs() > 1e-6).then_some(e.opacity);
-    let width = (e.width != o.width).then_some(e.width).flatten();
-    let endings = (e.endings != o.endings).then(|| e.endings.clone()).flatten();
-    if e.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
-        out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width, endings });
+    let width = (e.width != o.width).then_some(e.width).flatten().filter(|_| t.width.is_some());
+    let endings =
+        (e.endings != o.endings).then(|| e.endings.clone()).flatten().filter(|ends| t.endings.as_ref().is_some_and(|own| own.len() == ends.len()));
+    if t.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
+        out.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings });
     }
-    if e.restylable && e.fillable && e.fill != o.fill {
-        out.push(Edit::FillAnnotation { page: d.page, index: d.index, fill: e.fill });
+    if t.restylable && t.fillable && e.fill != o.fill {
+        out.push(Edit::FillAnnotation { page, index, fill: e.fill });
     }
-    if e.restylable
+    if t.restylable
+        && t.font_size.is_some()
         && let Some(size) = e.font_size.filter(|s| Some(*s) != o.font_size)
     {
-        out.push(Edit::FontSizeAnnotation { page: d.page, index: d.index, size });
+        out.push(Edit::FontSizeAnnotation { page, index, size });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
-    let icon = (e.icon != o.icon).then_some(e.icon).flatten();
+    let icon = (e.icon != o.icon).then_some(e.icon).flatten().filter(|_| t.icon.is_some());
     if author.is_some() || subject.is_some() || icon.is_some() {
-        out.push(Edit::SetAnnotationInfo { page: d.page, index: d.index, author, subject, icon });
+        out.push(Edit::SetAnnotationInfo { page, index, author, subject, icon });
     }
-    if !o.locked && e.locked {
-        out.push(Edit::LockAnnotation { page: d.page, index: d.index, locked: true });
-    }
-    out
 }
 
 /// Draw the dialog; returns (apply, cancel).
@@ -186,6 +246,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let Some(d) = app.comment_props.as_mut() else { return (false, true) };
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{kind} Properties"), &[("kind", &kind)])).font(theme::semibold(18.0)));
+    if !d.others.is_empty() {
+        let n = (d.others.len() + 1).to_string();
+        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Changes here apply to all {n} selected comments"), &[("n", &n)])).color(t.text_muted));
+    }
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in

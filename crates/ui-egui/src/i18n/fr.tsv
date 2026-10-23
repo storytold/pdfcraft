@@ -2781,3 +2781,20 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Copier le commentaire
+	Copy comments	Copier les commentaires
+	Paste comments	Coller les commentaires
+	Delete comments	Supprimer les commentaires
+	Move comments	Déplacer les commentaires
+	Complete	Terminer
+	Undo last point	Annuler le dernier point
+	Cancel drawing	Annuler le dessin
+	Copy comments first	Copiez d’abord des commentaires
+	Click where the copied comments go; Escape lets them go	Cliquez là où les commentaires copiés doivent aller ; Échap les relâche
+	The copied comments are larger than this page; they were placed as they are	Les commentaires copiés sont plus grands que cette page ; ils ont été placés tels quels
+	The clipboard holds no comments	Le presse-papiers ne contient aucun commentaire
+	Comments: {n}	Commentaires : {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Les modifications faites ici s’appliquent aux {n} commentaires sélectionnés

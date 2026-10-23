@@ -161,6 +161,7 @@ pub use pdfcraft_redact::sanitize::{HIDDEN, Hidden};
 pub use pdfcraft_sign as sign;
 pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, TrustStore};
 pub use pdfcraft_xfdf::Format as DataFormat;
+pub use pdfcraft_xfdf::{Outline as CommentOutline, comment_count, comment_outlines, comments_bounds, is_xfdf_comments};
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
 /// filled-in PDF form), as CSV with one row per file.
@@ -280,6 +281,7 @@ fn scope_of(edit: &Edit) -> Scope {
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
@@ -1821,6 +1823,15 @@ pub enum Edit {
         name: String,
         bytes: Arc<Vec<u8>>,
     },
+    /// Paste copied comments (XFDF from [`Session::export_comments`]) onto `page` as new
+    /// comments: copies under names of their own, so nothing is replaced and pasting twice
+    /// gives two sets; replies keep their copied parent.
+    PasteComments {
+        xfdf: String,
+        page: usize,
+        /// Where the copies go: moved by (dx, dy) in user space, or at their own positions.
+        offset: Option<[f64; 2]>,
+    },
     /// Remove Hidden Information: the chosen categories.
     RemoveHidden {
         which: Vec<Hidden>,
@@ -1975,6 +1986,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add file attachment",
     "Add stamp",
     "Delete comment",
+    "Paste comments",
     "Edit comment",
     "Reply",
     "Set status None",
@@ -2103,6 +2115,7 @@ impl Edit {
             Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
+            Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
@@ -2270,6 +2283,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
@@ -2521,6 +2535,14 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
+        }
+        Edit::PasteComments { xfdf, page, offset } => {
+            // Names from the edit's own id generator: unique to this paste within the document.
+            let prefix = cx.meta().id;
+            let report = pdfcraft_xfdf::import_comments(doc, xfdf, Some(*page), Some(&prefix), *offset)?;
+            if report.comments == 0 {
+                return Err(EditError::Invalid("the clipboard holds no comments".into()));
+            }
         }
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
@@ -4568,6 +4590,19 @@ impl Session {
         })
         .map_err(EditError::Write)?
         .map_err(EditError::Write)
+    }
+
+    /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
+    /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
+    pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        guard(|| pdfcraft_xfdf::export_xfdf_comments(&cos, which, &doc.name)).map_err(EditError::Write)
     }
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).

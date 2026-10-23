@@ -2537,3 +2537,20 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Копіювати коментар
+	Copy comments	Копіювати коментарі
+	Paste comments	Вставити коментарі
+	Delete comments	Видалити коментарі
+	Move comments	Перемістити коментарі
+	Complete	Завершити
+	Undo last point	Скасувати останню точку
+	Cancel drawing	Скасувати малювання
+	Copy comments first	Спочатку скопіюйте коментарі
+	Click where the copied comments go; Escape lets them go	Клацніть там, куди помістити скопійовані коментарі; Escape відпускає їх
+	The copied comments are larger than this page; they were placed as they are	Скопійовані коментарі більші за цю сторінку; їх розміщено як є
+	The clipboard holds no comments	У буфері обміну немає коментарів
+	Comments: {n}	Коментарі: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Зміни тут застосовуються до всіх вибраних коментарів ({n})

@@ -2822,3 +2822,20 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Kopírovat komentář
+	Copy comments	Kopírovat komentáře
+	Paste comments	Vložit komentáře
+	Delete comments	Odstranit komentáře
+	Move comments	Přesunout komentáře
+	Complete	Dokončit
+	Undo last point	Vzít zpět poslední bod
+	Cancel drawing	Zrušit kreslení
+	Copy comments first	Nejprve zkopírujte komentáře
+	Click where the copied comments go; Escape lets them go	Klikněte tam, kam mají zkopírované komentáře přijít; Escape je pustí
+	The copied comments are larger than this page; they were placed as they are	Zkopírované komentáře jsou větší než tato stránka; byly umístěny tak, jak jsou
+	The clipboard holds no comments	Schránka neobsahuje žádné komentáře
+	Comments: {n}	Komentáře: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Změny zde platí pro všechny vybrané komentáře ({n})

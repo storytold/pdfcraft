@@ -48,6 +48,13 @@ impl PdfCraftApp {
         } else {
             (None, 0, false)
         };
+        // What a paste adds is what it selects afterwards: the page's comments before it.
+        let paste_before: Option<Vec<Option<String>>> = match &edit {
+            Edit::PasteComments { page, .. } => {
+                self.session.get(id).map(|d| d.info.annotations.iter().filter(|a| a.page == *page).map(|a| a.name.clone()).collect())
+            }
+            _ => None,
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
@@ -151,11 +158,12 @@ impl PdfCraftApp {
                         if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
                             && self.quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
                     {
-                        view.comments.selected = None;
+                        view.comments.clear_selection();
                     }
                     Edit::AddAnnotation(a) => {
-                        // Select the new comment (appended last among the page's comments).
+                        // Select the new comment alone (appended last among the page's comments).
                         let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
+                        view.comments.clear_selection();
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
                         // A new highlight opens its note for typing straight away, as in Acrobat,
@@ -167,7 +175,26 @@ impl PdfCraftApp {
                             view.comments.open_editor(a.page, n, String::new());
                         }
                     }
-                    Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+                    // A group moved together stays selected (its positions don't change), so it
+                    // can be moved or copied again; anything else in a batch clears the selection.
+                    Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
+                    Edit::DeleteAnnotation { .. } | Edit::Batch { .. } => view.comments.clear_selection(),
+                    // The copies the paste added (and nothing that was there before): select them all.
+                    Edit::PasteComments { page, .. } => {
+                        let before = paste_before.unwrap_or_default();
+                        let mut new: Vec<(usize, usize)> = info
+                            .annotations
+                            .iter()
+                            .filter(|x| x.page == page && x.in_reply_to.is_none() && !before.contains(&x.name))
+                            .map(|x| (page, x.index))
+                            .collect();
+                        view.comments.clear_selection();
+                        if !new.is_empty() {
+                            view.comments.selected = Some(new.remove(0));
+                            view.comments.also = new;
+                            view.comments.reveal = true;
+                        }
+                    }
                     _ => {}
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
@@ -235,7 +262,7 @@ impl PdfCraftApp {
                 if let Some(doc) = self.session.get(id) {
                     self.views[i].document_changed(&doc.info);
                 }
-                self.views[i].comments.selected = None;
+                self.views[i].comments.clear_selection();
                 let label = crate::i18n::edit_label(&label);
                 if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);

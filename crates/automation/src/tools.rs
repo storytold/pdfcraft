@@ -863,6 +863,25 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
         t(
+            "comments_copy",
+            "Copy comments",
+            "The XFDF of these comments, each with its replies: what Copy puts on the clipboard. Paste it into this or another document with comments_paste. `comments`: [[page, index], …], 1-based as comment_list reports them.",
+        )
+        .ro()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "comments": { "type": "array", "items": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2 }, "minItems": 1 }
+            }),
+            &["doc", "comments"],
+        )),
+        t(
+            "comments_paste",
+            "Paste comments",
+            "Add the comments of an XFDF text (from comments_copy) to `page` as new comments: copies under names of their own, so nothing in the document is replaced and pasting twice gives two sets; replies keep their copied parent. `at` [x, y] (points, origin at the top-left of the displayed page, y down, as comment_add takes them) puts the centre of the copies' bounding box there; without it they keep their positions. Undoable.",
+        )
+        .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "xfdf": { "type": "string" }, "at": point() }), &["doc", "page", "xfdf"])),
+        t(
             "doc_protect",
             "Protect with passwords",
             "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it. permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy/accessibility; those restrictions (and their defaults) apply only when permissions_password is given. With open_password alone the document is encrypted and everything stays allowed, so passing a restriction without permissions_password is an error. Passwords are never echoed back. Undoable.",

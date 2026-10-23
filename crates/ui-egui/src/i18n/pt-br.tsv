@@ -2800,3 +2800,20 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Copiar comentário
+	Copy comments	Copiar comentários
+	Paste comments	Colar comentários
+	Delete comments	Excluir comentários
+	Move comments	Mover comentários
+	Complete	Concluir
+	Undo last point	Desfazer o último ponto
+	Cancel drawing	Cancelar o desenho
+	Copy comments first	Copie comentários primeiro
+	Click where the copied comments go; Escape lets them go	Clique onde os comentários copiados devem ficar; Esc os solta
+	The copied comments are larger than this page; they were placed as they are	Os comentários copiados são maiores que esta página; foram colocados como estão
+	The clipboard holds no comments	A área de transferência não contém comentários
+	Comments: {n}	Comentários: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	As alterações aqui se aplicam a todos os {n} comentários selecionados

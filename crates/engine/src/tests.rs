@@ -7438,3 +7438,39 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     assert!(pages[0].images.is_empty(), "the picture is past the budget");
     assert_eq!(truncated, [0]);
 }
+
+/// Copy and paste: the copies of a comment and its reply land on the asked-for page of another
+/// document under names of their own (nothing replaced; a second paste gives a second set),
+/// undo takes a paste away as one step, and a clipboard without comments is refused.
+#[test]
+fn pasting_copied_comments_adds_copies_that_undo_as_one_step() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Done".into(), author: "Ada".into() }).unwrap();
+    let xfdf = s.export_comments(id, &[(1, 0)]).unwrap();
+    assert!(xfdf.contains("<square") && xfdf.contains("inreplyto="), "{xfdf}");
+    let other = s.open("other.pdf", None, Arc::new(fixture(2)), None).expect("opens");
+    s.apply(other, Edit::PasteComments { xfdf: xfdf.clone(), page: 0, offset: None }).unwrap();
+    let a = s.get(other).unwrap().info.annotations.clone();
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert!(a.iter().all(|x| x.page == 0), "on the asked-for page: {a:?}");
+    let parent = a.iter().find(|x| x.in_reply_to.is_none()).unwrap();
+    let reply = a.iter().find(|x| x.in_reply_to.is_some()).unwrap();
+    assert_eq!(reply.in_reply_to, parent.name, "the reply follows its copied parent");
+    assert_ne!(parent.name, s.get(id).unwrap().info.annotations[0].name, "a name of its own");
+    assert_eq!(parent.contents.as_deref(), Some("Look here"));
+    assert_eq!(s.get(other).unwrap().can_undo(), Some("Paste comments"));
+    s.apply(other, Edit::PasteComments { xfdf: xfdf.clone(), page: 1, offset: Some([30.0, -10.0]) }).unwrap();
+    let a = s.get(other).unwrap().info.annotations.clone();
+    assert_eq!(a.len(), 4, "a second set");
+    let placed = a.iter().find(|x| x.page == 1 && x.in_reply_to.is_none()).unwrap();
+    assert!((placed.rect[0] - 110.0).abs() < 0.5 && (placed.rect[1] - 70.0).abs() < 0.5, "moved by the offset: {:?}", placed.rect);
+    assert_eq!(comment_count(&xfdf), 1);
+    assert_eq!(comments_bounds(&xfdf).map(|b| b.map(|v| v.round())), Some([80.0, 80.0, 120.0, 120.0]));
+    s.undo(other).unwrap();
+    assert_eq!(s.get(other).unwrap().info.annotations.len(), 2);
+    assert!(s.apply(other, Edit::PasteComments { xfdf: "hello".into(), page: 0, offset: None }).is_err(), "no comments in it");
+    assert!(s.apply(other, Edit::PasteComments { xfdf, page: 9, offset: None }).is_err(), "no such page");
+    assert_eq!(s.get(other).unwrap().info.annotations.len(), 2, "a refused paste changes nothing");
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2, "the source is untouched");
+}

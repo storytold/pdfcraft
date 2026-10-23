@@ -2428,3 +2428,20 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Копировать комментарий
+	Copy comments	Копировать комментарии
+	Paste comments	Вставить комментарии
+	Delete comments	Удалить комментарии
+	Move comments	Переместить комментарии
+	Complete	Завершить
+	Undo last point	Отменить последнюю точку
+	Cancel drawing	Отменить рисование
+	Copy comments first	Сначала скопируйте комментарии
+	Click where the copied comments go; Escape lets them go	Щёлкните там, куда поместить скопированные комментарии; Escape отпускает их
+	The copied comments are larger than this page; they were placed as they are	Скопированные комментарии больше этой страницы; они размещены как есть
+	The clipboard holds no comments	В буфере обмена нет комментариев
+	Comments: {n}	Комментарии: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Изменения здесь применяются ко всем выбранным комментариям ({n})

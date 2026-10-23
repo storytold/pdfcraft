@@ -75,6 +75,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
 | Comment properties and properties bar | yes | yes | shipped |
+| Select several comments; copy and paste comments between documents | yes | yes: ⌘/Ctrl-click adds, Delete, a drag, Properties and Colour act on all, ⌘C/⌘V as XFDF (also across PdfCraft processes) | shipped |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history

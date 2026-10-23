@@ -2520,3 +2520,20 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Kopiraj komentar
+	Copy comments	Kopiraj komentarje
+	Paste comments	Prilepi komentarje
+	Delete comments	Izbriši komentarje
+	Move comments	Premakni komentarje
+	Complete	Dokončaj
+	Undo last point	Razveljavi zadnjo točko
+	Cancel drawing	Prekliči risanje
+	Copy comments first	Najprej kopirajte komentarje
+	Click where the copied comments go; Escape lets them go	Kliknite tja, kamor naj gredo kopirani komentarji; Escape jih spusti
+	The copied comments are larger than this page; they were placed as they are	Kopirani komentarji so večji od te strani; postavljeni so bili taki, kot so
+	The clipboard holds no comments	Odložišče ne vsebuje komentarjev
+	Comments: {n}	Komentarji: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Spremembe tukaj veljajo za vse izbrane komentarje ({n})

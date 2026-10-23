@@ -2611,3 +2611,20 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Kopiuj komentarz
+	Copy comments	Kopiuj komentarze
+	Paste comments	Wklej komentarze
+	Delete comments	Usuń komentarze
+	Move comments	Przenieś komentarze
+	Complete	Zakończ
+	Undo last point	Cofnij ostatni punkt
+	Cancel drawing	Anuluj rysowanie
+	Copy comments first	Najpierw skopiuj komentarze
+	Click where the copied comments go; Escape lets them go	Kliknij tam, gdzie mają trafić skopiowane komentarze; Escape je puszcza
+	The copied comments are larger than this page; they were placed as they are	Skopiowane komentarze są większe niż ta strona; umieszczono je bez zmian
+	The clipboard holds no comments	Schowek nie zawiera komentarzy
+	Comments: {n}	Komentarze: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Zmiany wprowadzone tutaj dotyczą wszystkich zaznaczonych komentarzy ({n})

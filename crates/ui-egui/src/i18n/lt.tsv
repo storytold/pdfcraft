@@ -2776,3 +2776,20 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Kopijuoti komentarą
+	Copy comments	Kopijuoti komentarus
+	Paste comments	Įklijuoti komentarus
+	Delete comments	Šalinti komentarus
+	Move comments	Perkelti komentarus
+	Complete	Užbaigti
+	Undo last point	Atšaukti paskutinį tašką
+	Cancel drawing	Atšaukti piešimą
+	Copy comments first	Pirmiausia nukopijuokite komentarus
+	Click where the copied comments go; Escape lets them go	Spustelėkite ten, kur turi atsidurti nukopijuoti komentarai; Escape juos paleidžia
+	The copied comments are larger than this page; they were placed as they are	Nukopijuoti komentarai didesni už šį puslapį; jie įdėti tokie, kokie yra
+	The clipboard holds no comments	Iškarpinėje komentarų nėra
+	Comments: {n}	Komentarai: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Čia atlikti pakeitimai taikomi visiems pasirinktiems komentarams ({n})

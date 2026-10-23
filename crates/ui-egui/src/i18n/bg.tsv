@@ -2478,3 +2478,20 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Копиране на коментара
+	Copy comments	Копиране на коментарите
+	Paste comments	Поставяне на коментарите
+	Delete comments	Изтриване на коментарите
+	Move comments	Преместване на коментарите
+	Complete	Завършване
+	Undo last point	Отмяна на последната точка
+	Cancel drawing	Отказ от рисуването
+	Copy comments first	Първо копирайте коментари
+	Click where the copied comments go; Escape lets them go	Щракнете там, където да отидат копираните коментари; Escape ги пуска
+	The copied comments are larger than this page; they were placed as they are	Копираните коментари са по-големи от тази страница; поставени са както са
+	The clipboard holds no comments	Клипбордът не съдържа коментари
+	Comments: {n}	Коментари: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Промените тук се прилагат към всички {n} избрани коментара

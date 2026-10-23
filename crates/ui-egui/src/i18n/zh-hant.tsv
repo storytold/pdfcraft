@@ -2465,3 +2465,20 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	複製註解
+	Copy comments	複製註解
+	Paste comments	貼上註解
+	Delete comments	刪除註解
+	Move comments	移動註解
+	Complete	完成
+	Undo last point	復原最後一點
+	Cancel drawing	取消繪製
+	Copy comments first	請先複製註解
+	Click where the copied comments go; Escape lets them go	點選複製的註解要放置的位置；按 Escape 放棄
+	The copied comments are larger than this page; they were placed as they are	複製的註解比此頁面大，已按原樣放置
+	The clipboard holds no comments	剪貼簿中沒有註解
+	Comments: {n}	註解：{n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	此處的變更將套用至所有 {n} 則選取的註解

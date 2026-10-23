@@ -2791,3 +2791,20 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	نسخ التعليق
+	Copy comments	نسخ التعليقات
+	Paste comments	لصق التعليقات
+	Delete comments	حذف التعليقات
+	Move comments	نقل التعليقات
+	Complete	إكمال
+	Undo last point	التراجع عن النقطة الأخيرة
+	Cancel drawing	إلغاء الرسم
+	Copy comments first	انسخ التعليقات أولًا
+	Click where the copied comments go; Escape lets them go	انقر حيث يجب وضع التعليقات المنسوخة؛ يحررها Escape
+	The copied comments are larger than this page; they were placed as they are	التعليقات المنسوخة أكبر من هذه الصفحة؛ تم وضعها كما هي
+	The clipboard holds no comments	لا تحتوي الحافظة على تعليقات
+	Comments: {n}	التعليقات: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	تنطبق التغييرات هنا على جميع التعليقات المحددة ({n})

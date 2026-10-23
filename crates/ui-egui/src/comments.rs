@@ -389,6 +389,10 @@ pub enum Gesture {
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
+    /// Copied comments hanging on the pointer as one bundle (their box `bounds` in user space,
+    /// `count` of them, their `outlines` drawn along so the drop can be aimed): a click puts
+    /// their centre there, on the page clicked; Escape or a right-click lets them go.
+    Place { xfdf: String, bounds: [f64; 4], count: usize, outlines: Vec<pdfcraft_engine::CommentOutline> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -483,8 +487,21 @@ impl CommentView {
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
-    /// The selected comment: (page, index in `/Annots`).
+    /// The selected comment: (page, index in `/Annots`). With several selected (`also`), the one
+    /// the handles, the properties and the context menu act on.
     pub selected: Option<(usize, usize)>,
+    /// The other selected comments (⌘/Ctrl-click or ⇧-click on the page adds one, ⇧-click in the
+    /// Comments panel a range): Delete, Copy, Properties and a drag act on them with `selected`.
+    pub also: Vec<(usize, usize)>,
+    /// Copy the selected comments (set by the menus; the app has the clipboard).
+    pub copy_request: bool,
+    /// Paste the copied comments onto this page, centred at this user-space point (set by the
+    /// page's menu, which knows where it was opened).
+    pub paste_request: Option<(usize, [f64; 2])>,
+    /// A notice for the app to show (the page input has no app).
+    pub notice: Option<&'static str>,
+    /// Finish the connected lines, polygon or cloud being drawn (the context menu's Complete).
+    pub finish_request: bool,
     pub gesture: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
@@ -545,6 +562,55 @@ pub(crate) enum EditorFocus {
 }
 
 impl CommentView {
+    /// Every selected comment, the one the handles belong to first.
+    pub fn selection(&self) -> Vec<(usize, usize)> {
+        let mut all: Vec<(usize, usize)> = self.selected.into_iter().collect();
+        all.extend(self.also.iter().copied().filter(|k| Some(*k) != self.selected));
+        all
+    }
+
+    /// Whether `key` (page, index) is among the selected comments.
+    pub fn is_selected(&self, key: (usize, usize)) -> bool {
+        self.selected == Some(key) || self.also.contains(&key)
+    }
+
+    /// Select `key` alone.
+    pub fn select_only(&mut self, key: (usize, usize)) {
+        self.selected = Some(key);
+        self.also.clear();
+    }
+
+    /// ⇧-click in a list (`order`, as shown): every comment from the one with the handles to
+    /// `key` is selected, and only those, so another ⇧-click from the same comment changes the
+    /// range. Without a comment with the handles, or with either end not in the list, `key` is
+    /// added as by ⌘/Ctrl-click.
+    pub fn select_range(&mut self, order: &[(usize, usize)], key: (usize, usize)) {
+        let ends = self.selected.and_then(|anchor| Some((order.iter().position(|k| *k == anchor)?, order.iter().position(|k| *k == key)?)));
+        let Some((a, b)) = ends else { return self.toggle(key) };
+        let anchor = self.selected;
+        self.also = order.get(a.min(b)..=a.max(b)).unwrap_or_default().iter().copied().filter(|k| Some(*k) != anchor).collect();
+    }
+
+    /// ⌘/Ctrl-click: add `key` to the selection, or take it out again. The handles go to the
+    /// comment clicked last.
+    pub fn toggle(&mut self, key: (usize, usize)) {
+        if self.selected == Some(key) {
+            self.selected = self.also.pop();
+        } else if let Some(at) = self.also.iter().position(|k| *k == key) {
+            self.also.remove(at);
+        } else {
+            if let Some(previous) = self.selected.replace(key) {
+                self.also.push(previous);
+            }
+        }
+    }
+
+    /// Nothing selected.
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.also.clear();
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -822,6 +888,38 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     if cv.cancelled_drag {
         return true;
     }
+    // Copied comments on the pointer: a click places the bundle, centred where it is clicked,
+    // on this page; a right-click lets it go. Nothing else on the page takes the click.
+    if let Some(Gesture::Place { xfdf, bounds, .. }) = cv.gesture.clone() {
+        if over_page {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if resp.secondary_clicked() {
+            cv.gesture = None;
+            return true;
+        }
+        if resp.clicked()
+            && over_page
+            && cx.allowed
+            && let Some(p) = pointer
+        {
+            let [x, y] = cx.to_user(p);
+            let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
+            // Larger than the page it lands on (an A0 bundle on an A4 page): placed as it is,
+            // and said so.
+            if let Some(page) = cx.info.pages.get(cx.page) {
+                let a = page.user_to_view((bounds[0] + offset[0]) as f32, (bounds[1] + offset[1]) as f32);
+                let b = page.user_to_view((bounds[2] + offset[0]) as f32, (bounds[3] + offset[1]) as f32);
+                let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
+                if w > page.width + 1.0 || h > page.height + 1.0 {
+                    cv.notice = Some("The copied comments are larger than this page; they were placed as they are");
+                }
+            }
+            cv.gesture = None;
+            view.pending_edit = Some(Edit::PasteComments { xfdf, page: cx.page, offset: Some(offset) });
+        }
+        return true;
+    }
     if resp.secondary_clicked()
         && let Some(p) = pointer.filter(|p| page_rect.contains(*p))
     {
@@ -898,7 +996,18 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             if over_page {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
-            let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+            // The menu's Complete is taken by the page the drawing is on: every page on screen
+            // passes here in a frame, and an earlier one must not swallow it. With no drawing
+            // left, a request is stale.
+            let drawing_here = match &cv.gesture {
+                Some(Gesture::Draw { page, .. }) => *page == cx.page,
+                _ => {
+                    cv.finish_request = false;
+                    false
+                }
+            };
+            let finish =
+                resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) || (drawing_here && std::mem::take(&mut cv.finish_request));
             // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
             // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
             if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
@@ -1201,7 +1310,20 @@ fn select_input(
         } else if let Some(a) = cx.hit(o)
             && !is_markup(&a.subtype)
         {
-            cv.selected = Some((cx.page, a.index));
+            // Dragging one of several selected comments moves them all; any other drag starts
+            // a selection of its own.
+            let grabbed = (cx.page, a.index);
+            if !cv.is_selected(grabbed) {
+                cv.select_only(grabbed);
+            } else {
+                // The grabbed one takes the handles; the one that had them stays selected.
+                if let Some(previous) = cv.selected.replace(grabbed)
+                    && previous != grabbed
+                {
+                    cv.also.push(previous);
+                }
+                cv.also.retain(|k| *k != grabbed);
+            }
             cv.reveal = true;
             if cx.allowed {
                 cv.gesture = Some(Gesture::Move { page: cx.page, index: a.index, from: o });
@@ -1221,7 +1343,21 @@ fn select_input(
                 let (a, b) = (cx.to_user(from), cx.to_user(p));
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+                    // The other selected comments on this page (not text markup, which is where
+                    // its text is, nor a locked one, which would refuse the whole step) move with
+                    // the dragged one, as one undo step.
+                    let others: Vec<usize> = cv
+                        .also
+                        .iter()
+                        .filter(|(p, i)| *p == page && *i != index && cx.get(*i).is_some_and(|a| !is_markup(&a.subtype) && !a.locked))
+                        .map(|(_, i)| *i)
+                        .collect();
+                    view.pending_edit = Some(if others.is_empty() {
+                        Edit::MoveAnnotation { page, index, dx, dy }
+                    } else {
+                        let edits = std::iter::once(index).chain(others).map(|index| Edit::MoveAnnotation { page, index, dx, dy }).collect();
+                        Edit::Batch { label: tl!("Move comments").to_owned(), edits }
+                    });
                 }
             }
             Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
@@ -1260,14 +1396,19 @@ fn select_input(
             Some(a) if a.subtype == "Highlight" && follow_link => {
                 // A plain click follows the link beneath text highlighting. Keep other
                 // annotations and active gestures in control of their own input.
-                cv.selected = None;
+                cv.clear_selection();
             }
             Some(a) => {
-                cv.selected = Some((cx.page, a.index));
+                // ⌘/Ctrl-click (or ⇧-click) adds the comment to the selection, as in Acrobat.
+                if ui.input(|i| i.modifiers.command || i.modifiers.shift) {
+                    cv.toggle((cx.page, a.index));
+                } else {
+                    cv.select_only((cx.page, a.index));
+                }
                 cv.reveal = true;
                 consumed = true;
             }
-            None => cv.selected = None,
+            None => cv.clear_selection(),
         }
     }
     if resp.double_clicked()
@@ -1275,7 +1416,7 @@ fn select_input(
         && cx.allowed
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
     {
-        cv.selected = Some((cx.page, a.index));
+        cv.select_only((cx.page, a.index));
         cv.composer = Some(Composer {
             page: cx.page,
             at: [a.rect[2] as f64, a.rect[3] as f64],
@@ -1339,6 +1480,12 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             painter.rect_stroke(r.expand(2.0), CornerRadius::same(2), Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
     }
+    // The comments selected besides the one with the handles: outlined, not resizable.
+    for a in cv.also.iter().filter(|(p, _)| *p == cx.page).filter_map(|(_, i)| cx.get(*i)) {
+        for r in cx.screen_rects(a) {
+            painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+        }
+    }
     if let Some((page, index)) = cv.selected
         && page == cx.page
         && let Some(a) = cx.get(index)
@@ -1394,6 +1541,11 @@ fn changing_points(
         }),
         (_, Some(Edit::ReshapeAnnotation { page: p, index: i, points: to })) if (*p, *i) == (page, index) => Some(to.clone()),
         (_, Some(Edit::MoveAnnotation { page: p, index: i, dx, dy })) if (*p, *i) == (page, index) => Some(shifted(*dx, *dy)),
+        // Moved with the rest of the selection: its own move in the batch.
+        (_, Some(Edit::Batch { edits, .. })) => edits.iter().find_map(|e| match e {
+            Edit::MoveAnnotation { page: p, index: i, dx, dy } if (*p, *i) == (page, index) => Some(shifted(*dx, *dy)),
+            _ => None,
+        }),
         _ => None,
     }
 }
@@ -1428,6 +1580,82 @@ fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
         && *page == cx.page
     {
         paint_draw(painter, cx, tool, points);
+    }
+    // The bundle of copied comments, hanging on the pointer over this page: its box, and each
+    // comment's outline in its colour, so the drop can be aimed to the line.
+    if let Some(Gesture::Place { bounds, count, outlines, .. }) = &view.comments.gesture
+        && let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos())
+        && cx.xf.rect.contains(p)
+    {
+        let [x, y] = cx.to_user(p);
+        let (dx, dy) = (x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0);
+        let r = Rect::from_two_pos(cx.to_screen([bounds[0] + dx, bounds[1] + dy]), cx.to_screen([bounds[2] + dx, bounds[3] + dy]));
+        painter.rect_stroke(r.expand(2.0), CornerRadius::same(2), Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.6)), egui::StrokeKind::Middle);
+        let at = |q: [f64; 2]| cx.to_screen([q[0] + dx, q[1] + dy]);
+        for outline in outlines {
+            paint_outline(painter, outline, &at);
+        }
+        let label = crate::i18n::fmt(tl!("Comments: {n}"), &[("n", &count.to_string())]);
+        painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, label, crate::theme::regular(11.0), SELECT_BLUE);
+    }
+}
+
+/// One copied comment's outline on screen (`at` maps a user-space point, moved to where the
+/// bundle hangs), in the comment's colour.
+fn paint_outline(painter: &egui::Painter, outline: &pdfcraft_engine::CommentOutline, at: &dyn Fn([f64; 2]) -> Pos2) {
+    use pdfcraft_engine::CommentOutline as O;
+    let color = |c: &Option<[f64; 3]>| {
+        c.map(|[r, g, b]| Color32::from_rgb((r.clamp(0.0, 1.0) * 255.0) as u8, (g.clamp(0.0, 1.0) * 255.0) as u8, (b.clamp(0.0, 1.0) * 255.0) as u8))
+            .unwrap_or(SELECT_BLUE)
+    };
+    match outline {
+        O::Rect { rect, round, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            let r = Rect::from_two_pos(at([rect[0], rect[1]]), at([rect[2], rect[3]]));
+            if *round {
+                let (cx, cy, rx, ry) = (r.center().x, r.center().y, r.width() / 2.0, r.height() / 2.0);
+                let points: Vec<Pos2> =
+                    (0..48).map(|i| i as f32 / 48.0 * std::f32::consts::TAU).map(|t| pos2(cx + rx * t.cos(), cy + ry * t.sin())).collect();
+                painter.add(egui::Shape::closed_line(points, stroke));
+            } else {
+                painter.rect_stroke(r, CornerRadius::ZERO, stroke, egui::StrokeKind::Middle);
+            }
+        }
+        O::Line { points, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            painter.add(egui::Shape::line(points.iter().map(|p| at(*p)).collect(), stroke));
+        }
+        O::Poly { points, closed, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            let points: Vec<Pos2> = points.iter().map(|p| at(*p)).collect();
+            painter.add(if *closed { egui::Shape::closed_line(points, stroke) } else { egui::Shape::line(points, stroke) });
+        }
+        O::Ink { strokes, color: c } => {
+            let stroke = Stroke::new(1.5, color(c));
+            for s in strokes {
+                painter.add(egui::Shape::line(s.iter().map(|p| at(*p)).collect(), stroke));
+            }
+        }
+        O::Quads { quads, color: c } => {
+            let fill = color(c).gamma_multiply(0.35);
+            for q in quads {
+                // Upper left, upper right, lower right, lower left: a closed shape in that order.
+                let points = vec![at([q[0], q[1]]), at([q[2], q[3]]), at([q[6], q[7]]), at([q[4], q[5]])];
+                painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+            }
+        }
+        O::Text { rect, text, size, color: c } => {
+            // At the page's zoom, wrapped in the box; too small to read at this zoom, left out.
+            let r = Rect::from_two_pos(at([rect[0], rect[1]]), at([rect[2], rect[3]]));
+            let zoom = at([1.0, 0.0]).distance(at([0.0, 0.0]));
+            let px = *size as f32 * zoom;
+            if !(px.is_finite() && px >= 3.0) {
+                return;
+            }
+            let pad = 2.0 * zoom;
+            let galley = painter.layout(text.clone(), egui::FontId::proportional(px.min(400.0)), color(c), (r.width() - 2.0 * pad).max(1.0));
+            painter.with_clip_rect(r.intersect(painter.clip_rect())).galley(r.min + vec2(pad, pad), galley, color(c));
+        }
     }
 }
 
@@ -1809,17 +2037,36 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     let cv = &mut view.comments;
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         // One step back per press: cancel the gesture, then deselect, then drop the tool.
-        let cancelled = cv.gesture.take().is_some() || cv.selected.take().is_some();
+        let had_selection = cv.selected.is_some();
+        cv.clear_selection();
+        let cancelled = cv.gesture.take().is_some() || had_selection;
         if !cancelled && matches!(tool, QuickTool::Comment(_)) {
             *tool = QuickTool::Select;
         }
     }
     if allowed
-        && let Some((page, index)) = cv.selected
+        && cv.selected.is_some()
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        && let Some(edit) = delete_selected(cv)
     {
-        cv.selected = None;
-        view.pending_edit = Some(Edit::DeleteAnnotation { page, index });
+        view.pending_edit = Some(edit);
+    }
+}
+
+/// The edit that deletes every selected comment (one undo step for several), and clears the
+/// selection. Later positions go first, so each deletion leaves the earlier ones where they are.
+pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
+    let mut keys = cv.selection();
+    cv.clear_selection();
+    keys.sort_unstable_by(|a, b| b.cmp(a));
+    keys.dedup();
+    match keys.as_slice() {
+        [] => None,
+        [(page, index)] => Some(Edit::DeleteAnnotation { page: *page, index: *index }),
+        _ => Some(Edit::Batch {
+            label: tl!("Delete comments").to_owned(),
+            edits: keys.into_iter().map(|(page, index)| Edit::DeleteAnnotation { page, index }).collect(),
+        }),
     }
 }
 
@@ -1841,9 +2088,37 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 }
 
 /// Items of the canvas context menu for the selected comment (or the page).
-pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs, allowed: bool) -> Option<CanvasAction> {
+pub(crate) fn context_menu(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    info: &DocInfo,
+    prefs: &CommentPrefs,
+    allowed: bool,
+    can_paste: bool,
+) -> Option<CanvasAction> {
     let mut action = None;
+    // Connected lines, a polygon or a cloud being drawn: finish it from the menu, as other
+    // editors do (Enter and a double-click finish it too), take the last point back, or stop.
+    if let Some(Gesture::Draw { tool, points, .. }) = &view.comments.gesture
+        && tool.clicks_points()
+    {
+        let enough = points.len() >= if *tool == CommentTool::PolyLine { 2 } else { 3 };
+        if ui.add_enabled(enough, egui::Button::new(tl!("Complete"))).clicked() {
+            view.comments.finish_request = true;
+            ui.close();
+        }
+        if ui.button(tl!("Undo last point")).clicked() {
+            view.comments.undo_point();
+            ui.close();
+        }
+        if ui.button(tl!("Cancel drawing")).clicked() {
+            view.comments.gesture = None;
+            ui.close();
+        }
+        return None;
+    }
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
+    let several = view.comments.also.len();
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
@@ -1876,14 +2151,19 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 let keep_open = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
                 let _ = egui::containers::menu::SubMenuButton::new(tl!("Colour")).config(keep_open).ui(ui, |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
-                            page,
-                            index,
-                            color: Some(c),
-                            opacity: None,
-                            width: None,
-                            endings: None,
-                        })));
+                        // Several selected: the app gives each of them the colour.
+                        action = Some(if several > 0 {
+                            CanvasAction::Colour(c)
+                        } else {
+                            CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                                page,
+                                index,
+                                color: Some(c),
+                                opacity: None,
+                                width: None,
+                                endings: None,
+                            }))
+                        });
                         ui.close();
                     }
                 });
@@ -1899,9 +2179,23 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
-                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
+            // The comments themselves, to paste into this or another document (⌘C / ⌘V too).
+            let copy_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
+            if ui.add(egui::Button::new(tl!(if several > 0 { "Copy comments" } else { "Copy comment" })).shortcut_text(copy_key)).clicked() {
+                view.comments.copy_request = true;
+                ui.close();
+            }
+            let paste_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::PASTE);
+            if ui.add_enabled(allowed && can_paste, egui::Button::new(tl!("Paste comments")).shortcut_text(paste_key)).clicked() {
+                let at = view.comments.context_at.unwrap_or((page, [f64::from(a.rect[0]), f64::from(a.rect[1])]));
+                view.comments.paste_request = Some(at);
+                ui.close();
+            }
+            ui.separator();
+            let locked =
+                a.locked || view.comments.also.iter().any(|(p, i)| info.annotations.iter().any(|x| x.page == *p && x.index == *i && x.locked));
+            if ui.add_enabled(allowed && !locked, egui::Button::new(tl!(if several > 0 { "Delete comments" } else { "Delete" }))).clicked() {
+                action = delete_selected(&mut view.comments).map(|e| CanvasAction::Edit(Box::new(e)));
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
@@ -1920,6 +2214,13 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
                 ui.close();
             }
+            if let Some(at) = view.comments.context_at {
+                let paste_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::PASTE);
+                if ui.add_enabled(allowed && can_paste, egui::Button::new(tl!("Paste comments")).shortcut_text(paste_key)).clicked() {
+                    view.comments.paste_request = Some(at);
+                    ui.close();
+                }
+            }
             if ui.button(tl!("Comments panel")).clicked() {
                 action = Some(CanvasAction::OpenComments);
                 ui.close();
@@ -1936,6 +2237,8 @@ pub enum CanvasAction {
     OpenComments,
     /// Comment Properties for (page, index).
     Properties(usize, usize),
+    /// Give every selected comment this colour.
+    Colour(Rgb),
     /// Copy Image: image (page, index in `page_images`) to the clipboard.
     CopyImage(usize, usize),
     /// Copy Image in Original Format: the same image as a file (JPEG as stored, else PNG).
@@ -2190,6 +2493,13 @@ mod tests {
         let to = Some(pos2(60.0, 10.0));
         assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
         assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+        // Released with the rest of the selection: its own move in the batch.
+        let together = Edit::Batch {
+            label: "Move comments".into(),
+            edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
+        };
+        assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+        assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, false), None, "not in the batch");
     }
     use pdfcraft_render::TextGlyph;
 
@@ -2415,7 +2725,7 @@ mod tests {
         let mut h = egui_kittest::Harness::new_ui_state(
             |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
                 ui.button("Page").context_menu(|ui| {
-                    if let Some(a) = context_menu(ui, view, &info, &prefs, true) {
+                    if let Some(a) = context_menu(ui, view, &info, &prefs, true, false) {
                         actions.push(a);
                     }
                 });
@@ -2496,6 +2806,24 @@ mod tests {
             drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
             Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
         ));
+    }
+
+    #[test]
+    fn shift_click_selects_the_range_from_the_comment_with_the_handles() {
+        let order = [(0, 3), (0, 1), (0, 0), (1, 2), (1, 0)];
+        let mut cv = CommentView::default();
+        cv.select_only((0, 1));
+        cv.select_range(&order, (1, 2));
+        assert_eq!(cv.selection(), vec![(0, 1), (0, 0), (1, 2)], "from the anchor down, the anchor keeps the handles");
+        // Another ⇧-click from the same anchor changes the range, upwards too.
+        cv.select_range(&order, (0, 3));
+        assert_eq!(cv.selection(), vec![(0, 1), (0, 3)]);
+        // Nothing to start from, or a card not in the list: added as by ⌘/Ctrl-click.
+        let mut none = CommentView::default();
+        none.select_range(&order, (0, 0));
+        assert_eq!(none.selection(), vec![(0, 0)]);
+        cv.select_range(&order, (9, 9));
+        assert_eq!(cv.selected, Some((9, 9)));
     }
 
     #[test]

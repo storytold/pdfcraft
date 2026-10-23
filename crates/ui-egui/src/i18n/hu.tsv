@@ -2514,3 +2514,20 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Megjegyzés másolása
+	Copy comments	Megjegyzések másolása
+	Paste comments	Megjegyzések beillesztése
+	Delete comments	Megjegyzések törlése
+	Move comments	Megjegyzések áthelyezése
+	Complete	Befejezés
+	Undo last point	Utolsó pont visszavonása
+	Cancel drawing	Rajzolás megszakítása
+	Copy comments first	Először másoljon megjegyzéseket
+	Click where the copied comments go; Escape lets them go	Kattintson oda, ahová a másolt megjegyzések kerüljenek; az Escape elengedi őket
+	The copied comments are larger than this page; they were placed as they are	A másolt megjegyzések nagyobbak ennél az oldalnál; változatlanul kerültek elhelyezésre
+	The clipboard holds no comments	A vágólap nem tartalmaz megjegyzéseket
+	Comments: {n}	Megjegyzések: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Az itt végzett módosítások mind a(z) {n} kijelölt megjegyzésre vonatkoznak

@@ -2521,3 +2521,20 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Αντιγραφή σχολίου
+	Copy comments	Αντιγραφή σχολίων
+	Paste comments	Επικόλληση σχολίων
+	Delete comments	Διαγραφή σχολίων
+	Move comments	Μετακίνηση σχολίων
+	Complete	Ολοκλήρωση
+	Undo last point	Αναίρεση τελευταίου σημείου
+	Cancel drawing	Ακύρωση σχεδίασης
+	Copy comments first	Αντιγράψτε πρώτα σχόλια
+	Click where the copied comments go; Escape lets them go	Κάντε κλικ εκεί όπου θα μπουν τα αντιγραμμένα σχόλια· το Escape τα αφήνει
+	The copied comments are larger than this page; they were placed as they are	Τα αντιγραμμένα σχόλια είναι μεγαλύτερα από αυτή τη σελίδα· τοποθετήθηκαν ως έχουν
+	The clipboard holds no comments	Το πρόχειρο δεν περιέχει σχόλια
+	Comments: {n}	Σχόλια: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Οι αλλαγές εδώ ισχύουν για όλα τα {n} επιλεγμένα σχόλια

@@ -450,7 +450,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     if let Some((page, annotation, reading, scale)) = select {
         app.views[index].current = page;
-        app.views[index].comments.selected = Some((page, annotation));
+        app.views[index].comments.select_only((page, annotation));
         app.views[index].measure.reading = Some(reading);
         app.views[index].measure.scale = Some(scale);
         app.quick_tool = QuickTool::Select;

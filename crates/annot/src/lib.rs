@@ -167,6 +167,28 @@ impl FillMark {
         let (w, h) = if matches!(rotation.rem_euclid(360), 90 | 270) { (h, w) } else { (w, h) };
         [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
     }
+
+    /// The mark whose `/Name` this is.
+    pub fn from_name(n: &[u8]) -> Option<Self> {
+        [FillMark::Check, FillMark::Cross, FillMark::Dot, FillMark::Line].into_iter().find(|m| m.name().as_bytes() == n)
+    }
+
+    /// The pen strokes the mark is drawn with in `rect` (user space): what its appearance strokes,
+    /// and what a copy of it shows while it is being placed. The dot is a filled circle (radius
+    /// 0.3 × the shorter side, centred) and has none.
+    pub fn strokes(self, rect: [f64; 4]) -> Vec<Vec<[f64; 2]>> {
+        let [x0, y0, x1, y1] = rect;
+        let (w, h) = (x1 - x0, y1 - y0);
+        match self {
+            FillMark::Check => vec![vec![[x0 + w * 0.15, y0 + h * 0.5], [x0 + w * 0.4, y0 + h * 0.2], [x0 + w * 0.88, y0 + h * 0.85]]],
+            FillMark::Cross => vec![
+                vec![[x0 + w * 0.18, y0 + h * 0.18], [x1 - w * 0.18, y1 - h * 0.18]],
+                vec![[x0 + w * 0.18, y1 - h * 0.18], [x1 - w * 0.18, y0 + h * 0.18]],
+            ],
+            FillMark::Dot => Vec::new(),
+            FillMark::Line => vec![vec![[x0, y0 + h / 2.0], [x1, y0 + h / 2.0]]],
+        }
+    }
 }
 
 /// The stamps of Acrobat's stamp palette (drawn in PdfCraft's own style).

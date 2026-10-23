@@ -3788,8 +3788,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.polyline"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = ""
+evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/ui-egui/tests/it/comments.rs::connected_lines_are_completed_from_the_context_menu", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
+notes = "Click the corners; Enter, a double-click or the right-click menu's Complete finishes the lines (the menu also takes the last point back and cancels the drawing), Backspace takes a point back."
 
 [[feature]]
 id = "comment.cloud"
@@ -4193,11 +4193,35 @@ title = "Export selected comments"
 area = "E"
 tier = "P2"
 milestone = "M5"
-status = "planned"
+status = "partial"
+commands = ["comment.copy"]
+tools = ["comments_copy"]
+evidence = ["crates/xfdf/src/tests.rs::exporting_selected_comments_takes_them_and_their_replies", "crates/automation/tests/it/automation.rs::comments_copy_and_paste_between_documents_through_tools", "crates/xfdf/src/tests.rs::copies_keep_their_intent_cloud_and_pdfcraft_keys"]
+notes = "The selected comments, each with its replies, as XFDF: Copy puts it on the clipboard (desktop) and comments_copy returns it headlessly. Each keeps what it is meant as (`intent`: typewriter text, a cloud, an arrow), a cloudy border (`style`, `intensity`; both also in File ▸ Export comments) and PdfCraft's own keys (`pdfcraft:keys`, in a namespace of its own: a Fill & Sign item, a turned comment's box and angle), so a paste is the same comment. Not yet: a Save as… to a data file from the interface."
+
+[[feature]]
+id = "comment.multi-select"
+title = "Select several comments (⌘-click, ⇧-click)"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/comments.rs::ctrl_click_selects_several_comments_and_delete_removes_them_all", "crates/ui-egui/tests/it/comments.rs::properties_change_every_selected_comment_where_it_applies", "crates/ui-egui/tests/it/comments.rs::dragging_any_selected_comment_moves_the_whole_selection", "crates/ui-egui/src/comments.rs::shift_click_selects_the_range_from_the_comment_with_the_handles"]
+notes = "On the page, ⌘-click (Ctrl on Windows and Linux) or ⇧-click adds a comment to the selection or takes it out again; in the Comments panel ⌘/Ctrl-click does, and ⇧-click selects the cards from the one with the handles to the one clicked. The one clicked last has the handles and is what Reply acts on. Delete (key or menu) removes every selected comment as one undo step, dragging one of them moves them all (text markup stays with its text, a locked one where it is), and the context menu copies them all. Properties (opened on one of them), the context menu's Colour and the quick bar's colour change every selected comment as one undo step, each where the property applies (a font size to text, a fill to shapes, a width to lines and shapes); one that stays locked keeps its look. Escape and a plain click select one alone again. Not yet: a rubber-band (marquee) selection on the page."
+
+[[feature]]
+id = "comment.copy-paste"
+title = "Copy and paste comments, within and between documents"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = ["comment.copy", "comment.paste"]
+tools = ["comments_copy", "comments_paste"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::copied_comments_paste_into_another_document", "crates/engine/src/tests.rs::pasting_copied_comments_adds_copies_that_undo_as_one_step", "crates/xfdf/src/tests.rs::importing_comments_as_copies_adds_them_on_the_page_with_fresh_names", "crates/xfdf/src/tests.rs::copied_marks_and_text_boxes_show_what_they_are_while_placed_and_once_pasted", "crates/automation/tests/it/automation.rs::comments_copy_and_paste_between_documents_through_tools"]
+notes = "⌘C with comments selected (and no text selected) copies them as XFDF, each with its replies, to the app's clipboard (every tab and window) and as text to the system clipboard. ⌘V or Edit ▸ Paste comments hangs the copies on the pointer as one bundle (their box, with a count, and each comment's outline in its colour: Fill & Sign ticks, crosses, dots and lines as themselves, text boxes with their text); a click places them, centred there, on the page clicked, so a copy never lands on its original and a bundle from an A0 page goes where it fits on an A4 one (placed as it is when larger than the page, with a notice); Escape or a right-click lets the bundle go. The page's context menu places the bundle at the point the menu was opened at. The copies are new comments under names of their own (nothing is replaced; pasting twice gives two sets) and are selected afterwards. XFDF with comments on the system clipboard pastes too, so comments travel between PdfCraft processes. The Comments panel's card menu copies that card's comment. Headless: comments_copy / comments_paste (`at` places the bundle's centre), undoable as one step. Not yet: appearance streams (the copies are drawn again), file attachments' data (the attachment comment is copied without its file), pasting in the web build's other tabs through the system clipboard."
 
 [[feature]]
 id = "comment.import-from-pdf"

@@ -3,7 +3,7 @@
 
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::Annotation;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
@@ -92,6 +92,19 @@ fn drag_pt(h: &mut Harness<'static, PdfCraftApp>, a: (f32, f32), b: (f32, f32)) 
 fn click_pt(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)) {
     let p = at(h, p.0, p.1);
     click(h, p);
+}
+/// Click a page point with modifier keys held (⌘-click adds a comment to the selection).
+fn click_pt_with(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32), modifiers: egui::Modifiers) {
+    let p = at(h, p.0, p.1);
+    h.hover_at(p);
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers });
+        h.run_steps(1);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(2);
 }
 
 /// A text field by its placeholder ("Add a comment", "Add a reply").
@@ -2303,4 +2316,331 @@ fn text_comments_can_save_a_zero_width_default() {
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
+}
+
+/// ⌘-click (Ctrl on Linux and Windows) adds comments to the selection and takes one out again;
+/// Delete removes every selected comment as one undo step.
+#[test]
+fn ctrl_click_selects_several_comments_and_delete_removes_them_all() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    assert_eq!(comments(&h).len(), 3);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)]);
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 2), (0, 0), (0, 1)], "the handles go to the one clicked last");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
+    // ⌘-click on a selected comment takes it out again.
+    click_pt_with(&mut h, (40.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 2), (0, 1)]);
+    // Delete: both go, as one step.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    let left = comments(&h);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!((left[0].rect[0] - 20.0).abs() < 1.0, "the unselected first rectangle stays: {:?}", left[0].rect);
+    assert!(h.state().views[0].comments.selection().is_empty());
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comments"));
+    h.state_mut().undo();
+    assert_eq!(comments(&h).len(), 3);
+    // A plain click selects one alone again.
+    click_pt(&mut h, (120.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 1)]);
+    // On the page ⇧-click adds one too, and takes it out again (a range is the panel's).
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::SHIFT);
+    assert_eq!(h.state().views[0].comments.selection().len(), 2, "{:?}", h.state().views[0].comments.selection());
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::SHIFT);
+    assert_eq!(h.state().views[0].comments.selection(), vec![(0, 1)]);
+}
+
+/// Dragging one of several selected comments moves them all, whichever of them is grabbed: the
+/// grabbed one takes the handles and the one that had them stays selected.
+#[test]
+fn dragging_any_selected_comment_moves_the_whole_selection() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)), "the last one clicked has the handles");
+    // Drag the first one (not the one with the handles) 30 points up.
+    let before = comments(&h);
+    drag_pt(&mut h, (40.0, 40.0), (40.0, 70.0));
+    let after = comments(&h);
+    assert_eq!(after.len(), 3);
+    for (a, b) in before.iter().zip(&after) {
+        assert!((b.rect[1] - a.rect[1] - 30.0).abs() < 1.5, "every selected rectangle moved up 30 pt: {:?} from {:?}", b.rect, a.rect);
+    }
+    let selection = h.state().views[0].comments.selection();
+    assert_eq!(selection.len(), 3, "all three stay selected: {selection:?}");
+    assert_eq!(selection[0], (0, 0), "the grabbed one has the handles");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comments"));
+    // A locked one in the selection stays where it is; the others still move (it would refuse
+    // the whole step otherwise, and nothing would move).
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    let before = comments(&h);
+    drag_pt(&mut h, (40.0, 70.0), (40.0, 90.0));
+    let after = comments(&h);
+    // By index: the list isn't kept in index order.
+    let bottom = |list: &[Annotation], i: usize| list.iter().find(|a| a.index == i).map(|a| a.rect[1]).expect("still there");
+    for i in 0..3 {
+        let moved = bottom(&after, i) - bottom(&before, i);
+        if i == 1 {
+            assert!(moved.abs() < 0.01, "the locked one stays: moved {moved}");
+        } else {
+            assert!((moved - 20.0).abs() < 1.5, "rectangle {i} moved up 20 pt: moved {moved}");
+        }
+    }
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comments"));
+}
+
+/// Copied comments paste into another document on its current page, each with its replies, as
+/// new comments (a second paste gives a second set); the copies are selected afterwards.
+#[test]
+fn copied_comments_paste_into_another_document() {
+    let mut h = harness(|app| {
+        app.open_bytes("other.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.active = Some(0);
+    });
+    let (source, target) = (h.state().views[0].id, h.state().views[1].id);
+    for rect in [[20.0, 20.0, 60.0, 60.0], [100.0, 20.0, 140.0, 60.0]] {
+        let shape = pdfcraft_engine::Shape::Rectangle { rect };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "Box".into(),
+            author: "Tester".into(),
+        })));
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: "Reply".into(), author: "Tester".into() }));
+    h.run_steps(2);
+    // Adding a comment selects it; with nothing selected there is nothing to copy.
+    h.state_mut().views[0].comments.clear_selection();
+    assert!(!h.state_mut().execute("comment.copy"), "nothing selected: nothing to copy");
+    {
+        let cv = &mut h.state_mut().views[0].comments;
+        cv.select_only((0, 0));
+        cv.also.push((0, 1));
+    }
+    assert!(h.state_mut().execute("comment.copy"));
+    assert_eq!(h.state().comment_clipboard.as_ref().map(|c| c.count), Some(2));
+    // Into the other document: Edit ▸ Paste comments hangs the bundle on the pointer, a click
+    // places it, centred there (the two boxes span 20..140 × 20..60: centre 80, 40).
+    h.state_mut().active = Some(1);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("comment.paste"));
+    let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(target).unwrap().info.annotations.len();
+    assert_eq!(count(&h), 0, "nothing placed yet");
+    assert!(matches!(h.state().views[1].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Place { count: 2, .. })));
+    click_pt(&mut h, (150.0, 100.0));
+    let pasted = h.state().session.get(target).unwrap().info.annotations.clone();
+    assert_eq!(pasted.len(), 3, "two comments and the reply: {pasted:?}");
+    assert!(pasted.iter().all(|a| a.page == 0), "on the page clicked: {pasted:?}");
+    let parent = pasted.iter().find(|a| a.in_reply_to.is_none() && (a.rect[0] - 90.0).abs() < 1.0).expect("the first box, moved by (70, 60)");
+    assert!((parent.rect[1] - 80.0).abs() < 1.0 && (parent.rect[2] - 130.0).abs() < 1.0, "{:?}", parent.rect);
+    assert_eq!(pasted.iter().find(|a| a.in_reply_to.is_some()).and_then(|r| r.in_reply_to.clone()), parent.name, "the reply follows its copy");
+    assert_eq!(h.state().views[1].comments.selection().len(), 2, "the copies are selected");
+    assert!(h.state().views[1].comments.gesture.is_none());
+    assert_eq!(h.state().session.get(target).unwrap().can_undo(), Some("Paste comments"));
+    assert_eq!(h.state().session.get(source).unwrap().info.annotations.len(), 3, "the source is untouched");
+    // The page menu's Paste comments places the bundle where the menu was opened: page 2 here.
+    h.state_mut().views[1].comments.paste_request = Some((1, [100.0, 100.0]));
+    h.run_steps(3);
+    assert_eq!(count(&h), 6);
+    let second: Vec<_> =
+        h.state().session.get(target).unwrap().info.annotations.iter().filter(|a| a.page == 1 && a.in_reply_to.is_none()).cloned().collect();
+    assert_eq!(second.len(), 2);
+    let centre_x = (second.iter().map(|a| a.rect[0]).fold(f32::MAX, f32::min) + second.iter().map(|a| a.rect[2]).fold(f32::MIN, f32::max)) / 2.0;
+    assert!((centre_x - 100.0).abs() < 1.0, "centred at the menu's point: {second:?}");
+    // ⌘V (a Paste event) hangs the bundle on the pointer again; Escape lets it go.
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_none());
+    assert_eq!(count(&h), 6, "nothing placed");
+    h.state_mut().undo();
+    assert_eq!(count(&h), 3);
+    // XFDF arriving from the system clipboard pastes too, even without the app's clipboard.
+    let xfdf = h.state().comment_clipboard.clone().unwrap().xfdf;
+    h.state_mut().comment_clipboard = None;
+    assert!(!h.state_mut().execute("comment.paste"), "nothing copied: disabled");
+    h.event(egui::Event::Paste(xfdf.clone()));
+    h.run_steps(3);
+    click_pt(&mut h, (200.0, 120.0));
+    assert_eq!(count(&h), 6);
+    h.event(egui::Event::Paste("just text".into()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_none(), "plain text is not a paste of comments");
+    // Nor when comments were copied earlier: a word copied in another app since is that word.
+    h.state_mut().comment_clipboard = Some(pdfcraft_ui_egui::CommentClip { xfdf, count: 2 });
+    h.event(egui::Event::Paste("a word from elsewhere".into()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_none(), "the old comments don't hang on the pointer");
+    // Nothing legible on the system clipboard: the app's own copied comments.
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    assert!(h.state().views[1].comments.gesture.is_some());
+}
+
+/// Connected lines (and polygons) finish from the right-click menu too, as other editors do;
+/// the menu also takes the last point back and cancels the drawing.
+#[test]
+fn connected_lines_are_completed_from_the_context_menu() {
+    let mut h = harness(|app| app.set_option("quick", "polyline").unwrap());
+    for p in [(20.0, 150.0), (60.0, 130.0), (100.0, 150.0)] {
+        click_pt(&mut h, p);
+    }
+    assert_eq!(comments(&h).len(), 0, "still drawing");
+    let right_click = |h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)| {
+        let p = at(h, p.0, p.1);
+        h.hover_at(p);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+    };
+    right_click(&mut h, (120.0, 100.0));
+    h.get_by_label("Complete").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].subtype, "PolyLine");
+    // A polygon needs three points: with two, Complete is greyed; Undo last point and Cancel drawing work.
+    h.state_mut().set_option("quick", "polygon").unwrap();
+    for p in [(150.0, 150.0), (200.0, 150.0)] {
+        click_pt(&mut h, p);
+    }
+    assert_eq!(drawn_points(&h), 2);
+    right_click(&mut h, (220.0, 100.0));
+    assert!(h.get_by_label("Complete").accesskit_node().is_disabled());
+    h.get_by_label("Undo last point").click();
+    h.run_steps(3);
+    assert_eq!(drawn_points(&h), 1);
+    right_click(&mut h, (220.0, 100.0));
+    h.get_by_label("Cancel drawing").click();
+    h.run_steps(3);
+    assert_eq!(drawn_points(&h), 0);
+    assert!(h.state().views[0].comments.gesture.is_none());
+    assert_eq!(comments(&h).len(), 1, "nothing else was drawn");
+    // On the second page, with the first on screen in the same frame: Complete reaches the page
+    // the drawing is on (the first page passes first and must not take the request).
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.state_mut().set_option("zoom", "50").unwrap();
+    settle(&mut h);
+    assert!(h.state().views[0].page_screen_rect(0).is_some(), "page 1 is on screen too");
+    let at2 = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+        pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height())
+    };
+    for (x, y) in [(20.0, 100.0), (60.0, 80.0)] {
+        let p = at2(&h, x, y);
+        click(&mut h, p);
+    }
+    assert_eq!(drawn_points(&h), 2);
+    let p = at2(&h, 150.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    h.get_by_label("Complete").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 2, "{c:?}");
+    assert!(c.iter().any(|a| a.page == 1 && a.subtype == "PolyLine"), "{c:?}");
+    assert!(h.state().views[0].comments.gesture.is_none());
+}
+
+/// Properties on one of several selected comments changes all of them, each where it applies: the
+/// colour goes to every one, the line width to the shapes, the font size to the text box alone;
+/// a locked one stays as it is. One undo step. Colouring the selection works the same way.
+#[test]
+fn properties_change_every_selected_comment_where_it_applies() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    let shapes = [
+        Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] },
+        Shape::Oval { rect: [80.0, 20.0, 120.0, 60.0] },
+        Shape::TextBox { rect: [140.0, 20.0, 200.0, 40.0], font_size: 12.0 },
+        Shape::Rectangle { rect: [220.0, 20.0, 260.0, 60.0] },
+    ];
+    for shape in shapes {
+        let style = Style::default_for(&shape);
+        assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "x".into(),
+            author: "Tester".into()
+        })));
+    }
+    assert!(h.state_mut().apply_edit(Edit::LockAnnotation { page: 0, index: 3, locked: true }));
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, 0));
+        c.also = vec![(0, 1), (0, 2), (0, 3)];
+    }
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Changes here apply to all 4 selected comments");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.others.len(), 3);
+        d.edited.color = Some([0.0, 0.0, 1.0]);
+        d.edited.width = Some(4.0);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap()
+    };
+    for index in [0, 1] {
+        let p = props(&h, index);
+        assert_eq!((p.color, p.width), (Some([0.0, 0.0, 1.0]), Some(4.0)), "shape {index}");
+    }
+    assert_eq!(props(&h, 2).color, Some([0.0, 0.0, 1.0]), "the text box's text colour");
+    let locked = props(&h, 3);
+    assert_ne!(locked.color, Some([0.0, 0.0, 1.0]), "the locked rectangle stays as it was");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Change comment properties"), "one undo step");
+    // From the text box: its font size changes, and the shapes, which have none, keep their look.
+    h.state_mut().views[0].comments.selected = Some((0, 2));
+    h.state_mut().views[0].comments.also = vec![(0, 0), (0, 1)];
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    h.state_mut().comment_props.as_mut().expect("open").edited.font_size = Some(20.0);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2).font_size, Some(20.0));
+    assert_eq!((props(&h, 0).font_size, props(&h, 0).width), (None, Some(4.0)));
+    // Colouring the selection (the context menu's Colour with several selected).
+    h.state_mut().colour_selected_comments([1.0, 0.0, 0.0]);
+    h.run_steps(2);
+    for index in [0, 1, 2] {
+        assert_eq!(props(&h, index).color, Some([1.0, 0.0, 0.0]), "comment {index}");
+    }
+    assert_ne!(props(&h, 3).color, Some([1.0, 0.0, 0.0]));
 }

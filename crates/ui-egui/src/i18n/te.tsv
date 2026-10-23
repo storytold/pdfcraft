@@ -2424,3 +2424,20 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	వ్యాఖ్యను కాపీ చేయి
+	Copy comments	వ్యాఖ్యలను కాపీ చేయి
+	Paste comments	వ్యాఖ్యలను అతికించు
+	Delete comments	వ్యాఖ్యలను తొలగించు
+	Move comments	వ్యాఖ్యలను తరలించు
+	Complete	పూర్తి చేయి
+	Undo last point	చివరి బిందువును రద్దు చేయి
+	Cancel drawing	గీయడం రద్దు చేయి
+	Copy comments first	ముందుగా వ్యాఖ్యలను కాపీ చేయండి
+	Click where the copied comments go; Escape lets them go	కాపీ చేసిన వ్యాఖ్యలు ఎక్కడ ఉండాలో అక్కడ క్లిక్ చేయండి; Escape వాటిని వదిలేస్తుంది
+	The copied comments are larger than this page; they were placed as they are	కాపీ చేసిన వ్యాఖ్యలు ఈ పేజీ కంటే పెద్దవి; వాటిని ఉన్నదున్నట్లు ఉంచాం
+	The clipboard holds no comments	క్లిప్‌బోర్డ్‌లో వ్యాఖ్యలు లేవు
+	Comments: {n}	వ్యాఖ్యలు: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	ఇక్కడ చేసే మార్పులు ఎంచుకున్న మొత్తం {n} వ్యాఖ్యలకు వర్తిస్తాయి

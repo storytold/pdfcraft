@@ -2513,3 +2513,20 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	Пікірді көшіру
+	Copy comments	Пікірлерді көшіру
+	Paste comments	Пікірлерді қою
+	Delete comments	Пікірлерді жою
+	Move comments	Пікірлерді жылжыту
+	Complete	Аяқтау
+	Undo last point	Соңғы нүктені қайтару
+	Cancel drawing	Сызуды тоқтату
+	Copy comments first	Алдымен пікірлерді көшіріңіз
+	Click where the copied comments go; Escape lets them go	Көшірілген пікірлер орналасатын жерді басыңыз; Escape оларды босатады
+	The copied comments are larger than this page; they were placed as they are	Көшірілген пікірлер бұл беттен үлкен; олар сол күйінде орналастырылды
+	The clipboard holds no comments	Алмасу буферінде пікірлер жоқ
+	Comments: {n}	Пікірлер: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	Мұндағы өзгерістер таңдалған барлық {n} пікірге қолданылады

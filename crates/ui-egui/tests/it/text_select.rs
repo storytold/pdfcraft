@@ -201,7 +201,9 @@ fn selected_text_copy_edit_and_context_menus() {
     h.run_steps(2);
     h.get_by_label("Edit ⏵").hover();
     h.run_steps(3);
-    h.get_by_label_contains("Copy").click();
+    // The page text's Copy, not Copy comments beside it.
+    let text_copy = |n: &egui_kittest::kittest::AccessKitNode<'_>| n.label().is_some_and(|l| l.starts_with("Copy") && !l.contains("comment"));
+    h.get(egui_kittest::kittest::By::new().predicate(text_copy)).click();
     let mut did_copy = false;
     for _ in 0..4 {
         h.step();

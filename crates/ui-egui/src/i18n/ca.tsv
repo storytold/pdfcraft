@@ -2774,3 +2774,19 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Comments copied, pasted and selected together (M5).
+	Copy comment	Copia el comentari
+	Copy comments	Copia els comentaris
+	Paste comments	Enganxa els comentaris
+	Delete comments	Suprimeix els comentaris
+	Move comments	Mou els comentaris
+	Complete	Completa
+	Undo last point	Desfés l'últim punt
+	Cancel drawing	Cancel·la el dibuix
+	Copy comments first	Primer copieu comentaris
+	Click where the copied comments go; Escape lets them go	Feu clic on han d'anar els comentaris copiats; Esc els deixa anar
+	The copied comments are larger than this page; they were placed as they are	Els comentaris copiats són més grans que aquesta pàgina; s'han col·locat tal com són
+	The clipboard holds no comments	El porta-retalls no conté comentaris
+	Comments: {n}	Comentaris: {n}
+	Changes here apply to all {n} selected comments	Els canvis d'aquí s'apliquen als {n} comentaris seleccionats

@@ -215,6 +215,9 @@ pub(crate) fn show(
     {
         view.comments.collapsed_pages.retain(|&c| c != p);
     }
+    // The cards in the order shown, for a ⇧-click range (folded pages' cards aren't shown).
+    let order: Vec<(usize, usize)> =
+        roots.iter().filter(|a| !(sort == SortBy::Page && view.comments.collapsed_pages.contains(&a.page))).map(|a| (a.page, a.index)).collect();
     let mut page = usize::MAX;
     let mut group: Option<String> = None;
     for a in roots {
@@ -264,7 +267,7 @@ pub(crate) fn show(
             continue;
         }
         let thread = replies_of(a);
-        if let Some(e) = card(ui, t, a, thread, info, view, prefs, allowed, nav) {
+        if let Some(e) = card(ui, t, a, thread, &order, info, view, prefs, allowed, nav) {
             edit = Some(e);
         }
     }
@@ -277,6 +280,7 @@ fn card(
     t: &Tokens,
     a: &Annotation,
     thread: &[&Annotation],
+    order: &[(usize, usize)],
     info: &DocInfo,
     view: &mut DocView,
     prefs: &CommentPrefs,
@@ -285,7 +289,10 @@ fn card(
 ) -> Option<Edit> {
     let mut edit = None;
     let key = (a.page, a.index);
-    let selected = view.comments.selected == Some(key);
+    let selected = view.comments.is_selected(key);
+    // Several comments may be selected; the reply field (one draft) belongs to the one with
+    // the handles.
+    let primary = view.comments.selected == Some(key);
     let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
     let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.as_deref());
     let marked = is_marked(thread);
@@ -393,7 +400,7 @@ fn card(
                 let x = resp.response.rect.left() + 12.0;
                 ui.painter().vline(x, (resp.response.rect.top() - 14.0)..=(resp.response.rect.top() - 2.0), Stroke::new(1.5, t.border));
             }
-            if selected && allowed {
+            if primary && allowed {
                 ui.add_space(8.0);
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
                     // The field fills its line and Post sits right-aligned under it: a field sized
@@ -440,7 +447,16 @@ fn card(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
     if click.clicked() {
-        view.comments.selected = Some(key);
+        // ⌘/Ctrl-click adds the comment to the selection, as on the page; ⇧-click selects the
+        // cards from the one with the handles to this one, as lists do.
+        let modifiers = ui.input(|i| i.modifiers);
+        if modifiers.shift && !modifiers.command {
+            view.comments.select_range(order, key);
+        } else if modifiers.command {
+            view.comments.toggle(key);
+        } else {
+            view.comments.select_only(key);
+        }
         view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.rect));
     }
@@ -488,9 +504,15 @@ fn card(
                 view.comments.default_request = Some((a.page, a.index));
                 ui.close();
             }
+            if ui.button(tl!("Copy comment")).clicked() {
+                // The card's comment alone (the page's menu copies the whole selection).
+                view.comments.select_only(key);
+                view.comments.copy_request = true;
+                ui.close();
+            }
             ui.separator();
             if ui.add_enabled(!a.locked, egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
+                view.comments.clear_selection();
                 edit = Some(Edit::DeleteAnnotation { page: a.page, index: a.index });
                 ui.close();
             }

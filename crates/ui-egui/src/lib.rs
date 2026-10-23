@@ -386,6 +386,14 @@ pub struct DuplicateDraft {
 }
 
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
+/// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentClip {
+    pub xfdf: String,
+    /// How many comments (replies not counted) were copied.
+    pub count: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct PageClip {
     /// The document the pages were copied from: pasting back into it keeps field names.
@@ -736,6 +744,8 @@ pub struct PdfCraftApp {
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
+    /// Copied comments (XFDF), to paste into this or another document (M14).
+    pub comment_clipboard: Option<CommentClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
@@ -1072,6 +1082,7 @@ impl PdfCraftApp {
             optimize_run: None,
             progress_notice: None,
             page_clipboard: None,
+            comment_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
@@ -2922,7 +2933,7 @@ impl PdfCraftApp {
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
                 let (p, i): (usize, usize) =
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
-                v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
+                v.comments.select_only((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).
@@ -3065,14 +3076,102 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
+    /// ⌘C copies the selected text, or the selected comments when no text is selected; ⌘V
+    /// pastes copied comments onto the current page. Not while a text field has the keyboard
+    /// (it copies and pastes its own text).
     fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
-        // ⌘C arrives as a Copy event on most platforms.
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        if !copy || ctx.egui_wants_keyboard_input() {
+        // ⌘C and ⌘V arrive as Copy and Paste events on most platforms.
+        let (copy, pasted) = ctx.input(|input| {
+            let copy = input.events.iter().any(|e| matches!(e, egui::Event::Copy));
+            let pasted = input.events.iter().find_map(|e| if let egui::Event::Paste(text) = e { Some(text.clone()) } else { None });
+            (copy, pasted)
+        });
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
-        self.copy_selected_text(i, ctx);
+        if copy {
+            let text_selected = self.views.get(i).and_then(|v| v.selected_text()).is_some_and(|t| !t.is_empty());
+            if text_selected || !self.copy_selected_comments(i) {
+                self.copy_selected_text(i, ctx);
+            }
+        }
+        if let Some(text) = pasted {
+            // The organize grid takes ⌘V for pages; a text that is no XFDF with comments is not
+            // ours either: copied comments come from the system clipboard when it holds them,
+            // from the app's own only when it holds nothing legible (a word copied in another
+            // app since is that word, not the comments copied before it).
+            if self.views.get(i).is_some_and(|v| !v.organize) {
+                if pdfcraft_engine::is_xfdf_comments(&text) {
+                    self.paste_comments(i, Some(text), None);
+                } else if text.trim().is_empty() && self.comment_clipboard.is_some() {
+                    self.paste_comments(i, None, None);
+                }
+            }
+        }
+    }
+
+    /// Copy the selected comments of tab `i` as XFDF, each with its replies: into the app's
+    /// clipboard (for ⌘V in any tab or window) and onto the system clipboard as text. False
+    /// when nothing is selected.
+    pub fn copy_selected_comments(&mut self, i: usize) -> bool {
+        let Some(view) = self.views.get(i) else { return false };
+        let keys = view.comments.selection();
+        if keys.is_empty() {
+            return false;
+        }
+        let id = view.id;
+        match self.session.export_comments(id, &keys) {
+            Ok(xfdf) => {
+                if let Some(ctx) = &self.ctx {
+                    ctx.copy_text(xfdf.clone());
+                }
+                self.comment_clipboard = Some(CommentClip { xfdf, count: keys.len() });
+                true
+            }
+            Err(e) => {
+                self.notify_error(e);
+                false
+            }
+        }
+    }
+
+    /// Paste copied comments (`text`, XFDF from the system clipboard, or else the app's
+    /// clipboard) into tab `i`. With `at` (a page and a user-space point, from the page's menu)
+    /// the bundle is placed at once, centred there; otherwise it hangs on the pointer as one
+    /// bundle until a click places it (`Gesture::Place`), so a copy never lands on its original
+    /// and a bundle from a large page goes where it fits on a small one. The copies are selected
+    /// once placed (see `apply_edit`).
+    pub fn paste_comments(&mut self, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
+        let Some(xfdf) = text.or_else(|| self.comment_clipboard.as_ref().map(|c| c.xfdf.clone())) else {
+            self.notify_tr("Copy comments first");
+            return false;
+        };
+        let Some(view) = self.views.get(i) else { return false };
+        let id = view.id;
+        let Some(doc) = self.session.get(id) else { return false };
+        if !doc.allows_annotation() {
+            self.notify_tr("The document's security settings don't allow this change");
+            return false;
+        }
+        let count = pdfcraft_engine::comment_count(&xfdf);
+        let Some(bounds) = pdfcraft_engine::comments_bounds(&xfdf).filter(|_| count > 0) else {
+            self.notify_tr("The clipboard holds no comments");
+            return false;
+        };
+        match at {
+            Some((page, [x, y])) => {
+                let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
+                self.apply_edit(pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
+            }
+            None => {
+                let Some(view) = self.views.get_mut(i) else { return false };
+                view.comments.clear_selection();
+                let outlines = pdfcraft_engine::comment_outlines(&xfdf);
+                view.comments.gesture = Some(comments::Gesture::Place { xfdf, bounds, count, outlines });
+                self.notify_tr("Click where the copied comments go; Escape lets them go");
+                true
+            }
+        }
     }
 
     /// Shared permission gate for copying selected page text from menus and keyboard events.

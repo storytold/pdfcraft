@@ -27,6 +27,7 @@ pub(crate) const NEXT_VIEW: Shortcut = Shortcut::cmd("]");
 pub(crate) const FIND_NEXT: Shortcut = Shortcut::cmd("G");
 pub(crate) const FIND_PREV: Shortcut = Shortcut::cmd_shift("G");
 pub(crate) const COPY: Shortcut = Shortcut::cmd("C");
+pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
@@ -89,6 +90,8 @@ impl PdfCraftApp {
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.organize && v.selected_text().is_some_and(|t| !t.is_empty())))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
+                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
+                "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
                 _ => true,
@@ -551,6 +554,14 @@ impl PdfCraftApp {
                     return self.copy_selected_text(i, &ctx);
                 }
                 return false;
+            }
+            "comment.copy" => {
+                let Some(i) = active else { return false };
+                return self.copy_selected_comments(i);
+            }
+            "comment.paste" => {
+                let Some(i) = active else { return false };
+                return self.paste_comments(i, None, None);
             }
             "page.copy" => self.copy_pages(false),
             "page.cut" => self.copy_pages(true),

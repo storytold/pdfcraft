@@ -3031,7 +3031,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let units = app.units;
     let allowed = doc.allows_annotation();
     let can_copy = doc.allows_copying();
+    let can_paste = app.comment_clipboard.is_some();
     let mut copy_selected = false;
+    // Copy comments / Paste comments from the page's menu or a Comments panel card.
+    let mut copy_comments = false;
+    let mut paste_comments_at = None;
+    let mut comment_notice = None;
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
     let generation = doc.edit_generation();
@@ -3070,6 +3075,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut canvas_action: Option<comments::CanvasAction> = None;
     let mut field_menu: Option<FieldMenu> = None;
     let mut open_props: Option<(usize, usize)> = None;
+    let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     let mut field_props = false;
     let mut field_placed = false;
     let mut open_table: Option<(usize, [f64; 4])> = None;
@@ -4032,8 +4038,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     ui.separator();
                 }
             }
-            canvas_action = comments::context_menu(ui, view, info, prefs, allowed).or(copy_image);
+            canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_paste).or(copy_image);
         });
+        copy_comments = std::mem::take(&mut view.comments.copy_request);
+        paste_comments_at = view.comments.paste_request.take();
+        comment_notice = view.comments.notice.take();
         (wanted, visible_now)
     });
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
@@ -4256,6 +4265,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.comments_panel_closed = false;
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
+        Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
@@ -4319,6 +4329,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     if let Some((p, i)) = open_props {
         app.open_comment_props(p, i);
+    }
+    if let Some(c) = recolour {
+        app.colour_selected_comments(c);
     }
     if let Some((p, i)) = app.views[index].comments.default_request.take() {
         app.make_comment_default(p, i);
@@ -4405,6 +4418,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if copy_comments {
+        app.execute("comment.copy");
+    }
+    if let Some(at) = paste_comments_at {
+        app.paste_comments(index, None, Some(at));
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
@@ -5146,26 +5168,12 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
                         ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+                        // The selected comments this tool made take the colour too.
                         if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
-                            && let Some((index, id)) = app.active_ids()
-                            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
-                            && app.session.get(id).is_some_and(|doc| {
-                                doc.allows_annotation()
-                                    && doc
-                                        .info
-                                        .annotations
-                                        .iter()
-                                        .any(|a| a.page == page && a.index == annotation && a.in_reply_to.is_none() && comments::made_by(a, tool))
-                            })
+                            && let Some((_, id)) = app.active_ids()
+                            && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
                         {
-                            app.apply_edit(Edit::StyleAnnotation {
-                                page,
-                                index: annotation,
-                                color: Some(color),
-                                opacity: None,
-                                width: None,
-                                endings: None,
-                            });
+                            app.colour_selection(color, |a| comments::made_by(a, tool));
                         }
                     }
                 });

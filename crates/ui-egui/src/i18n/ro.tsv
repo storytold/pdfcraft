@@ -2774,3 +2774,19 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Comments copied, pasted and selected together (M5).
+	Copy comment	Copiere comentariu
+	Copy comments	Copiere comentarii
+	Paste comments	Lipire comentarii
+	Delete comments	Ștergere comentarii
+	Move comments	Mutare comentarii
+	Complete	Finalizare
+	Undo last point	Anulare ultimul punct
+	Cancel drawing	Anulare desenare
+	Copy comments first	Copiați mai întâi comentarii
+	Click where the copied comments go; Escape lets them go	Faceți clic unde merg comentariile copiate; Esc le eliberează
+	The copied comments are larger than this page; they were placed as they are	Comentariile copiate sunt mai mari decât această pagină; au fost plasate așa cum sunt
+	The clipboard holds no comments	Clipboardul nu conține comentarii
+	Comments: {n}	Comentarii: {n}
+	Changes here apply to all {n} selected comments	Modificările de aici se aplică tuturor celor {n} comentarii selectate

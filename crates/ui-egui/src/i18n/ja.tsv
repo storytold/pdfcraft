@@ -2515,3 +2515,20 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+
+# Comments copied between documents and selected several at once; finishing connected lines from the menu (M14).
+	Copy comment	コメントをコピー
+	Copy comments	コメントをコピー
+	Paste comments	コメントを貼り付け
+	Delete comments	コメントを削除
+	Move comments	コメントを移動
+	Complete	完了
+	Undo last point	最後の点を取り消す
+	Cancel drawing	描画をキャンセル
+	Copy comments first	先にコメントをコピーしてください
+	Click where the copied comments go; Escape lets them go	コピーしたコメントを置く場所をクリックしてください。Escape で取りやめます
+	The copied comments are larger than this page; they were placed as they are	コピーしたコメントはこのページより大きいため、そのまま配置しました
+	The clipboard holds no comments	クリップボードにコメントがありません
+	Comments: {n}	コメント: {n}
+# Comment Properties and the Colour menu act on every selected comment (M5).
+	Changes here apply to all {n} selected comments	ここでの変更は選択した {n} 件のコメントすべてに適用されます
