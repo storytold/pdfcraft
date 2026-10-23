@@ -653,3 +653,36 @@ fn a_centre_out_of_range_is_no_snap_target() {
     assert!(g.centres.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1e9), "{:?}", g.centres);
     assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
 }
+#[test]
+fn comments_drawn_with_lines_snap_by_their_ends_middles_and_centres() {
+    let annots = "/Annots [\
+        << /Subtype /Line /L [100 100 200 100] /Rect [99 99 201 101] >> \
+        << /Subtype /Text /Rect [0 0 20 20] >> \
+        << /Subtype /PolyLine /Vertices [300 100 350 150 400 100] >> \
+        << /Subtype /Polygon /Vertices [100 300 200 300 150 380] >> \
+        << /Subtype /Square /Rect [300 300 400 360] /BS << /W 4 >> >> \
+        << /Subtype /Circle /Rect [100 500 200 560] /RD [5 5 5 5] /BS << /W 2 >> >> \
+        << /Subtype /Ink /InkList [[10 10 20 20]] /Rect [10 10 20 20] >> \
+        << /Subtype /Line /L [0 700 50 700] /F 2 >> \
+        << /Subtype /Line /L [0 0 1 /x] >> ]";
+    let d = fixture("", annots, &[]);
+    let outlines = snap::comment_outlines(&d, 0).unwrap();
+    let places: Vec<usize> = outlines.iter().map(|(i, _)| *i).collect();
+    assert_eq!(places, [0, 2, 3, 4, 5], "a note, freehand, a hidden and a malformed one are left out");
+    let square = snap::Outline::Path { points: vec![[302.0, 302.0], [398.0, 302.0], [398.0, 358.0], [302.0, 358.0]], closed: true };
+    assert_eq!(outlines[3].1, square, "half the 4 pt border in from /Rect");
+    assert_eq!(outlines[4].1, snap::Outline::Ellipse { rect: [106.0, 506.0, 194.0, 554.0] }, "inside /RD, then half the border");
+    let g = snap::outline_geometry(outlines.iter().map(|(_, o)| o));
+    let opts = snap::SnapOptions::default();
+    let hit = |at: Point| g.snap(at, 4.0, opts).unwrap().map(|s| (s.point, s.kind));
+    use snap::SnapKind::*;
+    assert_eq!(hit([201.0, 102.0]), Some(([200.0, 100.0], Endpoint)), "a line's end");
+    assert_eq!(hit([151.0, 101.0]), Some(([150.0, 100.0], Midpoint)), "its middle");
+    assert_eq!(hit([351.0, 152.0]), Some(([350.0, 150.0], Endpoint)), "a corner of connected lines");
+    assert_eq!(hit([126.0, 341.0]), Some(([125.0, 340.0], Midpoint)), "the polygon's closing side");
+    assert_eq!(hit([351.0, 331.0]), Some(([350.0, 330.0], Centre)), "the rectangle's centre");
+    assert_eq!(hit([151.0, 555.0]), Some(([150.0, 554.0], Endpoint)), "the oval's top");
+    assert_eq!(hit([151.0, 531.0]), Some(([150.0, 530.0], Centre)), "and its centre");
+    assert_eq!(hit([10.0, 700.0]), None, "the hidden line doesn't snap");
+    assert!(snap::outline_geometry(std::iter::empty()).segments.is_empty());
+}

@@ -71,18 +71,20 @@ fn hex(c: [f32; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// A shape's points moved onto the page's drawing where one lies within `tolerance` (user
-/// units): line ends, polygon and polyline vertices, a box's corners. How many points snapped.
-fn snap_shape(shape: Shape, geometry: &measure::snap::Geometry, tolerance: f64) -> (Shape, Option<usize>) {
+/// A shape's points moved onto the page's drawing or the comments drawn over it (`geometries`)
+/// where one lies within `tolerance` (user units), the better target of them: line ends, polygon
+/// and polyline vertices, a box's corners. How many points snapped.
+fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: f64) -> (Shape, Option<usize>) {
     let options = measure::snap::SnapOptions::default();
     let mut count = 0usize;
     let mut snap = |p: [f64; 2]| -> [f64; 2] {
-        match geometry.snap(p, tolerance, options) {
-            Ok(Some(hit)) => {
+        let best = geometries.iter().filter_map(|g| g.snap(p, tolerance, options).ok().flatten()).min_by(measure::snap::candidate_order);
+        match best {
+            Some(hit) => {
                 count += 1;
                 hit.point
             }
-            _ => p,
+            None => p,
         }
     };
     let shape = match shape {
@@ -488,11 +490,12 @@ impl Automation {
             }
             let doc = self.doc(a)?;
             let geometry = doc.measurement_paths(page).map_err(failed)?;
+            let comments = doc.comment_paths(page, &[]).map_err(failed)?;
             // The tolerance in user units: the distance two display points apart map to.
             let origin = doc.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;
             let adjacent = doc.measurement_to_user(page, [tolerance, 0.0]).map_err(failed)?;
             let tolerance = measure::distance(origin, adjacent);
-            snap_shape(shape, &geometry, tolerance)
+            snap_shape(shape, &[&geometry, &comments], tolerance)
         } else {
             (shape, None)
         };

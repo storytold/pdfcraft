@@ -335,7 +335,12 @@ pub struct SnapCache {
     paths: Vec<(usize, u64, Option<std::sync::Arc<measure::snap::Geometry>>)>,
     /// Pages (and generations) whose limit notice has been shown.
     warned: Vec<(usize, u64)>,
+    /// The comments drawn on a page, by generation and the `/Annots` places left out.
+    comments: Vec<CommentPaths>,
 }
+
+/// A page, generation, the `/Annots` places left out, and the comments' snap geometry.
+type CommentPaths = (usize, u64, Vec<usize>, Option<std::sync::Arc<measure::snap::Geometry>>);
 
 impl SnapCache {
     /// The paths of `page` as the document is now (`None` when the page can't be read). A page
@@ -364,6 +369,23 @@ impl SnapCache {
             self.paths.remove(0);
         }
         self.paths.push((page, generation, geometry.clone()));
+        geometry
+    }
+
+    /// The comments drawn with lines on `page`, as the document is now, but those at the
+    /// `/Annots` places in `except` (`None` when the page can't be read). Built again after an
+    /// edit, or when what is left out changes.
+    pub fn comments(&mut self, doc: &Document, page: usize, except: &[usize]) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        self.comments.retain(|(_, g, _, _)| *g == generation);
+        if let Some((_, _, _, cached)) = self.comments.iter().find(|(p, _, e, _)| *p == page && e == except) {
+            return cached.clone();
+        }
+        let geometry = doc.comment_paths(page, except).ok().map(std::sync::Arc::new);
+        if self.comments.len() >= SNAP_CACHE_PAGES {
+            self.comments.remove(0);
+        }
+        self.comments.push((page, generation, except.to_vec(), geometry.clone()));
         geometry
     }
 }

@@ -24,7 +24,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         cv.snap_hover = None;
     }
     // The nearest target under the pointer, which Tab cycles from.
-    match pointer.filter(|_| over_page && cx.snap.is_some()) {
+    match pointer.filter(|_| over_page && cx.snapping()) {
         Some(p) => cv.snap_first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point)),
         None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
         None => {}
@@ -228,7 +228,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     // Tab while a comment is moved: its next anchor goes where this one is now (on its target,
     // when it has one), so the target stays and the comment turns about it.
     if cv.anchor_steps != 0
-        && cx.snap.is_some()
+        && cx.snapping()
         && let Some(Gesture::Move { page, index, from }) = cv.gesture.as_mut()
         && *page == cx.page
         && let (Some(a), Some(p)) = (cx.get(*index), pointer)
@@ -274,7 +274,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     }
     if let (Some(Gesture::Move { page, index, from }), Some(p)) = (&cv.gesture, pointer)
         && *page == cx.page
-        && cx.snap.is_some()
+        && cx.snapping()
         && let Some(a) = cx.get(*index)
         && let (moved, _, Some(i)) = cx.snap_move(a, *from, p, cv.move_anchor)
         && let Some(anchor) = cx.move_anchors(a).0.get(i)

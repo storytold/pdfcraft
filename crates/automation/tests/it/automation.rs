@@ -10487,3 +10487,25 @@ fn comment_add_snaps_points_to_the_drawing_on_request() {
     ));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// comment_add `snap` takes the comments already drawn as well as the page's paths: a second
+/// line started 3 pt off the first one's end begins exactly there; one started near nothing
+/// stays where it was asked to start.
+#[test]
+fn snap_takes_the_comments_already_drawn() {
+    let dir = workdir("snap-comments");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [120, 40] }));
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [123, 43], "to": [123, 140], "snap": true }));
+    assert_eq!(out["snapped"], 1, "{out}");
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 250], "to": [80, 250], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let mut lines = list["comments"].as_array().unwrap().clone();
+    lines.sort_by_key(|c| c["index"].as_u64());
+    let start = |c: &Value| [c["points"][0][0].as_f64().unwrap(), c["points"][0][1].as_f64().unwrap()];
+    let [x, y] = start(&lines[1]);
+    assert!((x - 120.0).abs() < 1e-3 && (y - 40.0).abs() < 1e-3, "{lines:?}");
+    assert_eq!(start(&lines[2]), [20.0, 250.0]);
+}

@@ -354,6 +354,9 @@ pub(crate) struct PageCx<'a> {
     /// The page's paths, when the tool's points snap to the drawing (Snap to drawing is on and
     /// the tool sets points or corners).
     pub snap: Option<std::sync::Arc<measure::snap::Geometry>>,
+    /// The comments already drawn on the page with lines (lines, connected lines, polygons,
+    /// rectangles, ovals), which snap like the page's paths; not the one being moved or reshaped.
+    pub snap_comments: Option<std::sync::Arc<measure::snap::Geometry>>,
     /// Tab's place among the snap candidates (see [`CommentView::snap_cycle`]).
     pub snap_cycle: Option<([f64; 2], isize)>,
 }
@@ -375,14 +378,37 @@ impl PageCx<'_> {
         all.get(i).map_or((u, None), |hit| (hit.point, Some(hit.kind)))
     }
 
+    /// Whether points snap: to the page's paths or to the comments drawn over it.
+    pub(crate) fn snapping(&self) -> bool {
+        self.snap.is_some() || self.snap_comments.is_some()
+    }
+
     /// The snap targets the user's choice allows within the reach (6 screen points at this zoom)
-    /// of user point `u`, nearest first; none without snapping.
+    /// of user point `u`, on the page's paths and the comments drawn over it, nearest first; none
+    /// without snapping.
     pub(crate) fn snap_candidates(&self, u: [f64; 2]) -> Vec<measure::snap::Snap> {
-        let Some(geometry) = &self.snap else { return Vec::new() };
+        if !self.snapping() {
+            return Vec::new();
+        }
         // The reach in user units: the screen distance of one user unit, at this zoom.
         let pixels_per_unit = self.to_screen([u[0] + 1.0, u[1]]).distance(self.to_screen(u)).max(1e-6);
         let tolerance = (SNAP_SENSITIVITY / f64::from(pixels_per_unit)).min(10_000.0);
-        geometry.candidates(u, tolerance, self.prefs.snap_targets).unwrap_or_default()
+        let mut all: Vec<measure::snap::Snap> = [&self.snap, &self.snap_comments]
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g.candidates(u, tolerance, self.prefs.snap_targets).unwrap_or_default())
+            .collect();
+        // As each geometry orders its own: points (ends, centres, middles, crossings) nearest
+        // first, then the nearest point on a path; one of each place.
+        let path = |s: &measure::snap::Snap| s.kind == measure::snap::SnapKind::Path;
+        all.sort_by(|a, b| path(a).cmp(&path(b)).then_with(|| measure::snap::candidate_order(a, b)));
+        let mut out: Vec<measure::snap::Snap> = Vec::with_capacity(all.len());
+        for s in all {
+            if !(path(&s) && out.iter().any(path)) && !out.iter().any(|o| measure::distance(o.point, s.point) <= 1e-6) {
+                out.push(s);
+            }
+        }
+        out
     }
 
     /// The pointer `p` of a drag that started at `from`, moved so the first of `anchors` (screen
@@ -396,7 +422,7 @@ impl PageCx<'_> {
 
     /// [`Self::snap_drag`], with which of `anchors` landed on the target.
     fn snap_drag_by(&self, anchors: &[Pos2], mark: Option<f64>, from: Pos2, p: Pos2) -> (Pos2, Option<(SnapHit, usize)>) {
-        if self.snap.is_none() {
+        if !self.snapping() {
             return (p, None);
         }
         let travel = p - from;

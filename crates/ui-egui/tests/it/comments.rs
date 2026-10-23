@@ -3064,6 +3064,10 @@ fn drawing_tools_snap_to_the_pages_paths_with_f3() {
     assert_eq!(free[0].subtype, "PolyLine");
     // (A polyline's rect is its points padded by the line width's 2 pt.)
     assert!((free[0].rect[0] + 2.0 - 53.0).abs() < 1.5 && (free[0].rect[1] + 2.0 - 47.0).abs() < 1.5, "unsnapped: {:?}", free[0].rect);
+    // Taken back: the comments drawn snap too, and its corners sit right where the clicks go.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(comments(&h).is_empty());
     // F3 turns snapping on (and says so); the same clicks now land on the endpoint and the
     // intersection, with the marker showing the target under the pointer.
     h.key_press(egui::Key::F3);
@@ -3082,8 +3086,8 @@ fn drawing_tools_snap_to_the_pages_paths_with_f3() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     let snapped = comments(&h);
-    assert_eq!(snapped.len(), 2, "{snapped:?}");
-    let line = &snapped[1];
+    assert_eq!(snapped.len(), 1, "{snapped:?}");
+    let line = &snapped[0];
     assert_eq!(line.subtype, "PolyLine");
     assert!(
         (line.rect[0] + 2.0 - 50.0).abs() < 0.5 && (line.rect[1] + 2.0 - 50.0).abs() < 0.5 && (line.rect[2] - 2.0 - 150.0).abs() < 0.5,
@@ -3377,4 +3381,53 @@ fn line_ends_snap_when_dragged_and_lines_by_their_ends_when_moved() {
     drag_pt(&mut h, (70.0, 90.0), (52.0, 62.0));
     let p = ends(&h);
     assert!((p[0][0] - 20.0).abs() < 0.01 && (p[0][1] - 50.0).abs() < 0.01, "{p:?}");
+}
+
+/// With Snap to drawing on, the comments already drawn snap like the page's paths: a new line
+/// starts exactly at the end of the one before, or at its middle. A comment being changed
+/// doesn't snap to itself: a rectangle's corner dragged 4 pt down keeps those 4 pt instead of
+/// clinging to its own top side.
+#[test]
+fn new_lines_snap_to_the_comments_already_drawn() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|app| {
+        app.set_option("quick", "line").unwrap();
+        // At 100 % a user unit is a screen point, so the 6-point reach is 6 units here.
+        app.set_option("zoom", "100").unwrap();
+    });
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    let lines = |h: &Harness<'static, PdfCraftApp>| {
+        let mut l: Vec<_> = comments(h).into_iter().filter(|a| a.subtype == "Line").collect();
+        l.sort_by_key(|a| a.index);
+        l.into_iter().map(|a| a.points).collect::<Vec<_>>()
+    };
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 100.0));
+    // Started 3 pt off the first line's end, and near its middle.
+    drag_pt(&mut h, (143.0, 103.0), (143.0, 40.0));
+    drag_pt(&mut h, (92.0, 103.0), (60.0, 160.0));
+    let l = lines(&h);
+    assert_eq!(l.len(), 3, "{l:?}");
+    let on = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1e-3 && (p[1] - q[1]).abs() < 1e-3;
+    assert!(on(l[1][0], l[0][1]), "on the first line's end: {l:?}");
+    assert!(on(l[2][0], [(l[0][0][0] + l[0][1][0]) / 2.0, 100.0]), "on its middle: {l:?}");
+    // A rectangle, selected; its top-right corner dragged 20 pt left and 4 pt down.
+    let shape = Shape::Rectangle { rect: [180.0, 60.0, 280.0, 140.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    let square = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle");
+    click_pt(&mut h, (square.rect[0] + 1.0, (square.rect[1] + square.rect[3]) / 2.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, square.index)));
+    let corner = (square.rect[2], square.rect[3]);
+    drag_pt(&mut h, corner, (corner.0 - 20.0, corner.1 - 4.0));
+    let after = comments(&h).into_iter().find(|a| a.subtype == "Square").unwrap().rect;
+    assert!((after[3] - (square.rect[3] - 4.0)).abs() < 0.6 && (after[2] - (square.rect[2] - 20.0)).abs() < 0.6, "{:?} → {after:?}", square.rect);
 }
