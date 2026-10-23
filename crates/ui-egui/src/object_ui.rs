@@ -101,6 +101,13 @@ impl ObjectSelection {
         }
     }
 
+    /// The deletion of the whole selection; nothing stays selected.
+    fn delete(&mut self, page: usize) -> Edit {
+        let objects = self.selected.iter().map(|o| o.target).collect();
+        self.clear();
+        Edit::DeleteObjects { page, objects }
+    }
+
     /// The move of the whole selection by `offset` (user space). The selection follows it.
     fn move_by(&mut self, page: usize, offset: [f64; 2]) -> Edit {
         let mut expected = self.selected.clone();
@@ -342,9 +349,16 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
     }
     let image = view.image_selection.as_ref().filter(|s| !s.dragging()).map(|s| (s.page, s.index));
     let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
+    use egui::{Key, Modifiers};
+    // Delete or Backspace removes the selected objects, as Acrobat does (a lone image has its own).
+    if let Some(page) = objects
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
+    {
+        view.pending_edit = Some(view.objects.delete(page));
+        return;
+    }
     let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
     let Some(xf) = view.page_xform(page) else { return };
-    use egui::{Key, Modifiers};
     let mut step = egui::Vec2::ZERO;
     ctx.input_mut(|i| {
         for (key, direction) in [

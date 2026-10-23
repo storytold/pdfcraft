@@ -300,7 +300,8 @@ fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static 
     ui.horizontal(|ui| {
         if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
             app.left = LeftPanel::AllTools;
-            app.mode = crate::Mode::AllTools;
+            // Through `enter_mode`, so Edit text & images is put down with the panel.
+            app.enter_mode(crate::Mode::AllTools);
         }
         // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
         let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
@@ -312,6 +313,9 @@ fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static 
         }
         if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
             app.left_open = false;
+            // Closing Edit a PDF leaves editing, as Acrobat's Close does: the boxes go and an open
+            // paragraph is applied.
+            app.leave_edit();
         }
     });
     ui.add_space(2.0);

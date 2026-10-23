@@ -5929,6 +5929,35 @@ fn mixed_object_moves_are_one_undo_step_and_survive_save_reopen() {
 }
 
 #[test]
+fn mixed_object_deletes_are_one_undo_step_and_survive_save_reopen() {
+    let (mut s, id) = session_with(1);
+    let text = AddedText { text: "Added label".into(), rect: [20.0, 240.0, 140.0, 265.0], ..Default::default() };
+    s.apply(id, Edit::AddText { page: 0, text }).unwrap();
+    let image = image::RgbImage::from_pixel(12, 8, image::Rgb([240, 20, 20]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()) }).unwrap();
+    let before = s.get(id).unwrap().editable_objects(0).unwrap();
+    assert_eq!(before.len(), 3, "one native paragraph, one added label and one added image");
+    let targets = before.iter().map(|o| o.target).collect();
+    s.apply(id, Edit::DeleteObjects { page: 0, objects: targets }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Delete objects"));
+    assert!(doc.editable_objects(0).unwrap().is_empty(), "the paragraph, the label and the image are gone");
+    let deleted = s.save_bytes(id).unwrap();
+    let mut again = Session::new();
+    let other = again.open("deleted.pdf", None, deleted, None).unwrap();
+    assert!(again.get(other).unwrap().editable_objects(0).unwrap().is_empty(), "a paragraph is deleted, not hidden");
+    assert_eq!(s.undo(id).unwrap().as_str(), "Delete objects");
+    assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap(), before, "one undo restores all three objects");
+    let mut stale = before.iter().map(|o| o.target).collect::<Vec<_>>();
+    stale.push(ObjectTarget { kind: ObjectKind::Image, index: 999 });
+    let generation = s.get(id).unwrap().edit_generation();
+    assert!(s.apply(id, Edit::DeleteObjects { page: 0, objects: stale }).is_err());
+    assert_eq!(s.get(id).unwrap().edit_generation(), generation, "a refused delete changes nothing");
+}
+
+#[test]
 fn failed_group_moves_preserve_generation_dirty_state_and_redo_history() {
     let (mut s, id) = session_with(1);
     let objects: Vec<_> = s.get(id).unwrap().editable_objects(0).unwrap().iter().map(|o| o.target).collect();

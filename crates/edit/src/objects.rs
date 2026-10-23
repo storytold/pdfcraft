@@ -132,6 +132,38 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     Ok(())
 }
 
+/// Delete selected mixed objects as one atomic operation: paragraphs leave the page with their
+/// text, images and added items go as their own Delete does. All targets refer to the original
+/// inventories. A refusal leaves the document untouched.
+pub fn delete_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget]) -> Result<(), EditError> {
+    if targets.is_empty() || targets.len() > MAX_MOVE_OBJECTS {
+        return Err(EditError::Invalid("select between 1 and 1000 objects to delete".into()));
+    }
+    let inventory: BTreeSet<_> = editable_objects(doc, page)?.into_iter().map(|o| o.target).collect();
+    let mut unique = BTreeSet::new();
+    for target in targets {
+        if !unique.insert(*target) {
+            return Err(EditError::Invalid("an object was selected more than once".into()));
+        }
+        if !inventory.contains(target) {
+            return Err(EditError::Invalid("a selected object no longer exists; select the objects again".into()));
+        }
+    }
+    let indexes = |kind| targets.iter().filter(|t| t.kind == kind).map(|t| t.index).collect::<Vec<_>>();
+    let mut work = doc.clone();
+    // Paragraphs and images are found by their operations, which the added items' removal
+    // doesn't renumber; added items go last, the highest index first.
+    crate::text::delete_blocks(&mut work, page, &indexes(ObjectKind::Text))?;
+    crate::images::delete_images(&mut work, page, &indexes(ObjectKind::Image))?;
+    let mut added = indexes(ObjectKind::Added);
+    added.sort_unstable_by(|a, b| b.cmp(a));
+    for index in added {
+        crate::delete_content(&mut work, page, index)?;
+    }
+    *doc = work;
+    Ok(())
+}
+
 struct AddedGeometry {
     rect: [f64; 4],
     local_rect: [f64; 4],

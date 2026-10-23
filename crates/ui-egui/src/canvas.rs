@@ -4974,6 +4974,10 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.vertical(|ui| {
                     if icons::button(ui, "mouse-pointer-2", 32.0, app.quick_tool == QuickTool::Select, tl!("Select (V)")).clicked() {
+                        // From an editing tool, an open paragraph is applied first.
+                        if matches!(app.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                            app.put_down_edit_text();
+                        }
                         app.quick_tool = QuickTool::Select;
                     }
                     if icons::button(ui, "hand", 32.0, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {

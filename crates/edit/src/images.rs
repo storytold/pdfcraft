@@ -746,6 +746,17 @@ fn crop_image(
 
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.
 /// Splice only the chosen Do operators and preserve all other bytes and stream dictionaries.
+/// Delete images `indexes` (from [`page_images`]) on `page`, the last first so the indexes of
+/// the others still hold.
+pub(crate) fn delete_images(doc: &mut Document, page: usize, indexes: &[usize]) -> Result<(), EditError> {
+    let mut indexes = indexes.to_vec();
+    indexes.sort_unstable_by(|a, b| b.cmp(a));
+    for index in indexes {
+        change_image(doc, page, index, &ImageChange::Delete)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
     if indexes.is_empty() {
         return Ok(());

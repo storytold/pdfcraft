@@ -156,6 +156,28 @@ fn marquee_and_mixed_group_drag_move_once_and_undo_together() {
     assert_eq!(objects(&h), after);
 }
 
+/// Delete removes the selected objects in one undo step, a paragraph with its text, as Acrobat
+/// does; text outside the selection stays where it was.
+#[test]
+fn delete_removes_the_selected_objects_in_one_step() {
+    let mut h = harness();
+    let before = objects(&h);
+    marquee(&mut h);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after = objects(&h);
+    assert_eq!(after.len(), before.len() - 3, "{after:?}");
+    let keep = |list: &[EditableObject]| list.iter().find(|o| o.text.as_deref() == Some("Keep here")).map(|o| o.rect);
+    assert_eq!(keep(&after), keep(&before), "the unselected paragraph stays");
+    assert!(after.iter().all(|o| o.text.as_deref() != Some("Group headline")));
+    assert!(h.query_all_by_label_contains("objects selected").next().is_none(), "nothing stays selected");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Delete objects"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+}
+
 #[test]
 fn modifier_clicks_extend_an_ordinary_selection_and_toggle_objects() {
     let mut h = harness();

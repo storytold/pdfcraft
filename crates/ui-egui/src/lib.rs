@@ -2250,6 +2250,10 @@ impl PdfCraftApp {
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
     /// workspace, so opening its panel also opens the page grid (without toggling it off).
     pub(crate) fn select_tool(&mut self, id: &'static str) {
+        // Another tool leaves editing: Edit text & images stays on only under its own panel.
+        if id != "edit" {
+            self.leave_edit();
+        }
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
@@ -2293,6 +2297,16 @@ impl PdfCraftApp {
         // document with Read as the default mode comes here without `switch_mode`.
         if mode == Mode::Read {
             self.quick_tool = QuickTool::Select;
+        }
+    }
+
+    /// Leave Edit a PDF: the editing tools are put down (an open paragraph is applied) and the
+    /// Edit workspace gives way to All tools. Nothing happens outside editing.
+    pub(crate) fn leave_edit(&mut self) {
+        if self.mode == Mode::Edit {
+            self.enter_mode(Mode::AllTools);
+        } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+            self.put_down_edit_text();
         }
     }
 
@@ -3106,6 +3120,10 @@ impl PdfCraftApp {
             return;
         }
         if ctx.input(|input| input.key_pressed(Key::V)) {
+            // From an editing tool, an open paragraph is applied first.
+            if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                self.put_down_edit_text();
+            }
             self.quick_tool = QuickTool::Select;
             self.space_hand = None;
         }

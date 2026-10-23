@@ -1501,6 +1501,27 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
 }
 
+/// Closing the Edit panel leaves editing, as Acrobat's Close does: Edit text & images is put
+/// down and the Edit tab gives way to All tools. The Select tool puts it down as well.
+#[test]
+fn closing_the_edit_panel_leaves_editing() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    h.get_all_by_label("Close panel").next().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().mode, Mode::AllTools);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    h.get_by_label("Select (V)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
 /// Organize pages in the Edit panel opens the Organize workspace: its own panel and the page grid,
 /// not the grid behind the Edit panel.
 #[test]

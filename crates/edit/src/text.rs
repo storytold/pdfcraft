@@ -3281,6 +3281,87 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     Ok(())
 }
 
+/// Remove paragraphs `indexes` (from the page's blocks) for good. Each of their text-showing
+/// operations becomes a `TJ` that moves by the same advance, so text after it on the line stays
+/// where it was, and their strings leave the page (hidden text would still be found, copied and
+/// read aloud).
+pub(crate) fn delete_blocks(doc: &mut Document, page: usize, indexes: &[usize]) -> Result<(), EditError> {
+    if indexes.is_empty() {
+        return Ok(());
+    }
+    let p = page_dict(doc, page)?;
+    let streams = content_streams(doc, &p.dict)?;
+    let lines = text_lines(doc, page)?;
+    let blocks = group_blocks(&lines);
+    let mut selected = std::collections::BTreeSet::new();
+    for index in indexes {
+        let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
+        for line in &b.lines {
+            let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
+            l.ensure_editable()?;
+            selected.extend(l.ops.iter().copied());
+        }
+    }
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+    let mut patches = HashMap::new();
+    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+        // Text drawn as a clip shapes what follows it: removing it would uncover that artwork.
+        if !(0..=3).contains(&s.state.render_mode) {
+            return Err(EditError::Invalid("text used as a clipping path cannot be deleted".into()));
+        }
+        let font = fonts
+            .get(&s.font)
+            .map(|f| doc.resolve(f))
+            .and_then(|f| f.as_dict().cloned())
+            .ok_or_else(|| EditError::Invalid("a selected paragraph has no font".into()))?;
+        if vertical_encoding(doc, &font)? {
+            return Err(EditError::Invalid("vertical text cannot be deleted in a group".into()));
+        }
+        let denominator = s.state.size * s.state.scale;
+        let shift = if s.advance == 0.0 {
+            0.0
+        } else if denominator.abs() > 1e-12 {
+            -1000.0 * s.advance / denominator
+        } else {
+            return Err(EditError::Invalid("a selected paragraph has no horizontal advance".into()));
+        };
+        if !shift.is_finite() || shift.abs() > 1e12 {
+            return Err(EditError::Invalid("a selected paragraph is too wide to delete".into()));
+        }
+        let original = ops.get(s.op).ok_or_else(|| EditError::Invalid("a selected text operation is missing".into()))?;
+        let mut replacement = Vec::new();
+        // ' and " move to the next line (and " sets the spacing) before showing: keep that.
+        if original.is("\"") {
+            let spacing = original
+                .operands
+                .get(..2)
+                .filter(|a| a.iter().all(|o| o.as_f64().is_some()))
+                .ok_or_else(|| EditError::Invalid("a text operation has invalid spacing".into()))?;
+            for (operator, operand) in ["Tw", "Tc"].into_iter().zip(spacing) {
+                replacement.push(Op::new(operator, vec![operand.clone()]));
+            }
+        }
+        if original.is("'") || original.is("\"") {
+            replacement.push(Op::new("T*", vec![]));
+        }
+        if shift != 0.0 {
+            replacement.push(Op::new("TJ", vec![Object::Array(vec![Object::Real(shift)])]));
+        }
+        patches.insert(s.op, replacement);
+    }
+    if patches.len() != selected.len() {
+        return Err(EditError::Invalid("a selected text operation cannot be deleted".into()));
+    }
+    let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
+    let contents = rewritten_contents(doc, &streams, data);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
