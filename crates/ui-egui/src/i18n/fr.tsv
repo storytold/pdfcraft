@@ -1784,6 +1784,9 @@
 	Cut	Couper
 	Copy	Copier
 	Paste after	Coller après
+	Select a text box or an image first	Sélectionnez d'abord une zone de texte ou une image
+	Select text, a text box or an image first	Sélectionnez d'abord du texte, une zone de texte ou une image
+	Copy a text box or an image first	Copiez d'abord une zone de texte ou une image
 	Rename	Renommer
 	Set to current page ({n})	Affecter à la page actuelle ({n})
 	Move up	Monter

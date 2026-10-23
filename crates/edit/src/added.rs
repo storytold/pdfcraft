@@ -509,6 +509,61 @@ pub fn text_rect(t: &AddedText) -> [f64; 4] {
     [r[0], r[3] - h, r[2], r[3]]
 }
 
+/// How far each paste onto a page already holding the copy is offset, down and to the right, so a
+/// copy doesn't hide what it was copied from (points).
+pub const PASTE_STEP: f64 = 18.0;
+
+/// Where a pasted item of box `rect` goes on a page of `size` (display space): with its top-left
+/// corner at `at`, else where it was, `steps` paste steps ([`PASTE_STEP`]) down and to the right.
+/// It is kept on the page; one larger than the page keeps its left and top edges on it. A page
+/// or point that isn't a number leaves the box where it was.
+pub fn paste_rect(rect: [f64; 4], size: [f64; 2], steps: u32, at: Option<[f64; 2]>) -> [f64; 4] {
+    let [x0, y0, x1, y1] = norm(rect);
+    let (w, h) = (x1 - x0, y1 - y0);
+    let (left, top) = match at {
+        Some([x, y]) => (x, y),
+        None => {
+            let d = PASTE_STEP * f64::from(steps);
+            (x0 + d, y1 - d)
+        }
+    };
+    if !size.iter().chain(&[left, top, w, h]).all(|v| v.is_finite()) {
+        return rect;
+    }
+    let left = left.min(size[0] - w).max(0.0);
+    let top = top.max(h).min(size[1]);
+    [left, top - h, left + w, top]
+}
+
+/// Most paste steps [`paste_place`] tries before giving up on finding a free place.
+const MAX_PASTE_STEPS: u32 = 64;
+
+/// Where Edit ▸ Paste puts `content` on a page of `size` already holding `items` (display space):
+/// where it was, or as many paste steps down and to the right as it takes not to land exactly on
+/// a copy of it (the original it was copied from, or an earlier paste).
+pub fn paste_place<'a>(items: impl IntoIterator<Item = &'a Content>, content: &Content, size: [f64; 2]) -> [f64; 4] {
+    let same = copy_key(content);
+    let copies: Vec<[f64; 4]> = items.into_iter().filter(|i| copy_key(i) == same).map(Content::rect).collect();
+    let taken = |rect: [f64; 4]| copies.iter().any(|c| c.iter().zip(rect).all(|(a, b)| (a - b).abs() < 0.5));
+    let mut rect = paste_rect(content.rect(), size, 0, None);
+    for steps in 1..=MAX_PASTE_STEPS {
+        if !taken(rect) {
+            break;
+        }
+        rect = paste_rect(content.rect(), size, steps, None);
+    }
+    rect
+}
+
+/// What makes two items copies of each other for [`paste_place`]: all but the box, and for an
+/// image all but the object holding its picture, which a paste into another document stores anew.
+fn copy_key(c: &Content) -> Content {
+    match c.with_rect([0.0; 4]) {
+        Content::Image(img) => Content::Image(AddedImage { image: ObjRef::new(0, 0), ..img }),
+        text => text,
+    }
+}
+
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
     t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)

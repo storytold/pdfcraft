@@ -72,9 +72,11 @@ mod zoom_snap;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
+mod content_clip;
 mod content_ui;
 mod link_ui;
 mod object_ui;
+pub use content_clip::ContentClip;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
@@ -736,6 +738,9 @@ pub struct PdfCraftApp {
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
+    /// An added text box or image copied or cut in Edit a PDF, ready to paste (into any document).
+    /// Anything else copied in PdfCraft (page text, a page picture, a snapshot) replaces it.
+    pub content_clipboard: Option<ContentClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
@@ -1072,6 +1077,7 @@ impl PdfCraftApp {
             optimize_run: None,
             progress_notice: None,
             page_clipboard: None,
+            content_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
@@ -3036,9 +3042,12 @@ impl PdfCraftApp {
                 prepare::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
-            self.copy_key(i, ctx);
+            // The selected added item takes ⌘C / ⌘X before page text and pictures.
+            if !self.content_clip_keys(i, ctx) {
+                self.copy_key(i, ctx);
+                self.image_pick_keys(i, ctx);
+            }
             self.paste_image_key(i, ctx, pasted);
-            self.image_pick_keys(i, ctx);
         }
     }
 }
@@ -3084,6 +3093,7 @@ impl PdfCraftApp {
             return false;
         }
         ctx.copy_text(text);
+        self.content_clipboard = None;
         true
     }
 

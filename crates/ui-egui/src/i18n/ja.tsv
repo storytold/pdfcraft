@@ -1866,6 +1866,10 @@
 	Cut	切り取り
 	Copy	コピー
 	Paste after	後ろに貼り付け
+	Paste	貼り付け
+	Select a text box or an image first	先にテキストボックスか画像を選択してください
+	Select text, a text box or an image first	先にテキスト、テキストボックス、画像のいずれかを選択してください
+	Copy a text box or an image first	先にテキストボックスか画像をコピーしてください
 	Rename	名前を変更
 	Set to current page ({n})	現在のページ（{n}）を設定
 	Move up	上へ移動

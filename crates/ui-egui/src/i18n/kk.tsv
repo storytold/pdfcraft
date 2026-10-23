@@ -1776,6 +1776,10 @@
 	Cut	Кесу
 	Copy	Көшіру
 	Paste after	Артына қою
+	Paste	Қою
+	Select a text box or an image first	Алдымен мәтін жәшігін немесе кескінді таңдаңыз
+	Select text, a text box or an image first	Алдымен мәтінді, мәтін жәшігін немесе кескінді таңдаңыз
+	Copy a text box or an image first	Алдымен мәтін жәшігін немесе кескінді көшіріңіз
 	Rename	Атын өзгерту
 	Set to current page ({n})	Ағымдағы бетке орнату ({n})
 	Move up	Жоғары жылжыту

@@ -216,8 +216,12 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
     // drag with the Select tool does the same; this is the way in where the desktop takes
     // Alt-drag for moving windows (several Linux window managers).
-    // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
+    // Clipboard events stay with the frontend so focused text inputs and page clipboard routing keep
+    // ownership. Cut and Copy act on the selected added text box or image (Copy also on selected
+    // page text), and Paste puts the copied one back.
+    c("edit.cut", "Cut", EDIT, None, Modification, "scissors"),
     c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    c("edit.paste", "Paste", EDIT, None, Modification, "clipboard-paste"),
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),

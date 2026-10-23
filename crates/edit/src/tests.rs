@@ -983,6 +983,52 @@ fn added_text_and_images_are_page_content_that_stays_editable() {
     assert!(marks_present(&doc).is_empty());
 }
 
+/// Edit ▸ Paste (#2636): where a pasted item lands.
+#[test]
+fn a_paste_lands_where_the_copy_was_offset_per_paste_and_stays_on_the_page() {
+    use crate::added::{PASTE_STEP, paste_rect};
+    let page = [300.0, 400.0];
+    let rect = [40.0, 300.0, 140.0, 320.0];
+    assert_eq!(paste_rect(rect, page, 0, None), rect, "in place");
+    let d = 2.0 * PASTE_STEP;
+    assert_eq!(paste_rect(rect, page, 2, None), [40.0 + d, 300.0 - d, 140.0 + d, 320.0 - d], "two steps down and right");
+    assert_eq!(paste_rect(rect, page, 1, Some([10.0, 50.0])), [10.0, 30.0, 110.0, 50.0], "its top-left corner at the point");
+    assert_eq!(paste_rect(rect, page, 0, Some([290.0, 5.0])), [200.0, 0.0, 300.0, 20.0], "pulled back onto the page");
+    assert_eq!(paste_rect([0.0, 0.0, 500.0, 600.0], page, 0, Some([10.0, 10.0])), [0.0, -200.0, 500.0, 400.0], "too large: left and top on the page");
+    assert_eq!(paste_rect([140.0, 320.0, 40.0, 300.0], page, 0, None), rect, "a reversed box is normalized");
+    assert_eq!(paste_rect(rect, [f64::NAN, 400.0], 1, None), rect, "a page without a size leaves the box alone");
+    assert_eq!(paste_rect(rect, page, 1, Some([f64::INFINITY, 5.0])), rect, "so does a point that isn't a number");
+    assert_eq!(paste_rect(rect, page, u32::MAX, None), [200.0, 0.0, 300.0, 20.0], "many pastes stop at the page's corner");
+}
+
+/// A paste steps on past exact copies of the item (its original, earlier pastes), and only those.
+#[test]
+fn a_paste_steps_past_copies_of_itself_only() {
+    use crate::added::{PASTE_STEP, paste_place};
+    let page = [300.0, 400.0];
+    let text = |rect, t: &str| Content::Text(AddedText { rect, text: t.into(), ..AddedText::default() });
+    let item = text([40.0, 300.0, 140.0, 314.4], "Note");
+    let step = |n: f64| [40.0 + n * PASTE_STEP, 300.0 - n * PASTE_STEP, 140.0 + n * PASTE_STEP, 314.4 - n * PASTE_STEP];
+    assert_eq!(paste_place([], &item, page), step(0.0), "an empty page: where it was");
+    assert_eq!(paste_place([&item], &item, page), step(1.0), "beside its original");
+    let first = item.with_rect(step(1.0));
+    assert_eq!(paste_place([&item, &first], &item, page), step(2.0), "beside the last copy");
+    assert_eq!(paste_place([&first], &item, page), step(0.0), "its place is free again (the original was cut)");
+    let other = text(step(0.0), "Other text");
+    assert_eq!(paste_place([&other], &item, page), step(0.0), "a different item in the way doesn't count");
+    // A page full of copies at its corner: the search ends.
+    let corner = item.with_rect([200.0, 0.0, 300.0, 14.4]);
+    let stuck = paste_place([&corner], &item.with_rect([200.0, 0.0, 300.0, 14.4]), page);
+    assert_eq!(stuck, [200.0, 0.0, 300.0, 14.4]);
+    // An image pasted into another document draws its picture from an object of that document:
+    // still a copy, so the next paste steps past it.
+    let image = Content::Image(AddedImage { crop: [0.1, 0.0, 0.0, 0.0], ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(7, 0)) });
+    let pasted = Content::Image(AddedImage { crop: [0.1, 0.0, 0.0, 0.0], ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(42, 0)) });
+    assert_eq!(paste_place([&pasted], &image, page), step(1.0), "a copy whose picture is stored anew");
+    let turned = Content::Image(AddedImage { rotation: 1, ..AddedImage::new(step(0.0), pdfcraft_cos::ObjRef::new(7, 0)) });
+    assert_eq!(paste_place([&turned], &image, page), step(0.0), "the same picture turned or cropped otherwise isn't a copy");
+}
+
 #[test]
 fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     let mut doc = fixture();

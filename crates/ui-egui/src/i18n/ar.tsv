@@ -1853,6 +1853,9 @@
 	Cut	قص
 	Copy	نسخ
 	Paste after	لصق بعد
+	Select a text box or an image first	حدد أولًا مربع نص أو صورة
+	Select text, a text box or an image first	حدد أولًا نصًا أو مربع نص أو صورة
+	Copy a text box or an image first	انسخ أولًا مربع نص أو صورة
 	Rename	إعادة تسمية
 	Set to current page ({n})	تعيين إلى الصفحة الحالية ({n})
 	Move up	نقل لأعلى

@@ -203,6 +203,63 @@ impl Automation {
         let (page, index, _, _) = self.item(a)?;
         self.apply(a, Edit::DeleteContent { page, index })
     }
+
+    /// Edit ▸ Copy, then Paste: an added item onto `to_page` of `to_doc` (its own page and
+    /// document by default), as it is, at `at` (its top-left) or where it was, stepped down and to
+    /// the right past copies of it already on that page.
+    pub(crate) fn content_copy(&mut self, a: &Args) -> Result<Value> {
+        let (page, index, content, _) = self.item(a)?;
+        let source = self.doc(a)?;
+        source.check_copying()?;
+        let from = source.id;
+        let file = match &content {
+            AddedContent::Text(_) => None,
+            AddedContent::Image(_) => {
+                let (ext, bytes) = source.added_image_file(page, index).map_err(failed)?;
+                Some((format!("Pasted image.{ext}"), std::sync::Arc::new(bytes)))
+            }
+        };
+        let to_doc = match a.opt_int("to_doc")? {
+            Some(d) => {
+                let d = u64::try_from(d).map_err(|_| bad("to_doc must be positive"))?;
+                self.session.get(pdfcraft_engine::DocId(d)).ok_or_else(|| failed(format!("no open document with id {d} (see doc_list)")))?.id
+            }
+            None => from,
+        };
+        let doc = self.session.get(to_doc).ok_or_else(|| failed("the document is no longer open"))?;
+        let n = doc.info.pages.len();
+        let to_page = match a.opt_int("to_page")? {
+            Some(p) => usize::try_from(p)
+                .ok()
+                .and_then(|p| p.checked_sub(1))
+                .filter(|p| *p < n)
+                .ok_or_else(|| bad(format!("to_page {p} is out of range: the document has {n} pages")))?,
+            None if page < n => page,
+            None => return Err(bad(format!("page {} is out of range in the target: it has {n} pages; pass to_page", page + 1))),
+        };
+        let info = doc.info.pages.get(to_page).ok_or_else(|| bad("the page no longer exists"))?;
+        let (pw, ph) = (f64::from(info.width), f64::from(info.height));
+        let at = match a.get("at") {
+            Some(v) => {
+                let p: Option<Vec<f64>> = v.as_array().and_then(|x| x.iter().map(Value::as_f64).collect());
+                let [x, y]: [f64; 2] = p.and_then(|p| p.try_into().ok()).ok_or_else(|| bad("at must be [x, y]"))?;
+                Some([x, ph - y])
+            }
+            None => None,
+        };
+        let on_page = || doc.added().iter().filter(|x| x.page == to_page);
+        let rect = match at {
+            Some(at) => pdfcraft_engine::added_paste_rect(content.rect(), [pw, ph], 0, Some(at)),
+            None => pdfcraft_engine::added_paste_place(on_page().map(|x| &x.content), &content, [pw, ph]),
+        };
+        let before = on_page().count();
+        let target = json!({ "doc": to_doc.0 });
+        let mut out = self.apply(&Args(&target), Edit::PasteContent { page: to_page, content: content.with_rect(rect), file })?;
+        out["page"] = json!(to_page + 1);
+        out["index"] = json!(before + 1);
+        out["rect"] = json!(to_view(rect, ph).map(|x| (x * 100.0).round() / 100.0));
+        Ok(out)
+    }
 }
 
 impl Automation {

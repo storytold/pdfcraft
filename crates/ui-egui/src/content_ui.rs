@@ -84,12 +84,20 @@ pub struct ContentView {
     pub draft: Option<TextDraft>,
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
+    /// The last right-click on a page: the page, the point (display space) and the item under it,
+    /// for the menu's Cut, Copy, Paste and Delete.
+    pub(crate) menu: Option<(usize, [f64; 2], Option<usize>)>,
     grab: Option<(usize, Grab, Pos2)>,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
 
 impl ContentView {
+    /// An item is being moved or resized.
+    pub(crate) fn dragging(&self) -> bool {
+        self.grab.is_some()
+    }
+
     pub(crate) fn finish_draft(&mut self, added: &[Added]) -> Option<Edit> {
         self.draft.take().and_then(|d| finish(self, d, added))
     }
@@ -371,6 +379,24 @@ pub(crate) fn page_input(
         .and_then(|(_, si)| items.iter().find(|(i, _)| *i == si))
         .map(|(_, a)| screen_rect(xf, info, page, a.content.rect()));
     let corner = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0));
+    // A right-click selects the item under it for its menu (Cut, Copy, Paste, Delete); elsewhere
+    // the page's menu pastes where it was opened. Text being typed keeps the menu its own, unless
+    // another item is right-clicked: that ends the typing, as a click on it does.
+    let item = hit.map(|(i, _)| i);
+    if resp.secondary_clicked()
+        && (cv.draft.is_none() || item.is_some_and(|i| cv.draft.as_ref().is_some_and(|d| d.page != page || d.index != Some(i))))
+    {
+        if let Some(edit) = cv.finish_draft(added) {
+            view.pending_edit = Some(edit);
+        }
+        cv.menu = Some((page, to_display(xf, info, page, p), item));
+        if let Some(i) = item {
+            cv.selected = Some((page, i));
+            // Its menu is the only one: a page picture selected earlier keeps no menu of its own.
+            only_selected_item(view);
+            return true;
+        }
+    }
     // Cursors only where the page shows: the mode bar and side panels over a page scrolled under
     // them keep their own (#2755).
     let shows = resp.contains_pointer();
@@ -415,6 +441,7 @@ pub(crate) fn page_input(
         } else if let Some((i, _)) = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(origin)) {
             cv.selected = Some((page, *i));
             cv.grab = Some((page, Grab::Move, origin));
+            only_selected_item(view);
             consumed = true;
         }
         return consumed;
@@ -434,6 +461,7 @@ pub(crate) fn page_input(
         }
         cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true });
         cv.selected = Some((page, i));
+        only_selected_item(view);
         consumed = true;
         return consumed;
     }
@@ -441,6 +469,7 @@ pub(crate) fn page_input(
         match hit {
             Some((i, _)) => {
                 cv.selected = Some((page, i));
+                only_selected_item(view);
                 consumed = true;
             }
             None if corner.is_none() => cv.selected = None,
@@ -490,12 +519,22 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
     }
 }
 
+/// An added item was just selected: it is the only selection, so ⌘C / ⌘X act on it alone. Page
+/// text and a page picture (selected in Edit text & images, or picked to copy) selected before
+/// it are dropped.
+fn only_selected_item(view: &mut DocView) {
+    view.clear_selection();
+    view.image_selection = None;
+    view.picked_image = None;
+}
+
 /// After an add: select the new item.
 pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
     if let Some((page, before)) = view.content.select_added.take()
         && on_page(added, page).len() > before
     {
         view.content.selected = Some((page, before));
+        only_selected_item(view);
     }
     if let Some((p, i)) = view.content.selected
         && on_page(added, p).len() <= i
@@ -730,6 +769,7 @@ impl crate::PdfCraftApp {
                 return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
             }
             self.last_copied_image = Some((w, h, rgba));
+            self.content_clipboard = None;
             Ok((w, h))
         });
         match copied {
@@ -812,14 +852,24 @@ impl crate::PdfCraftApp {
 
     /// Place image `bytes` in the middle of the current page and select it.
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
-        let Some((i, id)) = self.active_ids() else { return };
-        let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
-        if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
-            self.views[i].content.select_added = Some((page, before));
-            self.left = crate::LeftPanel::Tool("edit");
-            self.left_open = true;
+        if let Some(page) = self.active.and_then(|i| self.views.get(i)).map(|v| v.current) {
+            self.add_image_on(page, None, name, bytes);
         }
+    }
+
+    /// Place image `bytes` on `page` in `rect` (display space), or in the middle, and select it.
+    pub(crate) fn add_image_on(&mut self, page: usize, rect: Option<[f64; 4]>, name: String, bytes: Vec<u8>) -> bool {
+        let Some((i, id)) = self.active_ids() else { return false };
+        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
+        if !self.apply_edit(Edit::AddImage { page, rect, name, bytes: std::sync::Arc::new(bytes) }) {
+            return false;
+        }
+        if let Some(view) = self.views.get_mut(i) {
+            view.content.select_added = Some((page, before));
+        }
+        self.left = crate::LeftPanel::Tool("edit");
+        self.left_open = true;
+        true
     }
 
     /// Whether ⌘V / Ctrl+V was let go this frame. egui-winit swallows that press (with a Paste
@@ -839,21 +889,21 @@ impl crate::PdfCraftApp {
         released
     }
 
-    /// ⌘V / Ctrl+V with a picture on the system clipboard (a screenshot, a picture copied in a
-    /// browser) places it on the current page, as Add Image does.
+    /// ⌘V / Ctrl+V: a text box or image copied in Edit a PDF (while the system clipboard still
+    /// holds it), else a picture on the system clipboard (a screenshot, a picture copied in a
+    /// browser) placed on the current page, as Add Image does.
     /// Organize Pages keeps ⌘V for pages, Prepare Form for fields, and text fields for text.
     pub(crate) fn paste_image_key(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input();
         let Some(view) = self.views.get(i) else { return };
-        if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() {
+        // Not mid-drag: the drag would end on the pasted copy, which a paste selects.
+        if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() || view.content.dragging() {
             return;
         }
-        let clip = match self.clipboard_override.clone() {
-            Some(c) => Some(c),
-            #[cfg(not(target_arch = "wasm32"))]
-            None if self.system_clipboard => crate::create_ui::read_clipboard(),
-            None => None,
-        };
+        let clip = self.system_clip();
+        if self.paste_copied_key(clip.as_ref()) {
+            return;
+        }
         let Some(crate::create_ui::Clip::Image { width, height, rgba }) = clip else { return };
         match crate::create_ui::png_from_rgba(width, height, &rgba) {
             Ok(png) => self.add_image("Pasted image.png".into(), png),

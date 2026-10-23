@@ -621,6 +621,20 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "index"],
             )),
+        t(
+            "content_copy",
+            "Copy and paste added content",
+            "Copy an added item (page, index from content_list) and paste it, as Edit ▸ Copy and Paste do: onto to_page of to_doc (by default its own page and document) as it is: a text box's text, font, size, colour, alignment and box; an image's picture, box, turns, flips and crop (within its document the same image object is drawn again; into another one the picture goes as its JPEG or JPEG 2000 file, or else a PNG, without a colour profile and with CMYK colours turned to RGB). It goes at at [x, y] (its top-left, points from the top-left of the page), else where it was, 18 points down and to the right past each copy of it already there; kept on the page. Refused when the source document doesn't allow copying. Returns the new item's page, index and rect. Undoable in the target document.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 },
+                "to_doc": { "type": "integer", "minimum": 1, "description": "The document to paste into (default doc)." },
+                "to_page": { "type": "integer", "minimum": 1, "description": "The page to paste onto (default page)." },
+                "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+            }),
+            &["doc", "page", "index"],
+        )),
         t("content_delete", "Delete added content", "Delete an added item (page, index from content_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),

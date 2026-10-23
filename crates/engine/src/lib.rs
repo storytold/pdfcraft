@@ -41,6 +41,7 @@ mod text_preview;
 pub mod word_count;
 pub mod xfa;
 
+pub use copy_image::image_rgba;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::StampPreview;
@@ -55,7 +56,10 @@ pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnific
 
 pub use pdfcraft_cos::Algorithm;
 pub use pdfcraft_create::{CONVERTIBLE, CreateError, ImageResolution, SourceKind, decode_text, source_kind};
-pub use pdfcraft_edit::added::{text_rect as added_text_rect, text_width as added_text_width};
+pub use pdfcraft_edit::added::{
+    PASTE_STEP as ADDED_PASTE_STEP, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
+    text_width as added_text_width,
+};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -309,6 +313,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::UpdateContent { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
+        | Edit::PasteContent { .. }
         | Edit::AddHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
@@ -1782,6 +1787,16 @@ pub enum Edit {
         name: String,
         bytes: Arc<Vec<u8>>,
     },
+    /// Edit ▸ Paste: an added item copied in this document or another, as it was: text with its
+    /// style, an image in its box (display space) with its turns, flips and crop. An image's
+    /// picture is `file` (from [`Document::added_image_file`]): the copied image object is reused
+    /// while it is still that picture in this document, else one an added image here already draws
+    /// it from, else the file is embedded.
+    PasteContent {
+        page: usize,
+        content: AddedContent,
+        file: Option<(String, Arc<Vec<u8>>)>,
+    },
     /// Apply redaction marks (all, or those on `pages`): remove what they cover for good.
     ApplyRedactions {
         pages: Option<Vec<usize>>,
@@ -2034,6 +2049,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add image",
     "Edit content",
     "Delete content",
+    "Paste",
     "Apply redactions",
     "Remove redaction marks",
     "Remove hidden information",
@@ -2176,6 +2192,7 @@ impl Edit {
             Edit::UpdateContent { .. } => Label::of("Edit content"),
             Edit::DeleteContent { .. } => Label::of("Delete content"),
             Edit::ReplaceImage { .. } => Label::of("Replace image"),
+            Edit::PasteContent { .. } => Label::of("Paste"),
             Edit::ApplyRedactions { .. } => Label::of("Apply redactions"),
             Edit::ClearRedactions => Label::of("Remove redaction marks"),
             Edit::RemoveHidden { .. } => Label::of("Remove hidden information"),
@@ -2329,6 +2346,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::MoveObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
+        | Edit::PasteContent { .. }
         | Edit::ClearRedactions
         | Edit::RemoveHidden { .. }
         | Edit::ImportData { .. }
@@ -2783,6 +2801,28 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             };
             let (image, _) = embed_image(doc, name, bytes)?;
             pdfcraft_edit::update_content(doc, *page, *index, &AddedContent::Image(pdfcraft_edit::AddedImage { image, ..old }))?;
+        }
+        Edit::PasteContent { page, content, file } => {
+            let content = match content {
+                AddedContent::Text(_) => content.clone(),
+                AddedContent::Image(img) => {
+                    let Some((name, bytes)) = file else {
+                        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("a pasted image needs its picture".into())));
+                    };
+                    // The same picture in this document (copied here, pasted here before, or an
+                    // identical file): drawn again from the one image object rather than stored twice.
+                    let image = if copy_image::is_picture(doc, img.image, bytes) {
+                        img.image
+                    } else {
+                        match copy_image::added_picture(doc, bytes) {
+                            Some(image) => image,
+                            None => embed_image(doc, name, bytes)?.0,
+                        }
+                    };
+                    AddedContent::Image(pdfcraft_edit::AddedImage { image, ..img.clone() })
+                }
+            };
+            pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
             cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
@@ -4180,7 +4220,12 @@ impl Session {
         let touches_added = edit.is_none_or(|e| {
             matches!(
                 e,
-                Edit::AddText { .. } | Edit::AddImage { .. } | Edit::UpdateContent { .. } | Edit::DeleteContent { .. } | Edit::ReplaceImage { .. }
+                Edit::AddText { .. }
+                    | Edit::AddImage { .. }
+                    | Edit::UpdateContent { .. }
+                    | Edit::DeleteContent { .. }
+                    | Edit::ReplaceImage { .. }
+                    | Edit::PasteContent { .. }
             ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {

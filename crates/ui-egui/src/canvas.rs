@@ -2655,8 +2655,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
     let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
     // Edit a PDF: added text and images can be selected, moved and edited.
-    let editing_content =
-        (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
+    let editing_content = app.editing_content();
+    let can_paste_content = app.can_paste_content();
+    // Cut, Copy and Paste act on the active document (Compare draws a second, inactive one).
+    let content_menu = editing_content && app.active == Some(index);
     let text_style = app.text_style.clone();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted.
@@ -3049,6 +3051,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let by_line = app.session.stamp_by_line(&author);
     let mut stamp_placed = false;
     let mut image_action: Option<crate::edit_text_ui::ImageAction> = None;
+    let mut content_action: Option<crate::content_clip::MenuAction> = None;
     let custom_stamp = match app.quick_tool {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
@@ -3160,8 +3163,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let pressed = unobstructed && ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(avail);
         let mut pressed_page = None;
         if resp.secondary_clicked() {
-            // Set again below when the right-click lands on a link.
+            // Set again below when the right-click lands on a link, on a page in Edit a PDF, or
+            // (comments) on a page: a picture right-clicked earlier keeps no Copy Image here.
             view.links.context = None;
+            view.content.menu = None;
+            view.comments.context_at = None;
         }
         let mut calc_hover = None;
         for &i in &visible_pages {
@@ -3478,7 +3484,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 view.content.selected = None;
             }
-            let on_content = !on_objects && editing_content && can_modify && {
+            // A document that doesn't allow changes still takes a right-click on an added item,
+            // for its menu's Copy.
+            let on_content = !on_objects && editing_content && (can_modify || resp.secondary_clicked()) && {
                 source_blocked
                     || crate::content_ui::page_input(
                         ui,
@@ -3995,6 +4003,38 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
+            // Edit a PDF: an added item's own menu, or Paste where the page was right-clicked.
+            if content_menu && let Some((page, at, item)) = view.content.menu {
+                use crate::content_clip::MenuAction;
+                let ctx = ui.ctx().clone();
+                let key = |s| crate::commands::shortcut_label(&ctx, s);
+                if let Some(index) = item {
+                    if ui.add_enabled(can_copy && can_modify, egui::Button::new(tl!("Cut")).shortcut_text(key(crate::commands::CUT))).clicked() {
+                        content_action = Some(MenuAction::Cut(page, index));
+                        ui.close();
+                    }
+                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy")).shortcut_text(key(crate::commands::COPY))).clicked() {
+                        content_action = Some(MenuAction::Copy(page, index));
+                        ui.close();
+                    }
+                }
+                let paste = egui::Button::new(tl!("Paste")).shortcut_text(key(crate::commands::PASTE));
+                if ui.add_enabled(can_modify && can_paste_content, paste).clicked() {
+                    // Over empty page, where it was clicked.
+                    content_action = Some(MenuAction::Paste(page, item.is_none().then_some(at)));
+                    ui.close();
+                }
+                if let Some(index) = item {
+                    ui.separator();
+                    if ui.add_enabled(can_modify, egui::Button::new(tl!("Delete"))).clicked() {
+                        view.content.selected = None;
+                        view.pending_edit = Some(Edit::DeleteContent { page, index });
+                        ui.close();
+                    }
+                    return;
+                }
+                ui.separator();
+            }
             if view.comments.selected.is_none() {
                 let selected = view.selected_text().is_some_and(|t| !t.is_empty());
                 let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
@@ -4356,6 +4396,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         } else {
             app.redact_prefs.mark(page, quads, &author)
         });
+    }
+    match content_action {
+        Some(crate::content_clip::MenuAction::Cut(page, index)) => {
+            app.copy_content(ui.ctx(), page, index, true);
+        }
+        Some(crate::content_clip::MenuAction::Copy(page, index)) => {
+            app.copy_content(ui.ctx(), page, index, false);
+        }
+        Some(crate::content_clip::MenuAction::Paste(page, at)) => {
+            app.paste_from_menu(page, at);
+        }
+        None => {}
     }
     match image_action {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),

@@ -43,22 +43,79 @@ impl Document {
     /// RGBA pixels (width, height, pixels) for the clipboard. Soft masks become alpha.
     pub fn page_image_rgba(&self, page: usize, index: usize) -> Result<(u32, u32, Vec<u8>), String> {
         let (_, bytes) = self.page_image_copy_file(page, index)?;
-        let format = image::guess_format(&bytes).map_err(|e| e.to_string())?;
-        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes.as_slice()), format);
-        let mut limits = image::Limits::default();
-        limits.max_alloc = Some(MAX_COPY_PIXELS * 4);
-        reader.limits(limits);
-        let decoder = reader.into_decoder().map_err(|e| e.to_string())?;
-        let (w, h) = image::ImageDecoder::dimensions(&decoder);
-        if w == 0 || h == 0 {
-            return Err("the image is empty".into());
-        }
-        if u64::from(w) * u64::from(h) > MAX_COPY_PIXELS {
-            return Err(format!("the image is too large to copy ({w} × {h} pixels); use Save Image As"));
-        }
-        let rgba = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?.into_rgba8();
-        Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+        image_rgba(&bytes)
     }
+
+    /// Edit ▸ Copy of an added image (`index` among `page`'s added items): its picture as a file
+    /// (extension, bytes), a JPEG or JPEG 2000 file as stored, otherwise a lossless PNG, for
+    /// [`Edit::PasteContent`](crate::Edit::PasteContent). Refused when the document doesn't allow
+    /// copying.
+    pub fn added_image_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
+        self.check_copying().map_err(|e| e.to_string())?;
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        let item = self.added().iter().filter(|a| a.page == page).nth(index);
+        let Some(pdfcraft_edit::Content::Image(img)) = item.map(|a| &a.content) else {
+            return Err(format!("item {} on page {} is not an added image", index + 1, page + 1));
+        };
+        picture_file(&editor.cos, img.image)
+    }
+}
+
+/// An added image's picture as a file: [`pdfcraft_create::image_file`], except that a JPEG 2000
+/// picture, which Add Image stores as the file it was given, is that file.
+fn picture_file(cos: &Cos, image: ObjRef) -> Result<(&'static str, Vec<u8>), String> {
+    match &*cos.get(image) {
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") && s.dict.name(b"Filter") == Some(b"JPXDecode") => Ok(("jp2", s.raw.to_vec())),
+        _ => pdfcraft_create::image_file(cos, image),
+    }
+}
+
+/// An image file's pixels at its own resolution, as straight (unpremultiplied) RGBA (width,
+/// height, pixels) for the clipboard. Larger pictures than a clipboard takes are refused.
+pub fn image_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let format = image::guess_format(bytes).map_err(|e| e.to_string())?;
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_COPY_PIXELS * 4);
+    reader.limits(limits);
+    let decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+    let (w, h) = image::ImageDecoder::dimensions(&decoder);
+    if w == 0 || h == 0 {
+        return Err("the image is empty".into());
+    }
+    if u64::from(w) * u64::from(h) > MAX_COPY_PIXELS {
+        return Err(format!("the image is too large to copy ({w} × {h} pixels); use Save Image As"));
+    }
+    let rgba = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?.into_rgba8();
+    Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+}
+
+/// Whether image object `image` in `cos` is the picture `file` (as [`picture_file`] writes it).
+/// The sizes are compared first, so an unrelated image is not re-encoded to find out.
+pub(crate) fn is_picture(cos: &Cos, image: ObjRef, file: &[u8]) -> bool {
+    let size = |s: &pdfcraft_cos::Stream| Some((u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?));
+    // The object at that number now, not one of an earlier generation of it.
+    if cos.generation(image.num) != image.generation {
+        return false;
+    }
+    let stored = match &*cos.get(image) {
+        // A JPEG 2000 picture is stored as its file.
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") && s.dict.name(b"Filter") == Some(b"JPXDecode") => return s.raw[..] == *file,
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => size(s),
+        _ => return false,
+    };
+    let given = image::ImageReader::new(std::io::Cursor::new(file)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok());
+    stored.is_some() && stored == given && picture_file(cos, image).is_ok_and(|(_, data)| data == file)
+}
+
+/// The image object an added image in `cos` already draws picture `file` from, if any: where a
+/// second paste from another document finds the first one's.
+pub(crate) fn added_picture(cos: &Cos, file: &[u8]) -> Option<ObjRef> {
+    let mut seen = std::collections::HashSet::new();
+    pdfcraft_edit::list_added(cos).into_iter().find_map(|a| match a.content {
+        pdfcraft_edit::Content::Image(img) if seen.insert(img.image) && is_picture(cos, img.image, file) => Some(img.image),
+        _ => None,
+    })
 }
 
 /// The largest raster image Form `form` draws through its resources (nested Forms included).

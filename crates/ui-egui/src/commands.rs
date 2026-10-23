@@ -27,6 +27,8 @@ pub(crate) const NEXT_VIEW: Shortcut = Shortcut::cmd("]");
 pub(crate) const FIND_NEXT: Shortcut = Shortcut::cmd("G");
 pub(crate) const FIND_PREV: Shortcut = Shortcut::cmd_shift("G");
 pub(crate) const COPY: Shortcut = Shortcut::cmd("C");
+pub(crate) const CUT: Shortcut = Shortcut::cmd("X");
+pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
@@ -86,7 +88,13 @@ impl PdfCraftApp {
         }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.id != "edit.copy"
+                || self.selected_content().is_some()
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.organize && v.selected_text().is_some_and(|t| !t.is_empty())))
+            // Cut copies first, so it needs copying allowed as well as changes.
+            && (spec.id != "edit.cut"
+                || self.selected_content().is_some()
+                    && commands::command("edit.copy").is_some_and(|c| commands::is_enabled(c, &self.session, self.active_ids().map(|(_, id)| id))))
+            && (spec.id != "edit.paste" || self.can_paste_content())
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
@@ -113,7 +121,19 @@ impl PdfCraftApp {
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
+            let doc = self.active_ids().map(|(_, id)| id);
             let why = match spec.needs {
+                // Cut copies first.
+                _ if spec.id == "edit.cut" && commands::command("edit.copy").is_some_and(|c| !commands::is_enabled(c, &self.session, doc)) => {
+                    crate::copy_refused().to_string()
+                }
+                // The document allows it, and there is nothing to act on.
+                _ if matches!(spec.id, "edit.cut" | "edit.copy" | "edit.paste") && commands::is_enabled(spec, &self.session, doc) => match spec.id {
+                    "edit.cut" => tl!("Select a text box or an image first"),
+                    "edit.copy" => tl!("Select text, a text box or an image first"),
+                    _ => tl!("Copy a text box or an image first"),
+                }
+                .to_string(),
                 commands::Needs::Undo => tl!("Nothing to undo").to_string(),
                 commands::Needs::Redo => tl!("Nothing to redo").to_string(),
                 commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
@@ -546,11 +566,20 @@ impl PdfCraftApp {
                 self.quick_tool = crate::QuickTool::Snapshot;
                 self.notify_tr("Drag a rectangle around the area to copy");
             }
-            "edit.copy" => {
-                if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
+            "edit.copy" | "edit.cut" => {
+                let Some(ctx) = self.ctx.clone() else { return false };
+                // The selected added text box or image (Edit a PDF), else the selected page text.
+                if let Some((page, index)) = self.selected_content() {
+                    return self.copy_content(&ctx, page, index, id == "edit.cut");
+                }
+                if let Some(i) = active.filter(|_| id == "edit.copy") {
                     return self.copy_selected_text(i, &ctx);
                 }
                 return false;
+            }
+            "edit.paste" => {
+                let Some(page) = active.and_then(|i| self.views.get(i)).map(|v| v.current) else { return false };
+                return self.paste_from_menu(page, None);
             }
             "page.copy" => self.copy_pages(false),
             "page.cut" => self.copy_pages(true),
@@ -818,7 +847,14 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
             }
             continue;
         }
-        let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
+        // ⌘C, ⌘X and ⌘V stay with the frontend's clipboard events (see the registry), so they are labels here.
+        let clipboard = match spec.id {
+            "edit.copy" => Some(COPY),
+            "edit.cut" => Some(CUT),
+            "edit.paste" => Some(PASTE),
+            _ => None,
+        };
+        let shortcut = spec.shortcut.or(clipboard).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
         let enabled = app.command_enabled(spec);
         let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
         if resp.clicked() {

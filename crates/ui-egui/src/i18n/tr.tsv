@@ -1747,6 +1747,10 @@
 	Cut	Kes
 	Copy	Kopyala
 	Paste after	Sonrasına yapıştır
+	Paste	Yapıştır
+	Select a text box or an image first	Önce bir metin kutusu veya resim seçin
+	Select text, a text box or an image first	Önce metin, bir metin kutusu veya resim seçin
+	Copy a text box or an image first	Önce bir metin kutusu veya resim kopyalayın
 	Rename	Yeniden Adlandır
 	Set to current page ({n})	Geçerli sayfaya ayarla ({n})
 	Move up	Yukarı taşı

@@ -1773,6 +1773,10 @@ action wizard	Start	ప్రారంభించు
 	Cut	కత్తిరించు
 	Copy	కాపీ చేయి
 	Paste after	ఎంపిక తర్వాత అతికించు
+	Paste	అతికించు
+	Select a text box or an image first	ముందుగా ఒక టెక్స్ట్ బాక్స్ లేదా చిత్రాన్ని ఎంచుకోండి
+	Select text, a text box or an image first	ముందుగా టెక్స్ట్, టెక్స్ట్ బాక్స్ లేదా చిత్రాన్ని ఎంచుకోండి
+	Copy a text box or an image first	ముందుగా ఒక టెక్స్ట్ బాక్స్ లేదా చిత్రాన్ని కాపీ చేయండి
 	Rename	పేరు మార్చు
 	Set to current page ({n})	ప్రస్తుత పేజీకి సెట్ చేయి ({n})
 	Move up	పైకి తరలించు

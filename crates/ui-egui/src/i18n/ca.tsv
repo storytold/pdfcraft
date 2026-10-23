@@ -1811,6 +1811,9 @@ action wizard	Start	Inicia
 	Cut	Retalla
 	Copy	Copia
 	Paste after	Enganxa després
+	Select a text box or an image first	Selecciona primer un quadre de text o una imatge
+	Select text, a text box or an image first	Selecciona primer text, un quadre de text o una imatge
+	Copy a text box or an image first	Copia primer un quadre de text o una imatge
 	Rename	Canvia el nom
 	Set to current page ({n})	Defineix com a pàgina actual ({n})
 	Move up	Mou amunt

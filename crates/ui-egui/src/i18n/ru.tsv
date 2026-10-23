@@ -1854,6 +1854,10 @@
 	Cut	Вырезать
 	Copy	Копировать
 	Paste after	Вставить после
+	Paste	Вставить
+	Select a text box or an image first	Сначала выберите текстовое поле или изображение
+	Select text, a text box or an image first	Сначала выделите текст, текстовое поле или изображение
+	Copy a text box or an image first	Сначала скопируйте текстовое поле или изображение
 	Rename	Переименовать
 	Set to current page ({n})	Установить текущей страницей ({n})
 	Move up	Переместить вверх

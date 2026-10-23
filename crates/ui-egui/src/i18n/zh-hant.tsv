@@ -1767,6 +1767,10 @@
 	Cut	剪下
 	Copy	複製
 	Paste after	在後面貼上
+	Paste	貼上
+	Select a text box or an image first	請先選取一個文字方塊或圖片
+	Select text, a text box or an image first	請先選取文字、文字方塊或圖片
+	Copy a text box or an image first	請先複製一個文字方塊或圖片
 	Rename	重新命名
 	Set to current page ({n})	設為目前頁（第 {n} 頁）
 	Move up	上移

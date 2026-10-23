@@ -1774,6 +1774,10 @@
 	Cut	Kivágás
 	Copy	Másolás
 	Paste after	Beillesztés utána
+	Paste	Beillesztés
+	Select a text box or an image first	Előbb válassz ki egy szövegdobozt vagy egy képet
+	Select text, a text box or an image first	Előbb jelölj ki szöveget, egy szövegdobozt vagy egy képet
+	Copy a text box or an image first	Előbb másolj egy szövegdobozt vagy egy képet
 	Rename	Átnevezés
 	Set to current page ({n})	Beállítás az aktuális oldalra ({n})
 	Move up	Feljebb

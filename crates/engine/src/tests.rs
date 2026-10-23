@@ -3155,6 +3155,127 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
+/// image with its picture and transforms, in the same document and in another.
+#[test]
+fn pasted_added_content_keeps_its_style_and_picture() {
+    let (mut s, id) = session_with(2);
+    let text = AddedText {
+        rect: [20.0, 250.0, 180.0, 264.4],
+        text: "Styled note".into(),
+        family: FontFamily::Times,
+        bold: true,
+        italic: true,
+        size: 12.0,
+        color: [0.8, 0.1, 0.2],
+        align: TextAlign::Center,
+    };
+    s.apply(id, Edit::AddText { page: 0, text: text.clone() }).unwrap();
+    let copied = s.get(id).unwrap().added()[0].content.clone();
+    let moved = copied.with_rect([40.0, 100.0, 200.0, 114.4]);
+    s.apply(id, Edit::PasteContent { page: 1, content: moved.clone(), file: None }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Paste"));
+    assert_eq!(doc.added()[1].page, 1);
+    assert_eq!(doc.added()[1].content, moved, "every part of the style, in the new box");
+
+    // An image, turned, flipped and cropped.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 20, 10);
+        enc.set_color(png::ColorType::Rgb);
+        let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+    }
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let AddedContent::Image(mut img) = s.get(id).unwrap().added()[1].content.clone() else { panic!("the image is the page's second item") };
+    (img.rotation, img.flip_h, img.crop) = (1, true, [0.1, 0.0, 0.2, 0.05]);
+    s.apply(id, Edit::UpdateContent { page: 0, index: 1, content: AddedContent::Image(img.clone()) }).unwrap();
+    let (ext, file) = s.get(id).unwrap().added_image_file(0, 1).unwrap();
+    assert_eq!(ext, "png");
+    let file = Some(("Pasted image.png".to_string(), Arc::new(file)));
+    assert!(s.get(id).unwrap().added_image_file(0, 0).is_err(), "the first item is text");
+    let pasted = AddedImage { rect: [60.0, 90.0, 160.0, 140.0], ..img.clone() };
+    s.apply(id, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: file.clone() }).unwrap();
+    let AddedContent::Image(got) = s.get(id).unwrap().added()[2].content.clone() else { panic!("an image was pasted") };
+    assert_eq!(got, pasted, "the same picture object, box, turn, flip and crop");
+
+    // Into another document: the picture comes along as a file of its own.
+    let other = s.open("other.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    s.apply(other, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: file.clone() }).unwrap();
+    s.apply(other, Edit::PasteContent { page: 0, content: copied.clone(), file: None }).unwrap();
+    let d = s.get(other).unwrap();
+    let AddedContent::Image(theirs) = &d.added()[0].content else { panic!("an image was pasted") };
+    assert_eq!(AddedImage { image: img.image, ..theirs.clone() }, pasted, "the same box and transforms");
+    assert_eq!(d.added_image_file(0, 0).unwrap().1, file.as_ref().unwrap().1.as_slice(), "the same picture");
+    assert_eq!(d.added()[1].content, copied);
+    // Pasted there again, it draws the first paste's picture object rather than storing a third.
+    let first = theirs.image;
+    s.apply(other, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: file.clone() }).unwrap();
+    let AddedContent::Image(again) = s.get(other).unwrap().added()[2].content.clone() else { panic!("an image was pasted") };
+    assert_eq!(again.image, first, "one picture object for both pastes");
+    // The object holds another picture of the same size (another document's numbering, an undone
+    // add): the file is embedded instead of drawing the wrong picture.
+    let mut other_png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut other_png, 20, 10);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[7u8; 600]).unwrap();
+    }
+    let other_file = Some(("other.png".to_string(), Arc::new(other_png)));
+    s.apply(id, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: other_file }).unwrap();
+    let AddedContent::Image(fresh) = s.get(id).unwrap().added()[3].content.clone() else { panic!("an image was pasted") };
+    assert_ne!(fresh.image, img.image, "a picture object of its own");
+    assert_ne!(s.get(id).unwrap().added_image_file(0, 3).unwrap().1, file.as_ref().unwrap().1.as_slice());
+    assert!(matches!(
+        s.apply(id, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted), file: None }),
+        Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(_)))
+    ));
+    // Four items on page 1 and the pasted text on page 2.
+    assert_eq!(s.get(id).unwrap().added().len(), 5, "refused pastes add nothing");
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().added().len(), 4, "a paste is one undo step");
+}
+
+/// An added JPEG 2000 picture is copied as the file it was added from: pasted into its own
+/// document it draws the same object, and into another one it is embedded once.
+#[test]
+fn an_added_jpeg_2000_image_is_copied_as_its_file() {
+    // A JP2 file (30 × 20, three components) with a stub codestream, as Add Image takes it.
+    let bx = |ty: &[u8], payload: &[u8]| [((payload.len() + 8) as u32).to_be_bytes().as_slice(), ty, payload].concat();
+    let ihdr = [20u32.to_be_bytes().as_slice(), &30u32.to_be_bytes(), &[0, 3, 7, 7, 0, 0]].concat();
+    let signature = [0, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+    let file = [signature.as_slice(), &bx(b"ftyp", b"jp2 \0\0\0\0jp2 "), &bx(b"jp2h", &bx(b"ihdr", &ihdr)), &bx(b"jp2c", &[0xFF, 0x4F, 0xFF, 0x51])]
+        .concat();
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 110.0, 140.0]), name: "photo.jp2".into(), bytes: Arc::new(file.clone()) })
+        .unwrap();
+    let (ext, copied) = s.get(id).unwrap().added_image_file(0, 0).unwrap();
+    assert_eq!((ext, &copied), ("jp2", &file), "the file as it was added");
+    let AddedContent::Image(img) = s.get(id).unwrap().added()[0].content.clone() else { panic!("an image was added") };
+    let copied = Arc::new(copied);
+    let file = Some(("Pasted image.jp2".to_string(), copied.clone()));
+    let pasted = AddedContent::Image(AddedImage { rect: [70.0, 80.0, 130.0, 120.0], ..img.clone() });
+    s.apply(id, Edit::PasteContent { page: 0, content: pasted.clone(), file: file.clone() }).unwrap();
+    assert!(matches!(&s.get(id).unwrap().added()[1].content, AddedContent::Image(i) if i.image == img.image), "the same picture object");
+    let other = s.open("other.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    for _ in 0..2 {
+        s.apply(other, Edit::PasteContent { page: 0, content: pasted.clone(), file: file.clone() }).unwrap();
+    }
+    let d = s.get(other).unwrap();
+    let images: Vec<_> = d
+        .added()
+        .iter()
+        .filter_map(|a| match &a.content {
+            AddedContent::Image(i) => Some(i.image),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0], images[1], "embedded once");
+    assert_eq!(d.added_image_file(0, 0).unwrap().1, copied.as_slice());
+}
+
 #[test]
 fn added_images_rotate_flip_and_crop_as_drawn() {
     // A 20×10 image: left half red, right half blue.
