@@ -2776,3 +2776,11 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+	Invert colors	Invertuoti spalvas
+	Inverted page background	Invertuoto puslapio fonas
+	Inverted text	Invertuotas tekstas
+	Reset	Atstatyti
+	Soft dark gray	Švelni tamsiai pilka
+	Sepia night	Naktinė sepija
+	Invert everything	Invertuoti viską
+	Text only, keep images	Tik tekstas, paveikslėliai lieka

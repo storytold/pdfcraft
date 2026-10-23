@@ -2750,3 +2750,11 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Invert colors	रंग उलटें
+	Inverted page background	उलटे पृष्ठ की पृष्ठभूमि
+	Inverted text	उलटा पाठ
+	Reset	रीसेट करें
+	Soft dark gray	हल्का गहरा स्लेटी
+	Sepia night	रात्रि सेपिया
+	Invert everything	सब कुछ उलटें
+	Text only, keep images	केवल पाठ, चित्र जैसे हैं वैसे रखें

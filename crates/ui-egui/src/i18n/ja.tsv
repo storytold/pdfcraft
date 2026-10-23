@@ -2515,3 +2515,11 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Invert colors	色を反転
+	Inverted page background	反転ページの背景
+	Inverted text	反転テキスト
+	Reset	リセット
+	Soft dark gray	ソフトダークグレー
+	Sepia night	ナイトセピア
+	Invert everything	すべて反転
+	Text only, keep images	テキストのみ(画像はそのまま)

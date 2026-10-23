@@ -410,7 +410,8 @@ pub fn show(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui) {
         panel_limits,
         |ui, panel| match panel {
             Panel::Canvas => {
-                ui.painter().rect_filled(ui.max_rect(), 0.0, t.pasteboard);
+                let pasteboard = if app.invert_colors && !t.dark() { egui::Color32::from_gray(32) } else { t.pasteboard };
+                ui.painter().rect_filled(ui.max_rect(), 0.0, pasteboard);
                 match app.active {
                     None if app.combine_showing() => crate::combine_ui::page(app, ui),
                     None => crate::home::show(app, ui),

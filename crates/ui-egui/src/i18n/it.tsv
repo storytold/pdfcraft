@@ -2747,3 +2747,11 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Invert colors	Inverti colori
+	Inverted page background	Sfondo della pagina invertita
+	Inverted text	Testo invertito
+	Reset	Ripristina
+	Soft dark gray	Grigio scuro tenue
+	Sepia night	Seppia notturna
+	Invert everything	Inverti tutto
+	Text only, keep images	Solo il testo, mantieni le immagini

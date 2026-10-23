@@ -2774,3 +2774,11 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Invert colors	Inversează culorile
+	Inverted page background	Fundalul paginii inversate
+	Inverted text	Text inversat
+	Reset	Resetează
+	Soft dark gray	Gri închis moale
+	Sepia night	Sepia de noapte
+	Invert everything	Inversează tot
+	Text only, keep images	Doar textul, păstrează imaginile

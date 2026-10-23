@@ -2516,3 +2516,11 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Invert colors	Farben umkehren
+	Inverted page background	Hintergrund der invertierten Seite
+	Inverted text	Invertierter Text
+	Reset	Zurücksetzen
+	Soft dark gray	Weiches Dunkelgrau
+	Sepia night	Nacht-Sepia
+	Invert everything	Alles umkehren
+	Text only, keep images	Nur Text, Bilder bleiben

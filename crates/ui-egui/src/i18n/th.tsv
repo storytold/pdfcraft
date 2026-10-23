@@ -2681,3 +2681,11 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Invert colors	สลับสี
+	Inverted page background	พื้นหลังหน้าที่สลับสี
+	Inverted text	ข้อความที่สลับสี
+	Reset	รีเซ็ต
+	Soft dark gray	เทาเข้มนุ่ม
+	Sepia night	ซีเปียกลางคืน
+	Invert everything	สลับทั้งหมด
+	Text only, keep images	เฉพาะข้อความ คงรูปภาพไว้

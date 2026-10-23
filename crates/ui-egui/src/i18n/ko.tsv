@@ -2750,3 +2750,11 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Invert colors	색상 반전
+	Inverted page background	반전된 페이지 배경
+	Inverted text	반전된 텍스트
+	Reset	재설정
+	Soft dark gray	부드러운 진회색
+	Sepia night	야간 세피아
+	Invert everything	모두 반전
+	Text only, keep images	텍스트만, 이미지 유지

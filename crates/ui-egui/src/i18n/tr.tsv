@@ -2511,3 +2511,11 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+	Invert colors	Renkleri ters çevir
+	Inverted page background	Ters çevrilmiş sayfa arka planı
+	Inverted text	Ters çevrilmiş metin
+	Reset	Sıfırla
+	Soft dark gray	Yumuşak koyu gri
+	Sepia night	Gece sepyası
+	Invert everything	Her şeyi ters çevir
+	Text only, keep images	Yalnızca metin, görseller kalsın

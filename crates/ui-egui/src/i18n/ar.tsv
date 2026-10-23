@@ -2791,3 +2791,11 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Invert colors	عكس الألوان
+	Inverted page background	خلفية الصفحة المعكوسة
+	Inverted text	النص المعكوس
+	Reset	إعادة تعيين
+	Soft dark gray	رمادي داكن ناعم
+	Sepia night	سيبيا ليلي
+	Invert everything	عكس كل شيء
+	Text only, keep images	النص فقط، مع إبقاء الصور

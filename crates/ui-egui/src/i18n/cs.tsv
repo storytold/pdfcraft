@@ -2822,3 +2822,11 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+	Invert colors	Invertovat barvy
+	Inverted page background	Pozadí invertované stránky
+	Inverted text	Invertovaný text
+	Reset	Obnovit
+	Soft dark gray	Měkká tmavě šedá
+	Sepia night	Noční sépie
+	Invert everything	Invertovat vše
+	Text only, keep images	Jen text, obrázky zůstanou

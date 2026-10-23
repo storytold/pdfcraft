@@ -2520,3 +2520,11 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	Invert colors	Obrni barve
+	Inverted page background	Ozadje obrnjene strani
+	Inverted text	Obrnjeno besedilo
+	Reset	Ponastavi
+	Soft dark gray	Mehka temno siva
+	Sepia night	Nočna sepija
+	Invert everything	Obrni vse
+	Text only, keep images	Samo besedilo, slike ostanejo

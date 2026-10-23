@@ -2537,3 +2537,11 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Invert colors	Інвертувати кольори
+	Inverted page background	Тло інвертованої сторінки
+	Inverted text	Інвертований текст
+	Reset	Скинути
+	Soft dark gray	М’який темно-сірий
+	Sepia night	Нічна сепія
+	Invert everything	Інвертувати все
+	Text only, keep images	Лише текст, зображення без змін
