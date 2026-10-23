@@ -6001,10 +6001,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
 tools = ["sign_document"]
-evidence = ["crates/ui-egui/tests/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/pdf.rs::visible_signatures_read_upright_on_rotated_pages", "crates/engine/src/tests.rs::visible_signatures_keep_displayed_orientation_on_rotated_pages"]
+evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/pdf.rs::visible_signatures_read_upright_on_rotated_pages", "crates/engine/src/tests.rs::visible_signatures_keep_displayed_orientation_on_rotated_pages"]
 notes = "drag a rectangle; Acrobat's name-and-details appearance; reads upright on rotated pages (/MK /R)"
-evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "drag a rectangle; Acrobat's name-and-details appearance"
 
 [[feature]]
 id = "sign.sign-existing-field"
