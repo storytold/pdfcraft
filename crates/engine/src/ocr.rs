@@ -97,15 +97,22 @@ pub struct OcrJob {
     /// Per page: the render scale (pixels per point) that shows its images at their own
     /// resolution, if it has any.
     native: Vec<Option<f32>>,
+    /// How long one page render may take before that page is skipped (#3634), from the document's
+    /// own configuration: recognition renders outside the viewer's pool, so it has to carry the bound
+    /// itself rather than inherit a pool watchdog. Read by the crate's tests because recognising
+    /// needs models a checkout may not have, while this part of the job does not.
+    pub(crate) page_time_limit: std::time::Duration,
     pub pages: Vec<usize>,
     pub settings: OcrSettings,
 }
 
 impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
-    /// stops (the pages read so far are returned).
+    /// stops (the pages read so far are returned). Each render gets the document's page budget
+    /// (#3634), so a pathological scan is reported in its page's `skipped` and the batch goes on
+    /// with the rest; a page gets that budget twice, once for its own text and once as a picture.
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
-        let config = RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
+        let config = RenderConfig { password: self.password.as_deref().map(Arc::from), page_time_limit: self.page_time_limit, ..Default::default() };
         let mut r = PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         let total = self.pages.len();
@@ -116,11 +123,17 @@ impl OcrJob {
             let Some(info) = self.infos.get(page) else { continue };
             let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()) };
             // The boxes of the page's own text (an earlier OCR layer's included), in view space.
-            let existing: Vec<[f32; 4]> = r
-                .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
-                .text
-                .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
-                .unwrap_or_default();
+            let own_text = r.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+            if let Some(e) = own_text.error {
+                // The page's own text could not be read — over its budget (#3634), refused by the
+                // exclusion rules, or a genuinely broken page. Reading the picture anyway would put
+                // recognised words on top of text that is already there, because the comparison below
+                // has nothing left to compare against.
+                out.push(skip(&e));
+                continue;
+            }
+            let existing: Vec<[f32; 4]> =
+                own_text.text.map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect()).unwrap_or_default();
             if self.settings.skip_text_pages && !existing.is_empty() {
                 out.push(skip("the page already contains text"));
                 continue;
@@ -187,7 +200,15 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
-        Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings })
+        Some(OcrJob {
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            infos: doc.info.pages.clone(),
+            native,
+            page_time_limit: doc.config.page_time_limit,
+            pages,
+            settings,
+        })
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.

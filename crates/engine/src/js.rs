@@ -360,7 +360,11 @@ impl Session {
     fn detect_fields_turned(&self, id: DocId, pages: &[usize]) -> Vec<(usize, pdfcraft_forms::detect::Candidate, i64)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
-        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let config = pdfcraft_render::RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            page_time_limit: doc.config.page_time_limit,
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut taken: Vec<String> = doc.form.iter().map(|f| f.name.clone()).collect();
         let all = doc.info.pages.len();
@@ -369,6 +373,13 @@ impl Session {
         for page in list {
             let Some(info) = doc.info.pages.get(page) else { continue };
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            // Advisory like URL discovery above: a page that could not be read contributes no words,
+            // and since #3634 that can be a page that is merely very slow. The candidate list stays
+            // partial by design here; the paths whose output claims completeness (`Session::compare`)
+            // report the page instead.
+            if res.error.is_some() {
+                continue;
+            }
             let shapes = pdfcraft_forms::detect::page_shapes(cos, page);
             let existing: Vec<[f64; 4]> = doc.form.iter().flat_map(|f| f.widgets.iter()).filter(|w| w.page == Some(page)).map(|w| w.rect).collect();
             let (found, turn) = if shapes.boxes.is_empty() && shapes.rules.is_empty() && crate::scan_fields::is_scan(doc, page, info) {

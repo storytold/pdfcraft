@@ -8157,8 +8157,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/engine/src/tests.rs::printing_as_image_sends_pictures_instead_of_pages", "crates/ui-egui/tests/it/print.rs::print_as_image_is_an_advanced_choice_that_saves_pictures", "crates/automation/tests/it/automation.rs::doc_print_as_image"]
-notes = "The Print dialog's Advanced section (folded unless on): Print as image at 150, 300 or 600 dpi; doc_print as_image and dpi (72–600). The pages used are rendered once each the way the viewer shows them (comments left out when the print leaves them out), composed over white, made into an image-only document and imposed on the paper like the pages themselves. The print is no longer searchable text. Still missing against Acrobat: per-printer defaults for it."
+evidence = ["crates/engine/src/tests.rs::printing_as_image_sends_pictures_instead_of_pages", "crates/ui-egui/tests/it/print.rs::print_as_image_is_an_advanced_choice_that_saves_pictures", "crates/automation/tests/it/automation.rs::doc_print_as_image", "crates/engine/src/tests.rs::print_as_image_reports_a_page_that_runs_past_its_time_limit"]
+notes = "The Print dialog's Advanced section (folded unless on): Print as image at 150, 300 or 600 dpi; doc_print as_image and dpi (72–600). The pages used are rendered once each the way the viewer shows them (comments left out when the print leaves them out), composed over white, made into an image-only document and imposed on the paper like the pages themselves. The print is no longer searchable text. A page that cannot be rendered within its time limit (#3634) stops the job with a message naming that page, instead of leaving it running. Still missing against Acrobat: per-printer defaults for it."
 
 [[feature]]
 id = "print.page-setup"
@@ -9173,8 +9173,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["doc.compare"]
 tools = ["doc_compare", "doc_compare_mark"]
-evidence = ["crates/compare/src/lib.rs::insertions_deletions_and_replacements", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools", "crates/ui-egui/tests/it/compare.rs::compare_two_versions"]
-notes = "Word-level Myers diff with patience anchors for long files; replaced/inserted/deleted shaded on the new file, listed in the Compare panel, or added as comments."
+evidence = ["crates/compare/src/lib.rs::insertions_deletions_and_replacements", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools", "crates/ui-egui/tests/it/compare.rs::compare_two_versions", "crates/engine/src/tests.rs::compare_names_the_page_it_could_not_read_instead_of_calling_it_unchanged"]
+notes = "Word-level Myers diff with patience anchors for long files; replaced/inserted/deleted shaded on the new file, listed in the Compare panel, or added as comments. A page whose text cannot be read within its render budget (#3634) fails the comparison and names which side, rather than reporting the documents as matching on a page nobody read."
 
 [[feature]]
 id = "misc.compare-visual"
@@ -9185,8 +9185,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["doc.compare"]
 tools = ["doc_compare"]
-evidence = ["crates/compare/src/lib.rs::finds_changed_regions", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools"]
-notes = "Pages rendered at 72 dpi and compared page by page; differing regions shaded orange where no text change explains them."
+evidence = ["crates/compare/src/lib.rs::finds_changed_regions", "crates/engine/src/tests.rs::comparing_two_versions_of_a_document", "crates/automation/tests/it/automation.rs::comparing_documents_through_tools", "crates/engine/src/tests.rs::compare_names_the_page_it_could_not_read_instead_of_calling_it_unchanged"]
+notes = "Pages rendered at 72 dpi and compared page by page; differing regions shaded orange where no text change explains them. Only pages both documents have get a verdict, and a page that cannot be drawn within its budget (#3634) fails the pass naming that page, rather than reading as unchanged."
 
 [[feature]]
 id = "misc.compare-side-by-side"

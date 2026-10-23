@@ -410,7 +410,14 @@ impl PdfCraftApp {
             return;
         }
         let up = self.session.print_text_up(id, &pages);
-        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        // #3634 review: these crops are read on the dialog's own thread, so they take the viewer's
+        // ceiling and never more than it — a document that asked for longer must not freeze this
+        // window. A page that misses its cut prints whole (no crop), which the draft handles.
+        let config = pdfcraft_render::RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            page_time_limit: doc.page_time_limit().min(pdfcraft_render::STUCK_AFTER),
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         self.print_draft.crops = doc
             .info

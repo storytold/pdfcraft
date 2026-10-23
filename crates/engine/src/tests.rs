@@ -2404,7 +2404,7 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     let mut cos = doc.editor.as_ref().unwrap().cos.clone();
     let marks = pdfcraft_redact::marks(&cos);
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None);
+        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None, std::time::Duration::from_secs(60));
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));
@@ -7437,4 +7437,136 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     let (pages, truncated) = doc.export_pages_checked(true, 0);
     assert!(pages[0].images.is_empty(), "the picture is past the budget");
     assert_eq!(truncated, [0]);
+}
+// ---------------------------------------------------------------------------
+// #3634 · pages get a time limit, so no job waits forever on one bad page
+//
+// The budget lives in `RenderConfig::page_time_limit` and defaults to the job figure
+// (`PAGE_TIME_LIMIT`, sixty seconds) rather than the viewer's twenty, which is how export, OCR,
+// print as image, compare (both passes), word count and the detection paths are all covered at once
+// instead of one call site at a time; `pool_stuck_after` keeps the viewer's own twenty-second
+// watchdog whatever a document asks for. That it really stops an interpreter, and not merely reports
+// afterwards, is shown in the render crate's `page_time_limit` tests; these check that a document's
+// budget reaches each job, and that every one reports the page instead of hanging or answering from
+// the pages it happened to read. Tight budgets (zero) are used so no test needs a slow document.
+// ---------------------------------------------------------------------------
+
+/// The budget every job inherits (sixty seconds, sized for callers that wait on pages), and a
+/// document's own tighter choice kept ahead of it.
+#[test]
+fn jobs_default_to_the_sixty_second_page_budget() {
+    let (mut s, id) = session_with(2);
+    assert_eq!(s.get(id).unwrap().config.page_time_limit, pdfcraft_render::PAGE_TIME_LIMIT);
+    assert_eq!(s.get(id).unwrap().export_source().config.page_time_limit, pdfcraft_render::PAGE_TIME_LIMIT);
+
+    // A tighter budget reaches the paths that build their own configuration: compare reads text page
+    // by page, and its answer claims to cover every one of them.
+    s.doc_mut(id).unwrap().config.page_time_limit = std::time::Duration::ZERO;
+    assert!(s.get(id).unwrap().words().is_err(), "the tightened budget reaches the word list");
+}
+
+#[test]
+fn export_reports_a_page_that_runs_past_its_time_limit() {
+    let (mut s, id) = session_with(2);
+    // The ordinary case first: inside the default budget, nothing about export changes.
+    assert!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).is_ok(), "an ordinary page still exports");
+
+    s.doc_mut(id).unwrap().config.page_time_limit = std::time::Duration::ZERO;
+    let err = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap_err();
+    assert!(err.contains("page 1 ") && err.contains("took longer than"), "{err}");
+    let err = export::Exporter::new(s.get(id).unwrap()).text(0).unwrap_err();
+    assert!(err.contains("text extraction for page 1 took longer than"), "{err}");
+
+    // A document that asks for no limit is not bounded by the job either.
+    s.doc_mut(id).unwrap().config.page_time_limit = pdfcraft_render::NO_PAGE_TIME_LIMIT;
+    assert!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).is_ok(), "an explicit opt-out is honoured");
+}
+
+#[test]
+fn print_as_image_reports_a_page_that_runs_past_its_time_limit() {
+    let (mut s, id) = session_with(2);
+    assert!(
+        print_raster::rasterize(s.get(id).unwrap(), &[0], &Default::default(), pdfcraft_print::Content::DocumentAndMarkups).is_ok(),
+        "an ordinary page prints as an image"
+    );
+
+    s.doc_mut(id).unwrap().config.page_time_limit = std::time::Duration::ZERO;
+    let err = print_raster::rasterize(s.get(id).unwrap(), &[0], &Default::default(), pdfcraft_print::Content::DocumentAndMarkups).unwrap_err();
+    assert!(err.contains("page 1 ") && err.contains("took longer than"), "{err}");
+}
+
+/// The worst case of a timeout is not slowness but a confident wrong answer. Comparing documents
+/// reads every page of both sides; if one page is never read, the differences on it are simply
+/// missing from the answer. Both passes report instead, naming which document failed and what was
+/// being attempted — read in full, or compared — rather than reporting what they managed to see.
+#[test]
+fn compare_names_the_page_it_could_not_read_instead_of_calling_it_unchanged() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let v1 = s.create_from_text("t", "The contract starts on Monday.").unwrap();
+    let v2 = s.create_from_text("t", "The contract starts on Tuesday.").unwrap();
+    let old = s.open("v1.pdf", None, v1, None).unwrap();
+    let new = s.open("v2.pdf", None, v2, None).unwrap();
+    assert_eq!(s.compare(old, new).unwrap().changes.len(), 1, "an ordinary comparison still works");
+
+    s.doc_mut(old).unwrap().config.page_time_limit = std::time::Duration::ZERO;
+    let err = s.compare(old, new).unwrap_err().to_string();
+    assert!(err.contains("the older document could not be read in full"), "{err}");
+    assert!(err.contains("page 1 ") && err.contains("took longer than"), "{err}");
+    // Not "identical", not "no changes": a page nobody read cannot support either claim.
+    assert!(!err.contains("identical"), "{err}");
+
+    let err = s.compare_visual(old, new, 72.0).unwrap_err().to_string();
+    assert!(err.contains("the older document could not be compared"), "visual failures name their side and the operation: {err}");
+    assert!(err.contains("page 1 ") && err.contains("took longer than"), "{err}");
+
+    // A document asking for more room still cannot blind the viewer's watchdog (`pool_stuck_after`
+    // keeps `STUCK_AFTER`) — pinned in the render crate, since only there can it be observed.
+
+    // With the budget lifted, both answers come back as they were.
+    s.doc_mut(old).unwrap().config.page_time_limit = pdfcraft_render::NO_PAGE_TIME_LIMIT;
+    assert_eq!(s.compare(old, new).unwrap().changes.len(), 1);
+    let _ = s.compare_visual(old, new, 72.0).unwrap();
+}
+
+/// Recognition takes its budget from the document, since it renders outside the viewer's pool.
+#[test]
+fn an_ocr_job_carries_the_documents_time_limit() {
+    let (mut s, id) = session_with(1);
+    assert_eq!(s.ocr_job(id, &[], ocr::OcrSettings::default()).unwrap().page_time_limit, pdfcraft_render::PAGE_TIME_LIMIT);
+
+    s.doc_mut(id).unwrap().config.page_time_limit = std::time::Duration::ZERO;
+    assert_eq!(s.ocr_job(id, &[], ocr::OcrSettings::default()).unwrap().page_time_limit, std::time::Duration::ZERO);
+}
+
+/// The end of that: a page whose render runs out of budget is reported as skipped, adds no words,
+/// and — whatever "skip pages that already have text" says — is never recognised over the words it
+/// could not read. Needs the models (`cargo xtask models`); without them this says so rather than
+/// pretending it checked. The half that does not need models — a timed-out text read returns an
+/// error instead of partial glyphs, which is what this keys on — is pinned in the render crate
+/// (`page_time_limit::text_extraction_runs_out_of_its_budget_too`).
+#[test]
+fn recognize_text_reports_a_page_it_could_not_read_within_the_time_limit() {
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let (mut s, id) = session_with(1);
+    s.doc_mut(id).unwrap().config.page_time_limit = std::time::Duration::ZERO;
+
+    // The page has text ("Page 1"), so with the comparison switched on it is skipped as already
+    // carrying text. With it off, recognition would add words over the text on the page — and
+    // since the page's own text could not be read, that is exactly what must not happen.
+    for skip_text_pages in [true, false] {
+        let found = s.recognize_text(id, &[], ocr::OcrSettings { skip_text_pages, ..Default::default() }).unwrap();
+        assert_eq!(found.len(), 1);
+        let why = found[0].skipped.clone().unwrap_or_else(|| "the page was read: nothing bounded it".into());
+        assert!(why.contains("took longer than"), "skip_text_pages={skip_text_pages}: {why}");
+        assert_eq!(found[0].words.len(), 0, "a page that could not be read adds no words");
+    }
+
+    // And with the budget off, that same page reads fine again.
+    s.doc_mut(id).unwrap().config.page_time_limit = pdfcraft_render::NO_PAGE_TIME_LIMIT;
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { skip_text_pages: false, ..Default::default() }).unwrap();
+    assert_eq!(found[0].skipped, None, "{:?}", found[0]);
+    assert!(!found[0].words.is_empty(), "the page has a word to find: {:?}", found[0]);
 }

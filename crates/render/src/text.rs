@@ -726,14 +726,21 @@ impl<'a> Device<'a> for TextDevice {
     }
 }
 
-/// Extract the text of one page. Panics inside the interpreter are the caller's to catch.
-pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Option<PageText> {
-    extract_page_filtered(pdf, page, settings, TextFilter::default()).ok()
+/// Extract the text of one page, or say why it could not be read. Panics inside the interpreter
+/// are still the caller's to catch — what is *not* their problem is a page that was read but
+/// refused: the exclusion rules have one case where they cannot give an honest answer, and that has
+/// to arrive as a reason rather than as `None`, which a caller would otherwise count as "this page
+/// holds no text" (#3634 review: OCR's duplicate-word filter made exactly that mistake).
+pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Result<PageText, String> {
+    extract_page_filtered(pdf, page, settings, TextFilter::default())
 }
 
 pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &InterpreterSettings, filter: TextFilter) -> Result<PageText, String> {
     let pages = pdf.pages();
-    let p = pages.get(page).ok_or("the page could not be read")?;
+    // Saturating, because `page` comes from a request and the message is for a human counting from
+    // one (#3634 review: this call used to be flattened into `None`, so a *refusal* — content that
+    // cannot be classified honestly — reached callers as no text at all).
+    let p = pages.get(page).ok_or_else(|| format!("page {} does not exist", page.saturating_add(1)))?;
     let (w, h) = p.render_dimensions();
     let cache = InterpreterCache::new();
     // Annotation appearances are included: form-field values and comment text are searchable,

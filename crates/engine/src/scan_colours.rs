@@ -16,7 +16,13 @@ const RING: f32 = 4.0;
 
 /// The paper and ink colours (RGB 0–1) of invisible paragraph `b` on `page`, or `None` when the
 /// paragraph is visible text or the page can't be read.
-pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize, b: &TextBlock) -> Option<([f64; 3], [f64; 3])> {
+pub(crate) fn sample(
+    cos: &pdfcraft_cos::Document,
+    info: &PageInfo,
+    page: usize,
+    b: &TextBlock,
+    limit: std::time::Duration,
+) -> Option<([f64; 3], [f64; 3])> {
     if !b.invisible {
         return None;
     }
@@ -48,7 +54,8 @@ pub(crate) fn sample(cos: &pdfcraft_cos::Document, info: &PageInfo, page: usize,
         cos.bytes().clone()
     };
     // The document's true colours, whatever the reading colours are set to.
-    let shot = PageRenderer::new(bytes, RenderConfig::default()).render(RenderRequest { page, scale, tile: Some(tile), ..Default::default() });
+    let config = RenderConfig { page_time_limit: limit, ..Default::default() };
+    let shot = PageRenderer::new(bytes, config).render(RenderRequest { page, scale, tile: Some(tile), ..Default::default() });
     if shot.error.is_some() {
         return None;
     }

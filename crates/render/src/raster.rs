@@ -53,7 +53,7 @@ impl Stopwatch {
 }
 
 /// Per-document rendering configuration.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RenderConfig {
     /// User or owner password for encrypted documents.
     pub password: Option<Arc<str>>,
@@ -71,6 +71,39 @@ pub struct RenderConfig {
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
+    /// How long one page may render before it is given up on (#3634): when the budget runs out the
+    /// interpreter stops at its next content operator and the page comes back with [`RenderPool`]'s
+    /// watchdog message. The default is [`PAGE_TIME_LIMIT`] — sixty seconds, sized for a caller that
+    /// waits on pages (see that constant for the measurements) — so every path that draws pages bounds a bad page without having to remember
+    /// to: export, OCR, print as image, compare, word count, the previews, the CLI and the
+    /// automation tools. A caller that needs a different bound sets it (`Duration::from_secs(120)`
+    /// for an unusual batch; at or above [`NO_PAGE_TIME_LIMIT`] there is no timer at all, so a page
+    /// runs as long as it takes rather than being bounded by a day). Setting this does not slow the
+    /// viewer down: its pools clamp to [`STUCK_AFTER`] however large the number is. Every engine path
+    /// that reads pages — export, OCR, print (label crops included), compare, word count, URL and
+    /// field detection, the redaction check-back and reading-colour samples — passes a document's
+    /// own value through, so one setting holds across a job; the viewer's pool honours it
+    /// only downwards, and never gives up its [`STUCK_AFTER`] ceiling. Not enforced on wasm32, where there is no thread
+    /// to raise the flag from — inline rendering is unbounded on that target either way.
+    pub page_time_limit: std::time::Duration,
+}
+
+impl Default for RenderConfig {
+    /// Every switch off, except the per-page budget: a page gets [`PAGE_TIME_LIMIT`] (sixty seconds)
+    /// by default (#3634), because an unbounded page holds whatever job is waiting on it — and its
+    /// user — for as long as it likes. The viewer is not that caller: pools clamp to [`STUCK_AFTER`]
+    /// (`pool_stuck_after`), so this default loosens jobs, not windows.
+    fn default() -> Self {
+        Self {
+            password: None,
+            layers: Arc::new(Vec::new()),
+            hide_comments: false,
+            reject_oversize: false,
+            reading_colors: ReadingColors::default(),
+            transparent: false,
+            page_time_limit: PAGE_TIME_LIMIT,
+        }
+    }
 }
 
 impl RenderConfig {
@@ -312,8 +345,12 @@ fn render_page<'a>(
     let reading = request_reading(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
-            Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
-            Ok(None) => Err((format!("page {} does not exist", req.page + 1), false)),
+            Ok(Ok(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
+            // The extractor's own reason, unchanged. It used to be flattened into "does not exist",
+            // which sent callers looking for a missing page when the real answer was "this page's
+            // text cannot be classified honestly" — and a caller that treats any failure as "no text
+            // here" then adds its own words over the ones already on the page (#3634 review).
+            Ok(Err(reason)) => Err((reason, false)),
             Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
         };
     }
@@ -418,7 +455,9 @@ fn take_warnings(warnings: &Mutex<Vec<RenderWarning>>) -> Vec<RenderWarning> {
     std::mem::take(&mut *lock(warnings))
 }
 
-/// A single-threaded renderer over one parsed document (used by the CLI and tests).
+/// A single-threaded renderer over one parsed document (used by the CLI and tests). It draws on
+/// the caller's thread, so a page runs to its end unless [`RenderConfig::page_time_limit`] gives
+/// it one (#3634); the viewer's [`RenderPool`] has its own watchdog (see its type docs).
 pub struct PageRenderer {
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
@@ -447,8 +486,16 @@ impl PageRenderer {
     pub fn filtered_text(&mut self, page: usize, filter: crate::text::TextFilter) -> Result<crate::PageText, String> {
         let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
         self.stats.text_interpretations = self.stats.text_interpretations.saturating_add(1);
-        catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
-            .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
+        let budget = PageTimeLimit::arm(self.config.page_time_limit);
+        let settings = budget.as_ref().map_or_else(|| self.settings.clone(), |g| g.applied_to(&self.settings));
+        let r = catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &settings, filter)))
+            .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?;
+        let over_time = budget.as_ref().filter(|g| g.cut_short()).map(|_| self.config.page_time_limit);
+        drop(budget);
+        match over_time {
+            Some(limit) if r.is_ok() => Err(stuck_message(&RenderRequest { page, kind: RequestKind::Text, ..Default::default() }, limit)),
+            _ => r,
+        }
     }
 
     /// Render one page. Never panics.
@@ -473,8 +520,18 @@ impl PageRenderer {
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let settings = warning_settings(&self.settings, warnings.clone());
+        // #3634: a caller that asked for a per-page budget gets the same treatment as the pool —
+        // the interpreter is told to stop at its next operator and the page comes back skipped.
+        let budget = PageTimeLimit::arm(self.config.page_time_limit);
+        let settings = budget.as_ref().map_or_else(|| settings.clone(), |g| g.applied_to(&settings));
         let r = render_page(pdf, &cache, &settings, &self.config, req);
+        let over_time = budget.as_ref().filter(|g| g.cut_short()).map(|_| self.config.page_time_limit);
+        drop(budget);
         let warnings = take_warnings(&warnings);
+        let r = match over_time {
+            Some(limit) if r.is_ok() => Err((stuck_message(&req, limit), false)),
+            _ => r,
+        };
         if matches!(r, Err((_, true))) {
             self.pdf = parse(&self.bytes, self.config.password.as_deref());
             self.stats.parser_builds += 1;
@@ -491,8 +548,174 @@ pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown panic".into())
 }
 
-/// How long one page may render before the pool gives up on it (the watchdog).
+/// How long the viewer's watchdog waits for one page before giving up on it: twenty seconds.
+/// This is the number PdfCraft's window has used all along, and #3634 leaves it alone — see
+/// [`PAGE_TIME_LIMIT`] for the budget a caller that *waits* on pages gets instead, and
+/// [`pool_stuck_after`] for how the two are kept apart.
 pub const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The default [`RenderConfig::page_time_limit`] (#3634): sixty seconds, what a caller that waits
+/// for pages — export, OCR, print as image, compare, word count, the previews, the CLI and the
+/// automation tools — allows one of them before reporting it skipped.
+///
+/// Why sixty and not the viewer's [`STUCK_AFTER`]: measured on an 18-core desktop, idle and then
+/// under 36 competing busy loops. A page render is single-threaded, so contention stretches it about
+/// four times:
+///
+/// - A3 vector plot @600 dpi: 1.7 s -> 7.1 s
+/// - A1 poster vector plot @300 dpi: 1.4 s -> 5.5 s
+/// - flattened poster, 2,000 whole-sheet translucent paints @600 dpi: 4.7 s -> **18.1 s**
+/// - the same poster at 8,000 paints: 20.3 s -> 70.6 s
+///
+/// That third row settles it: legitimate artwork clears a twenty-second budget by only 1.9 seconds,
+/// on hardware faster than the office laptops people print from — and slower cores, slower storage and
+/// less memory bandwidth are still to come. Sixty keeps such work while staying a minute rather than
+/// forever; the shape #3634 was filed against (content that paints until it is stopped) has no
+/// number at all, so any finite budget ends that wait.
+///
+/// No low-end hardware was tested: contention is a floor on the slowdown, not an estimate of it. The
+/// method, the failed handicap and the offer to change this number at maintainer direction are in the
+/// PR description.
+pub const PAGE_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A [`RenderConfig::page_time_limit`] at or above which a page gets no budget at all (#3634): one
+/// day. Nothing renders legitimately for that long, and arming a timer to wait years out would only
+/// park a thread — measured here, `recv_timeout` does not even complain about a span that wide, it
+/// simply blocks until told to stop. Any wider span means the same thing, so opting out does not
+/// require knowing this value, and no arithmetic is done on a caller's duration. Note what opting out
+/// does **not** reach: the viewer's pool keeps its own [`STUCK_AFTER`] ceiling whichever way this
+/// field is set, because that watchdog is what recovers a wedged worker (`RenderPool`).
+pub const NO_PAGE_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// What a pool's watchdog waits for: the smaller of the document's budget and [`STUCK_AFTER`].
+///
+/// A pool is the interactive path — page views, tiles and previews, including the single-thread pools
+/// behind the stamp and signature previews — so it keeps the twenty seconds a person watching a
+/// window will put up with, even though [`PAGE_TIME_LIMIT`] gives a caller waiting on an export a
+/// minute. A document may ask for less; it cannot ask for more, and it cannot ask for none at all,
+/// because this watchdog is also what retires a wedged worker and retries its page. That makes the
+/// same document behave at two different limits — twenty in a pool, sixty through `PageRenderer` —
+/// which is deliberate: the difference is not between features but between being watched and waiting.
+pub(crate) fn pool_stuck_after(config: &RenderConfig) -> std::time::Duration {
+    config.page_time_limit.min(STUCK_AFTER)
+}
+
+/// What the watchdog reports for a page it gave up on — [`RenderPool`]'s and, since #3634, a
+/// time-limited [`PageRenderer`]'s shared wording, so a page skipped in the viewer and one
+/// skipped in an export read the same to the user.
+fn stuck_message(req: &RenderRequest, limit: std::time::Duration) -> String {
+    let what = if req.kind == RequestKind::Text { "text extraction for page" } else { "page" };
+    format!(
+        "{what} {} took longer than {:.0} s and was skipped; the page may be damaged or extremely complex",
+        req.page + 1,
+        limit.as_secs_f32().max(1.0)
+    )
+}
+
+/// Raises the interpreter's `cancelled` flag once a render has run past its budget: the same
+/// mechanism and wording as [`RenderPool`]'s watchdog, for a caller that renders on its own
+/// thread instead of pooling (#3634). The timer ends when the guard is dropped, so a render that
+/// finishes in time leaves no thread behind.
+///
+/// The verdict is not the flag alone. Nothing downstream of the interpreter consults the flag —
+/// rasterization in particular runs long after the last operator is picked up — so a page whose
+/// content finished inside its budget can still see the timer ring mid-paint, and throwing that
+/// drawing away over a late bell would lose complete output for no benefit. Instead the
+/// interpreter reports back when it stops on the flag with work still pending
+/// (`InterpreterSettings::cancel_heeded`), and only a witnessed stop reports the page skipped:
+/// output lost for real is named, late-but-complete pages keep their pixels. A zero budget needs
+/// no witness — it is the caller's own words that no operator may run, so its page is refused
+/// however quickly it finishes. Two margins are disclosed rather than papered over. At a content
+/// stream's final boundary `needs_more` is still true until EOF is actually read, so a page finishing
+/// exactly there can over-report as skipped even though nothing was dropped — the safe direction,
+/// since under-reporting is what would hand out a partial page. And the pool makes a different trade
+/// in the same spirit: its watchdog retries shared renders under fresh budgets and retires wedged
+/// workers without a verdict for them, while a caller waiting on an abandoned non-shared page still
+/// receives the watchdog's skipped report — abandonment there is recovery, not silence.
+#[cfg(not(target_arch = "wasm32"))]
+struct PageTimeLimit {
+    /// Shared with the interpreter, which checks it before every content operator.
+    cancelled: Arc<AtomicBool>,
+    /// Set by the interpreter (see `InterpreterSettings::cancel_heeded`) when it stopped on
+    /// `cancelled` with work still pending: the only proof that what got drawn is incomplete.
+    heeded: Arc<AtomicBool>,
+    /// Whether the budget was zero at arm time - the caller's own words that no operator may
+    /// run, which needs no witness to have taken effect.
+    zero: bool,
+    /// Closing it (on drop) tells the timer thread the render is over. Kept unnamed so the
+    /// guard's own drop is what releases the thread — which also means a guard must never be
+    /// stored somewhere that outlives the render it bounds.
+    _finished: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PageTimeLimit {
+    /// Start timing a render. `None` for a span at or above [`NO_PAGE_TIME_LIMIT`] — which is how a
+    /// caller asks for no limit, and skips arming rather than parking a thread for years — and when
+    /// the timer thread cannot be spawned, because rendering without the bound beats refusing to
+    /// draw the page (`AGENTS.md` §4: degrade, do not fail). A zero budget needs no thread either:
+    /// there is no time in which to work, so the flag starts raised and the interpreter stops
+    /// before its first operator. The budget is passed to `recv_timeout` as given — nothing about an
+    /// input-derived duration is computed here beyond the comparison against that constant.
+    fn arm(limit: std::time::Duration) -> Option<Self> {
+        if limit >= NO_PAGE_TIME_LIMIT {
+            return None;
+        }
+        let zero = limit.is_zero();
+        let cancelled = Arc::new(AtomicBool::new(zero));
+        let heeded = Arc::new(AtomicBool::new(false));
+        let (finished, waiting) = std::sync::mpsc::channel::<()>();
+        if !limit.is_zero() {
+            let flag = cancelled.clone();
+            if let Err(e) = std::thread::Builder::new().name("pdfcraft-page-limit".into()).spawn(move || {
+                // The channel carries nothing: an empty receive either times out (the budget ran
+                // out) or reports disconnect (the render returned, so there is nothing to cancel).
+                if matches!(waiting.recv_timeout(limit), Err(std::sync::mpsc::RecvTimeoutError::Timeout)) {
+                    flag.store(true, Ordering::Release);
+                }
+            }) {
+                log::warn!("rendering this page without a time limit: could not start the timer thread: {e}");
+                return None;
+            }
+        }
+        Some(Self { cancelled, heeded, zero, _finished: finished })
+    }
+
+    /// Whether this render was verifiably cut short: the flag rang, and either the interpreter
+    /// stopped on it with work still pending or the budget was zero. A flag raised after the
+    /// content had run to its end - nothing downstream of the interpreter listens, least of all
+    /// rasterization - keeps its output (see the note on the type).
+    fn cut_short(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire) && (self.zero || self.heeded.load(Ordering::Acquire))
+    }
+
+    /// `settings` with this guard's flag installed, so the interpreter stops when it expires.
+    fn applied_to(&self, settings: &InterpreterSettings) -> InterpreterSettings {
+        InterpreterSettings { cancelled: Some(self.cancelled.clone()), cancel_heeded: Some(self.heeded.clone()), ..settings.clone() }
+    }
+}
+
+/// The wasm32 build has no threads to raise the flag from, and `std::time::Instant` panics there
+/// (the reason [`Stopwatch`] exists), so a configured `page_time_limit` is simply not enforced —
+/// as it is not for an inline [`RenderPool`] on that target. `arm` hands back nothing, so no
+/// guard is created and every render runs to its end.
+#[cfg(target_arch = "wasm32")]
+struct PageTimeLimit;
+
+#[cfg(target_arch = "wasm32")]
+impl PageTimeLimit {
+    fn arm(_limit: std::time::Duration) -> Option<Self> {
+        None
+    }
+
+    fn cut_short(&self) -> bool {
+        false
+    }
+
+    fn applied_to(&self, settings: &InterpreterSettings) -> InterpreterSettings {
+        settings.clone()
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -711,8 +934,10 @@ impl PoolParser {
 
 /// Renders pages on worker threads, most urgent request first.
 ///
-/// **Watchdog:** a render running longer than `stuck_after` (default [`STUCK_AFTER`]) is given
-/// up on. A timed-out *shared* render retires that parser and retries still-desired work
+/// **Watchdog:** a render running longer than `stuck_after` ([`pool_stuck_after`]: the smaller of
+/// [`RenderConfig::page_time_limit`] and [`STUCK_AFTER`], so a document may shorten the wait but not
+/// lengthen or remove it) is given up on. A timed-out
+/// *shared* render retires that parser and retries still-desired work
 /// privately: the page may only have been waiting behind another page's decode. A private
 /// timeout is reported as an error for that page and the page is not attempted again. Threads
 /// cannot be killed: the stuck worker is told to stop at its next content operator, exits when
@@ -755,7 +980,12 @@ impl RenderPool {
             bytes: bytes.clone(),
             config: config.clone(),
             _workers: Mutex::new(Vec::new()),
-            stuck_after: STUCK_AFTER,
+            // A document may ask the viewer to give up sooner (a tighter budget), but never later and
+            // never not at all: this watchdog is what frees the viewer's workers — a page told to
+            // stop at its next operator has its worker retired and replaced (`AGENTS.md` §4) — so
+            // `NO_PAGE_TIME_LIMIT`, which loosens the synchronous renderers, leaves it where it has
+            // always been. The two paths agree on the number they share, not on who may turn it off.
+            stuck_after: pool_stuck_after(&config),
             replacements_left: Mutex::new(threads),
             retired_workers: Mutex::new(0),
             inline: None,
@@ -813,7 +1043,8 @@ impl RenderPool {
         self.inline.as_ref().map_or_else(|| self.shared.stats.snapshot(), |renderer| renderer.borrow().stats())
     }
 
-    /// Change the watchdog limit (tests and benchmarks).
+    /// Change the watchdog limit (tests and benchmarks), overriding
+    /// [`RenderConfig::page_time_limit`].
     pub fn set_stuck_after(&mut self, limit: std::time::Duration) {
         self.stuck_after = limit;
     }
@@ -915,12 +1146,7 @@ impl RenderPool {
                     self.shared.queue.retry(req);
                 } else {
                     lock(&self.shared.stuck).insert(req.into());
-                    let what = if req.kind == RequestKind::Text { "text extraction for page" } else { "page" };
-                    let error = format!(
-                        "{what} {} took longer than {:.0} s and was skipped; the page may be damaged or extremely complex",
-                        req.page + 1,
-                        self.stuck_after.as_secs_f32().max(1.0)
-                    );
+                    let error = stuck_message(&req, self.stuck_after);
                     self.shared.queue.abandon(RenderedPage {
                         request: req,
                         width: 0,
@@ -8162,6 +8388,9 @@ trailer << /Root 1 0 R >>
 
     // #1201: /DefaultGray, /DefaultRGB and /DefaultCMYK (vendored hayro-interpret patch 38).
     mod default_colour_spaces;
+
+    // #3634: a per-page time limit for rendering outside the pool, in `RenderConfig::page_time_limit`.
+    mod page_time_limit;
 
     /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
     /// but draws no pixels itself.

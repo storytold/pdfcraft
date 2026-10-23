@@ -38,18 +38,39 @@ impl crate::Document {
     }
 
     /// Every word of the document in reading order, with page and box.
-    pub fn words(&self) -> Vec<pdfcraft_compare::Word> {
-        let config = pdfcraft_render::RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
+    ///
+    /// A page whose text could not be read is an error rather than a gap in the word list (#3634):
+    /// a comparison built from the pages that did read reports the documents as matching where they
+    /// were never looked at, and an answer that looks authoritative is worse than no answer.
+    pub fn words(&self) -> Result<Vec<pdfcraft_compare::Word>, EditError> {
+        let config = pdfcraft_render::RenderConfig {
+            password: self.password.as_deref().map(Arc::from),
+            page_time_limit: self.config.page_time_limit,
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         for (page, info) in self.info.pages.iter().enumerate() {
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            if let Some(e) = res.error {
+                // The render message already names its page ("page 3 took longer than …"), so the
+                // reason goes through unchanged rather than being prefixed a second time.
+                return Err(EditError::Invalid(e));
+            }
             if let Some(t) = res.text {
                 out.extend(crate::js::page_words(&t, info).into_iter().map(|(text, rect)| pdfcraft_compare::Word { text, page, rect }));
             }
         }
-        out
+        Ok(out)
     }
+}
+
+/// A failure on one side of a comparison, with the side and what we were doing named: text that
+/// could not be read, or a page that could not be drawn. Without the label, "page 1 took longer
+/// than" reaches the user with no indication of which document is at fault (#3634).
+fn side_error(label: &str, what: &str, e: EditError) -> EditError {
+    let EditError::Invalid(why) = e else { return e };
+    EditError::Invalid(format!("{label} could not be {what}: {why}"))
 }
 
 impl Session {
@@ -60,18 +81,34 @@ impl Session {
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
+        // Named by side, because "page 3 could not be read" leaves the question of which document.
+        let old_words = a.words().map_err(|e| side_error("the older document", "read in full", e))?;
+        let new_words = b.words().map_err(|e| side_error("the newer document", "read in full", e))?;
+        Ok(pdfcraft_compare::compare(&old_words, &new_words))
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
     /// (rendered at `dpi`), as (page, user-space box in `new`).
+    /// Visual differences, as (page, user-space box in `new`). Fails if a page could not be compared
+    /// at all, for the same reason `Session::compare` does, and the message names which side failed.
+    ///
+    /// Known limitation, older than #3634 and unchanged here: only pages both documents have are
+    /// compared, so a page that exists on one side alone gets no visual verdict — appended *or*
+    /// removed. `compare` reads both sides in full, so it does see those words: added as inserted at
+    /// the end of `new`, or as deleted when `new` is shorter. Naming it rather than quietly
+    /// widening the loop: covering one-sided pages needs a decision about what "different" means when
+    /// there is nothing on the other side, which belongs to its own issue.
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         let renderer = |d: &crate::Document| {
             pdfcraft_render::PageRenderer::new(
                 d.bytes.clone(),
-                pdfcraft_render::RenderConfig { password: d.password.as_deref().map(Arc::from), ..Default::default() },
+                pdfcraft_render::RenderConfig {
+                    password: d.password.as_deref().map(Arc::from),
+                    page_time_limit: d.config.page_time_limit,
+                    ..Default::default()
+                },
             )
         };
         let (mut ra, mut rb) = (renderer(a), renderer(b));
@@ -80,8 +117,14 @@ impl Session {
         for (page, info) in b.info.pages.iter().enumerate().take(a.info.pages.len()) {
             let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
             let (x, y) = (ra.render(req), rb.render(req));
-            if x.error.is_some() || y.error.is_some() {
-                continue;
+            // Same rule as the text comparison, down to naming which side: a page that could not be
+            // drawn is reported rather than left out of the list as though it had matched, and "the
+            // older" versus "the newer" tells the user which document to look at (#3634).
+            if let Some(e) = x.error {
+                return Err(side_error("the older document", "compared", EditError::Invalid(e)));
+            }
+            if let Some(e) = y.error {
+                return Err(side_error("the newer document", "compared", EditError::Invalid(e)));
             }
             let s = y.width as f32 / info.width.max(1e-3);
             for r in pdfcraft_compare::visual_regions((&y.rgba, y.width, y.height), (&x.rgba, x.width, x.height), 24) {

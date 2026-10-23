@@ -193,7 +193,21 @@ impl PdfCraftApp {
         let Some(old) = self.compare_old else { return };
         match self.session.compare(old, new) {
             Ok(result) => {
-                let visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
+                // A page the visual pass could not draw is reported rather than swallowed: dropping
+                // it quietly would leave the text differences on screen with no rectangles at all and
+                // nothing saying why (#3634 review, round 3).
+                // #3634 review: the count notification below would wipe a visual error shown here,
+                // promising "N differences" over half-blind output. Toasts are single-slot, so hold
+                // the bad news and show it last: the toast's final word becomes the warning (the
+                // count survives in the Compare panel's own tallies).
+                let mut visual_error = None;
+                let visual = match self.session.compare_visual(old, new, 72.0) {
+                    Ok(regions) => regions,
+                    Err(e) => {
+                        visual_error = Some(e);
+                        Vec::new()
+                    }
+                };
                 let n = result.changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
                 let side_by_side = self.views.iter().any(|v| v.id == old) && self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0);
@@ -218,6 +232,9 @@ impl PdfCraftApp {
                 } else {
                     crate::i18n::fmt(tl!("{n} differences found"), &[("n", &n.to_string())])
                 });
+                if let Some(e) = visual_error {
+                    self.notify_error(e);
+                }
             }
             Err(e) => self.notify_error(e),
         }

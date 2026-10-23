@@ -115,6 +115,10 @@ pub struct InterpreterSettings {
     /// operator. What was drawn is then incomplete, so only set it when the output will be
     /// thrown away (a viewer's render whose result nobody can receive any more).
     pub cancelled: Option<Arc<AtomicBool>>,
+    /// PdfCraft patch (output): set to `true` when interpretation stopped because of
+    /// `cancelled` while operators were still pending - proof to the caller that what was drawn
+    /// is incomplete, as opposed to a flag raised after the content had already run to its end.
+    pub cancel_heeded: Option<Arc<AtomicBool>>,
     /// PdfCraft patch: a low-detail render for previews (page backdrops, thumbnails). Images
     /// that would cover only a few device pixels are skipped: redrawing them at full detail
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
@@ -141,6 +145,7 @@ impl Default for InterpreterSettings {
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
+            cancel_heeded: None,
             preview: false,
         }
     }
@@ -375,6 +380,10 @@ fn interpret_window<'a>(
     while let Some(op) = ops.next() {
         // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`).
         if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            // PdfCraft patch: report that the stop landed on pending work.
+            if let Some(heed) = &context.settings.cancel_heeded {
+                heed.store(true, Ordering::Release);
+            }
             break;
         }
         match op {
@@ -968,6 +977,15 @@ fn interpret_content<'a>(
             .as_ref()
             .is_some_and(|c| c.load(Ordering::Relaxed));
         if !needs_more || cancelled || exhausted {
+            // PdfCraft patch: work remained when the cancel was seen at a window boundary - report
+            // it. At the stream's final boundary `needs_more` is still true until EOF is read, so
+            // this witness can over-report a just-finished page: the safe direction (an extra skip,
+            // never a kept partial).
+            if cancelled && needs_more {
+                if let Some(heed) = &context.settings.cancel_heeded {
+                    heed.store(true, Ordering::Release);
+                }
+            }
             break;
         }
         // A window that is still incomplete at its end waits for more of the stream. It doubles
