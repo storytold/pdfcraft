@@ -88,17 +88,28 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 }
 
 /// [`wrap`], measuring with `measure` (for example [`cjk_width`]).
+///
+/// A line measures as the sum of its words, the spaces between them and the characters of a broken
+/// word, each measured once, so the work stays linear in `text` however much fits on a line.
 pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
+    let space = measure(" ", size);
+    let mut buf = [0u8; 4];
     // A CRLF pair is one break, a lone CR or LF is one break each.
     for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let mut line = String::new();
+        let mut line_width = 0.0;
         // No word is on the line yet; an empty word (a leading space) still starts it.
         let mut fresh = true;
         for word in para.split(' ') {
-            let candidate = if fresh { word.to_string() } else { format!("{line} {word}") };
-            if measure(&candidate, size) <= width || fresh && measure(word, size) <= width {
-                line = candidate;
+            let word_width = measure(word, size);
+            let candidate = if fresh { word_width } else { line_width + space + word_width };
+            if candidate <= width {
+                if !fresh {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_width = candidate;
                 fresh = false;
                 continue;
             }
@@ -108,11 +119,15 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
             } else {
                 lines.push(std::mem::take(&mut line));
             }
+            line_width = 0.0;
             for ch in word.chars() {
-                if !line.is_empty() && measure(&format!("{line}{ch}"), size) > width {
+                let ch_width = measure(ch.encode_utf8(&mut buf), size);
+                if !line.is_empty() && line_width + ch_width > width {
                     lines.push(std::mem::take(&mut line));
+                    line_width = 0.0;
                 }
                 line.push(ch);
+                line_width += ch_width;
             }
             fresh = line.is_empty();
         }
@@ -441,5 +456,21 @@ mod tests {
         assert_eq!(cjk_width("A", 10.0), helvetica_width("A", 10.0));
         let lines = wrap_with("日本語のテキストは文字単位で折り返されます", 10.0, 45.0, cjk_width);
         assert!(lines.len() > 3 && lines.iter().all(|l| cjk_width(l, 10.0) <= 45.0), "{lines:?}");
+    }
+
+    /// Wrapping measures each word and character a bounded number of times, however many fit on a line.
+    #[test]
+    fn wrapping_measures_each_word_a_few_times() {
+        let measured = std::cell::Cell::new(0usize);
+        let measure = |s: &str, size: f64| {
+            measured.set(measured.get() + s.len());
+            helvetica_width(s, size)
+        };
+        let text = format!("{} {}", "word ".repeat(5_000), "x".repeat(5_000));
+        let lines = wrap_with(&text, 1.0, 13_000.0, measure);
+        assert_eq!(lines.len(), 2, "the words fit on one line, the long word on another");
+        assert!(measured.get() <= 4 * text.len(), "{} bytes measured", measured.get());
+        let narrow = wrap_with(&text, 10.0, 100.0, helvetica_width);
+        assert!(narrow.iter().all(|l| helvetica_width(l, 10.0) <= 100.0), "{narrow:?}");
     }
 }

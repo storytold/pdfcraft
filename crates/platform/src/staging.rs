@@ -31,16 +31,16 @@ pub fn create_staging(
     create_staging_as(dir, name, form, suffixes, None)
 }
 
-/// [`create_staging`], giving the new file the permissions `keep` on Unix. It is created readable
-/// and writable by its owner only and then given `keep`, so its mode is never more open than that
-/// of the file it will replace, not even while it is still empty (a handle opened then would keep
-/// reading what is written later). Only the mode is copied: the owner and group are the saver's.
+/// [`create_staging`], giving the new file the mode and group of the file `keep` describes on
+/// Unix. It is created readable and writable by its owner only and then given them, so its mode
+/// is never more open than that of the file it will replace, not even while it is still empty (a
+/// handle opened then would keep reading what is written later). The owner is the saver's.
 fn create_staging_as(
     dir: &Path,
     name: &str,
     form: StagingName,
     suffixes: impl IntoIterator<Item = u64>,
-    keep: Option<&std::fs::Permissions>,
+    keep: Option<&std::fs::Metadata>,
 ) -> std::io::Result<(PathBuf, std::fs::File)> {
     // At most 128 bytes of the target's name, cut between characters, so the staging name fits
     // the 255-byte (Linux, macOS) and 255-unit (Windows) limits however long that name is.
@@ -68,7 +68,7 @@ fn create_staging_as(
                 if let Some(keep) = keep {
                     // A volume that can't change modes (FAT, some network shares) leaves the file
                     // owner-only: stricter than the file it replaces, never looser.
-                    let _ = file.set_permissions(keep.clone());
+                    let _ = file.set_permissions(kept_permissions(&file, keep));
                 }
                 return Ok((tmp, file));
             }
@@ -79,6 +79,26 @@ fn create_staging_as(
         }
     }
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every temporary file name tried is taken"))
+}
+
+/// The permissions a staging file gets to replace the file `keep` describes. The mode's group bits
+/// are meant for that file's group, so the staging file joins it first. Where it can't (the saver
+/// isn't a member), group and others get nothing: someone the group bits shut out would
+/// otherwise read the file as one of the others.
+#[cfg(unix)]
+fn kept_permissions(file: &std::fs::File, keep: &std::fs::Metadata) -> std::fs::Permissions {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let mut mode = keep.permissions();
+    let joined = file.metadata().is_ok_and(|m| m.gid() == keep.gid()) || std::os::unix::fs::fchown(file, None, Some(keep.gid())).is_ok();
+    if !joined {
+        mode.set_mode(mode.mode() & !0o077);
+    }
+    mode
+}
+
+#[cfg(not(unix))]
+fn kept_permissions(_: &std::fs::File, keep: &std::fs::Metadata) -> std::fs::Permissions {
+    keep.permissions()
 }
 
 /// Unpredictable staging-name suffixes, so a name can't be planted in advance. Each is the
@@ -98,7 +118,7 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
 /// and the target is untouched until the new file is complete. The target's folder must exist;
 /// a folder at the target is refused by the rename. Flushing is the staging file's own
 /// (`sync_all`); parent-directory durability after a power loss is not promised. On Unix a file
-/// that is replaced keeps its permissions, so a private file stays private; a new file gets the
+/// that is replaced keeps its permissions and group, so a private file stays private; a new file gets the
 /// usual mode for a new file. On Windows and macOS a replaced file keeps its creation date, where
 /// the volume stores one.
 /// On macOS, accessible extended attributes of an existing regular destination are copied
@@ -126,9 +146,9 @@ pub fn write_atomically_with(
     }
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
-    // A file that is replaced keeps its permissions (#1790). Unix modes only: Windows is as before.
+    // A file that is replaced keeps its permissions (#1790) and group. Unix only: Windows is as before.
     #[cfg(unix)]
-    let keep = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let keep = std::fs::metadata(path).ok();
     #[cfg(not(unix))]
     let keep = None;
     // A saved file is the same document: it keeps its creation date (#2658).
@@ -580,6 +600,37 @@ mod tests {
         let plain = dir.join("plain");
         std::fs::write(&plain, b"").unwrap();
         assert_eq!(mode(&fresh), mode(&plain), "a new file is not made private");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A replaced file keeps its group as well as its mode, so group permissions never reach a
+    /// group that couldn't read the file before (the saver's own group, by default).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_replaced_file_keeps_its_group() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = test_dir("group");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        let created = std::fs::metadata(&target).unwrap().gid();
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let groups = status.lines().find_map(|l| l.strip_prefix("Groups:")).unwrap_or_default();
+        let Some(other) = groups.split_whitespace().filter_map(|g| g.parse::<u32>().ok()).find(|&g| g != created) else {
+            eprintln!("skipped: the test needs a second group");
+            return;
+        };
+        std::os::unix::fs::chown(&target, None, Some(other)).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mut staged = (0, 0);
+        write_atomically_with(&target, b"NEW", StagingName::SuffixThenTag, [7], |f| {
+            let m = f.metadata()?;
+            staged = (m.gid(), m.permissions().mode() & 0o777);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(staged, (other, 0o640), "the staging file has the target's group before it is flushed");
+        let m = std::fs::metadata(&target).unwrap();
+        assert_eq!((m.gid(), m.permissions().mode() & 0o777), (other, 0o640));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

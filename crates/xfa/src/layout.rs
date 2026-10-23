@@ -278,6 +278,12 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
 }
 
+// Bytes of embedded field values copied out on this thread, for tests that bound layout work.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static EMBED_COPIED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
     if depth > MAX_DEPTH {
         return;
@@ -478,12 +484,17 @@ impl Layouter<'_> {
         self.pages.len()
     }
 
-    fn embed(&self, id: &str) -> String {
-        match self.tpl.page_roles.iter().find(|(i, _)| i == id).map(|(_, r)| *r) {
+    /// The text an embedded field `id` shows, at most `max` bytes of a field value (the page
+    /// number and count are a few bytes; the text layout cuts them).
+    fn embed(&self, id: &str, max: usize) -> String {
+        let v = match self.tpl.page_roles.iter().find(|(i, _)| i == id).map(|(_, r)| *r) {
             Some(PageRole::Number) => self.page_no().to_string(),
             Some(PageRole::Count) => PAGE_COUNT_MARK.to_string(),
-            None => self.values.get(id).cloned().unwrap_or_default(),
-        }
+            None => self.values.get(id).map(|v| text::prefix(v, max).to_string()).unwrap_or_default(),
+        };
+        #[cfg(test)]
+        EMBED_COPIED.with(|c| c.set(c.get().saturating_add(v.len() as u64)));
+        v
     }
 
     /// `TooLarge` once the measurement budget is spent (sizes measured after that are guesses).
@@ -769,6 +780,9 @@ impl Layouter<'_> {
         self.warn_truncated(node, &ctx.som, instances);
         let ctx_parent = ctx;
         for i in 0..instances {
+            // Every instance spends budget, so nested repeats that place nothing still stop.
+            self.measures.set(self.measures.get().saturating_add(1));
+            self.check_measures()?;
             let ctx = ctx_parent.with_som(&sf.common, sib + i);
             let (rect, _, _) = self.cursor();
             let (x, w) = avail.unwrap_or((rect.x, rect.w));
@@ -1050,7 +1064,7 @@ impl Layouter<'_> {
             _ => return None,
         };
         // No text (a bordered spacer or rule): nothing to size to, so it keeps what it has room for.
-        let w = text::natural_width(&rich, para, &Face::of(font), &|id| self.embed(id));
+        let w = text::natural_width(&rich, para, &Face::of(font), &|id, max| self.embed(id, max));
         (w > 0.0).then_some(w + 0.01)
     }
 
@@ -1058,8 +1072,8 @@ impl Layouter<'_> {
     /// an image at its aspect ratio, and nothing for lines, rectangles and empty values.
     fn value_height(&self, v: &Value, w: f64, ctx: &Ctx) -> f64 {
         match v {
-            Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id| self.embed(id)),
-            Value::Rich(r) => text::measure_height(r, w, &ctx.para, &Face::of(&ctx.font), &|id| self.embed(id)),
+            Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
+            Value::Rich(r) => text::measure_height(r, w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
             Value::Image { data, .. } => crate::image::size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
             Value::Line { .. } | Value::Rectangle(_) | Value::Empty => 0.0,
         }
@@ -1084,7 +1098,7 @@ impl Layouter<'_> {
                     Value::Rich(r) => r.clone(),
                     other => text::plain(&other.plain().unwrap_or_default()),
                 };
-                text::measure_height(&rich, inner_w, &para, &Face::of(&font), &|id| self.embed(id))
+                text::measure_height(&rich, inner_w, &para, &Face::of(&font), &|id, max| self.embed(id, max))
             }
             _ => (Face::of(&font).width(&cap.value.plain().unwrap_or_default()) + 2.0).min(inner_w * 0.6),
         });
@@ -1107,7 +1121,7 @@ impl Layouter<'_> {
                         other => text::plain(&other.plain().unwrap_or_default()),
                     };
                     let w = (inner_w - f.ui_margin.horizontal()).max(1.0);
-                    text::measure_height(&rich, w, &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id| self.embed(id))
+                    text::measure_height(&rich, w, &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| self.embed(id, max))
                 });
                 cap + f.ui_margin.vertical()
             }
@@ -1121,8 +1135,8 @@ impl Layouter<'_> {
                         Value::Rich(r) => r.clone(),
                         other => text::plain(&other.plain().unwrap_or_default()),
                     };
-                    text::measure_height(&rich, (inner_w - r).max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id| {
-                        self.embed(id)
+                    text::measure_height(&rich, (inner_w - r).max(1.0), &ctx.para.apply(&c.para), &Face::of(&ctx.font.apply(&c.font)), &|id, max| {
+                        self.embed(id, max)
                     })
                 });
                 ui.max(cap.unwrap_or(0.0))
@@ -1158,7 +1172,7 @@ impl Layouter<'_> {
         let padding = if f.access == Access::NonInteractive { 0.0 } else { 4.0 };
         let w = (inner_w - beside - f.ui_margin.horizontal() - padding).max(1.0);
         let font = ctx.font.apply(&f.common.font);
-        text::measure_height(&text::plain(value.trim_end()), w, &ctx.para, &Self::field_text_face(f, &font), &|_| String::new())
+        text::measure_height(&text::plain(value.trim_end()), w, &ctx.para, &Self::field_text_face(f, &font), &|_, _| String::new())
     }
 
     /// The height of an exclusion group's fields at `inner_w`, by the group's layout: stacked
@@ -1315,6 +1329,10 @@ impl Layouter<'_> {
                 Ok(())
             }
             Node::Subform(s) => {
+                // Every drawn instance spends budget, as a flowed one does, so nested repeats that
+                // place nothing still stop.
+                self.measures.set(self.measures.get().saturating_add(1));
+                self.check_measures()?;
                 if let Some(b) = &s.common.border {
                     self.draw_border(b, rect)?;
                 }
@@ -1427,9 +1445,9 @@ impl Layouter<'_> {
         // Text that doesn't fit the height it was given (the template's face is narrower than
         // the standard one drawn in its place, so it wraps to more lines) is drawn smaller,
         // down to 70%, rather than over what lies below.
-        let fits = |k: f64| text::measure_height(&rich, rect.w / k, para, &face, &|id| self.embed(id)) <= rect.h / k + 1.0;
+        let fits = |k: f64| text::measure_height(&rich, rect.w / k, para, &face, &|id, max| self.embed(id, max)) <= rect.h / k + 1.0;
         let scale = if rect.h < 4.0 || fits(1.0) { 1.0 } else { [0.95, 0.9, 0.85, 0.8, 0.75].into_iter().find(|k| fits(*k)).unwrap_or(0.7) };
-        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &|id| self.embed(id));
+        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &|id, max| self.embed(id, max));
         if scale < 1.0 {
             for s in &mut block.spans {
                 s.x = rect.x + (s.x - rect.x) * scale;
@@ -1672,7 +1690,7 @@ impl Layouter<'_> {
                 let para = Para { v_align: VAlign::Top, ..fctx.para.clone() };
                 // In the face it was measured in, so it takes the lines it was given.
                 let face = Self::field_text_face(f, &fctx.font);
-                let block = text::layout(&text::plain(value.trim_end()), ui.inset(&m), &para, &face, &|_| String::new());
+                let block = text::layout(&text::plain(value.trim_end()), ui.inset(&m), &para, &face, &|_, _| String::new());
                 return self.push_block(block);
             }
         }

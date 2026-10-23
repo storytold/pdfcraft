@@ -709,7 +709,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
-        if own && self.watch.disk_differs(id, dest) {
+        if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
             self.dialog = Some(crate::Dialog::OverwriteChanged);
             return false;
@@ -785,6 +785,8 @@ impl PdfCraftApp {
                     view.disk_changed = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                #[cfg(target_os = "macos")]
+                crate::macos_association::repair(std::path::Path::new(dest));
                 true
             }
             Err(e) => {
@@ -1334,6 +1336,26 @@ mod tests {
         assert_eq!(read(&target), "OLD");
         assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_save_preserves_opening_settings_changed_while_staging() {
+        let dir = staging_dir("opening-metadata-changed");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        xattr::set(&target, "com.apple.LaunchServices.OpenWith", b"old handler").unwrap();
+        xattr::set(&target, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
+        let suffixes = std::iter::once_with(|| {
+            xattr::set(&target, "com.apple.LaunchServices.OpenWith", b"new handler").unwrap();
+            xattr::set(&target, "com.apple.quarantine", b"0082;5678;another app;").unwrap();
+            7
+        });
+        write_atomically_with(&target.to_string_lossy(), b"NEW", suffixes).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(xattr::get(&target, "com.apple.LaunchServices.OpenWith").unwrap(), Some(b"new handler".to_vec()));
+        assert_eq!(xattr::get(&target, "com.apple.quarantine").unwrap(), Some(b"0082;5678;another app;".to_vec()));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

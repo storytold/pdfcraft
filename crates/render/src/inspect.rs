@@ -38,6 +38,31 @@ const MAX_XFA_CONFIG_BYTES: usize = 16 << 20;
 const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
 const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 
+/// Text and geometry `DocInfo::annotations` keeps, as counted by [`retained`]. Past it the rest
+/// are not listed: real comments stay far below, many small ones sharing one long string do not.
+const MAX_ANNOTATION_BYTES: usize = 64 << 20;
+
+/// Web-address text the link listing, and name, description and embedded-file key text the
+/// attachment listing, keep together. Many links or attachments can share one long string, which
+/// each would otherwise copy. Past it, a link to a web address lists as a URI action without its
+/// address, an attachment under its generic name without a description, and an embedded file whose
+/// key does not fit is not listed.
+const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
+
+/// The bytes a listed annotation keeps.
+fn retained(a: &Annotation) -> usize {
+    let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
+    text.into_iter()
+        .map(|t| t.as_ref().map_or(0, String::len))
+        .chain([
+            a.subtype.len(),
+            std::mem::size_of_val(a.quads.as_slice()),
+            std::mem::size_of_val(a.points.as_slice()),
+            std::mem::size_of::<Annotation>(),
+        ])
+        .fold(0, usize::saturating_add)
+}
+
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
@@ -676,7 +701,8 @@ impl<'a> Inspector<'a> {
         if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
             (info.outline, info.outline_more) = self.outline_window(first);
         }
-        self.annotations(info);
+        let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+        self.annotations(info, &mut text_budget);
         self.transitions(info);
         let mut field_seen = HashSet::new();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
@@ -720,8 +746,10 @@ impl<'a> Inspector<'a> {
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
             if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {
                 let mut seen = HashSet::new();
-                for (name, spec) in self.name_tree(ef, &mut seen, 0) {
-                    info.attachments.push(self.attachment(name.clone(), spec, AttachmentSource::Document { key: name }));
+                for (name, spec) in self.name_tree(ef, &mut seen, 0, &mut text_budget) {
+                    // The key is kept a second time when it is also the name.
+                    let fallback = |budget: &mut usize| spend(name.as_bytes(), budget, |_| name.clone());
+                    info.attachments.push(self.attachment(spec, AttachmentSource::Document { key: name.clone() }, &mut text_budget, fallback));
                 }
             }
             info.has_javascript |= names.get(b"JavaScript").is_ok();
@@ -809,6 +837,12 @@ impl<'a> Inspector<'a> {
         self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
     }
 
+    /// The object a reference ends at after following any chain of references; `None` for a
+    /// direct object or a broken reference.
+    fn resolved_id(&self, o: &Object) -> Option<ObjectId> {
+        self.doc.dereference(o).ok().and_then(|(id, _)| id)
+    }
+
     fn dict(&self, o: &'a Object) -> Option<&'a Dictionary> {
         match self.resolve(o) {
             Object::Dictionary(d) => Some(d),
@@ -818,14 +852,17 @@ impl<'a> Inspector<'a> {
     }
 
     fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
-        let o = self.resolve(d.get(key).ok()?);
-        let s = match o {
-            Object::String(bytes, _) => text_string(bytes),
-            Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
-            _ => return None,
-        };
-        let s = s.trim_matches('\0').trim().to_string();
+        let s = trimmed_text(self.resolve(d.get(key).ok()?))?;
         (!s.is_empty()).then_some(s)
+    }
+
+    /// [`Self::text`], converted and spent from `budget` as [`spend`] does, so text that trims
+    /// short or to nothing still spends its raw length.
+    fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
+        let o = self.resolve(d.get(key).ok()?);
+        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return None };
+        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default())?;
+        (!text.is_empty()).then_some(text)
     }
 
     fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
@@ -916,7 +953,15 @@ impl<'a> Inspector<'a> {
         }
     }
 
-    fn name_tree(&self, node: &'a Dictionary, seen: &mut HashSet<*const Dictionary>, depth: u32) -> Vec<(String, &'a Object)> {
+    /// The entries of an embedded-files name tree. Each string key is spent from `text_budget`
+    /// (see [`MAX_LINK_ATTACHMENT_TEXT_BYTES`]), and an entry whose key does not fit is left out.
+    fn name_tree(
+        &self,
+        node: &'a Dictionary,
+        seen: &mut HashSet<*const Dictionary>,
+        depth: u32,
+        text_budget: &mut usize,
+    ) -> Vec<(String, &'a Object)> {
         let mut out = Vec::new();
         if depth > 32 || !seen.insert(node as *const _) {
             return out;
@@ -925,7 +970,10 @@ impl<'a> Inspector<'a> {
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
                     let key = match self.resolve(k) {
-                        Object::String(bytes, _) => text_string(bytes),
+                        Object::String(bytes, _) => match spend(bytes, text_budget, text_string) {
+                            Some(key) => key,
+                            None => continue,
+                        },
                         _ => String::new(),
                     };
                     out.push((key, v));
@@ -935,11 +983,51 @@ impl<'a> Inspector<'a> {
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
                 if let Some(d) = self.dict(k) {
-                    out.extend(self.name_tree(d, seen, depth + 1));
+                    out.extend(self.name_tree(d, seen, depth + 1, text_budget));
                 }
             }
         }
         out
+    }
+
+    /// The first entry of an embedded-files name tree whose key is `key`, in the order
+    /// [`Self::name_tree`] lists them, with no key budget. It keeps no key, and converts a key
+    /// object or `/Names` array that several places reference only once (a second visit cannot
+    /// match, since the first would have returned).
+    fn name_tree_find(&self, node: &'a Dictionary, key: &str, seen: &mut NameTreeSeen, depth: u32) -> Option<&'a Object> {
+        if depth > 32 || !seen.nodes.insert(node as *const _) {
+            return None;
+        }
+        let names = node.get(b"Names").ok();
+        if let Some(names) = names
+            && self.resolved_id(names).is_none_or(|id| seen.objects.insert(id))
+            && let Object::Array(pairs) = self.resolve(names)
+        {
+            for pair in pairs.chunks(2) {
+                if let [k, v] = pair {
+                    if self.resolved_id(k).is_some_and(|id| !seen.objects.insert(id)) {
+                        continue;
+                    }
+                    let found = match self.resolve(k) {
+                        Object::String(bytes, _) => text_string(bytes) == key,
+                        _ => key.is_empty(),
+                    };
+                    if found {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
+            for k in kids {
+                if let Some(d) = self.dict(k)
+                    && let Some(v) = self.name_tree_find(d, key, seen, depth + 1)
+                {
+                    return Some(v);
+                }
+            }
+        }
+        None
     }
 
     // ── outline ─────────────────────────────────────────────────────────────────────────────
@@ -1141,21 +1229,44 @@ impl<'a> Inspector<'a> {
 
     // ── annotations ─────────────────────────────────────────────────────────────────────────
 
-    fn annotations(&self, info: &mut DocInfo) {
-        for (&id, &page) in &self.page_index {
+    /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
+    fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
+        let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
+        pages.sort_unstable_by_key(|&(_, page)| page);
+        // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
+        // first of them (§12.5.2 allows one page per annotation). Both are told apart by the object
+        // a reference resolves to, since an indirect object may itself hold a reference.
+        let mut seen_arrays = HashSet::new();
+        let mut seen_annotations = HashSet::new();
+        let mut kept = 0usize;
+        // Once the comment budget is spent, comments are no longer built, but links and attachments
+        // are still listed.
+        let mut comments_full = false;
+        for (id, page) in pages {
             let Ok(page_dict) = self.doc.get_dictionary(id) else { continue };
+            if let Ok(annots) = page_dict.get(b"Annots")
+                && let Some(r) = self.resolved_id(annots)
+                && !seen_arrays.insert(r)
+            {
+                continue;
+            }
             let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
             for (index, a) in annots.iter().enumerate() {
+                if let Some(r) = self.resolved_id(a)
+                    && !seen_annotations.insert(r)
+                {
+                    continue;
+                }
                 let Some(d) = self.dict(a) else { continue };
                 let Some(subtype) = self.name(d, b"Subtype") else { continue };
                 if subtype == "FileAttachment"
                     && let Ok(fs) = d.get(b"FS")
                 {
-                    let name = self.text(d, b"Contents").unwrap_or_else(|| "attachment".into());
-                    info.attachments.push(self.attachment(name, fs, AttachmentSource::Annotation { page, index }));
+                    let fallback = |budget: &mut usize| self.budgeted_text(d, b"Contents", budget);
+                    info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
                 }
                 if subtype == "Link" {
-                    if let Some(link) = self.link(page, index, d) {
+                    if let Some(link) = self.link(page, index, d, text_budget) {
                         if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                             info.has_javascript = true;
                         }
@@ -1168,6 +1279,9 @@ impl<'a> Inspector<'a> {
                 // `pdfcraft_annot::is_comment_subtype`).
                 if matches!(subtype.as_str(), "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
                 {
+                    continue;
+                }
+                if comments_full {
                     continue;
                 }
                 let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
@@ -1209,7 +1323,7 @@ impl<'a> Inspector<'a> {
                     }
                     _ => Vec::new(),
                 };
-                info.annotations.push(Annotation {
+                let annotation = Annotation {
                     page,
                     subtype,
                     author: self.text(d, b"T"),
@@ -1228,13 +1342,19 @@ impl<'a> Inspector<'a> {
                     intent: self.name(d, b"IT"),
                     fill_sign,
                     points,
-                });
+                };
+                kept = kept.saturating_add(retained(&annotation));
+                if kept > MAX_ANNOTATION_BYTES {
+                    comments_full = true;
+                    continue;
+                }
+                info.annotations.push(annotation);
             }
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
     }
 
-    fn link(&self, page: usize, index: usize, d: &Dictionary) -> Option<Link> {
+    fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -1247,7 +1367,11 @@ impl<'a> Inspector<'a> {
                     LinkTarget::Page(page, view)
                 }
                 Some("URI") => {
-                    LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
+                    let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                    match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                        Some(uri) => LinkTarget::Uri(uri),
+                        None => LinkTarget::Other("URI".into()),
+                    }
                 }
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
@@ -1578,7 +1702,14 @@ impl<'a> Inspector<'a> {
         out.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
-    fn attachment(&self, name: String, spec: &Object, source: AttachmentSource) -> Attachment {
+    /// The attachment's name is the file specification's, else `fallback`'s, else a generic one.
+    fn attachment(
+        &self,
+        spec: &Object,
+        source: AttachmentSource,
+        text_budget: &mut usize,
+        fallback: impl FnOnce(&mut usize) -> Option<String>,
+    ) -> Attachment {
         let d = self.dict(spec);
         let size =
             d.and_then(|d| d.get(b"EF").ok()).and_then(|o| self.dict(o)).and_then(|ef| ef.get(b"F").ok().or_else(|| ef.get(b"UF").ok())).and_then(
@@ -1595,8 +1726,11 @@ impl<'a> Inspector<'a> {
                     _ => None,
                 },
             );
-        let display = d.and_then(|d| self.text(d, b"UF").or_else(|| self.text(d, b"F"))).unwrap_or(name);
-        Attachment { name: display, description: d.and_then(|d| self.text(d, b"Desc")), size, source }
+        let display = d
+            .and_then(|d| self.budgeted_text(d, b"UF", text_budget).or_else(|| self.budgeted_text(d, b"F", text_budget)))
+            .or_else(|| fallback(text_budget))
+            .unwrap_or_else(|| "attachment".into());
+        Attachment { name: display, description: d.and_then(|d| self.budgeted_text(d, b"Desc", text_budget)), size, source }
     }
 }
 
@@ -1604,6 +1738,42 @@ impl<'a> Inspector<'a> {
 /// ([`pdfcraft_cos::PdfString::to_text`]) so the panels and outline editing agree.
 fn text_string(bytes: &[u8]) -> String {
     pdfcraft_cos::PdfString::literal(bytes).to_text()
+}
+
+/// What [`Inspector::name_tree_find`] has visited: node dictionaries, and the key and `/Names`
+/// array objects it reached by reference.
+#[derive(Default)]
+struct NameTreeSeen {
+    nodes: HashSet<*const Dictionary>,
+    objects: HashSet<ObjectId>,
+}
+
+/// A string or name value as text, without surrounding NULs and white space.
+fn trimmed_text(o: &Object) -> Option<String> {
+    let s = match o {
+        Object::String(bytes, _) => text_string(bytes),
+        Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+        _ => return None,
+    };
+    Some(s.trim_matches('\0').trim().to_string())
+}
+
+/// `convert(bytes)` when the result fits in `budget`, which it then spends by the longer of the raw
+/// and converted lengths. Bytes longer than the budget are not converted. A conversion that comes
+/// out too long spends the raw length, so a string many entries share is converted only until the
+/// budget runs out.
+fn spend(bytes: &[u8], budget: &mut usize, convert: impl FnOnce(&[u8]) -> String) -> Option<String> {
+    if bytes.len() > *budget {
+        return None;
+    }
+    let text = convert(bytes);
+    if text.len() > *budget {
+        *budget = budget.saturating_sub(bytes.len());
+        return None;
+    }
+    // The conversion's work follows the raw length, even when the text it keeps is shorter.
+    *budget = budget.saturating_sub(text.len().max(bytes.len()));
+    Some(text)
 }
 
 fn limited_pdf_string(bytes: &[u8], max_bytes: usize) -> Option<String> {
@@ -1678,8 +1848,7 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
             AttachmentSource::Document { key } => {
                 let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
                 let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
-                let mut seen = HashSet::new();
-                insp.name_tree(ef, &mut seen, 0).into_iter().find(|(k, _)| k == key).map(|(_, v)| v).ok_or("attachment not found")?
+                insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
             }
             AttachmentSource::Annotation { page, index } => {
                 let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
@@ -2581,6 +2750,216 @@ trailer << /Root 1 0 R >>
         fn encrypted(&self) -> bool {
             false
         }
+    }
+
+    /// One comment referenced many times, or a page-shared `/Annots` array, is listed once, and many
+    /// small comments sharing one large `/Contents` string stop at the retained-bytes budget.
+    #[test]
+    fn repeated_annotations_are_listed_once_within_a_byte_budget() {
+        let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 7 0 R >> ".repeat(1200);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 5 0 R >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 5 0 R >> endobj\n\
+             5 0 obj [{} {small}] endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Text /Rect [0 0 1 1] /Contents (note) >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            "6 0 R ".repeat(1000),
+            "x".repeat(64 << 10),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page.clone(), page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        let notes = &info.annotations;
+        assert_eq!(notes.iter().filter(|a| a.contents.as_deref() == Some("note")).count(), 1);
+        assert!(notes.iter().all(|a| a.page == 0), "the shared array is the first page's");
+        assert!(notes.len() > 1);
+        assert!(notes.iter().map(retained).sum::<usize>() <= MAX_ANNOTATION_BYTES);
+    }
+
+    /// A link reached through an indirect object that holds only a reference to it is the same
+    /// annotation as the link itself, and so is a page array reached the same way: each is listed once.
+    #[test]
+    fn an_annotation_reached_through_a_reference_chain_is_listed_once() {
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 8 0 R >> endobj\n\
+             5 0 obj 6 0 R endobj\n\
+             6 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI (https://example.com) >> >> endobj\n\
+             7 0 obj [5 0 R 6 0 R] endobj\n\
+             8 0 obj 7 0 R endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let mut doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut saved = Vec::new();
+        doc.save_to(&mut saved).expect("saves");
+        let lazy = LazyStructure::new(Arc::new(saved), None).expect("opens");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        for reader in [&doc as &dyn Structure, &lazy] {
+            let mut info = DocInfo { pages: vec![page.clone(), page.clone()], ..Default::default() };
+            Inspector::new(reader).fill(&mut info);
+            assert_eq!(info.links.len(), 1, "{:?}", info.links);
+        }
+    }
+
+    /// A conversion rejected as too long, or trimmed short or to nothing, still spends the raw
+    /// length, so a string many entries share is converted only a few times.
+    #[test]
+    fn rejected_text_conversions_spend_the_budget() {
+        let mut budget = 10;
+        let mut conversions = 0;
+        for _ in 0..10 {
+            // Each 0xFF becomes the three-byte replacement character.
+            let kept = spend(&[0xFF; 5], &mut budget, |b| {
+                conversions += 1;
+                String::from_utf8_lossy(b).into_owned()
+            });
+            assert_eq!(kept, None);
+        }
+        assert_eq!((conversions, budget), (2, 0));
+
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let d = Dictionary::from_iter([("Contents", Object::string_literal("   "))]);
+        let mut budget = 10;
+        assert_eq!(Inspector::new(&doc).budgeted_text(&d, b"Contents", &mut budget), None);
+        assert_eq!(budget, 7);
+        // Text that trims short spends its raw length.
+        let d = Dictionary::from_iter([("Contents", Object::string_literal("      x"))]);
+        let mut budget = 10;
+        assert_eq!(Inspector::new(&doc).budgeted_text(&d, b"Contents", &mut budget).as_deref(), Some("x"));
+        assert_eq!(budget, 3);
+    }
+
+    /// An annotation attachment's `/Contents` spends the text budget only when it names the
+    /// attachment, so long descriptions of named files leave a later web address listed.
+    #[test]
+    fn a_named_attachment_leaves_its_contents_unspent() {
+        let files = "<< /Subtype /FileAttachment /Rect [0 0 1 1] /Contents 6 0 R /FS << /F (a.txt) >> >> ".repeat(20);
+        // Longer than what 20 MiB of charged `/Contents` would leave of the 16 MiB budget.
+        let uri = format!("https://example.com/{}", "a".repeat(2 << 20));
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{files} \
+             << /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI ({uri}) >> >>] >> endobj\n\
+             6 0 obj ({}) endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(1 << 20),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        assert!(info.attachments.iter().all(|a| a.name == "a.txt"));
+        assert_eq!(info.links.len(), 1);
+        assert!(matches!(&info.links[0].target, LinkTarget::Uri(u) if *u == uri));
+    }
+
+    /// Embedded files whose name-tree keys share one long string keep it, as key and as name, only
+    /// within `MAX_LINK_ATTACHMENT_TEXT_BYTES`.
+    #[test]
+    fn embedded_file_keys_sharing_a_long_string_keep_it_within_a_budget() {
+        let entries = "4 0 R << /Type /Filespec >> ".repeat(20);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [{entries}] >> >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+             4 0 obj ({}) endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(1 << 20),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let mut info = DocInfo::default();
+        Inspector::new(&doc).fill(&mut info);
+        let kept: usize =
+            info.attachments.iter().map(|a| a.name.len() + if let AttachmentSource::Document { key } = &a.source { key.len() } else { 0 }).sum();
+        assert!(!info.attachments.is_empty());
+        // Past the budget an attachment still has the generic name.
+        let generic = info.attachments.len() * "attachment".len();
+        assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES + generic, "{kept} bytes kept");
+    }
+
+    /// An embedded file the listing keeps is extracted, though earlier keys the listing could not
+    /// keep would fill a fresh key budget before it.
+    #[test]
+    fn a_listed_embedded_file_is_extracted_past_keys_the_listing_left_out() {
+        let skipped = "6 0 R 7 0 R ".repeat(9);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [{skipped}(b.txt) 9 0 R] >> >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+             << /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI ({}) >> >>] >> endobj\n\
+             6 0 obj ({}) endobj\n\
+             7 0 obj << /Type /Filespec /F (a.txt) >> endobj\n\
+             8 0 obj << /Type /EmbeddedFile /Length 5 >> stream\nhello\nendstream endobj\n\
+             9 0 obj << /Type /Filespec /F (b.txt) /EF << /F 8 0 R >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "u".repeat(15 << 20),
+            "k".repeat(2 << 20),
+        );
+        let bytes = Arc::new(pdf.into_bytes());
+        let info = inspect(bytes.clone(), None).expect("opens");
+        let listed = info.attachments.iter().find(|a| a.name == "b.txt").expect("b.txt is listed");
+        assert_eq!(attachment_data(&bytes, None, listed).as_deref(), Ok(&b"hello"[..]));
+    }
+
+    /// Links and attachments sharing one long string each keep a copy only within
+    /// `MAX_LINK_ATTACHMENT_TEXT_BYTES`, and every one is still listed.
+    #[test]
+    fn links_and_attachments_sharing_a_long_string_keep_it_within_a_budget() {
+        const EACH: usize = 20;
+        let links = "<< /Subtype /Link /Rect [0 0 1 1] /A 5 0 R >> ".repeat(EACH);
+        let files = "<< /Subtype /FileAttachment /Rect [0 0 1 1] /FS 7 0 R >> ".repeat(EACH);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{links} {files}] >> endobj\n\
+             5 0 obj << /S /URI /URI 6 0 R >> endobj\n\
+             6 0 obj ({}) endobj\n\
+             7 0 obj << /Type /Filespec /F (a.txt) /Desc 6 0 R >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(1 << 20),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        assert_eq!(info.links.len(), EACH);
+        assert_eq!(info.attachments.len(), EACH);
+        let uris = info.links.iter().map(|l| if let LinkTarget::Uri(u) = &l.target { u.len() } else { 0 });
+        let descriptions = info.attachments.iter().map(|a| a.description.as_ref().map_or(0, String::len));
+        let kept: usize = uris.chain(descriptions).sum();
+        assert!(kept > 0 && kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} bytes kept");
+        assert!(info.links.iter().any(|l| matches!(&l.target, LinkTarget::Other(s) if s == "URI")));
+    }
+
+    /// Links and attachments after the comment budget fills are still listed, and a JavaScript link
+    /// among them still marks the document.
+    #[test]
+    fn links_and_attachments_past_the_comment_budget_are_listed() {
+        let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 6 0 R >> ".repeat(1100);
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{small} \
+             << /Subtype /Link /Rect [0 0 1 1] /A << /S /JavaScript /JS (1) >> >>] >> endobj\n\
+             4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+             << /Subtype /FileAttachment /Rect [0 0 1 1] /FS << /Type /Filespec /F (a.txt) >> >>] >> endobj\n\
+             6 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            "x".repeat(64 << 10),
+        );
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+        let mut info = DocInfo { pages: vec![page.clone(), page], ..Default::default() };
+        Inspector::new(&doc).fill(&mut info);
+        assert!(info.annotations.len() < 1100, "the comment budget filled");
+        assert_eq!(info.links.len(), 1);
+        assert!(info.has_javascript);
+        assert_eq!(info.attachments.len(), 1);
     }
 
     /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'

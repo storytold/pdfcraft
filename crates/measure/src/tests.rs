@@ -403,3 +403,61 @@ fn a_scale_ratio_converts_its_page_side_to_points() {
         assert!(Scale::ratio([0.0, 0.0], [1.0, 0.0], page, PageUnit::Mm, real, "mm", 2).is_err(), "{page} {real}");
     }
 }
+/// A content stream reads its `/XObject` resources once, not again (as a copy of a direct
+/// dictionary) for every `Do`.
+#[test]
+fn xobject_resources_are_read_once_per_stream() {
+    let d = fixture(&"/Missing Do\n".repeat(10_000), "", &[]);
+    snap::XOBJECT_DICT_READS.with(|c| c.set(0));
+    let paths = snap::geometry(&d, 0).unwrap();
+    assert!(paths.segments.is_empty());
+    let reads = snap::XOBJECT_DICT_READS.with(std::cell::Cell::get);
+    assert!(reads <= 1, "{reads} reads of the page's XObject resources");
+}
+/// Finding the scale under a point reads only well-formed viewport boxes, and only as many
+/// viewports as a page can be given, however many a file lists or however long their boxes.
+#[test]
+fn scale_lookup_reads_viewports_within_bounds() {
+    let vp = vec!["5 0 R"; 5_000].join(" ");
+    let long_box = vec!["0"; 2_000].join(" ");
+    let d = fixture("", &format!("/VP [{vp}]"), &["<< /Type /Viewport /BBox 6 0 R >>", &format!("[{long_box}]")]);
+    VIEWPORT_NUMBERS_READ.with(|c| c.set(0));
+    let scale = scale_at(&d, 0, [10.0, 10.0]).unwrap();
+    assert_eq!(scale.unit, "in");
+    let read = VIEWPORT_NUMBERS_READ.with(std::cell::Cell::get);
+    assert!(read <= 4 * 1024, "{read} viewport numbers read");
+}
+
+#[test]
+fn listing_skips_repeated_refs_and_caps_what_it_keeps() {
+    let mut d = fixture("", "", &[]);
+    let points: Vec<Point> = (0..MAX_POINTS).map(|i| [i as f64 * 0.1, 0.0]).collect();
+    add(&mut d, &new(Kind::Perimeter, points), &Meta::default()).unwrap();
+    let (r, mut annotation) = annot(&d, 0, 0).unwrap();
+    let page = pdfcraft_model::pages(&d)[0].obj;
+    let set_annots = |d: &mut Document, list: Vec<Object>| d.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(list))).unwrap();
+    // One annotation referenced 1000 times is one measurement.
+    set_annots(&mut d, vec![Object::Ref(r); 1000]);
+    assert_eq!(list(&d).measurements.len(), 1);
+    // Many small annotations sharing one 2048-point vertex array stop at the retained budget.
+    let vertices = d.add(annotation.get(b"Vertices").unwrap().clone());
+    annotation.set(b"Vertices".to_vec(), Object::Ref(vertices));
+    set_annots(&mut d, vec![Object::Dict(annotation); 1200]);
+    let listing = list(&d);
+    assert!(listing.truncated);
+    assert!(listing.measurements.iter().map(retained).sum::<usize>() <= MAX_LISTED_BYTES);
+    assert!(!listing.measurements.is_empty());
+}
+#[test]
+fn a_stream_over_the_byte_budget_uses_it_up_once() {
+    // 50 references to one Flate stream that inflates past the 16 MiB budget decode once.
+    let big = pdfcraft_cos::Stream::flate(Dict::new(), &vec![b' '; 17 << 20]);
+    let hex: String = big.raw.iter().map(|b| format!("{b:02x}")).collect();
+    let bomb = String::from_utf8(pdfcraft_testkit::stream_obj("/Filter [/ASCIIHexDecode /FlateDecode]", hex)).unwrap();
+    let contents = format!("[4 0 R{}]", " 5 0 R".repeat(50));
+    let d = fixture_with(&contents, "0 0 m 10 0 l S", "", &[bomb.as_str()]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert_eq!(g.unreadable, 1);
+    assert!(g.truncated);
+    assert_eq!(g.segments.len(), 1, "the parts before it still snap");
+}

@@ -15,7 +15,7 @@ use std::rc::Rc;
 use crate::Limits;
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
-    resolve_som, run_within,
+    reset_names, resolve_som, run_within,
 };
 
 /// Deepest nesting the parser follows.
@@ -716,6 +716,8 @@ fn num_text(n: f64) -> String {
 fn fixed(v: f64, decimals: usize) -> String {
     let k = 10f64.powi(decimals.min(20) as i32);
     let scaled = (v * k).round() / k;
+    // A small negative value rounds to -0.0, which would print as "-0".
+    let scaled = if scaled == 0.0 { 0.0 } else { scaled };
     format!("{:.decimals$}", if scaled.is_finite() { scaled } else { v })
 }
 
@@ -1466,8 +1468,7 @@ impl Interp<'_> {
                 }
                 "resetdata" => {
                     let list = self.arg_str(args, 0)?;
-                    let names: Vec<String> = list.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
-                    self.h.push(XfaEffect::ResetData(names));
+                    self.h.push(XfaEffect::ResetData(reset_names(&list)));
                     Ok(Val::Null)
                 }
                 "print" => {
@@ -1618,19 +1619,13 @@ impl Interp<'_> {
                     "presence" => {
                         let p = self.to_str(&v);
                         if matches!(p.as_str(), "visible" | "invisible" | "hidden" | "inactive") {
-                            if let Some(n) = self.h.nodes.get_mut(i) {
-                                n.presence = p.clone();
-                            }
-                            self.h.push(XfaEffect::SetPresence { som, presence: p });
+                            self.h.set_state(i, XfaEffect::SetPresence { som, presence: p });
                         }
                     }
                     "access" => {
                         let a = self.to_str(&v);
                         if matches!(a.as_str(), "open" | "readOnly" | "protected" | "nonInteractive") {
-                            if let Some(n) = self.h.nodes.get_mut(i) {
-                                n.access = a.clone();
-                            }
-                            self.h.push(XfaEffect::SetAccess { som, access: a });
+                            self.h.set_state(i, XfaEffect::SetAccess { som, access: a });
                         }
                     }
                     other => {
@@ -1646,6 +1641,8 @@ impl Interp<'_> {
                             return Err(format!("{som} has no {other} to assign to"));
                         }
                         for k in kids {
+                            // Every destination copies the value: charge each copy.
+                            self.charge(self.cost(&v))?;
                             self.assign_to(Val::Node(k), "rawValue", v.clone())?;
                         }
                     }
@@ -1654,6 +1651,7 @@ impl Interp<'_> {
             }
             Val::List(items) => {
                 for it in items {
+                    self.charge(self.cost(&v))?;
                     self.assign_to(it, prop, v.clone())?;
                 }
                 Ok(())
@@ -2524,10 +2522,10 @@ impl Interp<'_> {
                 let v = parse_num(&s).unwrap_or(0.0);
                 let unit: String = s.trim().chars().skip_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+').collect();
                 let per_in = |u: &str| match u.trim().to_ascii_lowercase().as_str() {
-                    "mm" => 25.4,
-                    "cm" => 2.54,
-                    "pt" => 72.0,
-                    "pc" => 6.0,
+                    "mm" | "millimeter" | "millimeters" => 25.4,
+                    "cm" | "centimeter" | "centimeters" => 2.54,
+                    "pt" | "point" | "points" => 72.0,
+                    "pc" | "pica" => 6.0,
                     _ => 1.0,
                 };
                 let target = if to.trim().is_empty() { unit.clone() } else { to };
@@ -2630,6 +2628,14 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_does_not_print_negative_zero() {
+        assert_eq!(fixed(-0.4, 0), "0");
+        assert_eq!(fixed(-0.004, 2), "0.00");
+        assert_eq!(fixed(-0.0, 0), "0");
+        assert_eq!(fixed(-1.5, 0), "-2");
+    }
 
     #[test]
     fn dates_round_trip_through_formcalc_day_numbers() {

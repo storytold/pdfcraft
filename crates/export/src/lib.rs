@@ -8,6 +8,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::collections::HashMap;
+
 mod pptx;
 mod zip;
 
@@ -35,7 +37,8 @@ pub struct Block {
 pub struct Image {
     /// "png" or "jpg".
     pub ext: &'static str,
-    pub bytes: Vec<u8>,
+    /// Shared: a picture drawn in many places is held once.
+    pub bytes: std::sync::Arc<[u8]>,
     pub rect: [f64; 4],
     /// Width and height before rotation, in points.
     pub size: [f64; 2],
@@ -85,14 +88,33 @@ enum Item<'a> {
     PageBreak,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Entries read to find a font size's or a colour's slot, for the tests that keep it constant.
+    static LOOKUP_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` entries read by a lookup (tests only).
+#[inline]
+fn count_lookup_steps(_n: usize) {
+    #[cfg(test)]
+    LOOKUP_STEPS.with(|c| c.set(c.get().saturating_add(_n)));
+}
+
 /// The body text size: the size most of the document's characters are set in.
 fn body_size(pages: &[Page]) -> f64 {
+    // Sizes in first-seen order (which breaks ties), and where each one is in it.
     let mut by: Vec<(i64, usize)> = Vec::new();
+    let mut slot: HashMap<i64, usize> = HashMap::new();
     for b in pages.iter().flat_map(|p| &p.blocks) {
         let k = (b.size * 2.0).round() as i64;
-        match by.iter_mut().find(|e| e.0 == k) {
-            Some(e) => e.1 += b.text.len(),
-            None => by.push((k, b.text.len())),
+        count_lookup_steps(1);
+        let i = *slot.entry(k).or_insert_with(|| {
+            by.push((k, 0));
+            by.len() - 1
+        });
+        if let Some(e) = by.get_mut(i) {
+            e.1 = e.1.saturating_add(b.text.len());
         }
     }
     by.into_iter().max_by_key(|e| e.1).map_or(11.0, |e| e.0 as f64 / 2.0)
@@ -831,9 +853,12 @@ pub fn rtf(pages: &[Page]) -> String {
     let items = items(pages);
     // The colour table: entry 0 is the default (auto) colour, then each non-black colour once.
     let mut colors: Vec<[u8; 3]> = Vec::new();
+    let mut slot: HashMap<[u8; 3], usize> = HashMap::new();
     let mut note = |c: [f64; 3]| {
         let c = rgb8(c);
-        if c != [0, 0, 0] && !colors.contains(&c) {
+        count_lookup_steps(1);
+        if c != [0, 0, 0] && !slot.contains_key(&c) {
+            slot.insert(c, colors.len());
             colors.push(c);
         }
     };
@@ -847,7 +872,8 @@ pub fn rtf(pages: &[Page]) -> String {
     // `\cfN` for a colour (nothing for black, which keeps the default).
     let cf = |c: [f64; 3]| {
         let c = rgb8(c);
-        colors.iter().position(|e| *e == c).map_or(String::new(), |i| format!("\\cf{}", i + 1))
+        count_lookup_steps(1);
+        slot.get(&c).map_or(String::new(), |i| format!("\\cf{}", i + 1))
     };
     let mut s = String::from("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Helvetica;}}\n");
     if !colors.is_empty() {
@@ -911,6 +937,46 @@ pub fn rtf(pages: &[Page]) -> String {
 mod tests {
     use super::*;
 
+    /// A page of `n` one-word blocks, each in its own size and colour.
+    fn varied_page(n: usize) -> Page {
+        let blocks = (0..n)
+            .map(|i| Block {
+                text: "word".into(),
+                rect: [72.0, i as f64, 100.0, i as f64 + 1.0],
+                size: 4.0 + i as f64 * 0.5,
+                bold: false,
+                italic: false,
+                color: [(i % 256) as f64 / 255.0, (i / 256 % 256) as f64 / 255.0, 0.5],
+                rotation: 0.0,
+            })
+            .collect();
+        Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None }
+    }
+
+    fn lookup_steps(f: impl FnOnce()) -> usize {
+        LOOKUP_STEPS.with(|c| c.set(0));
+        f();
+        LOOKUP_STEPS.with(|c| c.get())
+    }
+
+    #[test]
+    fn many_distinct_sizes_are_counted_in_constant_steps_each() {
+        let pages = [varied_page(3000)];
+        let steps = lookup_steps(|| {
+            body_size(&pages);
+        });
+        assert!(steps <= 2 * 3000, "{steps} steps");
+    }
+
+    #[test]
+    fn many_distinct_colours_take_constant_steps_each() {
+        let pages = [varied_page(3000)];
+        let mut out = String::new();
+        let steps = lookup_steps(|| out = rtf(&pages));
+        assert!(steps <= 4 * 3000, "{steps} steps");
+        assert!(out.contains("\\cf3000 ") || out.contains("\\cf3000\\"), "the last colour has the last slot");
+    }
+
     fn page() -> Page {
         let b = |t: &str, y: f64, size: f64, bold: bool| Block {
             text: t.into(),
@@ -932,7 +998,7 @@ mod tests {
             ],
             images: vec![Image {
                 ext: "png",
-                bytes: b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03".to_vec(),
+                bytes: b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03".as_slice().into(),
                 rect: [72.0, 450.0, 272.0, 600.0],
                 size: [200.0, 150.0],
                 rotation: 0.0,
@@ -1374,7 +1440,7 @@ mod tests {
     /// file in the package, with a content type; JPEG pictures too, inline or placed.
     #[test]
     fn word_pictures_resolve_to_media_in_the_package() {
-        let jpeg = Image { ext: "jpg", bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], ..page().images[0].clone() };
+        let jpeg = Image { ext: "jpg", bytes: [0xFF, 0xD8, 0xFF, 0xD9].as_slice().into(), ..page().images[0].clone() };
         for placed in [false, true] {
             let mut p = page();
             p.images = vec![jpeg.clone()];
@@ -1401,7 +1467,7 @@ mod tests {
     fn word_export_bounds_the_number_of_pictures_and_skips_empty_ones() {
         let mut p = page();
         let one = p.images[0].clone();
-        p.images = vec![Image { bytes: Vec::new(), ..one.clone() }];
+        p.images = vec![Image { bytes: [].as_slice().into(), ..one.clone() }];
         p.images.extend(std::iter::repeat_n(one, MAX_MEDIA + 10));
         let zip = docx(&[p], "T");
         let rels = part(&zip, "word/_rels/document.xml.rels");

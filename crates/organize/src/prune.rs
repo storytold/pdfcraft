@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ObjRef, Object};
 
 use crate::OrganizeError;
 
@@ -29,7 +29,7 @@ enum XKey {
 }
 
 /// Who owns the resources currently being walked, for the key drawn names are recorded under.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Owner {
     /// An indirect resources object (a page's, or a form XObject's own).
     Resources(ObjRef),
@@ -50,6 +50,9 @@ struct Pruner<'a> {
     glyph_seen: HashSet<ObjRef>,
     /// An indirect font's explicit resources have one owner regardless of which page uses it.
     glyph_fonts: HashSet<ObjRef>,
+    /// Forms already analysed, with the owner of the resources they drew against: drawing one
+    /// again records nothing new, and re-reading it on every `Do` is exponential in the nesting.
+    forms_seen: HashSet<(ObjRef, Owner)>,
 }
 
 impl Pruner<'_> {
@@ -211,6 +214,11 @@ impl Pruner<'_> {
                 // A form without its own resources draws against the ones it was invoked with.
                 None => (resources.clone(), owner),
             };
+            if !self.forms_seen.insert((r, inner_owner)) {
+                continue;
+            }
+            #[cfg(test)]
+            crate::work(1);
             match s.decoded() {
                 Ok(data) => self.content(&data, &inner, inner_owner, depth + 1),
                 // What the form draws is unknown: keep everything it could reach.
@@ -223,23 +231,16 @@ impl Pruner<'_> {
     }
 }
 
-/// The page's content, concatenated (`/Contents` may be one stream or an array). `None` when a
-/// stream can't be decoded: the page may draw names that can't be seen.
-fn content_bytes(doc: &Document, contents: &Object) -> Option<Vec<u8>> {
-    match &*doc.resolve(contents) {
-        Object::Stream(s) => s.decoded().ok(),
-        Object::Array(a) => {
-            let mut out = Vec::new();
-            for c in a {
-                if let Object::Stream(s) = &*doc.resolve(c) {
-                    out.extend(s.decoded().ok()?);
-                    out.push(b'\n');
-                }
-            }
-            Some(out)
-        }
-        _ => Some(Vec::new()),
+/// The page's content, concatenated (`/Contents` may be one stream or an array), decoded
+/// against one page's [`DecodeBudget`]. An error when a stream can't be decoded or the budget
+/// runs out: the page may draw names that can't be seen.
+pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<Vec<u8>, CosError> {
+    let mut out = Vec::new();
+    for data in DecodeBudget::page().decode_contents(doc, contents) {
+        out.extend(data?);
+        out.push(b'\n');
     }
+    Ok(out)
 }
 
 /// The resources of a page (as `walk` reports them) with their owner.
@@ -314,6 +315,7 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         glyph_work_left: MAX_GLYPH_RESOURCE_WORK,
         glyph_seen: HashSet::new(),
         glyph_fonts: HashSet::new(),
+        forms_seen: HashSet::new(),
     };
     for (page, attrs) in &pages {
         let Some(res) = attrs.get(b"Resources") else { continue };
@@ -321,9 +323,9 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
         let Some(contents) = pd.get(b"Contents").cloned() else { continue };
         match content_bytes(pruner.doc, &contents) {
-            Some(data) if data.is_empty() => {}
-            Some(data) => pruner.content(&data, &res_dict, owner, 0),
-            None => {
+            Ok(data) if data.is_empty() => {}
+            Ok(data) => pruner.content(&data, &res_dict, owner, 0),
+            Err(_) => {
                 pruner.protect_type3_resources(&res_dict, owner);
                 pruner.distrust(&res_dict, owner);
             }

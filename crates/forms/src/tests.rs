@@ -2981,3 +2981,95 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     assert_eq!(walk.next(), None);
     assert_eq!(page_refs(&doc), [page]);
 }
+
+/// A Calculate script naming thousands of fields is merged with the field's other reads in one
+/// pass, not by searching the names so far for each one.
+#[test]
+fn a_script_reading_many_fields_merges_its_reads_in_one_pass() {
+    use crate::calc_order::NAMES_COMPARED;
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("total")).unwrap();
+    let n = 2_000;
+    let script: String = (0..n).map(|i| format!("getField(\"f{i}\").value + ")).collect::<String>() + "0";
+    set_field_script(&mut doc, "total", "calculate", Some(&format!("event.value = {script};"))).unwrap();
+    NAMES_COMPARED.with(|c| c.set(0));
+    let order = calculation_order(&doc, &fields(&doc));
+    assert_eq!(order.fields[0].reads.len(), n);
+    let compared = NAMES_COMPARED.with(std::cell::Cell::get);
+    assert!(compared <= 4 * n, "{compared} names compared for {n} reads");
+}
+
+/// 300 fields and 300 document scripts that all name one 1 MiB JavaScript stream.
+fn repeated_script_references() -> Document {
+    use pdfcraft_cos::Stream;
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    let js = doc.add(Stream::flate(pdfcraft_cos::Dict::new(), &vec![b'x'; 1 << 20]));
+    let action = doc.add(dict(vec![(b"S", Object::Name(b"JavaScript".to_vec())), (b"JS", Object::Ref(js))]));
+    let fields: Vec<Object> = (0..300)
+        .map(|i| {
+            Object::Ref(doc.add(dict(vec![
+                (b"FT", Object::Name(b"Tx".to_vec())),
+                (b"T", Object::String(pdfcraft_cos::PdfString::literal(format!("f{i}")))),
+                (b"Rect", Object::Array([0, 0, 10, 10].map(Object::from).to_vec())),
+                (b"AA", dict(vec![(b"C", Object::Ref(action))])),
+            ])))
+        })
+        .collect();
+    let names: Vec<Object> =
+        (0..300).flat_map(|i| [Object::String(pdfcraft_cos::PdfString::literal(format!("s{i:03}"))), Object::Ref(action)]).collect();
+    let catalog = doc.add(dict(vec![
+        (b"Type", Object::Name(b"Catalog".to_vec())),
+        (b"AcroForm", dict(vec![(b"Fields", Object::Array(fields))])),
+        (b"Names", dict(vec![(b"JavaScript", dict(vec![(b"Names", Object::Array(names))]))])),
+    ]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    doc
+}
+
+#[test]
+fn repeated_script_references_share_one_decode_budget() {
+    let doc = repeated_script_references();
+    let limit = MAX_SCRIPT_BYTES;
+    let named: usize = document_scripts_named(&doc).iter().map(|(_, js)| js.len()).sum();
+    assert!(named > 0 && named <= limit, "{named} bytes of document scripts");
+    let all = fields(&doc);
+    assert_eq!(all.len(), 300);
+    let calculate: usize = all.iter().filter_map(|f| f.actions.scripts.calculate.as_ref()).map(String::len).sum();
+    assert!(calculate > 0 && calculate <= limit, "{calculate} bytes of field scripts");
+}
+
+/// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,
+/// is read once: the first field to list it owns it.
+#[test]
+fn a_widget_listed_repeatedly_is_read_once() {
+    let kids = "7 0 R ".repeat(500);
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 4 0 R /AcroForm << /Fields [2 0 R 3 0 R] >> >>".into(),
+        "<< /FT /Tx /T (a) /Kids 6 0 R >>".into(),
+        "<< /FT /Tx /T (b) /Kids 6 0 R >>".into(),
+        "<< /Type /Pages /Kids [5 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 4 0 R /MediaBox [0 0 100 100] /Annots [7 0 R] >>".into(),
+        format!("[{kids}]"),
+        "<< /Type /Annot /Subtype /Widget /Parent 2 0 R /Rect [0 0 10 10] >>".into(),
+    ]);
+    let all = fields(&doc);
+    let widgets: Vec<usize> = all.iter().map(|f| f.widgets.len()).collect();
+    assert_eq!(widgets, [1, 0], "{:?}", all.iter().map(|f| &f.name).collect::<Vec<_>>());
+}
+
+/// A field of a kind that isn't read doesn't claim the widget it shares with a field that is.
+#[test]
+fn a_skipped_field_leaves_its_widget_to_the_next() {
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 4 0 R /AcroForm << /Fields [2 0 R 3 0 R] >> >>".into(),
+        "<< /FT /Zz /T (odd) /Kids [6 0 R] >>".into(),
+        "<< /FT /Tx /T (b) /Kids [6 0 R] >>".into(),
+        "<< /Type /Pages /Kids [5 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 4 0 R /MediaBox [0 0 100 100] /Annots [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 3 0 R /Rect [0 0 10 10] >>".into(),
+    ]);
+    let all = fields(&doc);
+    let widgets: Vec<(&str, usize)> = all.iter().map(|f| (f.name.as_str(), f.widgets.len())).collect();
+    assert_eq!(widgets, [("b", 1)]);
+}

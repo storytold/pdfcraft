@@ -417,3 +417,74 @@ fn oversized_xmp_is_refused_while_decoding() {
     assert_eq!(stream.decoded().unwrap().len(), xmp::MAX_XMP_BYTES + 1, "fixture must actually decompress");
     assert!(metadata(&doc).is_none(), "compressed metadata must be limited during decoding");
 }
+
+/// Content is read one operator at a time and no further than it needs: once gray, RGB and CMYK
+/// are all set, the rest of the stream is not read.
+#[test]
+fn content_colour_reads_operators_one_at_a_time_and_stops_when_all_are_found() {
+    let mut data = b"0 g 0 0 0 rg 0 0 0 0 k\n".to_vec();
+    data.extend(b"n\n".repeat(100_000));
+    let mut used = DeviceColour::default();
+    let read = content_colour(&data, &mut used);
+    assert!(used.gray && used.rgb && used.cmyk);
+    assert_eq!(read, 3);
+}
+
+/// A forbidden action chained by `/Next` behind an allowed one, written directly inside its
+/// parent, is reported and removed like any other.
+#[test]
+fn forbidden_actions_chained_behind_allowed_ones_are_found_and_removed() {
+    let js = "<< /S /JavaScript /JS (app.alert(1)) >>";
+    let page = "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>";
+    let pages = "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>";
+    let link = |a: &str| format!("<< /Type /Annot /Subtype /Link /Rect [0 0 0 0] /P 3 0 R /F 4 /A {a} >>");
+    let open_action = format!("<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /GoTo /D [3 0 R /Fit] /Next {js} >> >>");
+    let goto = format!("<< /Type /Action /S /GoTo /D [3 0 R /Fit] /Next [{js}] >>");
+    let cases = [
+        build(&[&open_action, pages, page, &link("<< /S /GoTo /D [3 0 R /Fit] >>")], ""),
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link("5 0 R"), &goto], ""),
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link(&format!("<< /S /GoTo /D [3 0 R /Fit] /Next {js} >>"))], ""),
+        // `/Next` refers to an array that holds the action directly.
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link("<< /S /GoTo /D [3 0 R /Fit] /Next 5 0 R >>"), &format!("[{js}]")], ""),
+    ];
+    for (i, mut doc) in cases.into_iter().enumerate() {
+        let found = messages(&verify(&doc, Level::A2b)).contains(&"A JavaScript action isn't allowed");
+        assert!(found, "case {i}: {:#?}", verify(&doc, Level::A2b));
+        let r = convert(&mut doc, Level::A2b).unwrap();
+        assert!(!r.remaining.iter().any(|x| x.clause == "6.5.1"), "case {i}: {:#?}", r.remaining);
+        let plain = pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() };
+        let bytes = pdfcraft_cos::write_full(&doc, &plain).unwrap();
+        assert!(!bytes.windows(11).any(|w| w == b"/JavaScript"), "case {i}: {}", String::from_utf8_lossy(&bytes));
+    }
+}
+
+/// Each annotation's page is found from one pass over the pages' `/Annots`, not by searching
+/// every page's list again for each annotation.
+#[test]
+fn annotation_pages_are_found_in_one_pass() {
+    let n = 2_000;
+    let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", annots.join(" "));
+    let mut objs =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(), page];
+    objs.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Link /Rect [0 0 0 0] /P 3 0 R >>".to_string()));
+    let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&refs, "");
+    ANNOT_ENTRIES_READ.with(|c| c.set(0));
+    let issues = verify(&doc, Level::A2b);
+    assert!(issues.iter().any(|i| i.clause == "6.3.2" && i.page == Some(0)), "{issues:#?}");
+    let read = ANNOT_ENTRIES_READ.with(std::cell::Cell::get);
+    assert!(read <= 2 * n, "{read} entries read for {n} annotations");
+}
+
+#[test]
+fn an_output_intent_profile_header_is_read_within_a_size_cap() {
+    let intent = "/OutputIntents [<< /S /GTS_PDFA1 /DestOutputProfile 2 0 R >>]";
+    for (size, n) in [(128, Some(4)), (MAX_ICC_PROFILE + 1, None)] {
+        let mut doc = build(&[&format!("<< /Type /Catalog {intent} >>"), "null"], "");
+        let mut profile = vec![0; size];
+        profile[16..20].copy_from_slice(b"CMYK");
+        doc.set(pdfcraft_cos::ObjRef::new(2, 0), Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &profile)));
+        assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
+    }
+}

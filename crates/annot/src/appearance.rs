@@ -120,12 +120,18 @@ fn smooth_curve(pts: &[(f64, f64)]) -> String {
     smooth_segments(pts).iter().map(|[a, b, e]| format!("{} {} {} {} {} {} c\n", n(a.0), n(a.1), n(b.0), n(b.1), n(e.0), n(e.1))).collect()
 }
 
+/// Bumps one cloudy outline draws at most (plus one per edge); past it the bumps grow.
+pub(crate) const MAX_CLOUD_BUMPS: usize = 20_000;
+
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
 pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
     let area: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     // Outward normal of an edge: to the right of travel for counter-clockwise outlines.
     let sign = if area >= 0.0 { 1.0 } else { -1.0 };
+    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| (b.0 - a.0).hypot(b.1 - a.1)).sum();
+    // Each edge rounds to at least one bump, so the total stays within the budget plus one per edge.
+    let r = r.max(perimeter / (2.0 * MAX_CLOUD_BUMPS as f64));
     let mut c = String::new();
     for (i, (a, b)) in pts.iter().zip(pts.iter().cycle().skip(1)).enumerate() {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);

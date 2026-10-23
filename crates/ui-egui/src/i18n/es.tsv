@@ -2359,6 +2359,7 @@ action wizard	Start	Iniciar
 	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	El certificado del firmante tiene extensiones críticas que PdfCraft no reconoce ({}).
 # Why a certificate that matched the issuer was not used to build the chain.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	El certificado de {} no es un certificado de CA que pueda emitir certificados, así que no se usa para avalar a {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	El certificado de {} tiene extensiones críticas que PdfCraft no reconoce, así que no se usa para avalar a {}.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	El certificado de {} no admite tantos certificados de CA por debajo (longitud de ruta), así que no se usa para avalar a {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	El certificado de {} no era válido en el momento de la firma, así que no se usa para avalar a {}.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	La identidad del firmante es desconocida porque no está en tu lista de certificados de confianza y ninguno de los certificados superiores es de confianza.
@@ -2378,6 +2379,7 @@ action wizard	Start	Iniciar
 	The timestamp token could not be read ({}).	No se ha podido leer el sello de tiempo ({}).
 	The document has been altered or corrupted since the timestamp was applied.	El documento se ha alterado o se ha dañado desde que se aplicó el sello de tiempo.
 	The timestamp authority's certificate was not valid at the time of timestamping.	El certificado de la autoridad de sellado de tiempo no era válido en el momento del sellado.
+	The timestamp authority's certificate is not issued for time stamping.	El certificado de la autoridad de sellado de tiempo no está emitido para sellar el tiempo.
 	This document has not been modified since this timestamp was applied.	Este documento no se ha modificado desde que se aplicó este sello de tiempo.
 	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	El documento se ha modificado desde que se aplicó este sello de tiempo, pero son cambios que permite ({}).
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El documento se ha alterado desde que se aplicó este sello de tiempo de maneras que no permite ({}).
