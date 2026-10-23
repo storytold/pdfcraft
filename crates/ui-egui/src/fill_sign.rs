@@ -5,7 +5,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
-use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
+use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Rgb, Shape, SignatureImage, SignaturePhoto, Style, Turn};
 use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageXform};
@@ -404,7 +404,21 @@ pub struct TypeBox {
     pub at: [f64; 2],
     pub text: String,
     pub size: f64,
+    /// The border around the text.
+    pub border: TextBorder,
     pub focus: bool,
+}
+
+/// The border around typed text: its width in points (0: none) and its own colour (`None`: the
+/// text's).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextBorder {
+    pub width: f64,
+    pub color: Option<Rgb>,
+}
+
+impl TextBorder {
+    pub const NONE: Self = Self { width: 0.0, color: None };
 }
 
 /// The default size Fill & Sign uses for typed text.
@@ -414,6 +428,14 @@ pub const MAX_TEXT_SIZE: f64 = 300.0;
 
 pub fn valid_text_size(size: f64) -> Option<f64> {
     (size.is_finite() && (MIN_TEXT_SIZE..=MAX_TEXT_SIZE).contains(&size)).then_some(size)
+}
+
+/// The borders the toolbar offers around typed text, in points (0: none).
+pub const TEXT_BORDERS: [f64; 6] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0];
+pub const MAX_TEXT_BORDER: f64 = 12.0;
+
+pub fn valid_text_border(width: f64) -> Option<f64> {
+    (width.is_finite() && (0.0..=MAX_TEXT_BORDER).contains(&width)).then_some(width)
 }
 
 fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
@@ -428,10 +450,14 @@ fn new(page: usize, shape: Shape, contents: String, author: &str) -> Edit {
 }
 
 /// A typewriter annotation sized to its text, its displayed top-left at `at` on a page turned by
-/// `rotation` (its `/Rotate`).
-pub fn typed(page: usize, at: [f64; 2], text: &str, size: f64, rotation: i64, author: &str) -> Edit {
-    let rect = crate::comments::text_box_rect(at, text, size, rotation);
-    new(page, Shape::Typewriter { rect, font_size: size }, text.to_string(), author)
+/// `rotation` (its `/Rotate`). A `border` goes around the box sized to the text, so the text sits
+/// where it would without one.
+pub fn typed(page: usize, at: [f64; 2], text: &str, size: f64, border: TextBorder, rotation: i64, author: &str) -> Edit {
+    let width = valid_text_border(border.width).unwrap_or(0.0);
+    let [x0, y0, x1, y1] = crate::comments::text_box_rect(at, text, size, rotation);
+    let shape = Shape::Typewriter { rect: [x0 - width, y0 - width, x1 + width, y1 + width], font_size: size };
+    let style = Style { width, border_color: border.color.filter(|_| width > 0.0), ..Style::default_for(&shape) };
+    Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: text.to_string(), author: author.to_string() })
 }
 
 /// Place a saved signature (strokes normalised to a 0–1 box, y up) with its left edge at `at`,
@@ -630,6 +656,7 @@ pub(crate) fn page_input(
     info: &DocInfo,
     tool: FillTool,
     text_size: f64,
+    text_border: TextBorder,
     view: &mut DocView,
     signature: Option<&SavedSig>,
     initials: Option<&SavedSig>,
@@ -667,13 +694,21 @@ pub(crate) fn page_input(
         FillTool::Text => {
             // Clicking away from an open box commits it: the page sees this click before the box
             // sees its lost focus, so replacing the box first would drop what was typed.
-            let open = view.fill_text.replace(TypeBox { page, at: top, text: String::new(), size: text_size, focus: true });
+            let open = view.fill_text.replace(TypeBox { page, at: top, text: String::new(), size: text_size, border: text_border, focus: true });
             open.filter(|tb| !tb.text.trim().is_empty()).map(|tb| {
-                FillAction::Edit(Box::new(typed(tb.page, tb.at, tb.text.trim(), tb.size, crate::comments::page_rotation(info, tb.page), author)))
+                FillAction::Edit(Box::new(typed(
+                    tb.page,
+                    tb.at,
+                    tb.text.trim(),
+                    tb.size,
+                    tb.border,
+                    crate::comments::page_rotation(info, tb.page),
+                    author,
+                )))
             })
         }
         FillTool::Date => Some(match date_text {
-            Ok(text) => FillAction::Edit(Box::new(typed(page, top, text, text_size, rotation, author))),
+            Ok(text) => FillAction::Edit(Box::new(typed(page, top, text, text_size, text_border, rotation, author))),
             Err(why) => FillAction::Refused(why.clone()),
         }),
         FillTool::Signature => match signature {
@@ -742,6 +777,12 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                     .hint_text(tl!("Type text"))
                     .id_salt("fill-text-edit"),
             );
+            // The border the text will get, around the box being typed into.
+            if t.border.width > 0.0 {
+                let w = (t.border.width as f32 * zoom).max(1.0);
+                let color = t.border.color.map_or(Color32::BLACK, crate::comments::color32);
+                ui.painter().rect_stroke(r.rect, 0.0, Stroke::new(w, color), egui::StrokeKind::Outside);
+            }
             if t.focus {
                 r.request_focus();
                 t.focus = false;
@@ -759,7 +800,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     if commit {
         let tb = view.fill_text.take()?;
         if !tb.text.trim().is_empty() {
-            return Some(typed(tb.page, tb.at, tb.text.trim(), tb.size, crate::comments::page_rotation(info, tb.page), author));
+            return Some(typed(tb.page, tb.at, tb.text.trim(), tb.size, tb.border, crate::comments::page_rotation(info, tb.page), author));
         }
     }
     None

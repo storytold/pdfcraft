@@ -2781,3 +2781,10 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Bordure :
+
+# A text border's own colour (M5).
+	Border colour	Couleur de bordure
+	Same as text	Comme le texte

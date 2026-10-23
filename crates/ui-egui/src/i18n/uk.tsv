@@ -2537,3 +2537,10 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Рамка:
+
+# A text border's own colour (M5).
+	Border colour	Колір рамки
+	Same as text	Як у тексту

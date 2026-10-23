@@ -237,6 +237,108 @@ fn fill_text_size_resizes_the_selected_text() {
     assert!(after > before * 2.0, "36 pt text has a taller box than 10 pt text: {before} -> {after}");
 }
 
+/// With a placed text selected, the toolbar shows its own border, also after Comment Properties
+/// changed it; the Border colour button gives that border its own colour ("Same as text" takes
+/// it back), and new text gets what the toolbar shows.
+#[test]
+fn the_toolbar_follows_the_selected_texts_border_and_colours_it() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    click(&mut h, 50.0, 250.0);
+    h.event(egui::Event::Text("Framed".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let (page, index) = {
+        let s = h.state();
+        let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Framed")).cloned().unwrap();
+        (a.page, a.index)
+    };
+    let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    // As Comment Properties ▸ Thickness does.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(2.0), endings: None });
+    h.run_steps(3);
+    assert_eq!(h.state().fill_text_border, 2.0, "the toolbar follows the selected text");
+    assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("2 pt")));
+
+    h.get_by_label("Border colour").click();
+    h.run_steps(2);
+    h.get_by_label("Red").click();
+    h.run_steps(4);
+    let red = Some([0.89, 0.13, 0.13]);
+    assert_eq!(props(&h).border_color, red, "the selected text's border is red");
+    assert_eq!(h.state().fill_text_border_color, red, "and new text's will be");
+    h.get_by_label("Border colour").click();
+    h.run_steps(2);
+    h.get_by_label("Same as text").click();
+    h.run_steps(4);
+    assert_eq!(props(&h).border_color, None);
+
+    h.state_mut().fill_text_border_color = red;
+    let settings = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&settings);
+    assert_eq!(restored.fill_text_border_color, red);
+    restored.restore(r#"{"fill_text_border_color":null}"#);
+    assert_eq!(restored.fill_text_border_color, None, "null is the text's colour");
+}
+
+/// The Border control puts a frame around new Fill & Sign text, and around the text that is
+/// selected; the box grows outwards, so the text stays where it was typed. The choice persists.
+#[test]
+fn fill_text_border_frames_new_and_selected_text() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Border:");
+    let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
+        click(h, 50.0, y);
+        h.event(egui::Event::Text("Same".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+    };
+    // The two texts, oldest first: (page, index, rect).
+    let texts = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let mut v: Vec<_> =
+            doc.info.annotations.iter().filter(|a| a.contents.as_deref() == Some("Same")).map(|a| (a.page, a.index, a.rect)).collect();
+        v.sort_by_key(|t| t.1);
+        v
+    };
+    let width = |r: [f32; 4]| r[2] - r[0];
+    type_at(&mut h, 150.0);
+    // Nothing selected, so the toolbar sets new text's border only (it shows a selected text's).
+    h.state_mut().views[0].comments.selected = None;
+    h.state_mut().fill_text_border = 1.5;
+    type_at(&mut h, 250.0);
+    let [(page, index, plain), (_, _, framed)] = texts(&h)[..] else { panic!("two texts") };
+    assert!((width(framed) - width(plain) - 3.0).abs() < 0.01, "1.5 pt on each side: {plain:?} {framed:?}");
+
+    // The plain text selected, then framed with 2 pt from the toolbar.
+    h.state_mut().views[0].comments.selected = Some((page, index));
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|n| n.value().as_deref() == Some("1.5 pt"))
+        .expect("the Border control, showing the border for new text")
+        .click();
+    h.run_steps(2);
+    h.get_by_label("2 pt").click();
+    h.run_steps(4);
+    assert_eq!(h.state().fill_text_border, 2.0);
+    let (_, _, now) = texts(&h)[0];
+    assert!((width(now) - width(plain) - 4.0).abs() < 0.01, "2 pt on each side: {plain:?} {now:?}");
+    assert!((plain[0] - now[0] - 2.0).abs() < 0.01 && (now[3] - plain[3] - 2.0).abs() < 0.01, "grown outwards, the text in place: {plain:?} {now:?}");
+
+    let settings = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&settings);
+    assert_eq!(restored.fill_text_border, 2.0);
+    restored.restore(r#"{"fill_text_border":100}"#);
+    assert_eq!(restored.fill_text_border, 2.0, "invalid settings do not change the border");
+}
+
 #[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();
@@ -1064,7 +1166,14 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Typed".into(),
+        size: 10.0,
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -1075,7 +1184,14 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox {
+        page: 0,
+        at: [40.0, 160.0],
+        text: "More".into(),
+        size: 10.0,
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());

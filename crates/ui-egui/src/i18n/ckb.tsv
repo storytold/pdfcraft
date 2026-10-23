@@ -2713,3 +2713,10 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+
+# Fill & Sign text: the border around it (M5).
+	Border:	سنوور:
+
+# A text border's own colour (M5).
+	Border colour	ڕەنگی سنوور
+	Same as text	وەک دەق

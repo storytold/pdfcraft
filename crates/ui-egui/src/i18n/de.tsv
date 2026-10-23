@@ -2516,3 +2516,10 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Rahmen:
+
+# A text border's own colour (M5).
+	Border colour	Rahmenfarbe
+	Same as text	Wie Text

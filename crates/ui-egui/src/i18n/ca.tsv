@@ -2774,3 +2774,10 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Vora:
+
+# A text border's own colour (M5).
+	Border colour	Color de la vora
+	Same as text	Igual que el text

@@ -2791,3 +2791,10 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# Fill & Sign text: the border around it (M5).
+	Border:	الحد:
+
+# A text border's own colour (M5).
+	Border colour	لون الحد
+	Same as text	مثل النص

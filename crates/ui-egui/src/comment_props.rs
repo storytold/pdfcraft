@@ -148,6 +148,9 @@ pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     {
         out.push(Edit::FontSizeAnnotation { page: d.page, index: d.index, size });
     }
+    if e.restylable && e.font_size.is_some() && e.border_color != o.border_color {
+        out.push(Edit::BorderColorAnnotation { page: d.page, index: d.index, color: e.border_color });
+    }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
     let icon = (e.icon != o.icon).then_some(e.icon).flatten();
@@ -220,6 +223,17 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         e.color = Some(c);
                     }
                     ui.end_row();
+                    // Text boxes, typewriter text and callouts: the border's own colour.
+                    if e.font_size.is_some() {
+                        ui.label(tl!("Border colour"));
+                        let text = e.color.unwrap_or([0.0; 3]);
+                        ui.horizontal(|ui| {
+                            if let Some(c) = crate::comments::border_colour_button(ui, e.border_color, text) {
+                                e.border_color = c;
+                            }
+                        });
+                        ui.end_row();
+                    }
                     if e.fillable {
                         ui.label(tl!("Fill colour"));
                         if let Some(f) = crate::comments::fill_picker(ui, e.fill) {

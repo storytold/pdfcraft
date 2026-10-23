@@ -196,6 +196,12 @@ impl CommentTool {
         if matches!(self, Self::TextBox | Self::Callout) { 0.0 } else { 0.5 }
     }
 
+    /// Whether the border-colour control applies to this tool: text boxes and callouts, whose
+    /// border takes the text colour unless it has its own.
+    pub fn has_border_color(self) -> bool {
+        matches!(self, Self::TextBox | Self::Callout)
+    }
+
     /// Whether the fill-colour control applies to this tool.
     pub fn has_fill(self) -> bool {
         matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud | Self::TextBox | Self::Callout)
@@ -304,6 +310,14 @@ impl CommentPrefs {
     pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
+        }
+    }
+
+    /// The border's own colour for new text boxes and callouts (`None`: the text colour).
+    pub fn set_border_color(&mut self, tool: CommentTool, color: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_color =
+                if tool.has_border_color() { color.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
         }
     }
 
@@ -2131,6 +2145,33 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         });
     }
     selected_color
+}
+
+/// A border-colour button: a hollow square in the border's colour (`current`, else the text's,
+/// `text`), with a menu of "Same as text" and the swatches. Returns the choice (`Some(None)`:
+/// the text's colour again).
+pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text: Rgb) -> Option<Option<Rgb>> {
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(15.0, 15.0));
+    ui.painter().rect_stroke(sq, 1.0, Stroke::new(3.0, color32(current.unwrap_or(text))), egui::StrokeKind::Inside);
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.shrink(2.0), 4.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Border colour")));
+    let resp = resp.on_hover_text(tl!("Border colour"));
+    let mut picked = None;
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+        ui.label(egui::RichText::new(tl!("Border colour")).font(theme::semibold(12.0)));
+        if ui.add(egui::Button::new(tl!("Same as text")).selected(current.is_none())).clicked() {
+            picked = Some(None);
+            ui.close();
+        }
+        if let Some(c) = swatch_grid(ui, current) {
+            picked = Some(Some(c));
+            ui.close();
+        }
+    });
+    picked
 }
 
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline

@@ -2515,3 +2515,10 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+
+# Fill & Sign text: the border around it (M5).
+	Border:	境界線:
+
+# A text border's own colour (M5).
+	Border colour	境界線の色
+	Same as text	テキストと同じ

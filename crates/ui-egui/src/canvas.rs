@@ -3384,6 +3384,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     info,
                     ft,
                     app.fill_text_size,
+                    crate::fill_sign::TextBorder { width: app.fill_text_border, color: app.fill_text_border_color },
                     view,
                     signature.as_ref(),
                     initials.as_ref(),
@@ -5118,6 +5119,37 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             }
                         });
                     if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
+                        // The Fill & Sign text that is selected, which the controls change too.
+                        let selected_text =
+                            |app: &PdfCraftApp| {
+                                let (index, id) = app.active_ids()?;
+                                let (page, annotation) = app.views.get(index)?.comments.selected?;
+                                app.session
+                                    .get(id)
+                                    .is_some_and(|doc| {
+                                        doc.allows_annotation()
+                                            && doc.info.annotations.iter().any(|a| {
+                                                a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked
+                                            })
+                                    })
+                                    .then_some((page, annotation))
+                            };
+                        // The controls show the selected text's own size and border, which Comment
+                        // Properties may have changed since: unless one is being dragged or typed
+                        // into. What they show is also what new text gets.
+                        let busy = ui.ctx().dragged_id().is_some() || ui.ctx().memory(|m| m.focused().is_some());
+                        if !busy
+                            && let Some((page, annotation)) = selected_text(app)
+                            && let Some(p) = app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|d| d.comment_props(page, annotation))
+                        {
+                            if let Some(size) = p.font_size.and_then(crate::fill_sign::valid_text_size) {
+                                app.fill_text_size = size;
+                            }
+                            if let Some(width) = p.width.and_then(crate::fill_sign::valid_text_border) {
+                                app.fill_text_border = width;
+                            }
+                            app.fill_text_border_color = p.border_color;
+                        }
                         ui.label(tl!("Font size:"));
                         let size = ui.add(
                             egui::DragValue::new(&mut app.fill_text_size)
@@ -5129,23 +5161,70 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         // once per change (a typed value, or the end of a drag), so a drag adds
                         // one undo step and not one per frame.
                         if ((size.changed() && !size.dragged()) || size.drag_stopped())
-                            && let Some((index, id)) = app.active_ids()
-                            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
-                            && app.session.get(id).is_some_and(|doc| {
-                                doc.allows_annotation()
-                                    && doc
-                                        .info
-                                        .annotations
-                                        .iter()
-                                        .any(|a| a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked)
-                            })
+                            && let Some((page, annotation)) = selected_text(app)
                         {
                             app.apply_edit(Edit::FontSizeAnnotation { page, index: annotation, size: app.fill_text_size });
+                        }
+                        // A border around the text, in its colour; the text keeps its place.
+                        let border_label = |w: f64| if w > 0.0 { format!("{w} pt") } else { tl!("None").to_string() };
+                        let label = ui.label(tl!("Border:"));
+                        let before = app.fill_text_border;
+                        egui::ComboBox::from_id_salt("fill-text-border")
+                            .selected_text(border_label(before))
+                            .width(72.0)
+                            .show_ui(ui, |ui| {
+                                for w in crate::fill_sign::TEXT_BORDERS {
+                                    ui.selectable_value(&mut app.fill_text_border, w, border_label(w));
+                                }
+                            })
+                            .response
+                            .labelled_by(label.id);
+                        if app.fill_text_border != before
+                            && let Some((page, annotation)) = selected_text(app)
+                        {
+                            app.apply_edit(Edit::StyleAnnotation {
+                                page,
+                                index: annotation,
+                                color: None,
+                                opacity: None,
+                                width: Some(app.fill_text_border),
+                                endings: None,
+                            });
+                        }
+                        // The border's own colour (the text's unless picked).
+                        if app.fill_text_border > 0.0
+                            && let Some(color) = comments::border_colour_button(ui, app.fill_text_border_color, [0.0; 3])
+                        {
+                            app.fill_text_border_color = color;
+                            if let Some((page, annotation)) = selected_text(app) {
+                                app.apply_edit(Edit::BorderColorAnnotation { page, index: annotation, color });
+                            }
                         }
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
                         ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+                        // Text boxes and callouts: the border's own colour, for new ones and the
+                        // selected one this tool made.
+                        if tool.has_border_color() {
+                            let style = app.comment_prefs.style(tool);
+                            if let Some(color) = comments::border_colour_button(ui, style.border_color, style.color) {
+                                app.comment_prefs.set_border_color(tool, color);
+                                if let Some((index, id)) = app.active_ids()
+                                    && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
+                                    && app.session.get(id).is_some_and(|doc| {
+                                        doc.allows_annotation()
+                                            && doc
+                                                .info
+                                                .annotations
+                                                .iter()
+                                                .any(|a| a.page == page && a.index == annotation && comments::made_by(a, tool))
+                                    })
+                                {
+                                    app.apply_edit(Edit::BorderColorAnnotation { page, index: annotation, color });
+                                }
+                            }
+                        }
                         if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
                             && let Some((index, id)) = app.active_ids()
                             && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)

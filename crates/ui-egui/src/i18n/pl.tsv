@@ -2611,3 +2611,10 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Obramowanie:
+
+# A text border's own colour (M5).
+	Border colour	Kolor obramowania
+	Same as text	Jak tekst

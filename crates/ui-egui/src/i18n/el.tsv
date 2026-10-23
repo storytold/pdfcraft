@@ -2521,3 +2521,10 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Περίγραμμα:
+
+# A text border's own colour (M5).
+	Border colour	Χρώμα περιγράμματος
+	Same as text	Ίδιο με το κείμενο

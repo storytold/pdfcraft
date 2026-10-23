@@ -2511,3 +2511,10 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Fill & Sign text: the border around it (M5).
+	Border:	Kenarlık:
+
+# A text border's own colour (M5).
+	Border colour	Kenarlık rengi
+	Same as text	Metinle aynı
