@@ -208,6 +208,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
 	Not in order	不在顺序中
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Reads {name}, which the form doesn't have, so it gets no value there.	读取表单中不存在的 {name}，因此从中得不到值。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其脚本还会读取运行时才拼出名称的字段，因此无法检查这些读取。
+	Missing field	缺少字段
+	Unchecked reads	未检查的读取
+	{field} reads fields named as it runs	{field} 读取运行时才确定名称的字段
+	Some names are built as it runs	部分名称在运行时才拼出
 	Back to Prepare a form	返回准备表单
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
 	{names} and {last}	{names}和{last}
@@ -2352,6 +2358,11 @@ animation effects	Off	关
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 个公式读取了表单中不存在的字段
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} 读取表单中不存在的 {fields}。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	另有 {n} 个公式读取了缺失的字段。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} 在运行时才拼出部分字段名称，因此这些读取不会被检查。
+@plural	{fields} is missing|{fields} are missing	缺少 {fields}
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…

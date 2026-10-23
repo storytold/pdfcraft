@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M6: the calculation order flags a formula that reads a field the form doesn't have and a script that builds the names it reads; the tools show each formula; estimates unchanged)
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M12 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections; estimates unchanged)
 
@@ -239,6 +240,7 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | M6: calculation checks: a formula reading a field the form doesn't have, and a script building the names it reads, are flagged by `form_calculation_order` and on the Calculation order page (a red mark, a card naming the broken formulas, a note for built names); `form_calculation_order` gives each formula and `form_fields` a custom Calculate script. Estimates unchanged. |
 | 2026-10-22 | minor | M4, #3916 partial: edits and Undo/Redo cancel Organize page drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
 | 2026-10-22 | minor | M14 #3558: rebased macOS association recovery; reuse #3042 shared metadata preservation instead of a duplicate save wrapper. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |

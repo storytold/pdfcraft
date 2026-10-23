@@ -492,6 +492,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} өрістерін оқиды, олар оны қайта оқиды. Ешбір рет циклды түзете алмайды: формулалардың бірін өзгертіңіз.
 	Not in order	Ретте жоқ
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF ішінде сақталған есептеу ретінде жоқ: басқа PDF қарау құралдары оны есептемеуі мүмкін.
+	Reads {name}, which the form doesn't have, so it gets no value there.	{name} өрісін оқиды, бірақ ол пішінде жоқ, сондықтан одан мән алмайды.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Оның скрипті атауларын орындалу кезінде құрастыратын өрістерді де оқиды, сондықтан бұл оқуларды тексеру мүмкін емес.
+	Missing field	Өріс жоқ
+	Unchecked reads	Тексерілмеген оқулар
+	{field} reads fields named as it runs	{field} орындалу кезінде аталатын өрістерді оқиды
+	Some names are built as it runs	Кейбір атаулар орындалу кезінде құрастырылады
 	Back to Prepare a form	Форманы дайындауға оралу
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Бұл формада мәнін есептейтін өріс әлі жоқ. Өріс сипаттарының «Есептеу» қойындысында оған есептеу беріңіз, сонда ол осында көрсетіледі.
 	{names} and {last}	{names} және {last}
@@ -2375,6 +2381,11 @@ animation effects	Off	Өшірулі
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} өзі оқитын {fields} өрісінен бұрын есептеледі.|{field} өзі оқитын {fields} өрістерінен бұрын есептеледі.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Тағы {n} өріс тым ерте есептеледі.|Тағы {n} өріс тым ерте есептеледі.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} PDF-те сақталған ретте жоқ, сондықтан басқа PDF қаралымдары оны есептемеуі мүмкін.|{fields} PDF-те сақталған ретте жоқ, сондықтан басқа PDF қаралымдары оларды есептемеуі мүмкін.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула пішінде жоқ өрісті оқиды|{n} формула пішінде жоқ өрістерді оқиды
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} пішінде жоқ {fields} өрісін оқиды.|{field} пішінде жоқ {fields} өрістерін оқиды.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Тағы {n} формула жоқ өрісті оқиды.|Тағы {n} формула жоқ өрістерді оқиды.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} кейбір өріс атауларын орындалу кезінде құрастырады, сондықтан бұл оқулар тексерілмейді.|{fields} кейбір өріс атауларын орындалу кезінде құрастырады, сондықтан бұл оқулар тексерілмейді.
+@plural	{fields} is missing|{fields} are missing	{fields} жоқ|{fields} жоқ
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}|{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}
 	Scan	Сканерлеу
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Ақ қағаз парағына қол қойып, оны жарық әрі біркелкі жарықта суретке түсіріңіз (жарқылды қосыңыз). Суретті таңдаңыз немесе осында тастаңыз: PdfCraft қолтаңбаны тауып, қағазды алып тастайды.

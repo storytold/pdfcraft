@@ -1023,6 +1023,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Bere {names}, ki ga berejo nazaj. Noben vrstni red ne popravi zanke: spremenite eno od formul.
 	Not in order	Ni v vrstnem redu
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Manjka v vrstnem redu izračunov, shranjenem v PDF-ju: drugi pregledovalniki PDF ga morda ne izračunajo.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Bere {name}, ki ga v obrazcu ni, zato od tam ne dobi vrednosti.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Njegov skript bere tudi polja, katerih imena sestavi med izvajanjem, zato teh branj ni mogoče preveriti.
+	Missing field	Manjka polje
+	Unchecked reads	Nepreverjena branja
+	{field} reads fields named as it runs	{field} bere polja, poimenovana med izvajanjem
+	Some names are built as it runs	Nekatera imena se sestavijo med izvajanjem
 	Back to Prepare a form	Nazaj na Pripravi obrazec
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nobeno polje tega obrazca še ne izračuna svoje vrednosti. Polju dodelite izračun na zavihku Izračunaj v njegovih lastnostih in prikazalo se bo tukaj.
 	{names} and {last}	{names} in {last}
@@ -2392,6 +2398,11 @@ animation effects	Off	Izklopljeni
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se izračuna pred {fields}, ki ga bere.|{field} se izračuna pred {fields}, ki ju bere.|{field} se izračuna pred {fields}, ki jih bere.|{field} se izračuna pred {fields}, ki jih bere.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Še {n} polje se izračuna prezgodaj.|Še {n} polji se izračunata prezgodaj.|Še {n} polja se izračunajo prezgodaj.|Še {n} polj se izračuna prezgodaj.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manjka v vrstnem redu, shranjenem v PDF-ju, zato ga drugi pregledovalniki PDF morda ne bodo izračunali.|{fields} manjkata v vrstnem redu, shranjenem v PDF-ju, zato ju drugi pregledovalniki PDF morda ne bodo izračunali.|{fields} manjkajo v vrstnem redu, shranjenem v PDF-ju, zato jih drugi pregledovalniki PDF morda ne bodo izračunali.|{fields} manjkajo v vrstnem redu, shranjenem v PDF-ju, zato jih drugi pregledovalniki PDF morda ne bodo izračunali.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula bere polje, ki ga v obrazcu ni|{n} formuli bereta polja, ki ju v obrazcu ni|{n} formule berejo polja, ki jih v obrazcu ni|{n} formul bere polja, ki jih v obrazcu ni
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} bere {fields}, ki ga v obrazcu ni.|{field} bere {fields}, ki ju v obrazcu ni.|{field} bere {fields}, ki jih v obrazcu ni.|{field} bere {fields}, ki jih v obrazcu ni.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Še {n} formula bere manjkajoče polje.|Še {n} formuli bereta manjkajoča polja.|Še {n} formule berejo manjkajoča polja.|Še {n} formul bere manjkajoča polja.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} nekatera imena polj sestavi med izvajanjem, zato ta branja niso preverjena.|{fields} nekatera imena polj sestavita med izvajanjem, zato ta branja niso preverjena.|{fields} nekatera imena polj sestavijo med izvajanjem, zato ta branja niso preverjena.|{fields} nekatera imena polj sestavijo med izvajanjem, zato ta branja niso preverjena.
+@plural	{fields} is missing|{fields} are missing	{fields} manjka|{fields} manjkata|{fields} manjkajo|{fields} manjka
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} ime polja se ujema z imeni iz prejšnjih datotek in bo preimenovano: {list}|{n} imeni polj se ujemata z imeni iz prejšnjih datotek in bosta preimenovani: {list}|{n} imena polj se ujemajo z imeni iz prejšnjih datotek in bodo preimenovana: {list}|{n} imen polj se ujema z imeni iz prejšnjih datotek in bo preimenovanih: {list}
 	Scan	Skeniraj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpišite se na list belega papirja in ga fotografirajte v močni, enakomerni svetlobi (uporabite bliskavico). Izberite fotografijo ali jo spustite sem: PdfCraft poišče podpis in odstrani papir.

@@ -530,6 +530,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читає {names}, які своєю чергою читають його. Жоден порядок не виправить цикл: змініть одну з формул.
 	Not in order	Поза порядком
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Відсутнє в порядку обчислень, збереженому в PDF: інші переглядачі PDF можуть його не обчислювати.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Читає {name}, якого немає у формі, тому не отримує звідти значення.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Його сценарій також читає поля, імена яких складає під час виконання, тому ці читання неможливо перевірити.
+	Missing field	Немає поля
+	Unchecked reads	Неперевірені читання
+	{field} reads fields named as it runs	{field} читає поля, імена яких задаються під час виконання
+	Some names are built as it runs	Деякі імена складаються під час виконання
 	Back to Prepare a form	Назад до «Підготувати форму»
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Жодне поле цієї форми поки не обчислює своє значення. Задайте полю обчислення на вкладці «Обчислення» його властивостей, і воно з’явиться тут.
 	{names} and {last}	{names} і {last}
@@ -2410,6 +2416,11 @@ animation effects	Off	Вимкнено
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} обчислюється раніше за {fields}, яке воно читає.|{field} обчислюється раніше за {fields}, які воно читає.|{field} обчислюється раніше за {fields}, які воно читає.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ще {n} поле обчислюється зарано.|Ще {n} поля обчислюються зарано.|Ще {n} полів обчислюються зарано.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть його не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула читає поле, якого немає у формі|{n} формули читають поля, яких немає у формі|{n} формул читають поля, яких немає у формі
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} читає {fields}, якого немає у формі.|{field} читає {fields}, яких немає у формі.|{field} читає {fields}, яких немає у формі.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ще {n} формула читає відсутнє поле.|Ще {n} формули читають відсутні поля.|Ще {n} формул читають відсутні поля.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} складає деякі імена полів під час виконання, тому ці читання не перевіряються.|{fields} складають деякі імена полів під час виконання, тому ці читання не перевіряються.|{fields} складають деякі імена полів під час виконання, тому ці читання не перевіряються.
+@plural	{fields} is missing|{fields} are missing	Немає {fields}|Немає {fields}|Немає {fields}
 	Scan	Сканувати
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Розпишіться на аркуші білого паперу та сфотографуйте його за яскравого рівномірного освітлення (зі спалахом). Виберіть фото або перетягніть його сюди: PdfCraft знайде підпис і прибере папір.
 	Choose photo…	Вибрати фото…

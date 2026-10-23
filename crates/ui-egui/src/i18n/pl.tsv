@@ -527,6 +527,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Odczytuje {names}, które z kolei odczytują je. Żadna kolejność nie naprawi pętli: zmień jedną z formuł.
 	Not in order	Poza kolejnością
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Brakuje go w kolejności obliczeń zapisanej w pliku PDF: inne przeglądarki PDF mogą go nie obliczać.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Odczytuje {name}, którego nie ma w formularzu, więc nie dostaje stamtąd żadnej wartości.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jego skrypt odczytuje też pola, których nazwy tworzy w trakcie działania, więc tych odczytów nie da się sprawdzić.
+	Missing field	Brak pola
+	Unchecked reads	Niesprawdzone odczyty
+	{field} reads fields named as it runs	{field} odczytuje pola nazywane w trakcie działania
+	Some names are built as it runs	Niektóre nazwy powstają w trakcie działania
 	Back to Prepare a form	Wróć do „Przygotuj formularz”
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Żadne pole tego formularza nie oblicza jeszcze swojej wartości. Nadaj polu obliczenie na karcie Obliczenia w jego właściwościach, a pojawi się tutaj.
 	{names} and {last}	{names} i {last}
@@ -2356,6 +2362,11 @@ animation effects	Off	Wyłączone
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Jeszcze {n} pole jest obliczane za wcześnie.|Jeszcze {n} pola są obliczane za wcześnie.|Jeszcze {n} pól jest obliczanych za wcześnie.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą go nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formuła odczytuje pole, którego nie ma w formularzu|{n} formuły odczytują pola, których nie ma w formularzu|{n} formuł odczytuje pola, których nie ma w formularzu
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} odczytuje {fields}, którego nie ma w formularzu.|{field} odczytuje {fields}, których nie ma w formularzu.|{field} odczytuje {fields}, których nie ma w formularzu.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Jeszcze {n} formuła odczytuje brakujące pole.|Jeszcze {n} formuły odczytują brakujące pola.|Jeszcze {n} formuł odczytuje brakujące pola.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} tworzy część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.|{fields} tworzą część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.|{fields} tworzą część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.
+@plural	{fields} is missing|{fields} are missing	Brak {fields}|Brak {fields}|Brak {fields}
 	Scan	Skanuj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpisz się na białej kartce i zrób jej zdjęcie przy jasnym, równomiernym świetle (użyj lampy błyskowej). Wybierz zdjęcie lub upuść je tutaj: PdfCraft znajdzie podpis i usunie papier.
 	Choose photo…	Wybierz zdjęcie…

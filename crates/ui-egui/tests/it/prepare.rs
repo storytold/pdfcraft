@@ -1092,3 +1092,99 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
     assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
 }
+
+/// Two calculated fields that share a name (a malformed form) each show their own formula: the
+/// first dup sums src, the second x.
+#[test]
+fn fields_sharing_a_name_each_show_their_own_formula() {
+    let widget = |name: &str, y: u32, reads: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", \"{reads}\"\\);) >> >> >>",
+            y + 20
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /CO [6 0 R 7 0 R 5 0 R] >>".into(),
+        widget("dup", 700, "x"),
+        widget("dup", 660, "src"),
+        widget("src", 620, "x"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [50 580 250 600] /P 3 0 R /V (3) >>".into(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("dup.pdf", None, bytes.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    for (row, formula) in [("1. dup", "= sum(src)"), ("3. dup", "= sum(x)")] {
+        h.get_by_label_contains(row).hover();
+        h.run_steps(30);
+        assert!(h.query_by_label_contains(formula).is_some(), "{row} shows {formula}");
+    }
+}
+
+/// A formula that reads a field the form doesn't have gets a card of its own, in place of "every
+/// field calculates after the fields it reads", and its link opens that formula. A script that
+/// builds the names it reads gets a note.
+#[test]
+fn a_formula_reading_a_missing_field_has_its_own_card() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    use pdfcraft_ui_egui::prepare::FieldTab;
+    let mut h = harness();
+    for (i, name) in ["qty", "discount", "sub", "rows"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty - discount".into())), ..Default::default() });
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let script = Some("event.value = getField(\"row\" + 1).value;".to_owned());
+    h.state_mut().apply_edit(Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some(), "nothing is missing yet");
+    assert!(h.query_by_label("rows builds some field names as it runs, so those reads aren't checked.").is_some());
+    h.state_mut().apply_edit(Edit::DeleteField { name: "discount".into() });
+    h.run_steps(3);
+    assert!(h.query_by_label("1 formula reads a field the form doesn't have").is_some());
+    assert!(h.query_by_label("sub reads discount, which the form doesn't have.").is_some());
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "no all-clear while a formula is broken");
+    // Reordered, the order can be undone from the missing-field card; the all-clear still stays away.
+    h.state_mut().apply_edit(Edit::SetCalculationOrder { names: vec!["rows".into(), "sub".into()] });
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "still no all-clear");
+    h.get_by_label("Undo").click();
+    h.run_steps(3);
+    let order: Vec<String> = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().calculation_order().fields.into_iter().map(|f| f.name).collect()
+    };
+    assert_eq!(order, ["sub", "rows"], "Undo put the order back");
+    h.get_by_label("Edit sub's formula").click();
+    h.run_steps(3);
+    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
+    assert_eq!(draft, Some(("sub".to_owned(), FieldTab::Calculate)));
+}

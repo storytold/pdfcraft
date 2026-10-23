@@ -528,6 +528,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lee {names}, que a su vez lo leen. Ningún orden puede corregir un bucle: cambia una de las fórmulas.
 	Not in order	Fuera del orden
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Falta en el orden de cálculo guardado en el PDF: otros visores de PDF podrían no calcularlo.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Lee {name}, que no existe en el formulario, así que no obtiene ningún valor de ahí.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Su script también lee campos cuyos nombres construye mientras se ejecuta, así que esas lecturas no se pueden comprobar.
+	Missing field	Falta un campo
+	Unchecked reads	Lecturas sin comprobar
+	{field} reads fields named as it runs	{field} lee campos nombrados mientras se ejecuta
+	Some names are built as it runs	Algunos nombres se construyen al ejecutarse
 	Back to Prepare a form	Volver a Preparar un formulario
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ningún campo de este formulario calcula todavía su valor. Dale a un campo un cálculo en la pestaña Calcular de sus propiedades y aparecerá aquí.
 	{names} and {last}	{names} y {last}
@@ -2524,6 +2530,11 @@ animation effects	Off	Desactivados
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calcula antes que {fields}, que lee.|{field} se calcula antes que {fields}, que lee.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} campo más se calcula demasiado pronto.|{n} campos más se calculan demasiado pronto.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} falta en el orden guardado en el PDF, así que otros visores de PDF podrían no calcularlo.|{fields} faltan en el orden guardado en el PDF, así que otros visores de PDF podrían no calcularlos.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} fórmula lee un campo que no existe en el formulario|{n} fórmulas leen campos que no existen en el formulario
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} lee {fields}, que no existe en el formulario.|{field} lee {fields}, que no existen en el formulario.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} fórmula más lee un campo que falta.|{n} fórmulas más leen campos que faltan.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construye algunos nombres de campo al ejecutarse, así que esas lecturas no se comprueban.|{fields} construyen algunos nombres de campo al ejecutarse, así que esas lecturas no se comprueban.
+@plural	{fields} is missing|{fields} are missing	Falta {fields}|Faltan {fields}
 	Scan	Escanear
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Firma en una hoja de papel blanco y hazle una foto con luz intensa y uniforme (usa el flash). Elige la foto o suéltala aquí: PdfCraft encuentra la firma y elimina el papel.
 	Choose photo…	Elegir foto…

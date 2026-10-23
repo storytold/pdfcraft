@@ -1462,6 +1462,45 @@ fn the_calculation_order_is_checked_fixed_and_kept() {
     assert_eq!(order.fixed(), ["sub", "total", "tax", "grand"], "only tax moves, to just after total");
 }
 
+/// A formula that reads a field the form doesn't have is flagged, whichever kind of formula it
+/// is: a field deleted from under a sum, a typo in notation, a script's `getField`. So is a
+/// script that builds the names it reads. Neither is an order Fix order can fix.
+#[test]
+fn missing_fields_and_built_names_are_flagged() {
+    use crate::af::{CalcOp, Calculate};
+    use crate::calc_order::CalculationIssue::{BuiltNames, MissingField};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["qty", "gone", "sum", "notation", "script", "built"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let calculate = |c: Calculate| FieldProps { calculate: Some(c), ..FieldProps::default() };
+    set_props(&mut doc, "sum", &calculate(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into(), "gone".into()] })).unwrap();
+    set_props(&mut doc, "notation", &calculate(Calculate::Notation("qty * nope".into()))).unwrap();
+    set_field_script(&mut doc, "script", "calculate", Some("event.value = getField(\"qty\").value + getField(\"ghost\").value;")).unwrap();
+    set_field_script(&mut doc, "built", "calculate", Some("event.value = getField(\"qty\").value + getField(\"row\" + 1).value;")).unwrap();
+    let issues = |doc: &Document| {
+        let order = calculation_order(doc, &fields(doc));
+        assert!(!order.fixable(), "nothing Fix order can fix");
+        order.fields.into_iter().map(|f| (f.name, f.issues)).collect::<Vec<_>>()
+    };
+    let expected = |sum: Vec<_>| {
+        vec![
+            ("sum".to_owned(), sum),
+            ("notation".to_owned(), vec![MissingField { field: "nope".into() }]),
+            ("script".to_owned(), vec![MissingField { field: "ghost".into() }]),
+            ("built".to_owned(), vec![BuiltNames]),
+        ]
+    };
+    assert_eq!(issues(&doc), expected(vec![]));
+    delete_field(&mut doc, "gone").unwrap();
+    assert_eq!(issues(&doc), expected(vec![MissingField { field: "gone".into() }]), "a deleted field leaves the sum reading nothing");
+    assert_eq!(issues(&reopen(&doc)), expected(vec![MissingField { field: "gone".into() }]));
+    let order = calculation_order(&doc, &fields(&doc));
+    assert_eq!(order.fields[3].reads, ["qty"], "the names it does know are still read");
+}
+
 /// `/CO` as other tools leave it: a calculated field missing, a field without a calculation, an
 /// entry repeated, a reference to nothing and a number. The order reads around them, and setting
 /// the order writes `/CO` afresh.
@@ -1526,6 +1565,12 @@ fn two_fields_with_one_name_keep_their_places_in_the_order() {
     };
     let row = |name: &str, reads: &str, ok: bool| (name.to_owned(), vec![reads.to_owned()], ok);
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)]);
+    // Each row is its own field object, so a caller can find the right formula for each dup.
+    let all = fields(&doc);
+    for c in calculation_order(&doc, &all).fields {
+        let f = all.iter().find(|f| f.obj == c.obj).unwrap();
+        assert_eq!((&f.name, f.actions.calculate.reads()), (&c.name, c.reads.clone()));
+    }
     let current: Vec<String> = ["dup", "src", "dup"].map(String::from).into();
     set_calculation_order(&mut doc, &current).unwrap();
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)], "the current order sets back unchanged");

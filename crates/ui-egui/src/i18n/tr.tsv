@@ -490,6 +490,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} alanlarını okur, onlar da bu alanı okur. Hiçbir sıra bir döngüyü düzeltemez: formüllerden birini değiştirin.
 	Not in order	Sırada değil
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF'te kayıtlı hesaplama sırasında yok: diğer PDF görüntüleyicileri bunu hesaplamayabilir.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Formda olmayan {name} alanını okur, bu yüzden oradan değer alamaz.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Komut dosyası, adlarını çalışırken oluşturduğu alanları da okur; bu okumalar denetlenemez.
+	Missing field	Eksik alan
+	Unchecked reads	Denetlenmeyen okumalar
+	{field} reads fields named as it runs	{field}, çalışırken adlandırılan alanları okuyor
+	Some names are built as it runs	Bazı adlar çalışırken oluşturuluyor
 	Back to Prepare a form	Form hazırla'ya geri dön
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Bu formdaki hiçbir alan henüz değerini hesaplamıyor. Bir alana özelliklerinin Hesapla sekmesinde bir hesaplama verin, burada görünür.
 	{names} and {last}	{names} ve {last}
@@ -2373,6 +2379,11 @@ animation effects	Off	Kapalı
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} önce hesaplanıyor; okuduğu {fields} daha sonra hesaplanıyor.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} alan daha çok erken hesaplanıyor.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields}, PDF'te kayıtlı sırada yok; bu yüzden diğer PDF görüntüleyicileri hesaplamayabilir.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formül formda olmayan alanları okuyor
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field}, formda olmayan {fields} alanını okuyor.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} formül daha eksik alanları okuyor.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields}, bazı alan adlarını çalışırken oluşturuyor; bu okumalar denetlenmiyor.
+@plural	{fields} is missing|{fields} are missing	{fields} eksik
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} alan adı önceki dosyalarla çakışıyor ve yeniden adlandırılacak: {list}
 	Scan	Tara
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Beyaz bir kâğıda imzanızı atın ve parlak, eşit ışıkta fotoğrafını çekin (flaş kullanın). Fotoğrafı seçin veya buraya bırakın: PdfCraft imzayı bulur ve kâğıdı kaldırır.

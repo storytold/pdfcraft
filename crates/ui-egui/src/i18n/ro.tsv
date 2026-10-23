@@ -2699,6 +2699,12 @@ theme	Appearance	Aspect
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Citește {names}, care îl citesc la rândul lor. Nicio ordine nu poate rezolva o buclă: modificați una dintre formule.
 	Not in order	În afara ordinii
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Lipsește din ordinea de calcul salvată în PDF: alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Citește {name}, care nu există în formular, deci nu primește nicio valoare de acolo.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Scriptul său citește și câmpuri ale căror nume le construiește în timpul rulării, deci aceste citiri nu pot fi verificate.
+	Missing field	Câmp lipsă
+	Unchecked reads	Citiri neverificate
+	{field} reads fields named as it runs	{field} citește câmpuri numite în timpul rulării
+	Some names are built as it runs	Unele nume sunt construite în timpul rulării
 	Back to Prepare a form	Înapoi la Pregătire formular
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Niciun câmp din acest formular nu își calculează încă valoarea. Adăugați un calcul unui câmp în fila Calcul din proprietățile lui și va apărea aici.
 	{names} and {last}	{names} și {last}
@@ -2726,6 +2732,11 @@ theme	Appearance	Aspect
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calculează înaintea câmpului {fields}, pe care îl citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Încă {n} câmp se calculează prea devreme.|Încă {n} câmpuri se calculează prea devreme.|Încă {n} de câmpuri se calculează prea devreme.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} lipsește din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formulă citește un câmp care nu există în formular|{n} formule citesc câmpuri care nu există în formular|{n} de formule citesc câmpuri care nu există în formular
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Încă {n} formulă citește un câmp lipsă.|Încă {n} formule citesc câmpuri lipsă.|Încă {n} de formule citesc câmpuri lipsă.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construiește unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.
+@plural	{fields} is missing|{fields} are missing	{fields} lipsește|{fields} lipsesc|{fields} lipsesc
 	Bulleted list	Listă cu marcatori
 	Numbered list	Listă numerotată
 	Alignment	Aliniere

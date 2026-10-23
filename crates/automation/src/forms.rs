@@ -113,6 +113,10 @@ fn calculate_arg(v: &Value) -> Result<Calculate> {
         return Ok(Calculate::None);
     }
     let o = v.as_object().ok_or_else(|| bad("calculate must be {\"op\": …, \"fields\": […]}, {\"notation\": …} or \"none\""))?;
+    // Before anything else is read, so a script given beside a notation isn't dropped unnoticed.
+    if o.contains_key("script") {
+        return Err(bad("a custom calculate script is set with form_set_script (event: calculate)"));
+    }
     if let Some(n) = o.get("notation").and_then(Value::as_str) {
         return Ok(Calculate::Notation(n.to_string()));
     }
@@ -130,6 +134,17 @@ fn calculate_arg(v: &Value) -> Result<Calculate> {
         return Err(bad("calculate needs fields"));
     }
     Ok(Calculate::Simple { op, fields })
+}
+
+/// A field's calculation as `form_fields` and `form_calculation_order` show it, in
+/// `form_set_props`'s shape, or `{"script": …}` for a custom Calculate script; `None` without one.
+fn calculate_json(f: &FormField) -> Option<Value> {
+    match (&f.actions.calculate, &f.actions.scripts.calculate) {
+        (Calculate::Simple { op, fields }, _) => Some(json!({ "op": op.code().to_lowercase(), "fields": fields })),
+        (Calculate::Notation(n), _) => Some(json!({ "notation": n })),
+        (Calculate::None, Some(js)) => Some(json!({ "script": js })),
+        (Calculate::None, None) => None,
+    }
 }
 
 fn format_json(f: &Format) -> Value {
@@ -220,14 +235,8 @@ impl Automation {
                 if let Validate::Range { min, max } = &f.actions.validate {
                     o.insert("validate".into(), json!({ "min": min, "max": max }));
                 }
-                match &f.actions.calculate {
-                    Calculate::Simple { op, fields } => {
-                        o.insert("calculate".into(), json!({ "op": op.code().to_lowercase(), "fields": fields }));
-                    }
-                    Calculate::Notation(n) => {
-                        o.insert("calculate".into(), json!({ "notation": n }));
-                    }
-                    Calculate::None => {}
+                if let Some(c) = calculate_json(f) {
+                    o.insert("calculate".into(), c);
                 }
                 if !f.actions.unsupported.is_empty() {
                     o.insert("unsupported_scripts".into(), json!(f.actions.unsupported));
@@ -630,15 +639,28 @@ impl Automation {
         };
         let order = self.doc(a)?.calculation_order();
         let issue = |i: &CalculationIssue| match i {
+            CalculationIssue::MissingField { field } => json!({ "issue": "missing_field", "field": field }),
             CalculationIssue::RunsTooEarly { field } => json!({ "issue": "runs_too_early", "field": field }),
             CalculationIssue::Cycle { fields } => json!({ "issue": "cycle", "fields": fields }),
             CalculationIssue::NotInOrder => json!({ "issue": "not_in_order" }),
+            CalculationIssue::BuiltNames => json!({ "issue": "built_names" }),
         };
+        // By field object, not name: two calculated fields can share a name in a malformed form.
+        let doc = self.doc(a)?;
+        let by_obj: std::collections::HashMap<_, &FormField> = doc.form.iter().map(|f| (f.obj, f)).collect();
         out["calculation_order"] = json!(order.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>());
         out["fields"] = order
             .fields
             .iter()
-            .map(|f| json!({ "name": f.name, "reads": f.reads, "listed": f.listed, "issues": f.issues.iter().map(issue).collect::<Vec<_>>() }))
+            .map(|f| {
+                json!({
+                    "name": f.name,
+                    "formula": by_obj.get(&f.obj).and_then(|x| calculate_json(x)),
+                    "reads": f.reads,
+                    "listed": f.listed,
+                    "issues": f.issues.iter().map(issue).collect::<Vec<_>>(),
+                })
+            })
             .collect();
         out["extra"] = json!(order.extra);
         out["fixable"] = json!(order.fixable());

@@ -672,6 +672,10 @@ enum Site {
     Commas(String),
     /// A name in the simplified field notation of a `BVCALC` comment.
     Notation(String),
+    /// A field read by a name built at run time: a `getField` whose argument is more than one
+    /// string literal (`getField("row" + i)`), or an `AFSimple_Calculate` list that isn't
+    /// written out. Which field it is isn't known.
+    Built,
 }
 
 impl Site {
@@ -679,6 +683,7 @@ impl Site {
         match self {
             Site::Literal(name) | Site::Notation(name) => vec![name.as_str()],
             Site::Commas(list) => list.split(',').map(str::trim).filter(|n| !n.is_empty()).collect(),
+            Site::Built => Vec::new(),
         }
     }
 
@@ -695,14 +700,16 @@ impl Site {
                     js_str(&parts.join(","))
                 })
             }
+            Site::Built => None,
         }
     }
 }
 
 /// Where a Calculate script names fields, in order: the simplified field notation in its comment
 /// (see [`notation_range`]; [`parse_calculate`] reads it there too), the field list of
-/// `AFSimple_Calculate`, and every `getField` whose whole argument is one string literal.
-/// A name built at run time (`getField("row" + i)`) is not a site.
+/// `AFSimple_Calculate`, and every `getField` whose whole argument is one string literal. A name
+/// built at run time (`getField("row" + i)`) is a [`Site::Built`], at its `getField` or
+/// `AFSimple_Calculate`.
 fn calculation_sites(js: &str) -> Vec<(Range<usize>, Site)> {
     let mut sites = Vec::new();
     let (tokens, comments) = js_tokens(js);
@@ -721,35 +728,61 @@ fn calculation_sites(js: &str) -> Vec<(Range<usize>, Site)> {
         Some((range, Js::Str(text))) => Some((range.clone(), text.clone())),
         _ => None,
     };
+    let built = |k: usize| tokens.get(k).map(|(range, _)| (range.clone(), Site::Built));
     for k in 0..tokens.len() {
-        if ident(k, "getField")
-            && punct(k + 1, '(')
-            && punct(k + 3, ')')
-            && let Some((range, name)) = string(k + 2)
-        {
-            sites.push((range, Site::Literal(name)));
+        if ident(k, "getField") && punct(k + 1, '(') {
+            match string(k + 2) {
+                Some((range, name)) if punct(k + 3, ')') => sites.push((range, Site::Literal(name))),
+                _ => sites.extend(built(k)),
+            }
         }
-        if !(ident(k, "AFSimple_Calculate") && punct(k + 1, '(') && string(k + 2).is_some() && punct(k + 3, ',')) {
+        if !(ident(k, "AFSimple_Calculate") && punct(k + 1, '(')) {
             continue;
         }
+        if !(string(k + 2).is_some() && punct(k + 3, ',')) {
+            sites.extend(built(k));
+            continue;
+        }
+        // One string of comma-separated names, when it is the whole list (not `"row" + suffix`).
         if let Some((range, list)) = string(k + 4) {
-            sites.push((range, Site::Commas(list)));
+            if punct(k + 5, ')') {
+                sites.push((range, Site::Commas(list)));
+            } else {
+                sites.extend(built(k));
+            }
             continue;
         }
-        // `new Array("a", "b")` or `["a", "b"]`: its items, up to the first that isn't a string.
-        // Nothing else is read, so no token is read for two calls.
-        let first = if punct(k + 4, '[') {
-            k + 5
+        // `new Array("a", "b")` or `["a", "b"]`: each item that is one string, and the list has
+        // to end the call. An item that is more than a string (`"row" + i`), or anything after
+        // the list (`.concat(more)`), is a name built at run time. Nothing else is read, so no
+        // token is read for two calls.
+        let (first, close) = if punct(k + 4, '[') {
+            (k + 5, ']')
         } else if ident(k + 4, "new") && ident(k + 5, "Array") && punct(k + 6, '(') {
-            k + 7
+            (k + 7, ')')
         } else {
+            sites.extend(built(k));
             continue;
         };
-        for (range, token) in tokens.iter().skip(first) {
-            match token {
-                Js::Str(name) => sites.push((range.clone(), Site::Literal(name.clone()))),
-                Js::Punct(',') => {}
-                _ => break,
+        let mut j = first;
+        loop {
+            match tokens.get(j) {
+                // An item ends at a comma or the list's end, or where a script cut short ends.
+                Some((range, Js::Str(name))) if punct(j + 1, ',') || punct(j + 1, close) || tokens.get(j + 1).is_none() => {
+                    sites.push((range.clone(), Site::Literal(name.clone())));
+                    j += 1;
+                }
+                Some((_, Js::Punct(','))) => j += 1,
+                Some((_, Js::Punct(c))) if *c == close => {
+                    if !punct(j + 1, ')') {
+                        sites.extend(built(k));
+                    }
+                    break;
+                }
+                _ => {
+                    sites.extend(built(k));
+                    break;
+                }
             }
         }
     }
@@ -779,6 +812,12 @@ pub fn rename_in_calculation(js: &str, old: &str, new: &str) -> Option<String> {
 pub fn calculation_reads(js: &str) -> Vec<String> {
     let sites = calculation_sites(js);
     unique(sites.iter().flat_map(|(_, site)| site.names()).map(str::to_owned))
+}
+
+/// Whether a Calculate script also reads fields by names it builds at run time
+/// (`getField("row" + i)`), which [`calculation_reads`] can't list.
+pub fn reads_built_names(js: &str) -> bool {
+    calculation_sites(js).iter().any(|(_, site)| *site == Site::Built)
 }
 
 impl Calculate {
@@ -1645,6 +1684,51 @@ mod tests {
         // After a call, or a method that happens to be called `if`, the `/` divides.
         let divides = "event.value = Math.abs(getField(\"b\").value) / 2 + getField(\"a\").value / 3 + o.if(x) / 4 + getField(\"a\").value / 5;";
         assert_eq!(renamed(divides), Some(divides.replace("\"a\"", "\"qty\"")));
+    }
+
+    /// A `getField` whose argument is more than one string, or an `AFSimple_Calculate` list that
+    /// isn't written out, reads a field whose name isn't known until the script runs.
+    #[test]
+    fn names_built_at_run_time_are_noticed() {
+        for js in [
+            "event.value = getField(\"row\" + i).value;",
+            "event.value = this.getField(name).value;",
+            "AFSimple_Calculate(\"SUM\", list);",
+            "AFSimple_Calculate(\"SUM\", new Array(\"a\", b));",
+            "AFSimple_Calculate(\"SUM\", [\"a\", prefix + \"b\"]);",
+            "AFSimple_Calculate(\"SUM\", new Array(\"a\", \"b\" + c));",
+            "AFSimple_Calculate(op, new Array(\"a\"));",
+            "AFSimple_Calculate(\"SUM\", \"row\" + suffix);",
+            "AFSimple_Calculate(\"SUM\", [\"a\"].concat(more));",
+            "AFSimple_Calculate(\"SUM\", [\"row\" + i]);",
+        ] {
+            assert!(reads_built_names(js), "{js}");
+        }
+        // A string that is only the start of a name or a list isn't read, or renamed, as one.
+        for (js, reads) in [
+            ("AFSimple_Calculate(\"SUM\", \"row\" + suffix);", vec![]),
+            ("AFSimple_Calculate(\"SUM\", [\"row\" + i]);", vec![]),
+            ("AFSimple_Calculate(\"SUM\", [\"a\", \"row\" + i]);", vec!["a"]),
+            ("AFSimple_Calculate(\"SUM\", [\"a\", \"b\"].concat(more));", vec!["a", "b"]),
+        ] {
+            assert_eq!(parse_calculate(js), None, "{js} is a script");
+            assert_eq!(calculation_reads(js), reads, "{js}");
+            assert_eq!(rename_in_calculation(js, "row", "line"), None, "{js}");
+        }
+        for js in [
+            "event.value = getField(\"a\").value + getField('b').value;",
+            "AFSimple_Calculate(\"SUM\", new Array(\"a\", \"b\"));",
+            "AFSimple_Calculate(\"SUM\", [\"a\", \"b\",]);",
+            "AFSimple_Calculate(\"SUM\", \"a, b\");",
+            "// getField(\"row\" + i)\nvar s = 'getField(name)'; event.value = 1;",
+            "/** BVCALC a + b EVCALC **/ event.value = getField(\"a\").value + getField(\"b\").value;",
+        ] {
+            assert!(!reads_built_names(js), "{js}");
+        }
+        // The names it does know are still read and renamed.
+        let js = "event.value = getField(\"a\").value + getField(\"row\" + i).value + AFSimple_Calculate(\"SUM\", new Array(\"a\", b));";
+        assert_eq!(calculation_reads(js), ["a"]);
+        assert_eq!(rename_in_calculation(js, "a", "qty"), Some(js.replace("\"a\"", "\"qty\"")));
     }
 
     /// Scripts are read in one pass: a line of unfinished regular expressions, or calls nested in

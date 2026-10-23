@@ -701,6 +701,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Skaito {names}, kurie savo ruožtu skaito jį. Jokia tvarka neištaisys ciklo: pakeiskite vieną iš formulių.
 	Not in order	Ne tvarkoje
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Trūksta PDF faile įrašytoje skaičiavimo tvarkoje: kitos PDF peržiūros programos gali jo neskaičiuoti.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Skaito {name}, kurio formoje nėra, todėl iš ten negauna jokios reikšmės.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jo scenarijus taip pat skaito laukus, kurių pavadinimus sudaro vykdymo metu, todėl šių skaitymų patikrinti negalima.
+	Missing field	Trūksta lauko
+	Unchecked reads	Nepatikrinti skaitymai
+	{field} reads fields named as it runs	{field} skaito laukus, pavadinamus vykdymo metu
+	Some names are built as it runs	Kai kurie pavadinimai sudaromi vykdymo metu
 	Back to Prepare a form	Grįžti į „Rengti formą“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nė vienas šios formos laukas dar neskaičiuoja savo reikšmės. Nustatykite laukui skaičiavimą jo savybių kortelėje „Skaičiavimas“, ir jis bus rodomas čia.
 	{names} and {last}	{names} ir {last}
@@ -2651,6 +2657,11 @@ certificate	SHA-256 digest	SHA-256 santrauka
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} apskaičiuojamas anksčiau už {fields}, kurį skaito.|{field} apskaičiuojamas anksčiau už {fields}, kuriuos skaito.|{field} apskaičiuojamas anksčiau už {fields}, kuriuos skaito.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Dar {n} laukas apskaičiuojamas per anksti.|Dar {n} laukai apskaičiuojami per anksti.|Dar {n} laukų apskaičiuojama per anksti.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jo neapskaičiuoti.|{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jų neapskaičiuoti.|{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jų neapskaičiuoti.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formulė skaito lauką, kurio formoje nėra|{n} formulės skaito laukus, kurių formoje nėra|{n} formulių skaito laukus, kurių formoje nėra
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} skaito {fields}, kurio formoje nėra.|{field} skaito {fields}, kurių formoje nėra.|{field} skaito {fields}, kurių formoje nėra.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Dar {n} formulė skaito trūkstamą lauką.|Dar {n} formulės skaito trūkstamus laukus.|Dar {n} formulių skaito trūkstamus laukus.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} kai kuriuos laukų pavadinimus sudaro vykdymo metu, todėl šie skaitymai netikrinami.|{fields} kai kuriuos laukų pavadinimus sudaro vykdymo metu, todėl šie skaitymai netikrinami.|{fields} kai kuriuos laukų pavadinimus sudaro vykdymo metu, todėl šie skaitymai netikrinami.
+@plural	{fields} is missing|{fields} are missing	Trūksta {fields}|Trūksta {fields}|Trūksta {fields}
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete

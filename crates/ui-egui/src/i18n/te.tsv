@@ -509,6 +509,12 @@ comment menu	Edit	సవరించు
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names}ను చదువుతుంది, అవి దీన్ని తిరిగి చదువుతాయి. ఏ క్రమమూ లూప్‌ను సరిచేయదు: సూత్రాలలో ఒకదాన్ని మార్చండి.
 	Not in order	క్రమంలో లేదు
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDFలో సేవ్ చేసిన గణన క్రమంలో లేదు: ఇతర PDF వీక్షకులు దీన్ని లెక్కించకపోవచ్చు.
+	Reads {name}, which the form doesn't have, so it gets no value there.	{name}ను చదువుతుంది, కానీ అది ఫారమ్‌లో లేదు, కాబట్టి దాని నుండి విలువ రాదు.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	దీని స్క్రిప్ట్ నడుస్తున్నప్పుడు పేర్లను కూర్చే ఫీల్డ్‌లను కూడా చదువుతుంది, కాబట్టి ఆ చదువులను తనిఖీ చేయలేము.
+	Missing field	ఫీల్డ్ లేదు
+	Unchecked reads	తనిఖీ చేయని చదువులు
+	{field} reads fields named as it runs	{field} నడుస్తున్నప్పుడు పేరు పెట్టే ఫీల్డ్‌లను చదువుతుంది
+	Some names are built as it runs	కొన్ని పేర్లు నడుస్తున్నప్పుడు కూర్చబడతాయి
 	Back to Prepare a form	‘ఫారాన్ని సిద్ధం చేయి’కి తిరిగి వెళ్లు
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	ఈ ఫారంలో ఏ ఫీల్డ్ ఇంకా తన విలువను గణించదు. ఫీల్డ్ లక్షణాలలోని గణన ట్యాబ్‌లో దానికి గణన ఇవ్వండి, అది ఇక్కడ కనిపిస్తుంది.
 	{names} and {last}	{names} మరియు {last}
@@ -2289,6 +2295,11 @@ animation effects	Off	ఆఫ్
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} తాను చదివే {fields} కంటే ముందు గణించబడుతుంది.|{field} తాను చదివే {fields} కంటే ముందు గణించబడుతుంది.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	మరో {n} ఫీల్డ్ చాలా ముందుగా గణించబడుతుంది.|మరో {n} ఫీల్డ్‌లు చాలా ముందుగా గణించబడతాయి.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} PDFలో సేవ్ చేసిన క్రమంలో లేదు, కాబట్టి ఇతర PDF వ్యూయర్‌లు దాన్ని గణించకపోవచ్చు.|{fields} PDFలో సేవ్ చేసిన క్రమంలో లేవు, కాబట్టి ఇతర PDF వ్యూయర్‌లు వాటిని గణించకపోవచ్చు.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} సూత్రం ఫారమ్‌లో లేని ఫీల్డ్‌ను చదువుతుంది|{n} సూత్రాలు ఫారమ్‌లో లేని ఫీల్డ్‌లను చదువుతాయి
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} ఫారమ్‌లో లేని {fields}‌ను చదువుతుంది.|{field} ఫారమ్‌లో లేని {fields}‌ను చదువుతుంది.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	మరో {n} సూత్రం లేని ఫీల్డ్‌ను చదువుతుంది.|మరో {n} సూత్రాలు లేని ఫీల్డ్‌లను చదువుతాయి.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} నడుస్తున్నప్పుడు కొన్ని ఫీల్డ్ పేర్లను కూర్చుతుంది, కాబట్టి ఆ చదువులు తనిఖీ చేయబడవు.|{fields} నడుస్తున్నప్పుడు కొన్ని ఫీల్డ్ పేర్లను కూర్చుతాయి, కాబట్టి ఆ చదువులు తనిఖీ చేయబడవు.
+@plural	{fields} is missing|{fields} are missing	{fields} లేదు|{fields} లేవు
 	Scan	స్కాన్
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	తెల్ల కాగితంపై సంతకం చేసి, ప్రకాశవంతమైన, సమానమైన వెలుతురులో దాని ఫోటో తీయండి (ఫ్లాష్ ఉపయోగించండి). ఫోటోను ఎంచుకోండి లేదా ఇక్కడ వదలండి: PdfCraft సంతకాన్ని కనుగొని కాగితాన్ని తొలగిస్తుంది.
 	Choose photo…	ఫోటో ఎంచుకోండి…
