@@ -2406,6 +2406,13 @@ animation effects	Off	Өшірулі
 	The linked PDF opened, but its named destination was not applied.	Байланысты PDF ашылды, бірақ оның аталған мақсаты қолданылмады.
 	The linked PDF opened, but its page destination was out of range.	Байланысты PDF ашылды, бірақ оның мақсатты беті ауқымнан тыс.
 	Local cross-PDF links require the desktop app	PDF файлдары арасындағы жергілікті сілтемелер үшін жұмыс үстелі қолданбасы қажет
+	PIN	PIN коды
+	The PIN is incorrect.	PIN қате.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Құрылғыдағы цифрлық ID-ді пайдалану (смарт-карта, USB токен немесе бұлттық сертификат)
+	Device library (PKCS #11)	Құрылғы кітапханасы (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft құрылғы өндірушілері орнататын кітапханаларды іздейді. Құрылғыңыз табылмаса ғана біреуін таңдаңыз.
+	No signing certificate was found on this device. Is it connected?	Бұл құрылғыда қолтаңба сертификаты табылмады. Ол қосулы ма?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Кілт {device} құрылғысында, ол рұқсатты өзі сұрайды (PIN пернетақтасы немесе телефондағы қолданба).
 	Cut Image	Суретті кесу
 	Redact Image	Суретті жасыру
 	Create Link…	Сілтеме жасау…
@@ -2415,7 +2422,6 @@ animation effects	Off	Өшірулі
 	Restore	Қалпына келтіру
 	Use system title bar	Жүйелік тақырып жолағын пайдалану
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Терезе батырмалары үшін қойындылар жолағының орнына қарапайым тақырып жолағын көрсету. GNOME қолданбаларға тақырып жолағын салмайды, сондықтан бұл жолақ оның тақырыбына сәйкес келмейді.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Рұқсат беру
 	Only allow this if you trust the source document.	Бастапқы құжатқа сенсеңіз ғана рұқсат беріңіз.
@@ -2427,7 +2433,6 @@ animation effects	Off	Өшірулі
 	This document is trying to open a local file:	Бұл құжат жергілікті файлды ашуға әрекеттеніп жатыр:
 	Move tag earlier	Тегті ертерек жылжыту
 	Move tag later	Тегті кейінірек жылжыту
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының қол қойылған нұсқасын ({rev} нұсқа) қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының {rev} нұсқасын қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
@@ -2493,7 +2498,6 @@ animation effects	Off	Өшірулі
 	Larger thumbnails	Үлкенірек нобайлар
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Пікір пішінін өзгерту
-
 # Prepare a form ▸ Text field table
 	Add text field table	Мәтін өрістерінің кестесін қосу
 	Text field table	Мәтін өрістерінің кестесі

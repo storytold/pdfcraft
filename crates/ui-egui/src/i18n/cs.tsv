@@ -2482,6 +2482,13 @@ animation effects	Off	Vypnuto
 	The linked PDF opened, but its named destination was not applied.	Odkazovaný PDF se otevřel, ale jeho pojmenovaný cíl nebyl použit.
 	The linked PDF opened, but its page destination was out of range.	Odkazovaný PDF se otevřel, ale cílová stránka je mimo rozsah.
 	Local cross-PDF links require the desktop app	Místní odkazy mezi soubory PDF vyžadují desktopovou aplikaci
+	PIN	Kód PIN
+	The PIN is incorrect.	PIN je nesprávný.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Použít digitální ID ze zařízení (čipová karta, USB token nebo cloudový certifikát)
+	Device library (PKCS #11)	Knihovna zařízení (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft hledá knihovny, které instalují výrobci zařízení. Vyberte knihovnu jen tehdy, když se vaše zařízení nenajde.
+	No signing certificate was found on this device. Is it connected?	V tomto zařízení nebyl nalezen podpisový certifikát. Je připojené?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Klíč je v zařízení {device}, které si samo vyžádá schválení (klávesnice pro PIN nebo aplikace v telefonu).
 	Cut Image	Vyjmout obrázek
 	Redact Image	Začernit obrázek
 	Create Link…	Vytvořit odkaz…
@@ -2491,7 +2498,6 @@ animation effects	Off	Vypnuto
 	Restore	Obnovit
 	Use system title bar	Použít systémové záhlaví okna
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Zobrazit jednoduché záhlaví s tlačítky okna místo pruhu karet. GNOME aplikacím záhlaví nekreslí, proto toto záhlaví nesleduje jeho motiv.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Povolit
 	Only allow this if you trust the source document.	Povolte tuto akci pouze v případě, že důvěřujete zdrojovému dokumentu.
@@ -2503,7 +2509,6 @@ animation effects	Off	Vypnuto
 	This document is trying to open a local file:	Tento dokument se pokouší otevřít místní soubor:
 	Move tag earlier	Přesunout tag dříve
 	Move tag later	Přesunout tag později
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Prohlížíte si podepsanou verzi dokumentu „{from}“ (revize {rev}). Je to snímek: změny zde neovlivní originál.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Prohlížíte si revizi {rev} dokumentu „{from}“. Je to snímek: změny zde neovlivní originál.
@@ -2569,7 +2574,6 @@ animation effects	Off	Vypnuto
 	Larger thumbnails	Větší miniatury
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Změnit tvar komentáře
-
 # What the layers below word for themselves (engine `WORDINGS` lists): accessibility findings and
 # the saved report, PDF/A problems, signature details and the changes they name, pages to print,
 # history labels. Terms: timestamp = "časové razítko", timestamp authority = "autorita časových
@@ -2702,7 +2706,6 @@ animation effects	Off	Vypnuto
 	{} annotation on page {p} isn't tagged	Anotace {} na stránce {p} není označkovaná
 	{} annotations aren't allowed	Anotace {} nejsou povoleny
 	… and {n} more	… a další ({n})
-
 # Labels other catalogs carry (shared buttons, tooltips with key caps, the folder picker).
 	 on page {label}	 na stránce {label}
 	of	z
@@ -2770,7 +2773,6 @@ animation effects	Off	Vypnuto
 @plural	{n} file|{n} files	{n} soubor|{n} soubory|{n} souborů
 @plural	{n} result|{n} results	{n} výsledek|{n} výsledky|{n} výsledků
 theme	Appearance	Vzhled
-
 # The date picker's weekday heads.
 calendar weekday	Su	Ne
 calendar weekday	Mo	Po
@@ -2779,7 +2781,6 @@ calendar weekday	We	St
 calendar weekday	Th	Čt
 calendar weekday	Fr	Pá
 calendar weekday	Sa	So
-
 # A certificate's fields in the certificate viewer.
 certificate	Issued to	Vydáno pro
 certificate	Issued by	Vydal
@@ -2802,7 +2803,6 @@ certificate	Version	Verze
 	The signature's signed attributes have no message digest, so the signature does not cover the document.	Podepsané atributy podpisu neobsahují otisk zprávy, takže se podpis na dokument nevztahuje.
 	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Podepsané atributy podpisu uvádějí jiný typ obsahu než data, takže nejde o podpis dokumentu.
 	Remove {standard} identification	Odebrat identifikaci {standard}
-
 # Prepare a form ▸ Text field table
 	Add text field table	Přidat tabulku textových polí
 	Text field table	Tabulka textových polí

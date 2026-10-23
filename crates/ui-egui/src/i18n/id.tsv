@@ -2751,3 +2751,10 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	PIN	Kode PIN
+	The PIN is incorrect.	PIN salah.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Gunakan ID Digital dari perangkat (kartu pintar, token USB, atau sertifikat cloud)
+	Device library (PKCS #11)	Pustaka perangkat (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft mencari pustaka yang dipasang vendor perangkat. Pilih salah satu hanya jika perangkat Anda tidak ditemukan.
+	No signing certificate was found on this device. Is it connected?	Tidak ada sertifikat penandatanganan di perangkat ini. Apakah perangkat terhubung?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Kunci ada di {device}, yang meminta persetujuan sendiri (papan PIN, atau aplikasi di ponsel Anda).

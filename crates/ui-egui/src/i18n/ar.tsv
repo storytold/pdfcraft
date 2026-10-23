@@ -2429,6 +2429,13 @@ animation effects	Off	معطّلة
 	The linked PDF opened, but its named destination was not applied.	فُتح ملف PDF المرتبط، لكن لم تُطبَّق وجهته المسماة.
 	The linked PDF opened, but its page destination was out of range.	فُتح ملف PDF المرتبط، لكن وجهة الصفحة خارج النطاق.
 	Local cross-PDF links require the desktop app	تتطلب الروابط المحلية بين ملفات PDF تطبيق سطح المكتب
+	PIN	رمز PIN
+	The PIN is incorrect.	رمز PIN غير صحيح.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	استخدام معرّف رقمي من جهاز (بطاقة ذكية أو مفتاح USB أو شهادة سحابية)
+	Device library (PKCS #11)	مكتبة الجهاز (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	يبحث PdfCraft عن المكتبات التي يثبّتها مصنّعو الأجهزة. اختر واحدة فقط إذا لم يُعثر على جهازك.
+	No signing certificate was found on this device. Is it connected?	لم يُعثر على شهادة توقيع في هذا الجهاز. هل هو متصل؟
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	المفتاح موجود على {device}، الذي يطلب الموافقة بنفسه (لوحة PIN، أو تطبيق على هاتفك).
 	Cut Image	قص الصورة
 	Redact Image	حجب الصورة
 	Create Link…	إنشاء رابط…
@@ -2438,7 +2445,6 @@ animation effects	Off	معطّلة
 	Restore	استعادة
 	Use system title bar	استخدام شريط عنوان النظام
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	إظهار شريط عنوان بسيط لأزرار النافذة بدلًا من شريط الألسنة. لا يرسم GNOME أشرطة العناوين للتطبيقات، لذلك لا يتبع هذا الشريط سمته.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	السماح
 	Only allow this if you trust the source document.	لا تسمح بذلك إلا إذا كنت تثق بالمستند المصدر.
@@ -2450,7 +2456,6 @@ animation effects	Off	معطّلة
 	This document is trying to open a local file:	يحاول هذا المستند فتح ملف محلي:
 	Move tag earlier	نقل العلامة للأعلى
 	Move tag later	نقل العلامة للأسفل
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	أنت تعرض النسخة الموقعة من “{from}” (المراجعة {rev}). هذه لقطة: التغييرات هنا لن تؤثر على الأصل.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	أنت تعرض المراجعة {rev} من “{from}”. هذه لقطة: التغييرات هنا لن تؤثر على الأصل.
@@ -2771,7 +2776,6 @@ certificate	Version	الإصدار
 	Larger thumbnails	تكبير الصور المصغرة
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	إعادة تشكيل التعليق
-
 # Prepare a form ▸ Text field table
 	Add text field table	إضافة جدول حقول نصية
 	Text field table	جدول حقول نصية

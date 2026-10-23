@@ -2321,6 +2321,13 @@ animation effects	Off	Выкл
 	The linked PDF opened, but its named destination was not applied.	Связанный PDF открыт, но его именованное назначение не применено.
 	The linked PDF opened, but its page destination was out of range.	Связанный PDF открыт, но страница назначения вне допустимого диапазона.
 	Local cross-PDF links require the desktop app	Локальные ссылки между PDF работают только в настольном приложении
+	PIN	PIN-код
+	The PIN is incorrect.	Неверный PIN-код.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Использовать цифровой идентификатор с устройства (смарт-карта, USB-токен или облачный сертификат)
+	Device library (PKCS #11)	Библиотека устройства (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft ищет библиотеки, которые устанавливают производители устройств. Выберите библиотеку, только если устройство не найдено.
+	No signing certificate was found on this device. Is it connected?	На этом устройстве не найден сертификат для подписи. Оно подключено?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Ключ находится на устройстве {device}, которое само запрашивает подтверждение (клавиатура для PIN-кода или приложение на телефоне).
 	Cut Image	Вырезать изображение
 	Redact Image	Скрыть изображение
 	Create Link…	Создать ссылку…
@@ -2330,7 +2337,6 @@ animation effects	Off	Выкл
 	Restore	Восстановить
 	Use system title bar	Использовать системный заголовок окна
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показывать простой заголовок окна с кнопками вместо полосы вкладок. GNOME не рисует заголовки для приложений, поэтому этот заголовок не следует его теме.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разрешить
 	Only allow this if you trust the source document.	Разрешите это действие, только если доверяете исходному документу.
@@ -2342,7 +2348,6 @@ animation effects	Off	Выкл
 	This document is trying to open a local file:	Этот документ пытается открыть локальный файл:
 	Move tag earlier	Переместить тег раньше
 	Move tag later	Переместить тег позже
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Вы просматриваете подписанную версию документа «{from}» (ревизия {rev}). Это снимок: изменения здесь не затронут оригинал.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Вы просматриваете ревизию {rev} документа «{from}». Это снимок: изменения здесь не затронут оригинал.
@@ -2408,7 +2413,6 @@ animation effects	Off	Выкл
 	Larger thumbnails	Увеличить миниатюры
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Изменить форму комментария
-
 # Prepare a form ▸ Text field table
 	Add text field table	Добавить таблицу текстовых полей
 	Text field table	Таблица текстовых полей

@@ -2429,3 +2429,10 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+	PIN	ລະຫັດ PIN
+	The PIN is incorrect.	ລະຫັດ PIN ບໍ່ຖືກຕ້ອງ.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	ໃຊ້ ID ດິຈິຕອນຈາກອຸປະກອນ (ບັດອັດສະລິຍະ, ໂທເຄັນ USB ຫຼື ໃບຢັ້ງຢືນຄລາວ)
+	Device library (PKCS #11)	ຫ້ອງສະໝຸດອຸປະກອນ (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft ຊອກຫາຫ້ອງສະໝຸດທີ່ຜູ້ຜະລິດອຸປະກອນຕິດຕັ້ງ. ເລືອກອັນໜຶ່ງສະເພາະເມື່ອບໍ່ພົບອຸປະກອນຂອງທ່ານ.
+	No signing certificate was found on this device. Is it connected?	ບໍ່ພົບໃບຢັ້ງຢືນການເຊັນໃນອຸປະກອນນີ້. ມັນເຊື່ອມຕໍ່ແລ້ວບໍ?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	ກະແຈຢູ່ໃນ {device} ເຊິ່ງຂໍການອະນຸມັດເອງ (ແປ້ນ PIN ຫຼື ແອັບໃນໂທລະສັບຂອງທ່ານ).

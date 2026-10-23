@@ -2413,6 +2413,13 @@ animation effects	Off	Izklopljeni
 	The linked PDF opened, but its named destination was not applied.	Povezani PDF se je odprl, vendar njegov poimenovani cilj ni bil uporabljen.
 	The linked PDF opened, but its page destination was out of range.	Povezani PDF se je odprl, vendar je ciljna stran zunaj obsega.
 	Local cross-PDF links require the desktop app	Lokalne povezave med PDF-ji zahtevajo namizno aplikacijo
+	PIN	PIN
+	The PIN is incorrect.	PIN ni pravilen.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Uporabi digitalno identiteto iz naprave (pametna kartica, žeton USB ali potrdilo v oblaku)
+	Device library (PKCS #11)	Knjižnica naprave (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft išče knjižnice, ki jih namestijo proizvajalci naprav. Izberite jo le, če vaše naprave ne najde.
+	No signing certificate was found on this device. Is it connected?	V tej napravi ni bilo najdeno potrdilo za podpisovanje. Ali je priključena?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Ključ je v napravi {device}, ki sama zahteva odobritev (tipkovnica za PIN ali aplikacija v telefonu).
 	Cut Image	Izreži sliko
 	Redact Image	Počrni sliko
 	Create Link…	Ustvari povezavo…
@@ -2422,7 +2429,6 @@ animation effects	Off	Izklopljeni
 	Restore	Obnovi
 	Use system title bar	Uporabi sistemsko naslovno vrstico
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Prikaži preprosto naslovno vrstico za gumbe okna namesto vrstice zavihkov. GNOME aplikacijam ne riše naslovnih vrstic, zato ta ne sledi njegovi temi.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Dovoli
 	Only allow this if you trust the source document.	To dovolite le, če zaupate izvornemu dokumentu.
@@ -2434,7 +2440,6 @@ animation effects	Off	Izklopljeni
 	This document is trying to open a local file:	Ta dokument poskuša odpreti lokalno datoteko:
 	Move tag earlier	Premakni oznako prej
 	Move tag later	Premakni oznako pozneje
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ogledate si podpisano različico dokumenta „{from}“ (revizija {rev}). To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Ogledate si revizijo {rev} dokumenta „{from}“. To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
@@ -2500,7 +2505,6 @@ animation effects	Off	Izklopljeni
 	Larger thumbnails	Večje sličice
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Spremeni obliko komentarja
-
 # Prepare a form ▸ Text field table
 	Add text field table	Dodaj tabelo besedilnih polj
 	Text field table	Tabela besedilnih polj

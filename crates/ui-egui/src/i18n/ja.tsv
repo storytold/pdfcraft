@@ -2408,6 +2408,13 @@ animation effects	Off	オフ
 	The linked PDF opened, but its named destination was not applied.	リンク先の PDF を開きましたが、名前付き移動先は適用されませんでした。
 	The linked PDF opened, but its page destination was out of range.	リンク先の PDF を開きましたが、移動先のページが範囲外です。
 	Local cross-PDF links require the desktop app	PDF 間のローカルリンクにはデスクトップアプリが必要です
+	PIN	PIN
+	The PIN is incorrect.	PIN が正しくありません。
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	デバイスのデジタル ID を使用 (スマートカード、USB トークン、クラウド証明書)
+	Device library (PKCS #11)	デバイスライブラリ (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft はデバイスのメーカーがインストールするライブラリを探します。デバイスが見つからない場合のみ選択してください。
+	No signing certificate was found on this device. Is it connected?	このデバイスに署名用の証明書が見つかりません。接続されていますか?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	鍵は {device} にあり、デバイス自身が承認を求めます (PIN パッド、またはスマートフォンのアプリ)。
 	Cut Image	画像を切り取り
 	Redact Image	画像を墨消し
 	Create Link…	リンクを作成…
@@ -2417,7 +2424,6 @@ animation effects	Off	オフ
 	Restore	元のサイズに戻す
 	Use system title bar	システムのタイトルバーを使う
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	タブバーの代わりに、ウィンドウボタン用のシンプルなタイトルバーを表示します。GNOME はアプリのタイトルバーを描画しないため、このタイトルバーは GNOME のテーマに従いません。
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	許可
 	Only allow this if you trust the source document.	元の文書を信頼できる場合にのみ許可してください。
@@ -2429,7 +2435,6 @@ animation effects	Off	オフ
 	This document is trying to open a local file:	この文書はローカルファイルを開こうとしています：
 	Move tag earlier	タグを前へ移動
 	Move tag later	タグを後へ移動
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	「{from}」の署名済みバージョン（リビジョン {rev}）を表示しています。これはスナップショットであり、ここでの変更は元の文書に影響しません。
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	「{from}」のリビジョン {rev} を表示しています。これはスナップショットであり、ここでの変更は元の文書に影響しません。
@@ -2495,7 +2500,6 @@ animation effects	Off	オフ
 	Larger thumbnails	サムネイルを大きく
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	コメントの形状を変更
-
 # Prepare a form ▸ Text field table
 	Add text field table	テキストフィールドの表を追加
 	Text field table	テキストフィールドの表

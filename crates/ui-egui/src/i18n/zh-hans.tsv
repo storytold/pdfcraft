@@ -2372,6 +2372,13 @@ animation effects	Off	关
 	The linked PDF opened, but its named destination was not applied.	已打开链接的 PDF，但未应用其命名目标。
 	The linked PDF opened, but its page destination was out of range.	已打开链接的 PDF，但其页面目标超出范围。
 	Local cross-PDF links require the desktop app	PDF 之间的本地链接需要桌面应用
+	PIN	PIN
+	The PIN is incorrect.	PIN 不正确。
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	使用设备中的数字 ID（智能卡、USB 令牌或云证书）
+	Device library (PKCS #11)	设备库 (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft 会查找设备厂商安装的库。仅当找不到你的设备时才需要选择。
+	No signing certificate was found on this device. Is it connected?	此设备上未找到签名证书。设备已连接吗？
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	密钥位于 {device}，由设备自行请求批准（PIN 键盘，或手机上的应用）。
 	Cut Image	剪切图像
 	Redact Image	密文图像
 	Create Link…	创建链接…
@@ -2381,7 +2388,6 @@ animation effects	Off	关
 	Restore	还原
 	Use system title bar	使用系统标题栏
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	用简单的标题栏显示窗口按钮，而不是在标签栏中。GNOME 不为应用绘制标题栏，因此此标题栏不会跟随其主题。
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	允许
 	Only allow this if you trust the source document.	仅在您信任源文档时才允许此操作。
@@ -2393,7 +2399,6 @@ animation effects	Off	关
 	This document is trying to open a local file:	此文档正尝试打开本地文件：
 	Move tag earlier	将标签前移
 	Move tag later	将标签后移
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的已签名版本（修订版本 {rev}）。这是快照：在此处所做的更改不会影响原始文档。
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的修订版本 {rev}。这是快照：在此处所做的更改不会影响原始文档。
@@ -2459,7 +2464,6 @@ animation effects	Off	关
 	Larger thumbnails	放大缩略图
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	更改注释形状
-
 # Prepare a form ▸ Text field table
 	Add text field table	添加文本字段表格
 	Text field table	文本字段表格

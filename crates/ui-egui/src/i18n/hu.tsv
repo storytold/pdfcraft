@@ -2407,6 +2407,13 @@ animation effects	Off	Ki
 	The linked PDF opened, but its named destination was not applied.	A hivatkozott PDF megnyílt, de a nevesített cél nem lett alkalmazva.
 	The linked PDF opened, but its page destination was out of range.	A hivatkozott PDF megnyílt, de a céloldal a tartományon kívül esik.
 	Local cross-PDF links require the desktop app	A PDF-ek közötti helyi hivatkozásokhoz az asztali alkalmazás szükséges
+	PIN	PIN-kód
+	The PIN is incorrect.	A PIN-kód helytelen.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Digitális azonosító használata eszközről (intelligens kártya, USB-token vagy felhőalapú tanúsítvány)
+	Device library (PKCS #11)	Eszközkönyvtár (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	A PdfCraft megkeresi az eszközgyártók által telepített könyvtárakat. Csak akkor válasszon egyet, ha az eszköze nem található.
+	No signing certificate was found on this device. Is it connected?	Ezen az eszközön nem található aláíró tanúsítvány. Csatlakoztatva van?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	A kulcs a(z) {device} eszközön van, amely maga kér jóváhagyást (PIN-billentyűzet vagy alkalmazás a telefonján).
 	Cut Image	Kép kivágása
 	Redact Image	Kép kitakarása
 	Create Link…	Hivatkozás létrehozása…
@@ -2416,7 +2423,6 @@ animation effects	Off	Ki
 	Restore	Visszaállítás
 	Use system title bar	Rendszer címsorának használata
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Egyszerű címsor megjelenítése az ablakgombokkal a lapsáv helyett. A GNOME nem rajzol címsort az alkalmazásoknak, ezért ez nem követi a témáját.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Engedélyezés
 	Only allow this if you trust the source document.	Csak akkor engedélyezze ezt, ha megbízik a forrásdokumentumban.
@@ -2428,7 +2434,6 @@ animation effects	Off	Ki
 	This document is trying to open a local file:	Ez a dokumentum egy helyi fájlt próbál megnyitni:
 	Move tag earlier	Címke korábbra helyezése
 	Move tag later	Címke későbbre helyezése
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	A(z) „{from}“ aláírt változatát (a {rev}. változatot) tekinti meg. Ez egy pillanatkép: az itteni módosítások nem érintik az eredetit.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	A(z) „{from}“ {rev}. változatát tekinti meg. Ez egy pillanatkép: az itteni módosítások nem érintik az eredetit.
@@ -2494,7 +2499,6 @@ animation effects	Off	Ki
 	Larger thumbnails	Nagyobb bélyegképek
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Megjegyzés alakjának módosítása
-
 # Prepare a form ▸ Text field table
 	Add text field table	Szövegmező-táblázat hozzáadása
 	Text field table	Szövegmező-táblázat

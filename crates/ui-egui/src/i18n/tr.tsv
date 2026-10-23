@@ -2404,6 +2404,13 @@ animation effects	Off	Kapalı
 	The linked PDF opened, but its named destination was not applied.	Bağlantılı PDF açıldı, ancak adlandırılmış hedefi uygulanmadı.
 	The linked PDF opened, but its page destination was out of range.	Bağlantılı PDF açıldı, ancak sayfa hedefi aralık dışında.
 	Local cross-PDF links require the desktop app	PDF'ler arası yerel bağlantılar masaüstü uygulamasını gerektirir
+	PIN	PIN kodu
+	The PIN is incorrect.	PIN yanlış.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Bir cihazdaki Dijital Kimliği kullan (akıllı kart, USB token veya bulut sertifikası)
+	Device library (PKCS #11)	Cihaz kitaplığı (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft, cihaz üreticilerinin yüklediği kitaplıkları arar. Yalnızca cihazınız bulunamazsa birini seçin.
+	No signing certificate was found on this device. Is it connected?	Bu cihazda imzalama sertifikası bulunamadı. Bağlı mı?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Anahtar {device} üzerinde; onay kendisi ister (PIN tuş takımı veya telefonunuzdaki bir uygulama).
 	Cut Image	Resmi Kes
 	Redact Image	Resmi karart
 	Create Link…	Bağlantı oluştur…
@@ -2413,7 +2420,6 @@ animation effects	Off	Kapalı
 	Restore	Geri yükle
 	Use system title bar	Sistem başlık çubuğunu kullan
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Sekme çubuğu yerine pencere düğmeleri için basit bir başlık çubuğu göster. GNOME uygulamalar için başlık çubuğu çizmez, bu yüzden bu çubuk onun temasına uymaz.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	İzin ver
 	Only allow this if you trust the source document.	Buna yalnızca kaynak belgeye güveniyorsanız izin verin.
@@ -2425,7 +2431,6 @@ animation effects	Off	Kapalı
 	This document is trying to open a local file:	Bu belge yerel bir dosya açmaya çalışıyor:
 	Move tag earlier	Etiketi daha erken taşı
 	Move tag later	Etiketi daha geç taşı
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	“{from}” belgesinin imzalanmış sürümünü (düzeltme {rev}) görüntülüyorsunuz. Bu bir anlık görüntüdür: buradaki değişiklikler özgün belgeyi etkilemez.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	“{from}” belgesinin {rev}. düzeltmesini görüntülüyorsunuz. Bu bir anlık görüntüdür: buradaki değişiklikler özgün belgeyi etkilemez.
@@ -2491,7 +2496,6 @@ animation effects	Off	Kapalı
 	Larger thumbnails	Küçük resimleri büyüt
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Yorumun şeklini değiştir
-
 # Prepare a form ▸ Text field table
 	Add text field table	Metin alanı tablosu ekle
 	Text field table	Metin alanı tablosu

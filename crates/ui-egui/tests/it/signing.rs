@@ -617,6 +617,30 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
     assert_eq!(h.state().sign_draft.as_ref().unwrap().selected, Some(1));
 }
 
+/// Configure a Digital ID ▸ from a device: a library that isn't PKCS #11 is refused with a reason
+/// and isn't kept; the option is there next to the file and new-ID ones.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_device_library_that_isnt_pkcs11_is_refused() {
+    let dir = dir().join("device");
+    std::fs::create_dir_all(&dir).unwrap();
+    let fake = dir.join("not-a-pkcs11-library.so");
+    std::fs::write(&fake, b"not a library").unwrap();
+    let mut h = harness(dir.clone());
+    assert!(h.state_mut().execute("sign.certify_invisible"));
+    h.run_steps(2);
+    h.get_by_label("Use a Digital ID from a device (smart card, USB token or cloud certificate)").click();
+    h.run_steps(2);
+    assert!(h.state().sign_draft.as_ref().unwrap().new_id.device);
+    h.state_mut().sign_draft.as_mut().unwrap().new_id.module = fake.to_string_lossy().into_owned();
+    h.run_steps(1);
+    h.get_by_label("Continue").click();
+    h.run_steps(2);
+    let error = h.state().sign_draft.as_ref().and_then(|d| d.error.clone()).expect("an error");
+    assert!(error.contains("not-a-pkcs11-library"), "{error}");
+    assert!(h.state().pkcs11_modules.is_empty(), "a library that doesn't load isn't kept");
+}
+
 /// Issue #1396: an imported digital ID can be removed from Sign with a Digital ID, after a
 /// confirmation, and its file stays where it was.
 #[test]

@@ -2750,3 +2750,10 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	PIN	PIN 번호
+	The PIN is incorrect.	PIN 번호가 올바르지 않습니다.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	장치의 디지털 ID 사용(스마트 카드, USB 토큰 또는 클라우드 인증서)
+	Device library (PKCS #11)	장치 라이브러리(PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft는 장치 제조사가 설치하는 라이브러리를 찾습니다. 장치를 찾지 못한 경우에만 하나를 선택하세요.
+	No signing certificate was found on this device. Is it connected?	이 장치에서 서명 인증서를 찾지 못했습니다. 연결되어 있나요?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	키는 {device}에 있으며, 장치가 직접 승인을 요청합니다(PIN 패드 또는 휴대폰 앱).

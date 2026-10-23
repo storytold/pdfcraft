@@ -41,6 +41,9 @@ ripemd = "0.2.0"
 ed25519-dalek = "3.0.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Signing on smart cards, USB tokens and cloud certificates through their PKCS #11 module (Apache-2.0).
+cryptoki = "0.10"
+log = { workspace = true }
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 getrandom = "0.4"
 

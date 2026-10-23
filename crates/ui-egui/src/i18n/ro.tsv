@@ -2774,3 +2774,10 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	PIN	Cod PIN
+	The PIN is incorrect.	Codul PIN este incorect.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Folosiți un ID digital de pe un dispozitiv (card inteligent, token USB sau certificat în cloud)
+	Device library (PKCS #11)	Bibliotecă dispozitiv (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft caută bibliotecile instalate de producătorii dispozitivelor. Alegeți una doar dacă dispozitivul nu este găsit.
+	No signing certificate was found on this device. Is it connected?	Nu s-a găsit niciun certificat de semnare pe acest dispozitiv. Este conectat?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Cheia este pe {device}, care cere singur aprobarea (o tastatură PIN sau o aplicație de pe telefon).

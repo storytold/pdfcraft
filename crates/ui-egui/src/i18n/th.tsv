@@ -2681,3 +2681,10 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	PIN	รหัส PIN
+	The PIN is incorrect.	รหัส PIN ไม่ถูกต้อง
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	ใช้ Digital ID จากอุปกรณ์ (สมาร์ตการ์ด โทเค็น USB หรือใบรับรองบนคลาวด์)
+	Device library (PKCS #11)	ไลบรารีของอุปกรณ์ (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft จะค้นหาไลบรารีที่ผู้ผลิตอุปกรณ์ติดตั้งไว้ เลือกเองเฉพาะเมื่อไม่พบอุปกรณ์ของคุณ
+	No signing certificate was found on this device. Is it connected?	ไม่พบใบรับรองสำหรับการลงนามในอุปกรณ์นี้ เชื่อมต่ออยู่หรือไม่
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	คีย์อยู่บน {device} ซึ่งขอการอนุมัติเอง (แป้น PIN หรือแอปบนโทรศัพท์ของคุณ)

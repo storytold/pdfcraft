@@ -2388,6 +2388,13 @@ animation effects	Off	Wyłączone
 	Local cross-PDF links require the desktop app	Lokalne łącza między plikami PDF wymagają aplikacji komputerowej
 	The existing action will be preserved.	Istniejąca akcja zostanie zachowana.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skrypty tego formularza są wyłączone, ponieważ jeden z nich działał zbyt długo. Otwórz dokument ponownie, aby znów je uruchomić.
+	PIN	PIN
+	The PIN is incorrect.	Kod PIN jest nieprawidłowy.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Użyj identyfikatora cyfrowego z urządzenia (karta inteligentna, token USB lub certyfikat w chmurze)
+	Device library (PKCS #11)	Biblioteka urządzenia (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft szuka bibliotek instalowanych przez producentów urządzeń. Wybierz bibliotekę tylko wtedy, gdy urządzenie nie zostanie znalezione.
+	No signing certificate was found on this device. Is it connected?	Na tym urządzeniu nie znaleziono certyfikatu do podpisywania. Czy jest podłączone?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Klucz znajduje się na urządzeniu {device}, które samo prosi o zgodę (klawiatura PIN lub aplikacja w telefonie).
 	Cut Image	Wytnij obraz
 	Redact Image	Utajnij obraz
 	Create Link…	Utwórz łącze…
@@ -2397,7 +2404,6 @@ animation effects	Off	Wyłączone
 	Restore	Przywróć
 	Use system title bar	Używaj systemowego paska tytułu
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Pokazuj prosty pasek tytułu z przyciskami okna zamiast paska kart. GNOME nie rysuje pasków tytułu dla aplikacji, więc ten nie pasuje do jego motywu.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Zezwól
 	Only allow this if you trust the source document.	Zezwól na to tylko wtedy, gdy ufasz dokumentowi źródłowemu.
@@ -2471,7 +2477,6 @@ animation effects	Off	Wyłączone
 	Larger thumbnails	Większe miniatury
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Zmień kształt komentarza
-
 # Signature validation: what a signature's details say and the changes after signing they name
 # (pdfcraft_engine::sign::pdf::WORDINGS and kind::ALL).
 	The signature has no valid byte range.	Podpis nie ma prawidłowego zakresu bajtów.
@@ -2543,7 +2548,6 @@ animation effects	Off	Wyłączone
 	pages added or removed	dodane lub usunięte strony
 	other changes	inne zmiany
 	the signed version could not be read	nie udało się odczytać podpisanej wersji
-
 # The rest of the interface the Polish catalog lacked.
 	Auto ({percent}%)	Automatycznie ({percent}%)
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Tryb automatyczny dopasowuje się do rozmiaru tekstu w systemie. Strony są zawsze renderowane w pełnej rozdzielczości ekranu.
@@ -2591,7 +2595,6 @@ animation effects	Off	Wyłączone
 	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
 	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
 	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-
 # Prepare a form ▸ Text field table
 	Add text field table	Dodaj tabelę pól tekstowych
 	Text field table	Tabela pól tekstowych

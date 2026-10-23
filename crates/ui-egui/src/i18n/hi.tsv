@@ -2750,3 +2750,10 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	PIN	पिन
+	The PIN is incorrect.	पिन गलत है।
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	किसी डिवाइस से डिजिटल आईडी का उपयोग करें (स्मार्ट कार्ड, USB टोकन या क्लाउड प्रमाणपत्र)
+	Device library (PKCS #11)	डिवाइस लाइब्रेरी (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft उन लाइब्रेरी को खोजता है जिन्हें डिवाइस निर्माता इंस्टॉल करते हैं। केवल तभी कोई चुनें जब आपका डिवाइस न मिले।
+	No signing certificate was found on this device. Is it connected?	इस डिवाइस पर कोई हस्ताक्षर प्रमाणपत्र नहीं मिला। क्या यह कनेक्ट है?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	कुंजी {device} पर है, जो स्वयं अनुमोदन मांगता है (पिन पैड या आपके फ़ोन का ऐप)।

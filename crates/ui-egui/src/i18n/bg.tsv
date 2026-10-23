@@ -2371,6 +2371,13 @@ animation effects	Off	Изключени
 	The linked PDF opened, but its named destination was not applied.	Свързаният PDF се отвори, но именуваната му цел не беше приложена.
 	The linked PDF opened, but its page destination was out of range.	Свързаният PDF се отвори, но целевата му страница е извън обхвата.
 	Local cross-PDF links require the desktop app	Локалните връзки между PDF файлове изискват настолното приложение
+	PIN	ПИН
+	The PIN is incorrect.	ПИН кодът е грешен.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Използвай цифров идентификатор от устройство (смарт карта, USB токен или облачен сертификат)
+	Device library (PKCS #11)	Библиотека на устройството (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft търси библиотеките, които инсталират производителите на устройства. Изберете библиотека само ако устройството ви не е намерено.
+	No signing certificate was found on this device. Is it connected?	На това устройство не е намерен сертификат за подписване. Свързано ли е?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Ключът е в {device}, което само иска одобрение (клавиатура за ПИН или приложение на телефона ви).
 	Cut Image	Изрежи изображението
 	Redact Image	Заличи изображението
 	Create Link…	Създай връзка…
@@ -2380,7 +2387,6 @@ animation effects	Off	Изключени
 	Restore	Възстановяване
 	Use system title bar	Използване на системната заглавна лента
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показване на обикновена заглавна лента за бутоните на прозореца вместо лентата с раздели. GNOME не рисува заглавни ленти за приложенията, затова тази не следва темата му.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разреши
 	Only allow this if you trust the source document.	Разрешете това само ако имате доверие на изходния документ.
@@ -2392,7 +2398,6 @@ animation effects	Off	Изключени
 	This document is trying to open a local file:	Този документ се опитва да отвори локален файл:
 	Move tag earlier	Преместване на етикета по-рано
 	Move tag later	Преместване на етикета по-късно
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Разглеждате подписаната версия на „{from}“ (редакция {rev}). Това е моментна снимка: промените тук няма да засегнат оригинала.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Разглеждате редакция {rev} на „{from}“. Това е моментна снимка: промените тук няма да засегнат оригинала.
@@ -2458,7 +2463,6 @@ animation effects	Off	Изключени
 	Larger thumbnails	По-големи миниатюри
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Промяна на формата на коментара
-
 # Prepare a form ▸ Text field table
 	Add text field table	Добави таблица от текстови полета
 	Text field table	Таблица от текстови полета

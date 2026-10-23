@@ -2658,6 +2658,13 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Tarpas
+	PIN	PIN kodas
+	The PIN is incorrect.	PIN kodas neteisingas.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Naudoti įrenginyje esantį skaitmeninį ID (lustinė kortelė, USB raktas arba debesijos sertifikatas)
+	Device library (PKCS #11)	Įrenginio biblioteka (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft ieško bibliotekų, kurias įdiegia įrenginių gamintojai. Pasirinkite ją tik tada, jei jūsų įrenginys nerandamas.
+	No signing certificate was found on this device. Is it connected?	Šiame įrenginyje nerastas pasirašymo sertifikatas. Ar jis prijungtas?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Raktas yra įrenginyje {device}, kuris pats paprašo patvirtinimo (PIN klaviatūra arba programėlė jūsų telefone).
 	Cut Image	Iškirpti paveikslėlį
 	Redact Image	Pašalinti konfidencialią informaciją iš paveikslėlio
 	Create Link…	Kurti saitą…
@@ -2667,7 +2674,6 @@ key	Space	Tarpas
 	Restore	Atkurti
 	Use system title bar	Naudoti sistemos pavadinimo juostą
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Rodyti paprastą pavadinimo juostą su lango mygtukais vietoj kortelių juostos. GNOME nepiešia programoms pavadinimo juostų, todėl ši neatitinka jo temos.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Leisti
 	Only allow this if you trust the source document.	Leiskite tai tik tuo atveju, jei pasitikite pirminiu dokumentu.
@@ -2679,7 +2685,6 @@ key	Space	Tarpas
 	This document is trying to open a local file:	Šis dokumentas bando atverti vietinį failą:
 	Move tag earlier	Perkelti žymą anksčiau
 	Move tag later	Perkelti žymą vėliau
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Jūs peržiūrite pasirašytą „{from}“ versiją ({rev} versija). Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Jūs peržiūrite „{from}“ {rev} versiją. Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
@@ -2731,7 +2736,6 @@ key	Space	Tarpas
 	Make properties default	Nustatyti ypatybes kaip numatytąsias
 	Pages selected	Pasirinkti puslapiai
 	Page properties	Puslapio ypatybės
-
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
 	Mouse wheel scroll speed	Pelės ratuko slinkimo greitis
@@ -2752,7 +2756,6 @@ theme	Appearance	Išvaizda
 	Larger thumbnails	Didesnės miniatiūros
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Keisti komentaro formą
-
 # Prepare a form ▸ Text field table
 	Add text field table	Pridėti teksto laukų lentelę
 	Text field table	Teksto laukų lentelė

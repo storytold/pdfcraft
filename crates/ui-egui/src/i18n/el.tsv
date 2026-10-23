@@ -2418,6 +2418,13 @@ animation effects	Off	Ανενεργά
 	Local cross-PDF links require the desktop app	Οι τοπικοί σύνδεσμοι μεταξύ PDF απαιτούν την εφαρμογή υπολογιστή
 	The existing action will be preserved.	Η υπάρχουσα ενέργεια θα διατηρηθεί.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Τα σενάρια αυτής της φόρμας είναι απενεργοποιημένα, επειδή ένα από αυτά εκτελούνταν για πολύ ώρα. Ανοίξτε ξανά το έγγραφο για να εκτελεστούν ξανά.
+	PIN	PIN
+	The PIN is incorrect.	Το PIN είναι λανθασμένο.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Χρήση ψηφιακής ταυτότητας από συσκευή (έξυπνη κάρτα, token USB ή πιστοποιητικό στο cloud)
+	Device library (PKCS #11)	Βιβλιοθήκη συσκευής (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	Το PdfCraft αναζητά τις βιβλιοθήκες που εγκαθιστούν οι κατασκευαστές συσκευών. Επιλέξτε μία μόνο αν δεν βρεθεί η συσκευή σας.
+	No signing certificate was found on this device. Is it connected?	Δεν βρέθηκε πιστοποιητικό υπογραφής σε αυτή τη συσκευή. Είναι συνδεδεμένη;
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Το κλειδί βρίσκεται στη συσκευή {device}, που ζητά η ίδια έγκριση (πληκτρολόγιο PIN ή εφαρμογή στο τηλέφωνό σας).
 	Cut Image	Αποκοπή εικόνας
 	Redact Image	Απόκρυψη ευαίσθητου περιεχομένου εικόνας
 	Create Link…	Δημιουργία συνδέσμου…
@@ -2427,7 +2434,6 @@ animation effects	Off	Ανενεργά
 	Restore	Επαναφορά
 	Use system title bar	Χρήση γραμμής τίτλου συστήματος
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Εμφάνιση απλής γραμμής τίτλου για τα κουμπιά του παραθύρου αντί για τη γραμμή καρτελών. Το GNOME δεν σχεδιάζει γραμμές τίτλου για τις εφαρμογές, οπότε αυτή δεν ακολουθεί το θέμα του.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Να επιτραπεί
 	Only allow this if you trust the source document.	Επιτρέψτε το μόνο αν εμπιστεύεστε το έγγραφο προέλευσης.
@@ -2501,7 +2507,6 @@ animation effects	Off	Ανενεργά
 	Larger thumbnails	Μεγαλύτερες μικρογραφίες
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Αλλαγή σχήματος σχολίου
-
 # Prepare a form ▸ Text field table
 	Add text field table	Προσθήκη πίνακα πεδίων κειμένου
 	Text field table	Πίνακας πεδίων κειμένου

@@ -5,5 +5,10 @@
      command line and drag-and-drop). Add exceptions here only with a reason in a comment. -->
 <plist version="1.0">
 <dict>
+    <!-- Signing with a smart card, USB token or cloud certificate loads its vendor's PKCS #11
+         library (crates/sign/src/pkcs11.rs). Those are signed by the vendor, and the hardened
+         runtime only loads code signed by Apple or by this app's team ("different Team IDs"). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

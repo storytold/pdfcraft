@@ -57,6 +57,9 @@ pub struct NewIdDraft {
     /// Use a Digital ID from a file: its path and password.
     pub file: String,
     pub file_password: String,
+    /// Use a Digital ID from a device: the PKCS #11 library (empty: look where vendors install them).
+    pub device: bool,
+    pub module: String,
 }
 
 impl Default for NewIdDraft {
@@ -73,6 +76,8 @@ impl Default for NewIdDraft {
             confirm: String::new(),
             file: String::new(),
             file_password: String::new(),
+            device: false,
+            module: String::new(),
         }
     }
 }
@@ -225,6 +230,21 @@ fn save_new_id_file(dir: &std::path::Path, stem: &str, p12: &[u8]) -> std::io::R
     Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free file name for the digital ID"))
 }
 
+/// A PKCS #11 device identity (smart card, USB token, cloud certificate) by its `pkcs11:`
+/// reference. `pin` is for devices that take one.
+fn token_id(reference: &str, pin: &str, added: &[String]) -> Result<DigitalId, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return sign::pkcs11::find(reference, Some(pin), &added.iter().map(PathBuf::from).collect::<Vec<_>>()).map_err(|e| match e {
+        sign::SignError::WrongPassword => tl!("The PIN is incorrect.").to_string(),
+        e => e.to_string(),
+    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (pin, added);
+        Err(format!("{reference}: devices are only available in the desktop app"))
+    }
+}
+
 /// A Keychain identity by its `keychain:` reference.
 fn keychain_id(reference: &str) -> Result<DigitalId, String> {
     #[cfg(target_os = "macos")]
@@ -289,7 +309,17 @@ impl PdfCraftApp {
 
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"));
+        // Certificates on PKCS #11 devices (smart cards, USB tokens, cloud certificates).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pkcs11_ids {
+            self.token_ids.clear();
+            let added: Vec<PathBuf> = self.pkcs11_modules.iter().map(PathBuf::from).collect();
+            for id in sign::pkcs11::identities(&added) {
+                self.token_ids.insert(id.reference.clone(), (id.token.clone(), id.needs_pin));
+                self.digital_ids.push(entry_for(&id.reference, &id.certificate));
+            }
+        }
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -395,6 +425,33 @@ impl PdfCraftApp {
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
 
+    /// Configure New Digital ID ▸ Use a Digital ID from a device: a library the user chose is
+    /// checked and kept; then the devices are read again, and the first certificate of that library
+    /// (or of any device, with no library chosen) is selected.
+    fn add_device_ids(&mut self) -> Result<usize, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let module = self.sign_draft.as_ref().map(|d| d.new_id.module.trim().to_string()).unwrap_or_default();
+            let mut wanted = None;
+            if !module.is_empty() {
+                let found = sign::pkcs11::module_identities(std::path::Path::new(&module)).map_err(|e| e.to_string())?;
+                let first = found.first().ok_or_else(|| tl!("No signing certificate was found on this device. Is it connected?").to_string())?;
+                wanted = Some(first.reference.clone());
+                if !self.pkcs11_modules.contains(&module) {
+                    self.pkcs11_modules.push(module);
+                }
+            }
+            self.refresh_os_key_store_ids();
+            let index = match wanted {
+                Some(reference) => self.digital_ids.iter().position(|e| e.path == reference),
+                None => self.digital_ids.iter().position(|e| e.path.starts_with("pkcs11:")),
+            };
+            index.ok_or_else(|| tl!("No signing certificate was found on this device. Is it connected?").to_string())
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err("devices are only available in the desktop app".to_string())
+    }
+
     /// Configure New Digital ID ▸ Use a Digital ID from a file.
     fn import_digital_id(&mut self) -> Result<usize, String> {
         let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to import".into()) };
@@ -416,7 +473,9 @@ impl PdfCraftApp {
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
         let d = self.sign_draft.clone().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
-        let id = if entry.path.starts_with("keychain:") {
+        let id = if entry.path.starts_with("pkcs11:") {
+            token_id(&entry.path, &d.password, &self.pkcs11_modules)?
+        } else if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
@@ -699,7 +758,9 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 ui.painter().layout_job(job)
             };
             let name = line(&e.name, theme::semibold(13.0), name_color);
-            let store = if e.path.starts_with("keychain:") {
+            let store = if let Some((token, _)) = app.token_ids.get(&e.path) {
+                format!("{token}  ·  ")
+            } else if e.path.starts_with("keychain:") {
                 tl!("Keychain  ·  ").to_string()
             } else if e.path.starts_with("windows:") {
                 tl!("Windows store  ·  ").to_string()
@@ -785,11 +846,37 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     // Browse… is desktop-only.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
-    widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
-    widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
-    ui.add_space(8.0);
     let n = &mut d.new_id;
-    if n.create {
+    if ui.add(widgets::radio(!n.create && !n.device, tl!("Use a Digital ID from a file"))).clicked() {
+        (n.create, n.device) = (false, false);
+    }
+    // Devices load native libraries: the desktop app only.
+    #[cfg(not(target_arch = "wasm32"))]
+    if ui.add(widgets::radio(n.device, tl!("Use a Digital ID from a device (smart card, USB token or cloud certificate)"))).clicked() {
+        (n.create, n.device) = (false, true);
+    }
+    if ui.add(widgets::radio(n.create && !n.device, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"))).clicked() {
+        (n.create, n.device) = (true, false);
+    }
+    ui.add_space(8.0);
+    if n.device {
+        egui::Grid::new("id-device").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            let l = ui.label(tl!("Device library (PKCS #11)"));
+            ui.horizontal(|ui| {
+                ui.add(crate::widgets::line(&mut n.module).hint_text(tl!("Optional")).desired_width(220.0)).labelled_by(l.id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button(tl!("Browse…")).clicked() {
+                    browse = true;
+                }
+            });
+            ui.end_row();
+        });
+        ui.label(
+            egui::RichText::new(tl!("PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found."))
+                .small()
+                .color(t.text_muted),
+        );
+    } else if n.create {
         egui::Grid::new("new-id").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             for (label, value) in [
                 (tl!("Name"), &mut n.name),
@@ -847,7 +934,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, if d.new_id.create { tl!("Save") } else { tl!("Continue") }, true).clicked() {
+            if widgets::pill_button(ui, if d.new_id.create && !d.new_id.device { tl!("Save") } else { tl!("Continue") }, true).clicked() {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -856,8 +943,14 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
     });
     if go {
-        let create = app.sign_draft.as_ref().is_some_and(|d| d.new_id.create);
-        let result = if create { app.create_digital_id() } else { app.import_digital_id() };
+        let (create, device) = app.sign_draft.as_ref().map_or((false, false), |d| (d.new_id.create, d.new_id.device));
+        let result = if device {
+            app.add_device_ids()
+        } else if create {
+            app.create_digital_id()
+        } else {
+            app.import_digital_id()
+        };
         let Some(d) = app.sign_draft.as_mut() else { return true };
         match result {
             Ok(i) => {
@@ -872,14 +965,20 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     // The picker answers on a later frame, into the draft if the same dialog is still open.
     #[cfg(not(target_arch = "wasm32"))]
     if browse {
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]);
+        let device = app.sign_draft.as_ref().is_some_and(|d| d.new_id.device);
+        let dialog = if device {
+            rfd::AsyncFileDialog::new().add_filter(tl!("Device library (PKCS #11)"), &["dll", "dylib", "so"])
+        } else {
+            rfd::AsyncFileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"])
+        };
         let epoch = app.dialog_epoch();
         app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
             // Not one closed meanwhile, or opened again since.
             if app.dialog_epoch() == epoch
                 && let Some(d) = app.sign_draft.as_mut()
             {
-                d.new_id.file = p.to_string_lossy().into_owned();
+                let path = p.to_string_lossy().into_owned();
+                if device { d.new_id.module = path } else { d.new_id.file = path }
             }
         });
     }
@@ -996,7 +1095,22 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
         ),
     );
-    let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
+    // A device that authenticates by itself (a PIN pad, a cloud certificate approved on the phone)
+    // takes no password here; one with a PIN takes it in the password field, labelled PIN.
+    let token = app.token_ids.get(&entry.path).cloned();
+    let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:") || token.as_ref().is_some_and(|(_, pin)| !pin);
+    // Log in to such a device now, off the UI thread: if it asks for approval on the phone, it asks
+    // while the signature is set up, and Sign finds the session open.
+    #[cfg(not(target_arch = "wasm32"))]
+    if token.as_ref().is_some_and(|(_, pin)| !pin) && app.token_prepared.insert(entry.path.clone()) {
+        let reference = entry.path.clone();
+        let added: Vec<PathBuf> = app.pkcs11_modules.iter().map(PathBuf::from).collect();
+        std::thread::spawn(move || {
+            if let Err(e) = sign::pkcs11::prepare(&reference, None, &added) {
+                log::warn!("{reference}: {e}");
+            }
+        });
+    }
     let mut close = false;
     let mut go = false;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1074,16 +1188,21 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         if in_os_key_store {
             ui.label("");
             ui.label(
-                egui::RichText::new(if entry.path.starts_with("windows:") {
-                    tl!("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.")
+                egui::RichText::new(if let Some((name, _)) = &token {
+                    crate::i18n::fmt(
+                        tl!("The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone)."),
+                        &[("device", name)],
+                    )
+                } else if entry.path.starts_with("windows:") {
+                    tl!("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.").to_string()
                 } else {
-                    tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.")
+                    tl!("The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.").to_string()
                 })
                 .small()
                 .color(t.text_muted),
             );
         } else {
-            let l = ui.label(tl!("Digital ID password"));
+            let l = ui.label(if token.is_some() { tl!("PIN") } else { tl!("Digital ID password") });
             let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;

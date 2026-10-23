@@ -2430,6 +2430,13 @@ animation effects	Off	Вимкнено
 	The linked PDF opened, but its named destination was not applied.	Пов’язаний PDF відкрито, але його іменоване призначення не застосовано.
 	The linked PDF opened, but its page destination was out of range.	Пов’язаний PDF відкрито, але сторінка призначення поза межами діапазону.
 	Local cross-PDF links require the desktop app	Локальні посилання між PDF працюють лише в настільному застосунку
+	PIN	PIN-код
+	The PIN is incorrect.	Неправильний PIN-код.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Використати цифрове посвідчення з пристрою (смарт-картка, USB-токен або хмарний сертифікат)
+	Device library (PKCS #11)	Бібліотека пристрою (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft шукає бібліотеки, які встановлюють виробники пристроїв. Вибирайте бібліотеку, лише якщо ваш пристрій не знайдено.
+	No signing certificate was found on this device. Is it connected?	На цьому пристрої не знайдено сертифіката для підпису. Його під’єднано?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Ключ на пристрої {device}, який сам запитує схвалення (клавіатура для PIN-коду або застосунок на телефоні).
 	Cut Image	Вирізати зображення
 	Redact Image	Вилучити вміст зображення
 	Create Link…	Створити посилання…
@@ -2439,7 +2446,6 @@ animation effects	Off	Вимкнено
 	Restore	Відновити
 	Use system title bar	Використовувати системний заголовок вікна
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показувати простий заголовок вікна з кнопками замість панелі вкладок. GNOME не малює заголовки для програм, тому цей заголовок не відповідає його темі.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Дозволити
 	Only allow this if you trust the source document.	Дозволяйте це лише тоді, коли довіряєте вихідному документу.
@@ -2451,7 +2457,6 @@ animation effects	Off	Вимкнено
 	This document is trying to open a local file:	Цей документ намагається відкрити локальний файл:
 	Move tag earlier	Перемістити тег раніше
 	Move tag later	Перемістити тег пізніше
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ви переглядаєте підписану версію документа «{from}» (редакція {rev}). Це знімок: зміни тут не вплинуть на оригінал.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Ви переглядаєте редакцію {rev} документа «{from}». Це знімок: зміни тут не вплинуть на оригінал.
@@ -2517,7 +2522,6 @@ animation effects	Off	Вимкнено
 	Larger thumbnails	Збільшити мініатюри
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Змінити форму коментаря
-
 # Prepare a form ▸ Text field table
 	Add text field table	Додати таблицю текстових полів
 	Text field table	Таблиця текстових полів

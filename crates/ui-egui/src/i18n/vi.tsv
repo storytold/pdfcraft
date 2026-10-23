@@ -2780,3 +2780,10 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+	PIN	Mã PIN
+	The PIN is incorrect.	Mã PIN không đúng.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Dùng ID kỹ thuật số từ thiết bị (thẻ thông minh, token USB hoặc chứng thư trên đám mây)
+	Device library (PKCS #11)	Thư viện thiết bị (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft tìm các thư viện mà nhà sản xuất thiết bị cài đặt. Chỉ chọn một thư viện nếu không tìm thấy thiết bị của bạn.
+	No signing certificate was found on this device. Is it connected?	Không tìm thấy chứng thư ký trên thiết bị này. Thiết bị đã được kết nối chưa?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Khóa nằm trên {device}, thiết bị tự yêu cầu phê duyệt (bàn phím PIN hoặc ứng dụng trên điện thoại).

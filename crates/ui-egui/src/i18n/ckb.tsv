@@ -2713,3 +2713,10 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	PIN	کۆدی PIN
+	The PIN is incorrect.	کۆدی PIN هەڵەیە.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	ناسنامەی دیجیتاڵ لە ئامێرێک بەکاربهێنە (کارتی زیرەک، تۆکنی USB یان بڕوانامەی هەور)
+	Device library (PKCS #11)	کتێبخانەی ئامێر (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft بەدوای ئەو کتێبخانانەدا دەگەڕێت کە دروستکەرانی ئامێر دایدەمەزرێنن. تەنها ئەگەر ئامێرەکەت نەدۆزرایەوە یەکێک هەڵبژێرە.
+	No signing certificate was found on this device. Is it connected?	هیچ بڕوانامەیەکی واژۆ لەم ئامێرەدا نەدۆزرایەوە. ئایا پەیوەستە؟
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	کلیلەکە لەسەر {device}ە، کە خۆی داوای پەسەندکردن دەکات (تەختەی PIN یان ئەپێک لە مۆبایلەکەت).

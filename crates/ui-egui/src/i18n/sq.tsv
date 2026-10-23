@@ -2500,3 +2500,10 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	PIN	Kodi PIN
+	The PIN is incorrect.	Kodi PIN është i pasaktë.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Përdor një ID dixhitale nga një pajisje (kartë inteligjente, token USB ose certifikatë në re)
+	Device library (PKCS #11)	Biblioteka e pajisjes (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft kërkon bibliotekat që instalojnë prodhuesit e pajisjeve. Zgjidhni një vetëm nëse pajisja juaj nuk gjendet.
+	No signing certificate was found on this device. Is it connected?	Në këtë pajisje nuk u gjet asnjë certifikatë nënshkrimi. A është e lidhur?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Çelësi është në {device}, që e kërkon vetë miratimin (një tastierë PIN ose një aplikacion në telefon).

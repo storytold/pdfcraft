@@ -2555,6 +2555,13 @@ animation effects	Off	Desactivados
 	The linked PDF opened, but its page destination was out of range.	El PDF vinculado se abrió, pero su página de destino está fuera de rango.
 	Local cross-PDF links require the desktop app	Los enlaces locales entre PDF requieren la aplicación de escritorio
 	The existing action will be preserved.	Se conservará la acción existente.
+	PIN	PIN
+	The PIN is incorrect.	El PIN es incorrecto.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Usar un ID digital de un dispositivo (tarjeta inteligente, token USB o certificado en la nube)
+	Device library (PKCS #11)	Biblioteca del dispositivo (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft busca las bibliotecas que instalan los fabricantes de dispositivos. Elija una solo si no se encuentra su dispositivo.
+	No signing certificate was found on this device. Is it connected?	No se encontró ningún certificado de firma en este dispositivo. ¿Está conectado?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	La clave está en {device}, que pide la aprobación por sí mismo (un teclado para el PIN o una app en su teléfono).
 	Cut Image	Cortar imagen
 	Redact Image	Censurar imagen
 	Create Link…	Crear enlace…
@@ -2564,7 +2571,6 @@ animation effects	Off	Desactivados
 	Restore	Restaurar
 	Use system title bar	Usar la barra de título del sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostrar una barra de título básica para los botones de la ventana en lugar de la barra de pestañas. GNOME no dibuja barras de título para las aplicaciones, así que esta no sigue su tema.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir
 	Only allow this if you trust the source document.	Permite esta acción solo si confías en el documento de origen.
@@ -2633,7 +2639,6 @@ animation effects	Off	Desactivados
 	Paragraph spacing	Espaciado entre párrafos
 	Less	Menos
 	Other options	Otras opciones
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
@@ -2642,7 +2647,6 @@ animation effects	Off	Desactivados
 	Larger thumbnails	Miniaturas más grandes
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Cambiar la forma del comentario
-
 #
 # Keys the other catalogs carry that this one was missing, so Spanish covers the bundled key union
 # the way Lithuanian and Vietnamese do (`lithuanian_covers_bundled_catalog_keys_including_dynamic_dialog_labels`).
@@ -2814,7 +2818,6 @@ theme	Appearance	Aspecto
 	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
 	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
 	Save (M4)	Guardar (M4)
-
 # Prepare a form ▸ Text field table
 	Add text field table	Añadir tabla de campos de texto
 	Text field table	Tabla de campos de texto

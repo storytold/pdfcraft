@@ -2282,6 +2282,13 @@ animation effects	Off	關
 	The linked PDF opened, but its page destination was out of range.	已開啟連結的 PDF，但其頁面目的地超出範圍。
 	Local cross-PDF links require the desktop app	PDF 之間的本機連結需要桌面應用程式
 	The existing action will be preserved.	將保留現有動作。
+	PIN	PIN
+	The PIN is incorrect.	PIN 不正確。
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	使用裝置中的數位 ID（智慧卡、USB 權杖或雲端憑證）
+	Device library (PKCS #11)	裝置程式庫 (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft 會尋找裝置廠商安裝的程式庫。只有找不到您的裝置時才需要選擇。
+	No signing certificate was found on this device. Is it connected?	此裝置上找不到簽署憑證。裝置已連接嗎？
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	金鑰位於 {device}，由裝置自行要求核准（PIN 鍵盤，或手機上的 App）。
 	Cut Image	剪下圖片
 	Redact Image	遮蔽圖片
 	Create Link…	建立連結…
@@ -2291,7 +2298,6 @@ animation effects	Off	關
 	Restore	還原
 	Use system title bar	使用系統標題列
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	以簡單的標題列顯示視窗按鈕，而不是在分頁列中。GNOME 不為應用程式繪製標題列，因此此標題列不會跟隨其佈景主題。
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	允許
 	Only allow this if you trust the source document.	只有在您信任來源文件時，才允許此操作。
@@ -2445,7 +2451,6 @@ animation effects	Off	關
 	Larger thumbnails	放大縮圖
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	變更註解形狀
-
 # Prepare a form ▸ Text field table
 	Add text field table	新增文字欄位表格
 	Text field table	文字欄位表格

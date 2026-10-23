@@ -2694,3 +2694,10 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	PIN	PIN-kode
+	The PIN is incorrect.	PIN-koden er feil.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Bruk en digital ID fra en enhet (smartkort, USB-token eller skysertifikat)
+	Device library (PKCS #11)	Enhetsbibliotek (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft ser etter bibliotekene som enhetsprodusentene installerer. Velg et bare hvis enheten din ikke blir funnet.
+	No signing certificate was found on this device. Is it connected?	Fant ikke noe signeringssertifikat på denne enheten. Er den koblet til?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	Nøkkelen er på {device}, som ber om godkjenning selv (et PIN-tastatur eller en app på telefonen).

@@ -2321,6 +2321,13 @@ animation effects	Off	ఆఫ్
 	Local cross-PDF links require the desktop app	PDFల మధ్య స్థానిక లింక్‌లకు డెస్క్‌టాప్ యాప్ అవసరం
 	The existing action will be preserved.	ఉన్న చర్య అలాగే ఉంచబడుతుంది.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	ఒక స్క్రిప్ట్ చాలా సేపు నడిచినందున ఈ ఫారమ్ స్క్రిప్ట్‌లు ఆపివేయబడ్డాయి. వాటిని మళ్లీ నడపడానికి పత్రాన్ని మళ్లీ తెరవండి.
+	PIN	PIN
+	The PIN is incorrect.	PIN తప్పు.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	పరికరంలోని డిజిటల్ ఐడీని ఉపయోగించు (స్మార్ట్ కార్డ్, USB టోకెన్ లేదా క్లౌడ్ సర్టిఫికెట్)
+	Device library (PKCS #11)	పరికర లైబ్రరీ (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	పరికర తయారీదారులు ఇన్‌స్టాల్ చేసే లైబ్రరీల కోసం PdfCraft వెతుకుతుంది. మీ పరికరం దొరకకపోతే మాత్రమే ఒకటి ఎంచుకోండి.
+	No signing certificate was found on this device. Is it connected?	ఈ పరికరంలో సంతకం సర్టిఫికెట్ కనిపించలేదు. ఇది కనెక్ట్ అయి ఉందా?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	కీ {device}లో ఉంది, అది తనే ఆమోదం అడుగుతుంది (PIN ప్యాడ్ లేదా మీ ఫోన్‌లోని యాప్).
 	Cut Image	చిత్రాన్ని కత్తిరించు
 	Redact Image	చిత్రాన్ని రెడాక్ట్ చేయి
 	Create Link…	లింక్ సృష్టించు…
@@ -2330,7 +2337,6 @@ animation effects	Off	ఆఫ్
 	Restore	పునరుద్ధరించు
 	Use system title bar	సిస్టమ్ శీర్షిక పట్టీని ఉపయోగించు
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	ట్యాబ్ పట్టీకి బదులుగా విండో బటన్‌ల కోసం సాధారణ శీర్షిక పట్టీని చూపించు. GNOME యాప్‌లకు శీర్షిక పట్టీలను గీయదు, కాబట్టి ఇది దాని థీమ్‌ను అనుసరించదు.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	అనుమతించు
 	Only allow this if you trust the source document.	మూల పత్రాన్ని విశ్వసిస్తే మాత్రమే దీన్ని అనుమతించండి.
@@ -2404,7 +2410,6 @@ animation effects	Off	ఆఫ్
 	Larger thumbnails	పెద్ద థంబ్‌నెయిల్‌లు
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	వ్యాఖ్య ఆకారాన్ని మార్చు
-
 # Prepare a form ▸ Text field table
 	Add text field table	టెక్స్ట్ ఫీల్డ్ పట్టిక జోడించు
 	Text field table	టెక్స్ట్ ఫీల్డ్ పట్టిక

@@ -2408,6 +2408,13 @@ animation effects	Off	Désactivés
 	The linked PDF opened, but its named destination was not applied.	Le PDF lié s'est ouvert, mais sa destination nommée n'a pas été appliquée.
 	The linked PDF opened, but its page destination was out of range.	Le PDF lié s'est ouvert, mais sa page de destination est hors limites.
 	Local cross-PDF links require the desktop app	Les liens locaux entre PDF nécessitent l'application de bureau
+	PIN	Code PIN
+	The PIN is incorrect.	Le code PIN est incorrect.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Utiliser un ID numérique d'un périphérique (carte à puce, jeton USB ou certificat dans le cloud)
+	Device library (PKCS #11)	Bibliothèque du périphérique (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	PdfCraft recherche les bibliothèques installées par les fabricants de périphériques. N'en choisissez une que si votre périphérique n'est pas trouvé.
+	No signing certificate was found on this device. Is it connected?	Aucun certificat de signature n'a été trouvé sur ce périphérique. Est-il connecté ?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	La clé se trouve sur {device}, qui demande lui-même l'autorisation (clavier PIN ou application sur votre téléphone).
 	Cut Image	Couper l'image
 	Redact Image	Biffer l'image
 	Create Link…	Créer un lien…
@@ -2417,7 +2424,6 @@ animation effects	Off	Désactivés
 	Restore	Restaurer
 	Use system title bar	Utiliser la barre de titre du système
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Afficher une barre de titre simple pour les boutons de la fenêtre au lieu de la barre d’onglets. GNOME ne dessine pas de barre de titre pour les applications : celle-ci ne suit donc pas son thème.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Autoriser
 	Only allow this if you trust the source document.	N'autorisez cette action que si vous faites confiance au document source.
@@ -2429,7 +2435,6 @@ animation effects	Off	Désactivés
 	This document is trying to open a local file:	Ce document tente d’ouvrir un fichier local :
 	Move tag earlier	Déplacer la balise plus tôt
 	Move tag later	Déplacer la balise plus tard
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Vous consultez la version signée de «{from}» (révision {rev}). Il s'agit d'un instantané : les modifications effectuées ici n'affecteront pas l'original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Vous consultez la révision {rev} de «{from}». Il s'agit d'un instantané : les modifications effectuées ici n'affecteront pas l'original.
@@ -2761,7 +2766,6 @@ certificate	Valid to	Valide jusqu'au
 certificate	Validity ends	Fin de validité
 certificate	Validity starts	Début de validité
 certificate	Version	Version
-
 # Prepare a form ▸ Text field table
 	Add text field table	Ajouter un tableau de champs de texte
 	Text field table	Tableau de champs de texte

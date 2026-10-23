@@ -2774,3 +2774,10 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	PIN	Codi PIN
+	The PIN is incorrect.	El PIN és incorrecte.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Utilitza un identificador digital d'un dispositiu (targeta intel·ligent, testimoni USB o certificat al núvol)
+	Device library (PKCS #11)	Biblioteca del dispositiu (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	El PdfCraft cerca les biblioteques que instal·len els fabricants dels dispositius. Trieu-ne una només si no es troba el dispositiu.
+	No signing certificate was found on this device. Is it connected?	No s'ha trobat cap certificat de signatura en aquest dispositiu. Està connectat?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	La clau és a {device}, que demana l'aprovació pel seu compte (un teclat de PIN o una aplicació al telèfon).

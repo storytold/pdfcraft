@@ -2422,6 +2422,13 @@ animation effects	Off	Desativados
 	The linked PDF opened, but its named destination was not applied.	O PDF vinculado foi aberto, mas seu destino nomeado não foi aplicado.
 	The linked PDF opened, but its page destination was out of range.	O PDF vinculado foi aberto, mas sua página de destino está fora do intervalo.
 	Local cross-PDF links require the desktop app	Links locais entre PDFs exigem o aplicativo para desktop
+	PIN	PIN
+	The PIN is incorrect.	O PIN está incorreto.
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	Usar uma ID digital de um dispositivo (cartão, token USB ou certificado em nuvem)
+	Device library (PKCS #11)	Biblioteca do dispositivo (PKCS #11)
+	PdfCraft looks for the libraries device vendors install. Choose one only if your device isn't found.	O PdfCraft procura as bibliotecas que os fabricantes dos dispositivos instalam. Escolha uma só se o seu dispositivo não for encontrado.
+	No signing certificate was found on this device. Is it connected?	Nenhum certificado de assinatura foi encontrado neste dispositivo. Ele está conectado?
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	A chave está em {device}, que pede a aprovação por conta própria (um teclado de PIN ou um app no seu celular).
 	Cut Image	Recortar imagem
 	Redact Image	Ocultar dados da imagem
 	Create Link…	Criar link…
@@ -2431,7 +2438,6 @@ animation effects	Off	Desativados
 	Restore	Restaurar
 	Use system title bar	Usar a barra de título do sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostrar uma barra de título simples para os botões da janela em vez da barra de abas. O GNOME não desenha barras de título para os aplicativos, então esta não segue o tema dele.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir
 	Only allow this if you trust the source document.	Permita esta ação somente se confiar no documento de origem.
@@ -2443,7 +2449,6 @@ animation effects	Off	Desativados
 	This document is trying to open a local file:	Este documento está tentando abrir um arquivo local:
 	Move tag earlier	Mover tag para antes
 	Move tag later	Mover tag para depois
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Você está vendo a versão assinada de “{from}” (revisão {rev}). É um instantâneo: as alterações aqui não afetarão o original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Você está vendo a revisão {rev} de “{from}”. É um instantâneo: as alterações aqui não afetarão o original.
@@ -2495,7 +2500,6 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
-
 # Remaining keys from the current catalog union, translated from their English meaning (2026-10-21).
 	 on page {label}	 na página {label}
 	A font isn't embedded	Uma fonte não está incorporada
@@ -2774,7 +2778,6 @@ theme	Appearance	Aparência
 	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
 	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
 	Remove {standard} identification	Remove {standard} identification
-
 # Prepare a form ▸ Text field table
 	Add text field table	Adicionar tabela de campos de texto
 	Text field table	Tabela de campos de texto
@@ -2794,7 +2797,6 @@ theme	Appearance	Aparência
 	field names can't contain a period: {name}	nomes de campo não podem conter ponto: {name}
 	two cells would both be named {name}	duas células teriam o nome {name}
 	a field named {name} already exists	já existe um campo chamado {name}
-
 # Prepare a form ▸ Text field table: limits (AI-assisted, not separately native-reviewed)
 	a table has 1 to {max} rows	uma tabela tem de 1 a {max} linhas
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
