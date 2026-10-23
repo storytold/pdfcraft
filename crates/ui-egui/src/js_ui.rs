@@ -413,6 +413,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
             .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
     }
+    brand_preferences(app, ui);
     ui.add_space(8.0);
     // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
     // remapped while rendering, and the page clears to the background colour. The preference
@@ -600,4 +601,50 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         .small()
         .color(t.text_muted),
     );
+}
+
+/// Preferences ▸ Show in the tab strip: the app's or the user's logo and name at the strip's left
+/// end (`crate::brand`). Off by default, so the strip is as it always was.
+fn brand_preferences(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    use crate::brand::{APP_NAME, MAX_NAME_CHARS, TitleBrand};
+    ui.horizontal(|ui| {
+        ui.label(tl!("Show in the tab strip"));
+        egui::ComboBox::from_id_salt("title-brand").selected_text(tl!(app.brand.show.label())).show_ui(ui, |ui| {
+            for choice in TitleBrand::ALL {
+                ui.selectable_value(&mut app.brand.show, choice, tl!(choice.label()));
+            }
+        });
+    })
+    .response
+    .on_hover_text(tl!("A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's."));
+    if app.brand.show.shows_name() {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Name"));
+            ui.add(egui::TextEdit::singleline(&mut app.brand.name).hint_text(APP_NAME).desired_width(220.0).char_limit(MAX_NAME_CHARS));
+        });
+    }
+    if app.brand.show.shows_logo() {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Logo"));
+            let current = match &app.brand.logo {
+                Some(path) => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string()),
+                None => tl!("PdfCraft's own").to_string(),
+            };
+            ui.label(egui::RichText::new(current).weak());
+            // The web build has no files to choose from.
+            #[cfg(not(target_arch = "wasm32"))]
+            if ui.button(tl!("Choose…")).on_hover_text(tl!("A PNG or SVG file. It is read from this place each time PdfCraft starts.")).clicked() {
+                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a logo")).add_filter("PNG or SVG", &["png", "svg"]);
+                app.ask_one(crate::pickers::Ask::File(dialog), None, |app, path| {
+                    if let Err(e) = app.brand.set_logo(Some(path)) {
+                        app.notify(e);
+                    }
+                });
+            }
+            // Infallible for None; the result is for a user's path.
+            if app.brand.logo.is_some() && ui.button(tl!("Reset")).clicked() {
+                let _ = app.brand.set_logo(None);
+            }
+        });
+    }
 }

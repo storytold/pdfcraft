@@ -2513,3 +2513,15 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Show in the tab strip	Қойынды жолағында көрсету
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Қойындылардың сол жағында, тақырып жолағы көрсететін жерде, логотип немесе атау: PdfCraft-тың өзінікі немесе компанияңыздікі.
+	Nothing	Ештеңе
+	Logo	Логотип
+	Logo and name	Логотип және атауы
+	PdfCraft's own	PdfCraft-тың өзінікі
+	Choose…	Таңдау…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	PNG немесе SVG файлы. PdfCraft әр іске қосылғанда осы орыннан оқылады.
+	Choose a logo	Логотипті таңдаңыз
+	Reset	Бастапқы күйге келтіру
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Бұл файлды логотип ретінде пайдалану мүмкін емес: оның жолы жарамды UTF-8 емес, сондықтан параметрлермен бірге сақталмайды.
+	This file can't be used as the logo: it's larger than {max} MB.	Бұл файлды логотип ретінде пайдалану мүмкін емес: көлемі {max} МБ-тан асады.

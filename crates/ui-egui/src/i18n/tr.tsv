@@ -2511,3 +2511,15 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+	Show in the tab strip	Sekme çubuğunda göster
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Sekmelerin solunda, başlık çubuğunun göstereceği yerde bir logo veya ad: PdfCraft'ınki ya da şirketinizinki.
+	Nothing	Hiçbiri
+	Logo	Logo
+	Logo and name	Logo ve ad
+	PdfCraft's own	PdfCraft'ınki
+	Choose…	Seç…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Bir PNG veya SVG dosyası. PdfCraft her başlatıldığında bu konumdan okunur.
+	Choose a logo	Bir logo seçin
+	Reset	Sıfırla
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Bu dosya logo olarak kullanılamaz: yolu geçerli UTF-8 değil, bu yüzden ayarlarla birlikte kaydedilemez.
+	This file can't be used as the logo: it's larger than {max} MB.	Bu dosya logo olarak kullanılamaz: boyutu {max} MB'tan büyük.

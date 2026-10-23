@@ -2781,3 +2781,14 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+	Show in the tab strip	Afficher dans la barre d'onglets
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Un logo ou un nom à gauche des onglets, là où une barre de titre l'afficherait : celui de PdfCraft ou celui de votre entreprise.
+	Nothing	Rien
+	Logo	Logo
+	Logo and name	Logo et nom
+	PdfCraft's own	Celui de PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Un fichier PNG ou SVG. Il est lu à cet emplacement à chaque démarrage de PdfCraft.
+	Choose a logo	Choisir un logo
+	Reset	Réinitialiser
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Ce fichier ne peut pas servir de logo : son chemin n'est pas en UTF-8 valide, il ne pourrait donc pas être enregistré avec les réglages.
+	This file can't be used as the logo: it's larger than {max} MB.	Ce fichier ne peut pas servir de logo : il dépasse {max} Mo.

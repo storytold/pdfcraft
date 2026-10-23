@@ -2776,3 +2776,14 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+	Show in the tab strip	Rodyti kortelių juostoje
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Logotipas arba pavadinimas kairėje nuo kortelių, kur jį rodytų antraštės juosta: PdfCraft arba jūsų įmonės.
+	Nothing	Nieko
+	Logo	Logotipas
+	Logo and name	Logotipas ir pavadinimas
+	PdfCraft's own	PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	PNG arba SVG failas. Jis skaitomas iš šios vietos kiekvieną kartą paleidus PdfCraft.
+	Choose a logo	Pasirinkite logotipą
+	Reset	Atstatyti
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Šio failo negalima naudoti kaip logotipo: jo kelias nėra tinkamas UTF-8, todėl jo nepavyktų išsaugoti su nustatymais.
+	This file can't be used as the logo: it's larger than {max} MB.	Šio failo negalima naudoti kaip logotipo: jis didesnis nei {max} MB.

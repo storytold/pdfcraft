@@ -2521,3 +2521,15 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+	Show in the tab strip	Εμφάνιση στη γραμμή καρτελών
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Ένα λογότυπο ή όνομα αριστερά από τις καρτέλες, εκεί όπου θα το έδειχνε μια γραμμή τίτλου: του PdfCraft ή της εταιρείας σας.
+	Nothing	Τίποτα
+	Logo	Λογότυπο
+	Logo and name	Λογότυπο και όνομα
+	PdfCraft's own	Του PdfCraft
+	Choose…	Επιλογή…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Ένα αρχείο PNG ή SVG. Διαβάζεται από αυτή τη θέση σε κάθε εκκίνηση του PdfCraft.
+	Choose a logo	Επιλογή λογότυπου
+	Reset	Επαναφορά
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Αυτό το αρχείο δεν μπορεί να χρησιμοποιηθεί ως λογότυπο: η διαδρομή του δεν είναι έγκυρο UTF-8, οπότε δεν θα μπορούσε να αποθηκευτεί με τις ρυθμίσεις.
+	This file can't be used as the logo: it's larger than {max} MB.	Αυτό το αρχείο δεν μπορεί να χρησιμοποιηθεί ως λογότυπο: είναι μεγαλύτερο από {max} MB.

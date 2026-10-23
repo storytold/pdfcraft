@@ -33,6 +33,7 @@ macro_rules! tl_ctx {
 mod a11y_ui;
 mod actions_ui;
 mod appearance;
+pub mod brand;
 mod calc_order_ui;
 pub mod canvas;
 mod chrome;
@@ -617,6 +618,9 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
     /// winit's frame instead of drawing the header bar (#1001).
     pub system_title_bar: bool,
+    /// Preferences ▸ Show in the tab strip: the app's or the user's logo and name at the strip's
+    /// left end, for a window whose strip is its title bar.
+    pub brand: brand::Brand,
     /// Whether the window currently has the app's header bar (`None` until the first frame).
     app_frame_shown: Option<bool>,
     pub password_prompt: Option<PasswordPrompt>,
@@ -1004,6 +1008,7 @@ impl PdfCraftApp {
             integrated_titlebar: false,
             window_controls: None,
             system_title_bar: false,
+            brand: brand::Brand::default(),
             app_frame_shown: None,
             password_prompt: None,
             unlock_prompt: None,
@@ -2433,6 +2438,7 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["brand"] = self.brand.to_json();
         v.to_string()
     }
 
@@ -2472,6 +2478,7 @@ impl PdfCraftApp {
         if let Some(on) = v["system_title_bar"].as_bool() {
             self.system_title_bar = on;
         }
+        self.brand.restore(&v["brand"]);
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;
         }
@@ -2903,6 +2910,13 @@ impl PdfCraftApp {
                 };
             }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
+            ("title-brand", _) => {
+                self.brand.show = brand::TitleBrand::from_token(value)
+                    .ok_or_else(|| format!("title-brand must be one of {}", brand::TitleBrand::ALL.map(|b| b.token()).join(", ")))?;
+            }
+            ("brand-name", _) => self.brand.name = value.chars().take(brand::MAX_NAME_CHARS).collect(),
+            // Empty: back to the app's own logo.
+            ("brand-logo", _) => self.brand.set_logo((!value.is_empty()).then(|| std::path::PathBuf::from(value)))?,
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,

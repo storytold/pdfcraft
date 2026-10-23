@@ -2478,3 +2478,15 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+	Show in the tab strip	Показване в лентата с раздели
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Лого или име вляво от разделите, където би ги показала заглавната лента: на PdfCraft или на вашата фирма.
+	Nothing	Нищо
+	Logo	Лого
+	Logo and name	Лого и име
+	PdfCraft's own	На PdfCraft
+	Choose…	Избор…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	PNG или SVG файл. Чете се от това място при всяко стартиране на PdfCraft.
+	Choose a logo	Изберете лого
+	Reset	Нулиране
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Този файл не може да се използва като лого: пътят му не е валиден UTF-8, затова не би могъл да се запази с настройките.
+	This file can't be used as the logo: it's larger than {max} MB.	Този файл не може да се използва като лого: по-голям е от {max} MB.

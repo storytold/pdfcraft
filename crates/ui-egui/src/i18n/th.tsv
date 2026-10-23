@@ -2681,3 +2681,14 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Show in the tab strip	แสดงในแถบแท็บ
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	โลโก้หรือชื่อทางซ้ายของแท็บ ตรงที่แถบชื่อเรื่องจะแสดง: ของ PdfCraft เอง หรือของบริษัทคุณ
+	Nothing	ไม่มี
+	Logo	โลโก้
+	Logo and name	โลโก้และชื่อ
+	PdfCraft's own	ของ PdfCraft เอง
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	ไฟล์ PNG หรือ SVG ระบบจะอ่านจากตำแหน่งนี้ทุกครั้งที่ PdfCraft เริ่มทำงาน
+	Choose a logo	เลือกโลโก้
+	Reset	รีเซ็ต
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	ใช้ไฟล์นี้เป็นโลโก้ไม่ได้: พาธของไฟล์ไม่ใช่ UTF-8 ที่ถูกต้อง จึงบันทึกพร้อมการตั้งค่าไม่ได้
+	This file can't be used as the logo: it's larger than {max} MB.	ใช้ไฟล์นี้เป็นโลโก้ไม่ได้: ไฟล์ใหญ่กว่า {max} MB

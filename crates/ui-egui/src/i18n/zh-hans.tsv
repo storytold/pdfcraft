@@ -2479,3 +2479,15 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+	Show in the tab strip	在标签栏中显示
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	在标签左侧、标题栏通常显示的位置放一个徽标或名称：PdfCraft 自己的，或你公司的。
+	Nothing	无
+	Logo	徽标
+	Logo and name	徽标和名称
+	PdfCraft's own	PdfCraft 自己的
+	Choose…	选择…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	一个 PNG 或 SVG 文件。每次 PdfCraft 启动时都从此位置读取。
+	Choose a logo	选择徽标
+	Reset	重置
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	此文件不能用作徽标：其路径不是有效的 UTF-8，因此无法随设置一起保存。
+	This file can't be used as the logo: it's larger than {max} MB.	此文件不能用作徽标：它大于 {max} MB。

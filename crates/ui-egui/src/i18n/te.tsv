@@ -2424,3 +2424,15 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+	Show in the tab strip	ట్యాబ్ బార్‌లో చూపించు
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	ట్యాబ్‌లకు ఎడమవైపు, టైటిల్ బార్ చూపించే చోట, ఒక లోగో లేదా పేరు: PdfCraft యొక్కది లేదా మీ సంస్థది.
+	Nothing	ఏమీ లేదు
+	Logo	లోగో
+	Logo and name	లోగో మరియు పేరు
+	PdfCraft's own	PdfCraft యొక్కది
+	Choose…	ఎంచుకోండి…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	ఒక PNG లేదా SVG ఫైల్. PdfCraft ప్రారంభమైన ప్రతిసారీ ఈ స్థానం నుండి చదవబడుతుంది.
+	Choose a logo	లోగోను ఎంచుకోండి
+	Reset	రీసెట్ చేయి
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	ఈ ఫైల్‌ను లోగోగా ఉపయోగించలేము: దాని మార్గం చెల్లుబాటు అయ్యే UTF-8 కాదు, కాబట్టి దాన్ని సెట్టింగ్‌లతో సేవ్ చేయలేము.
+	This file can't be used as the logo: it's larger than {max} MB.	ఈ ఫైల్‌ను లోగోగా ఉపయోగించలేము: ఇది {max} MB కంటే పెద్దది.

@@ -2515,3 +2515,15 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Show in the tab strip	タブバーに表示
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	タブの左側、タイトルバーが表示する位置に出すロゴや名前。PdfCraft のもの、または会社のものを指定できます。
+	Nothing	なし
+	Logo	ロゴ
+	Logo and name	ロゴと名前
+	PdfCraft's own	PdfCraft のもの
+	Choose…	選択…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	PNG または SVG ファイル。PdfCraft の起動のたびにこの場所から読み込まれます。
+	Choose a logo	ロゴを選択
+	Reset	リセット
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	このファイルはロゴとして使えません。パスが有効な UTF-8 ではないため、設定と一緒に保存できません。
+	This file can't be used as the logo: it's larger than {max} MB.	このファイルはロゴとして使えません。サイズが {max} MB を超えています。

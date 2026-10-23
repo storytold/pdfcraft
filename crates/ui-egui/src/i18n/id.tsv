@@ -2751,3 +2751,14 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Show in the tab strip	Tampilkan di strip tab
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Logo atau nama di sebelah kiri tab, tempat bilah judul biasanya menampilkannya: milik PdfCraft, atau milik perusahaan Anda.
+	Nothing	Tidak ada
+	Logo	Logo
+	Logo and name	Logo dan nama
+	PdfCraft's own	Milik PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	File PNG atau SVG. File dibaca dari lokasi ini setiap kali PdfCraft dimulai.
+	Choose a logo	Pilih logo
+	Reset	Atur ulang
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	File ini tidak dapat dipakai sebagai logo: jalurnya bukan UTF-8 yang valid, sehingga tidak dapat disimpan bersama pengaturan.
+	This file can't be used as the logo: it's larger than {max} MB.	File ini tidak dapat dipakai sebagai logo: ukurannya lebih dari {max} MB.

@@ -2774,3 +2774,14 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Show in the tab strip	Mostra a la tira de pestanyes
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Un logotip o un nom a l'esquerra de les pestanyes, on una barra de títol en mostraria un: el de PdfCraft o el de la teva empresa.
+	Nothing	Res
+	Logo	Logotip
+	Logo and name	Logotip i nom
+	PdfCraft's own	El de PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Un fitxer PNG o SVG. Es llegeix des d'aquesta ubicació cada vegada que s'inicia PdfCraft.
+	Choose a logo	Tria un logotip
+	Reset	Restableix
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Aquest fitxer no es pot fer servir com a logotip: el seu camí no és UTF-8 vàlid, de manera que no s'ha pogut desar amb la configuració.
+	This file can't be used as the logo: it's larger than {max} MB.	Aquest fitxer no es pot fer servir com a logotip: ocupa més de {max} MB.

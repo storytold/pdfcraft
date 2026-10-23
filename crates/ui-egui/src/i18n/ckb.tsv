@@ -2713,3 +2713,14 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	Show in the tab strip	پیشاندان لە شریتی بازدەرەکان
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	لۆگۆ یان ناوێک لە لای چەپی بازدەرەکان، لەو شوێنەی شریتی ناونیشان پیشانی دەدا: هی PdfCraft یان هی کۆمپانیاکەت.
+	Nothing	هیچ
+	Logo	لۆگۆ
+	Logo and name	لۆگۆ و ناو
+	PdfCraft's own	هی PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	فایلێکی PNG یان SVG. هەر جارێک PdfCraft دەست پێ دەکات لەم شوێنەوە دەخوێنرێتەوە.
+	Choose a logo	لۆگۆیەک هەڵبژێرە
+	Reset	ڕێکخستنەوە
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	ئەم فایلە ناتوانرێت وەک لۆگۆ بەکاربهێنرێت: ڕێڕەوەکەی UTF-8ی دروست نییە، بۆیە نەدەتوانرا لەگەڵ ڕێکخستنەکان پاشەکەوت بکرێت.
+	This file can't be used as the logo: it's larger than {max} MB.	ئەم فایلە ناتوانرێت وەک لۆگۆ بەکاربهێنرێت: لە {max} MB گەورەترە.

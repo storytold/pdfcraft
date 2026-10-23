@@ -2774,3 +2774,14 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Show in the tab strip	Afișare în bara de file
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Un logo sau un nume în stânga filelor, unde o bară de titlu ar afișa unul: al PdfCraft sau al companiei tale.
+	Nothing	Nimic
+	Logo	Logo
+	Logo and name	Logo și nume
+	PdfCraft's own	Al PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Un fișier PNG sau SVG. Este citit din acest loc la fiecare pornire a PdfCraft.
+	Choose a logo	Alegere logo
+	Reset	Resetare
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Acest fișier nu poate fi folosit ca logo: calea sa nu este UTF-8 valid, așa că nu a putut fi salvată cu setările.
+	This file can't be used as the logo: it's larger than {max} MB.	Acest fișier nu poate fi folosit ca logo: este mai mare de {max} MB.

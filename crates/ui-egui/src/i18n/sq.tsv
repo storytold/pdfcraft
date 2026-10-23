@@ -2500,3 +2500,15 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Show in the tab strip	Shfaq në shiritin e skedave
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Një logo ose emër në të majtë të skedave, aty ku një shirit titulli do ta shfaqte: ai i PdfCraft ose ai i kompanisë suaj.
+	Nothing	Asgjë
+	Logo	Logo
+	Logo and name	Logo dhe emri
+	PdfCraft's own	Ai i PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Një skedar PNG ose SVG. Lexohet nga ky vend sa herë që niset PdfCraft.
+	Choose a logo	Zgjidh një logo
+	Reset	Rivendos
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Ky skedar nuk mund të përdoret si logo: shtegu i tij nuk është UTF-8 i vlefshëm, prandaj nuk mund të ruhej me cilësimet.
+	This file can't be used as the logo: it's larger than {max} MB.	Ky skedar nuk mund të përdoret si logo: është më i madh se {max} MB.
+	Choose…	Zgjidh…

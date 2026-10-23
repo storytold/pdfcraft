@@ -2429,3 +2429,15 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+	Show in the tab strip	ສະແດງໃນແຖບແທັບ
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	ໂລໂກ້ ຫຼື ຊື່ ຢູ່ທາງຊ້າຍຂອງແທັບ, ບ່ອນທີ່ແຖບຫົວຂໍ້ຈະສະແດງ: ຂອງ PdfCraft ເອງ ຫຼື ຂອງບໍລິສັດທ່ານ.
+	Nothing	ບໍ່ມີ
+	Logo	ໂລໂກ້
+	Logo and name	ໂລໂກ້ ແລະ ຊື່
+	PdfCraft's own	ຂອງ PdfCraft ເອງ
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	ໄຟລ໌ PNG ຫຼື SVG. ມັນຈະຖືກອ່ານຈາກບ່ອນນີ້ທຸກຄັ້ງທີ່ PdfCraft ເລີ່ມຕົ້ນ.
+	Choose a logo	ເລືອກໂລໂກ້
+	Reset	ຕັ້ງຄ່າຄືນໃໝ່
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	ບໍ່ສາມາດໃຊ້ໄຟລ໌ນີ້ເປັນໂລໂກ້ໄດ້: ເສັ້ນທາງຂອງມັນບໍ່ແມ່ນ UTF-8 ທີ່ຖືກຕ້ອງ, ຈຶ່ງບໍ່ສາມາດບັນທຶກພ້ອມກັບການຕັ້ງຄ່າໄດ້.
+	This file can't be used as the logo: it's larger than {max} MB.	ບໍ່ສາມາດໃຊ້ໄຟລ໌ນີ້ເປັນໂລໂກ້ໄດ້: ມັນໃຫຍ່ກວ່າ {max} MB.
+	Choose…	ເລືອກ…

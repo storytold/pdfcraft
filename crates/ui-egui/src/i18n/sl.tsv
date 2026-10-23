@@ -2520,3 +2520,15 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	Show in the tab strip	Pokaži v vrstici zavihkov
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Logotip ali ime levo od zavihkov, kjer bi ga pokazala naslovna vrstica: PdfCraftov ali vašega podjetja.
+	Nothing	Nič
+	Logo	Logotip
+	Logo and name	Logotip in ime
+	PdfCraft's own	PdfCraftov
+	Choose…	Izberi…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Datoteka PNG ali SVG. Prebere se s tega mesta ob vsakem zagonu PdfCrafta.
+	Choose a logo	Izberite logotip
+	Reset	Ponastavi
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Te datoteke ni mogoče uporabiti kot logotip: njena pot ni veljaven UTF-8, zato je ne bi bilo mogoče shraniti z nastavitvami.
+	This file can't be used as the logo: it's larger than {max} MB.	Te datoteke ni mogoče uporabiti kot logotip: večja je od {max} MB.

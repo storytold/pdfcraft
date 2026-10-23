@@ -2750,3 +2750,14 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Show in the tab strip	탭 스트립에 표시
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	제목 표시줄이 있을 자리인 탭 왼쪽에 로고나 이름을 표시합니다. PdfCraft 기본 로고나 회사 로고를 쓸 수 있습니다.
+	Nothing	없음
+	Logo	로고
+	Logo and name	로고와 이름
+	PdfCraft's own	PdfCraft 기본값
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	PNG 또는 SVG 파일입니다. PdfCraft를 시작할 때마다 이 위치에서 읽습니다.
+	Choose a logo	로고 선택
+	Reset	재설정
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	이 파일은 로고로 쓸 수 없습니다. 경로가 올바른 UTF-8이 아니어서 설정에 저장할 수 없습니다.
+	This file can't be used as the logo: it's larger than {max} MB.	이 파일은 로고로 쓸 수 없습니다. 크기가 {max}MB를 넘습니다.

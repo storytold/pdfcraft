@@ -2750,3 +2750,14 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Show in the tab strip	टैब स्ट्रिप में दिखाएँ
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	टैबों के बाईं ओर एक लोगो या नाम, जहाँ शीर्षक पट्टी उसे दिखाती: PdfCraft का अपना, या आपकी कंपनी का।
+	Nothing	कुछ नहीं
+	Logo	लोगो
+	Logo and name	लोगो और नाम
+	PdfCraft's own	PdfCraft का अपना
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	एक PNG या SVG फ़ाइल। PdfCraft हर बार शुरू होने पर इसे इसी जगह से पढ़ता है।
+	Choose a logo	लोगो चुनें
+	Reset	रीसेट करें
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	इस फ़ाइल को लोगो के रूप में इस्तेमाल नहीं किया जा सकता: इसका पथ मान्य UTF-8 नहीं है, इसलिए इसे सेटिंग्स के साथ सहेजा नहीं जा सका।
+	This file can't be used as the logo: it's larger than {max} MB.	इस फ़ाइल को लोगो के रूप में इस्तेमाल नहीं किया जा सकता: यह {max} MB से बड़ी है।

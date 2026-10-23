@@ -2791,3 +2791,14 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Show in the tab strip	إظهار في شريط علامات التبويب
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	شعار أو اسم على يسار علامات التبويب، حيث يُعرض عادةً في شريط العنوان: شعار PdfCraft أو شعار شركتك.
+	Nothing	لا شيء
+	Logo	الشعار
+	Logo and name	الشعار والاسم
+	PdfCraft's own	شعار PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	ملف PNG أو SVG. يُقرأ من هذا المكان في كل مرة يبدأ فيها PdfCraft.
+	Choose a logo	اختر شعارًا
+	Reset	إعادة ضبط
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	لا يمكن استخدام هذا الملف كشعار: مساره ليس بترميز UTF-8 صالح، لذا تعذّر حفظه مع الإعدادات.
+	This file can't be used as the logo: it's larger than {max} MB.	لا يمكن استخدام هذا الملف كشعار: حجمه أكبر من {max} ميغابايت.

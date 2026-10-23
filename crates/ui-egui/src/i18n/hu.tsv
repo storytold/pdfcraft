@@ -2514,3 +2514,15 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+	Show in the tab strip	Megjelenítés a lapsávban
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Egy logó vagy név a lapoktól balra, ahol a címsor mutatná: a PdfCraft sajátja vagy a cégedé.
+	Nothing	Semmi
+	Logo	Logó
+	Logo and name	Logó és név
+	PdfCraft's own	A PdfCraft sajátja
+	Choose…	Kiválasztás…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Egy PNG vagy SVG fájl. A PdfCraft minden indításakor erről a helyről olvassa be.
+	Choose a logo	Logó kiválasztása
+	Reset	Visszaállítás
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Ez a fájl nem használható logóként: az elérési útja nem érvényes UTF-8, így nem lehetne elmenteni a beállításokkal.
+	This file can't be used as the logo: it's larger than {max} MB.	Ez a fájl nem használható logóként: nagyobb, mint {max} MB.

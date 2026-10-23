@@ -2694,3 +2694,14 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Show in the tab strip	Vis i fanelinjen
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	En logo eller et navn til venstre for fanene, der en tittellinje ville vist det: PdfCrafts egen eller bedriftens.
+	Nothing	Ingenting
+	Logo	Logo
+	Logo and name	Logo og navn
+	PdfCraft's own	PdfCrafts egen
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	En PNG- eller SVG-fil. Den leses fra dette stedet hver gang PdfCraft starter.
+	Choose a logo	Velg en logo
+	Reset	Tilbakestill
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Denne filen kan ikke brukes som logo: banen er ikke gyldig UTF-8, så den kunne ikke lagres med innstillingene.
+	This file can't be used as the logo: it's larger than {max} MB.	Denne filen kan ikke brukes som logo: den er større enn {max} MB.

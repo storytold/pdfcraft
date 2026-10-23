@@ -2783,3 +2783,14 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Show in the tab strip	Näytä välilehtirivillä
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Logo tai nimi välilehtien vasemmalla puolella, jossa otsikkorivi näyttäisi sellaisen: PdfCraftin oma tai yrityksesi.
+	Nothing	Ei mitään
+	Logo	Logo
+	Logo and name	Logo ja nimi
+	PdfCraft's own	PdfCraftin oma
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	PNG- tai SVG-tiedosto. Se luetaan tästä sijainnista aina, kun PdfCraft käynnistyy.
+	Choose a logo	Valitse logo
+	Reset	Palauta
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Tätä tiedostoa ei voi käyttää logona: sen polku ei ole kelvollista UTF-8:aa, joten sitä ei voitu tallentaa asetuksiin.
+	This file can't be used as the logo: it's larger than {max} MB.	Tätä tiedostoa ei voi käyttää logona: se on suurempi kuin {max} MB.

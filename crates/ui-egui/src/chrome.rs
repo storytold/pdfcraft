@@ -62,6 +62,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
+                // The app's or the user's logo and name, when asked for (Preferences ▸ Show in the
+                // tab strip); nothing by default.
+                app.brand.show(ui, tab_h - 8.0);
                 if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
                     app.active = None;
                     app.combine_tab.focused = false;

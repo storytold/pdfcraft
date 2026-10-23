@@ -2747,3 +2747,15 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Show in the tab strip	Mostra nella barra delle schede
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Un logo o un nome a sinistra delle schede, dove lo mostrerebbe una barra del titolo: quello di PdfCraft o quello della tua azienda.
+	Nothing	Niente
+	Logo	Logo
+	Logo and name	Logo e nome
+	PdfCraft's own	Quello di PdfCraft
+	Choose…	Scegli…
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Un file PNG o SVG. Viene letto da questa posizione a ogni avvio di PdfCraft.
+	Choose a logo	Scegli un logo
+	Reset	Reimposta
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Questo file non può essere usato come logo: il suo percorso non è UTF-8 valido, quindi non potrebbe essere salvato con le impostazioni.
+	This file can't be used as the logo: it's larger than {max} MB.	Questo file non può essere usato come logo: supera i {max} MB.

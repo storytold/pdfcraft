@@ -2800,3 +2800,14 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+	Show in the tab strip	Mostrar na barra de abas
+	A logo or name at the left of the tabs, where a title bar would show one: PdfCraft's own, or your company's.	Um logotipo ou nome à esquerda das abas, onde uma barra de título o mostraria: o do PdfCraft ou o da sua empresa.
+	Nothing	Nada
+	Logo	Logotipo
+	Logo and name	Logotipo e nome
+	PdfCraft's own	O do PdfCraft
+	A PNG or SVG file. It is read from this place each time PdfCraft starts.	Um arquivo PNG ou SVG. Ele é lido deste local sempre que o PdfCraft é iniciado.
+	Choose a logo	Escolha um logotipo
+	Reset	Redefinir
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	Este arquivo não pode ser usado como logotipo: o caminho dele não é UTF-8 válido, então não poderia ser salvo com as configurações.
+	This file can't be used as the logo: it's larger than {max} MB.	Este arquivo não pode ser usado como logotipo: ele tem mais de {max} MB.
