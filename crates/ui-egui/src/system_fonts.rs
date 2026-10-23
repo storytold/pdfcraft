@@ -499,7 +499,7 @@ mod tests {
 
     /// `script_fallback` honours the documented installed-font switch, under which it returns
     /// nothing before order is ever consulted — so both loader tests and the macOS oracle skip when
-    /// it is off, the way `tests/fonts.rs` skips for the same reason. Without this the suite goes red in exactly the
+    /// it is off, the way `tests/it/fonts.rs` skips for the same reason. Without this the suite goes red in exactly the
     /// mode `cargo xtask screenshots` uses.
     fn installed_faces_switched_off() -> bool {
         std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0")
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn a_script_fallback_is_the_first_candidate_with_the_probe() {
         // This one calls `script_fallback` too, so it fails under the documented switch that
-        // published screenshots use — skip with a reason, as tests/fonts.rs does.
+        // published screenshots use — skip with a reason, as tests/it/fonts.rs does.
         if installed_faces_switched_off() {
             eprintln!("skipping: PDFCRAFT_SYSTEM_FONTS=0 turns the loader off");
             return;

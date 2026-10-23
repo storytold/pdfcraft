@@ -2634,6 +2634,7 @@ animation effects	Off	Desativados
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	O DigestInfo da assinatura RSA não tem o parâmetro NULL (assinantes mais antigos o incluem); mesmo assim, ele foi lido.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	O certificado de {} não permite essa quantidade de certificados de AC abaixo dele (comprimento do caminho), então não é usado para atestar a validade de {}.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	O certificado de {} não é um certificado de AC autorizado a emitir certificados, então não é usado para atestar a validade de {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	O certificado de {} não era válido no momento da assinatura, então não é usado para atestar a validade de {}.
 	The checker found problems which may prevent the document from being fully accessible.	A verificação encontrou problemas que podem impedir que o documento seja totalmente acessível.
 	The document has been altered or corrupted since the signature was applied.	O documento foi alterado ou corrompido desde que a assinatura foi aplicada.
@@ -2680,6 +2681,7 @@ animation effects	Off	Desativados
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	A identidade do signatário é desconhecida porque não foi incluída na sua lista de certificados confiáveis e nenhum dos certificados na cadeia acima dela é confiável.
 	The signer's identity is valid.	A identidade do signatário é válida.
 	The timestamp authority's certificate was not valid at the time of timestamping.	O certificado da autoridade de carimbo de data e hora não era válido no momento da emissão do carimbo.
+	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
 	The timestamp contents are not hexadecimal.	O conteúdo do carimbo de data e hora não está em hexadecimal.
 	The timestamp has no valid byte range.	O carimbo de data e hora não tem um intervalo de bytes válido.
 	The timestamp token could not be read ({}).	Não foi possível ler o token de carimbo de data e hora ({}).

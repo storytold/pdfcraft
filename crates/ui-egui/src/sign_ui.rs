@@ -463,6 +463,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             app.watch.known_now(doc_id, &path.to_string_lossy());
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+            #[cfg(target_os = "macos")]
+            crate::macos_association::repair(&path);
             app.sign_graphic = choice;
             if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
                 view.invalidate_content();

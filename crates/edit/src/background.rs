@@ -50,7 +50,7 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
     let crop = p.crop(doc);
     let resources = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let gstates = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
-    let streams = crate::text::content_streams(doc, &p.dict);
+    let streams = crate::text::content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
 

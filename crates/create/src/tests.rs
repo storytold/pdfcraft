@@ -833,6 +833,15 @@ fn indexed_hival_resolves_indirect_values_and_stream_palettes() {
 }
 
 #[test]
+fn indexed_lookup_stream_has_a_size_cap() {
+    // A lookup table needs 256 × 4 bytes at most; a 1 MiB one is refused, not decoded whole.
+    let mut palette = vec![255, 0, 0, 0, 0, 255];
+    palette.resize(1 << 20, 0);
+    let (doc, image) = indexed_export_fixture(Object::Int(1), palette, true, false, 8, vec![0, 1, 0, 1]);
+    assert!(crate::extract::image_file(&doc, image).unwrap_err().contains("lookup table"));
+}
+
+#[test]
 fn indexed_hival_boundary_values_keep_valid_palette_entries() {
     let palette: Vec<u8> = (0..=255u8).flat_map(|i| [i, 255 - i, 17]).collect();
     for high in [0, 255] {
@@ -1180,4 +1189,64 @@ fn a_jpeg_with_an_exif_orientation_becomes_an_upright_page() {
     assert!((m1[2] - 60.0).abs() < 0.01 && (m1[3] - 20.0).abs() < 0.01, "{m1:?}");
     let img = image_of(&doc, 1);
     assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(60), Some(20)));
+}
+
+#[test]
+fn a_cyclic_indexed_colour_space_is_refused() {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    // 5 0 obj [/Indexed 5 0 R 255 <00>]: the base is the indexed space itself.
+    let cs = doc.add(Object::Null);
+    doc.set(cs, Object::Array(vec![Object::name("Indexed"), Object::Ref(cs), Object::Int(255), Object::String(PdfString::literal(vec![0]))]));
+    with_image(&mut doc, |_| {
+        let mut dict = image_dict(1, 1, "DeviceGray", 8);
+        dict.set(b"ColorSpace".to_vec(), Object::Ref(cs));
+        Stream::from_raw(dict, vec![0])
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty());
+    assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+}
+
+/// A TIFF of `pages` 64×64 gray pages, then (with `unreadable`) one whose samples Create can't read.
+fn gray_tiff(pages: usize, unreadable: bool) -> Vec<u8> {
+    let mut tif = std::io::Cursor::new(Vec::new());
+    let mut enc = tiff::encoder::TiffEncoder::new(&mut tif).unwrap();
+    for _ in 0..pages {
+        enc.write_image::<tiff::encoder::colortype::Gray8>(64, 64, &[128; 64 * 64]).unwrap();
+    }
+    if unreadable {
+        enc.write_image::<tiff::encoder::colortype::RGB32Float>(1, 1, &[0.5; 3]).unwrap();
+    }
+    tif.into_inner()
+}
+
+/// Many small IFDs can each decode to a large page: the pages a TIFF keeps in memory together
+/// are bounded, and embedding one image reads only its first page.
+#[test]
+fn tiff_pages_are_decoded_within_a_total_budget() {
+    let tif = gray_tiff(3, false);
+    assert!(matches!(tiff_pages_within("t.tif", &tif, usize::MAX, 10_000), Err(CreateError::Image(..))), "12 KiB of pages past a 10 KB budget");
+    assert_eq!(tiff_pages_within("t.tif", &tif, usize::MAX, 20_000).unwrap().len(), 3);
+    let tif = gray_tiff(1, true);
+    let mut doc = Document::new_empty();
+    assert!(image_xobject(&mut doc, "t.tif", &tif).is_ok(), "the unreadable last page is never decoded");
+}
+
+/// A one-pixel GIF on a `w`×`h` logical screen: the decoder paints it on a canvas that size.
+fn gif_on_screen(w: u16, h: u16) -> Vec<u8> {
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&w.to_le_bytes());
+    gif.extend_from_slice(&h.to_le_bytes());
+    gif.extend_from_slice(&[0x80, 0, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0]);
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 1, 0, 0x3B]);
+    gif
+}
+
+/// The decoder's own limit lets a 74-byte GIF ask for a canvas of hundreds of MB, which the
+/// conversion then copies; a screen past [`MAX_GIF_PIXELS`] is refused before decoding.
+#[test]
+fn a_tiny_gif_on_a_huge_screen_is_refused() {
+    assert!(matches!(from_images(&[("big.gif".into(), gif_on_screen(4200, 4100))]), Err(CreateError::Image(..))));
+    let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }

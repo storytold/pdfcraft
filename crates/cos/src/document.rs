@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
 use crate::object::{Dict, ObjRef, Object};
-use crate::parser::{Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
+use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
 thread_local! {
     /// The objects being loaded on this thread, innermost last (see `Document::try_get`).
@@ -405,6 +405,8 @@ impl std::fmt::Debug for ReadState {
 #[derive(Clone)]
 pub struct Document {
     data: Arc<Vec<u8>>,
+    /// Where `endstream` occurs in `data`; see [`EndstreamIndex`].
+    endstreams: Arc<EndstreamIndex>,
     source_identity: Arc<()>,
     entries: Arc<XrefIndex>,
     trailer: Dict,
@@ -494,12 +496,22 @@ impl ObjectReader {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Cross-reference sections read on this thread.
+    static SECTION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Nesting [`owned_bytes`] walks: past the parser's own nesting limit, so every parsed object
+/// is measured in full.
+const OWNED_BYTES_DEPTH: usize = 256;
+
 /// Bytes `object` holds of its own: string and stream data that is not a view into `data`
-/// (the input file), nested a few levels deep (deeper data is rare and still bounded by the
-/// reader's object count).
+/// (the input file). An object nested deeper than [`OWNED_BYTES_DEPTH`] cannot be measured
+/// and counts as too large to keep.
 fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
-    if depth > 4 {
-        return 0;
+    if depth > OWNED_BYTES_DEPTH {
+        return usize::MAX;
     }
     match object {
         Object::String(s) => s.bytes.len(),
@@ -532,6 +544,7 @@ impl Document {
     pub fn new_empty() -> Self {
         let mut doc = Document {
             data: Arc::new(Vec::new()),
+            endstreams: Arc::default(),
             source_identity: Arc::new(()),
             entries: Arc::new(XrefIndex::empty()),
             trailer: Dict::new(),
@@ -614,6 +627,7 @@ impl Document {
         };
         let mut doc = Document {
             data,
+            endstreams: Arc::default(),
             source_identity: Arc::new(()),
             entries: Arc::new(XrefIndex::empty()),
             trailer: Dict::new(),
@@ -858,7 +872,7 @@ impl Document {
     /// Decrypt a freshly parsed indirect object if the document is encrypted.
     fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
-            Some(h) if Some(id.num) != self.encrypt_num => crate::security::transform(h, &o, id.num, id.generation, true),
+            Some(h) if Some(id.num) != self.encrypt_num => crate::security::transform(h, &o, id.num, id.generation, crate::security::Pass::Decrypt),
             _ => o,
         }
     }
@@ -978,7 +992,7 @@ impl Document {
         match self.xref_entry(num) {
             None | Some(XrefEntry::Free { .. }) => true,
             Some(XrefEntry::InFile { offset, .. }) => {
-                let at = |off: usize| matches!(parse_indirect_shared(&self.data, off, &|_| None), Ok((id, _)) if id.num == num);
+                let at = |off: usize| matches!(parse_indirect_shared(&self.data, off, &|_| None, &self.endstreams), Ok((id, _)) if id.num == num);
                 // Offsets may count from a header that does not start the file.
                 usize::try_from(offset).is_ok_and(|off| at(off) || (self.header_offset != 0 && at(off.saturating_add(self.header_offset))))
             }
@@ -1176,7 +1190,7 @@ impl Document {
                     length
                 };
                 let off = offset as usize;
-                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve) {
+                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
                     _ => None,
                 };
@@ -1242,7 +1256,7 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None)
+            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition
@@ -1740,6 +1754,12 @@ impl Document {
         let mut revisions = Vec::new();
         let mut oddities = Vec::new();
         let mut visited = HashSet::new();
+        // Hybrid streams already read, by offset: their entries, or `None` when unreadable. A newer
+        // section has merged every entry of one into `entries`, so an older section that names it
+        // again only has its own table compared with them, without decoding the stream again.
+        // At most MAX_XREF_OBJECTS entries are kept in all; a stream past that is read again.
+        let mut hybrids: HashMap<i64, Option<BTreeMap<u32, XrefEntry>>> = HashMap::new();
+        let (mut hybrid_rows, mut noted) = (0usize, HashSet::new());
         let mut next = Some(first);
         while let Some(off) = next.take() {
             if !visited.insert(off) || visited.len() > 10_000 {
@@ -1770,11 +1790,24 @@ impl Document {
             revisions.push(Revision { xref_offset: off, is_stream, header_relative });
             // Hybrid files (§7.5.8.4): the /XRefStm entries supplement the table and replace the
             // free entries it gives objects only a cross-reference stream can locate.
-            if let Some(x) = sect_trailer.int(b"XRefStm").filter(|x| *x >= 0) {
+            let hybrid = sect_trailer.int(b"XRefStm").filter(|x| *x >= 0);
+            if let Some((x, read)) = hybrid.and_then(|x| hybrids.get(&x).map(|read| (x, read))) {
+                if noted.insert(x) {
+                    log.push(format!("hybrid /XRefStm at {x} named again by the section at {off}; read once"));
+                }
+                if let Some(stm) = read {
+                    for (num, old) in &sect {
+                        // The table places the object somewhere other than the stream does.
+                        if !matches!(old, XrefEntry::Free { .. }) && stm.get(num).is_some_and(|e| e != old) {
+                            odd.push(*num);
+                        }
+                    }
+                }
+            } else if let Some(x) = hybrid {
                 let mut stm = BTreeMap::new();
-                match self.read_section(x as usize, &mut stm, &mut odd, log) {
+                let read = match self.read_section(x as usize, &mut stm, &mut odd, log) {
                     Ok(_) => {
-                        for (num, e) in stm {
+                        for (&num, &e) in &stm {
                             match sect.get(&num) {
                                 None | Some(XrefEntry::Free { .. }) => {
                                     sect.insert(num, e);
@@ -1784,8 +1817,17 @@ impl Document {
                                 Some(_) => {}
                             }
                         }
+                        Some(stm)
                     }
-                    Err(e) => log.push(format!("hybrid /XRefStm at {x} unreadable: {e}")),
+                    Err(e) => {
+                        log.push(format!("hybrid /XRefStm at {x} unreadable: {e}"));
+                        None
+                    }
+                };
+                let rows = read.as_ref().map_or(0, BTreeMap::len);
+                if let Some(total) = hybrid_rows.checked_add(rows).filter(|total| *total <= MAX_XREF_OBJECTS) {
+                    hybrid_rows = total;
+                    hybrids.insert(x, read);
                 }
             }
             oddities.extend(odd.into_iter().map(|num| (off, num)));
@@ -1814,6 +1856,8 @@ impl Document {
         odd: &mut Vec<u32>,
         log: &mut Vec<String>,
     ) -> Result<(Dict, bool), CosError> {
+        #[cfg(test)]
+        SECTION_READS.with(|c| c.set(c.get() + 1));
         let data = &self.data;
         let mut lx = Lexer::new(data, off);
         if lx.eat_keyword(b"xref") {
@@ -2051,7 +2095,7 @@ impl Document {
             if trailer.as_ref().is_some_and(|((catalog, p), _)| *catalog && *p > at) {
                 continue;
             }
-            if let Ok((_, Object::Stream(s))) = parse_indirect_shared(&data, at, &|_| None)
+            if let Ok((_, Object::Stream(s))) = parse_indirect_shared(&data, at, &|_| None, &self.endstreams)
                 && s.dict.name(b"Type") == Some(b"XRef")
                 && let Some(r) = rank(at, &s.dict)
                 && trailer.as_ref().is_none_or(|(best, _)| r > *best)
@@ -2994,6 +3038,56 @@ endobj
     }
 
     #[test]
+    fn streams_without_length_share_one_endstream_search() {
+        let n = 2_000;
+        let mut file = b"%PDF-1.7\n".to_vec();
+        for k in 1..=n {
+            file.extend_from_slice(format!("{k} 0 obj\n<< >>\nstream\nxx\n").as_bytes());
+        }
+        file.extend_from_slice(b"endstream\nendobj\n");
+        file.extend_from_slice(
+            format!(
+                "{0} 0 obj\n<< /Type /Catalog /Pages {1} 0 R >>\nendobj\n{1} 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+                n + 1,
+                n + 2
+            )
+            .as_bytes(),
+        );
+        file.extend_from_slice(format!("trailer\n<< /Root {} 0 R /Size {} >>\n%%EOF\n", n + 1, n + 3).as_bytes());
+        let len = file.len();
+        crate::parser::ENDSTREAM_SCAN.with(|c| c.set(0));
+        let doc = Document::open(Arc::new(file)).unwrap();
+        for k in [1, n / 2, n] {
+            assert!(matches!(doc.try_get(k).as_deref(), Ok(Object::Stream(_))), "object {k}");
+        }
+        let scanned = crate::parser::ENDSTREAM_SCAN.with(|c| c.get());
+        assert!(scanned <= 4 * len, "{scanned} bytes searched in a {len}-byte file");
+    }
+
+    #[test]
+    fn editor_cache_counts_deeply_nested_strings() {
+        let mut nested = Object::String(crate::PdfString::literal(vec![b'x'; 1 << 20]));
+        for _ in 0..8 {
+            nested = Object::Array(vec![nested]);
+        }
+        let mut source = Document::new_empty();
+        let objects: Vec<_> = (0..48).map(|_| Object::Ref(source.add(nested.clone()))).collect();
+        source.update_dict(source.root().unwrap(), |d| d.set(b"Extension".to_vec(), Object::Array(objects))).unwrap();
+        let bytes = Arc::new(crate::write_full(&source, &crate::SaveOptions::default()).unwrap());
+        let doc = Document::open(bytes).unwrap();
+        assert_eq!(owned_bytes(&nested, &doc.data, 0), 1 << 20);
+        let root = doc.get(doc.root().unwrap());
+        for reference in root.as_dict().unwrap().get(b"Extension").unwrap().as_array().unwrap() {
+            let Object::Ref(reference) = reference else { panic!("indirect object") };
+            drop(doc.get(*reference));
+            let cache = doc.cache.lock().unwrap();
+            let owned = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &doc.data, 0)));
+            let strings = cache.values().filter(|o| o.as_array().is_some()).count();
+            assert!(strings << 20 <= Document::EDITOR_CACHE_BYTES + (1 << 20), "{strings} MiB strings cached, {owned} bytes counted");
+        }
+    }
+
+    #[test]
     fn editor_cache_stays_bounded() {
         let mut source = Document::new_empty();
         let objects: Vec<_> = (0..(Document::EDITOR_CACHE_OBJECTS + 64))
@@ -3139,6 +3233,55 @@ endobj
         }
         out.extend_from_slice(format!("trailer << /Size 6 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
         out
+    }
+
+    /// Many revisions naming one hybrid /XRefStm read it once.
+    #[test]
+    fn a_hybrid_stream_named_by_many_revisions_is_read_once() {
+        let mut out = object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0);
+        let stream = find(&out, b"5 0 obj", 0, out.len()).unwrap();
+        let mut prev = rfind(&out, b"\nxref\n", 0).unwrap() + 1;
+        let revisions = 200;
+        for _ in 0..revisions {
+            let at = out.len();
+            out.extend_from_slice(
+                format!("xref\ntrailer << /Size 6 /Root 1 0 R /XRefStm {stream} /Prev {prev} >>\nstartxref\n{at}\n%%EOF\n").as_bytes(),
+            );
+            prev = at;
+        }
+        let doc = Document::open(Arc::new(out)).unwrap();
+        SECTION_READS.with(|c| c.set(0));
+        let (entries, ..) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
+        let reads = SECTION_READS.with(|c| c.get());
+        assert!(reads <= revisions + 2, "{reads} sections read for {} revisions", revisions + 1);
+        assert!(matches!(entries.get(&3), Some(XrefEntry::InStream { stream: 4, .. })), "{:?}", entries.get(&3));
+        assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
+        assert_compact_matches_materialized(&doc);
+    }
+
+    /// An older section that names an /XRefStm a newer section already read still has its own
+    /// table compared with that stream, so an entry it sets aside is recorded for it.
+    #[test]
+    fn a_repeated_hybrid_stream_records_each_sections_conflicts() {
+        let mut out = object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0);
+        let stream = find(&out, b"5 0 obj", 0, out.len()).unwrap();
+        let catalog = find(&out, b"1 0 obj", 0, out.len()).unwrap();
+        let base = rfind(&out, b"\nxref\n", 0).unwrap() + 1;
+        // This section's table places object 3 at the catalog; the stream puts it in object stream 4.
+        let older = out.len();
+        out.extend_from_slice(
+            format!(
+                "xref\n3 1\n{catalog:010} 00000 n \ntrailer << /Size 6 /Root 1 0 R /XRefStm {stream} /Prev {base} >>\nstartxref\n{older}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+        let newer = out.len();
+        out.extend_from_slice(
+            format!("xref\ntrailer << /Size 6 /Root 1 0 R /XRefStm {stream} /Prev {older} >>\nstartxref\n{newer}\n%%EOF\n").as_bytes(),
+        );
+        let doc = Document::open(Arc::new(out)).unwrap();
+        assert_eq!(doc.xref_oddities(), [(older as u64, 3)]);
+        assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"));
     }
 
     fn text_of(doc: &Document, num: u32, key: &[u8]) -> Option<String> {

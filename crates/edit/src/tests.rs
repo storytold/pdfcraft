@@ -6355,3 +6355,237 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
         ]
     );
 }
+
+/// Text set larger than the widest page PDF allows (14 400 pt) panicked when its paragraph was given
+/// a width: the width is clamped between the font size and 14 400 pt, and `f64::clamp` panics when
+/// its minimum is the larger. The width is now capped at 14 400 pt whatever the font size: from the
+/// file (`Tf`, or a small `Tf` scaled up by `Tm`) or asked for (the automation tools pass it through).
+#[test]
+fn width_on_a_paragraph_set_larger_than_a_page_is_capped_not_a_panic() {
+    let wide = text::BlockStyle { width: Some(200.0), ..Default::default() };
+    let huge = text::BlockStyle { size: Some(20_000.0), width: Some(200.0), ..Default::default() };
+    for (content, style) in [
+        ("BT /F2 20000 Tf 72 700 Td (ab) Tj ET", &wide),
+        ("BT /F2 1 Tf 20000 0 0 20000 72 700 Tm (ab) Tj ET", &wide),
+        ("BT /F2 12 Tf 72 700 Td (ab) Tj ET", &huge),
+    ] {
+        let mut doc = text_page(content);
+        text::rewrite_block(&mut doc, 0, 0, None, style).unwrap();
+    }
+}
+
+#[test]
+fn added_text_is_wrapped_once_per_write() {
+    let mut doc = fixture();
+    let lines: Vec<String> = (0..40).map(|i| format!("line {i}")).collect();
+    let text = AddedText { rect: [72.0, 100.0, 300.0, 700.0], text: lines.join("\n"), size: 10.0, align: Align::Justify, ..AddedText::default() };
+    added::WRAP_CALLS.with(|c| c.set(0));
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let calls = added::WRAP_CALLS.with(std::cell::Cell::get);
+    assert!(calls <= 4, "the text was wrapped {calls} times for 40 lines");
+}
+
+/// A field tree whose every node lists its child twice is pruned in work linear in its nodes, not
+/// in its paths, and a node listing itself is visited once.
+#[test]
+fn flattening_prunes_a_field_tree_with_repeated_kids_once_per_node() {
+    let levels = 16;
+    let page = stream("", " ");
+    // 5: the flattened widget; 6…: the chain; then the hidden widget at its end, on the page.
+    let leaf = 6 + levels;
+    let fields = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R {} 0 R] >> >>", leaf + 2);
+    let annots = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R {leaf} 0 R] >>");
+    let mut objs: Vec<String> = vec![
+        fields,
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        annots,
+        page,
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Rect [10 10 150 40] /F 4 /AP << /N {} 0 R >> >>", leaf + 1),
+    ];
+    for i in 0..levels {
+        let next = 7 + i;
+        objs.push(format!("<< /T (n{i}) /Kids [{next} 0 R {next} 0 R] >>"));
+    }
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /T (hidden) /Rect [10 90 150 120] /F 2 >>".into());
+    objs.push("<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into());
+    objs.push(format!("<< /T (loop) /Kids [{} 0 R] >>", leaf + 2));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    flatten::KEEP_CALLS.with(|c| c.set(0));
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    let calls = flatten::KEEP_CALLS.with(std::cell::Cell::get);
+    assert!(calls <= 2 * (levels + 4), "{calls} field-tree visits");
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let left = doc.resolve(af.as_dict().unwrap().get(b"Fields").unwrap()).as_array().unwrap().len();
+    assert_eq!(left, 2, "the chain to the hidden widget and the self-listing node stay");
+}
+
+/// A field reached first at the end of a long chain has its kids cut off by the depth limit, so
+/// they survive there. A shorter path to the same field still looks at its kids: an off-page widget
+/// under it is taken out when every field is flattened.
+#[test]
+fn a_field_reached_again_by_a_shorter_path_is_pruned_there() {
+    let chain = 64;
+    let page = stream("", " ");
+    // 7…: the chain; then the shared field, its off-page widget, and the short path to it.
+    let shared = 7 + chain;
+    let fields = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 7 0 R {} 0 R] >> >>", shared + 2);
+    let mut objs: Vec<String> = vec![
+        fields,
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>".into(),
+        page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Rect [10 10 150 40] /F 4 /AP << /N 6 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    for i in 0..chain {
+        objs.push(format!("<< /T (c{i}) /Kids [{} 0 R] >>", 8 + i));
+    }
+    objs.push(format!("<< /T (shared) /Kids [{} 0 R] >>", shared + 1));
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /T (orphan) /Rect [10 50 150 80] /F 4 >>".into());
+    objs.push(format!("<< /T (short) /Kids [{shared} 0 R] >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    let shared_ref = pdfcraft_cos::ObjRef::new(u32::try_from(shared).unwrap(), 0);
+    let kids = doc.resolve(doc.get(shared_ref).as_dict().unwrap().get(b"Kids").unwrap()).as_array().unwrap().len();
+    assert_eq!(kids, 0, "the off-page widget is pruned along the short path");
+}
+
+/// A ToUnicode destination is repeated for every glyph that shows its code: a page whose text
+/// would run past the extraction budget is refused, not built in memory.
+#[test]
+fn page_text_past_the_budget_is_refused() {
+    let cmap = stream("", &format!("1 beginbfchar <41> <{}> endbfchar", "0041".repeat(256)));
+    let page = |shown: &str| {
+        let content = stream("", &format!("BT /F1 12 Tf 10 10 Td ({shown}) Tj ET"));
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            &content,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+            &cmap,
+        ])
+    };
+    let doc = page(&"A".repeat(100_000));
+    assert!(matches!(text_lines(&doc, 0), Err(EditError::Invalid(_))), "25 MB of text from a 100 kB page");
+    let doc = page("AA");
+    assert_eq!(text_lines(&doc, 0).unwrap()[0].text.len(), 512, "a page within the budget still reads");
+}
+
+/// A one-page document from the page's /Contents and /Resources, built in code.
+fn page_with(build: impl FnOnce(&mut Document) -> (Object, Dict)) -> Document {
+    let mut doc = Document::new_empty();
+    let pages = doc.add(Object::Null);
+    let (contents, resources) = build(&mut doc);
+    let page: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Page".to_vec())),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::from).to_vec())),
+        (b"Contents".to_vec(), contents),
+        (b"Resources".to_vec(), Object::Dict(resources)),
+    ]
+    .into_iter()
+    .collect();
+    let page = doc.add(page);
+    let tree: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Pages".to_vec())),
+        (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+        (b"Count".to_vec(), Object::Int(1)),
+    ]
+    .into_iter()
+    .collect();
+    doc.set(pages, Object::Dict(tree));
+    let catalog: Dict = [(b"Type".to_vec(), Object::Name(b"Catalog".to_vec())), (b"Pages".to_vec(), Object::Ref(pages))].into_iter().collect();
+    let catalog = doc.add(catalog);
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    doc
+}
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    // One 1 MiB stream (a kilobyte on disk) named 300 times by the page's /Contents.
+    let doc = page_with(|doc| {
+        let spaces = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+        (Object::Array(vec![Object::Ref(spaces); 300]), Dict::new())
+    });
+    match text_lines(&doc, 0) {
+        Ok(lines) => panic!("read {} lines from more content than a page may decode", lines.len()),
+        Err(e) => assert!(matches!(e, EditError::Invalid(_)), "{e}"),
+    }
+}
+
+#[test]
+fn reading_images_stops_at_the_page_record_limit() {
+    // 20 draws of a form drawing a form 20 times that draws an image 20 times: 8,000 images
+    // per level-two form, 160,000 in all, from a few hundred bytes.
+    let doc = page_with(|doc| {
+        let image: Dict = [
+            (b"Subtype".to_vec(), Object::Name(b"Image".to_vec())),
+            (b"Width".to_vec(), Object::Int(1)),
+            (b"Height".to_vec(), Object::Int(1)),
+            (b"ColorSpace".to_vec(), Object::Name(b"DeviceGray".to_vec())),
+            (b"BitsPerComponent".to_vec(), Object::Int(8)),
+        ]
+        .into_iter()
+        .collect();
+        let mut inner = doc.add(Stream::from_raw(image, vec![0]));
+        let draws = "/X Do ".repeat(20);
+        let resources = |inner: pdfcraft_cos::ObjRef| -> Dict {
+            let xobjects: Dict = [(b"X".to_vec(), Object::Ref(inner))].into_iter().collect();
+            [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect()
+        };
+        for _ in 0..3 {
+            let mut d = resources(inner);
+            d = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec())), (b"Resources".to_vec(), Object::Dict(d))].into_iter().collect();
+            inner = doc.add(Stream::from_raw(d, draws.clone().into_bytes()));
+        }
+        let page = doc.add(Stream::from_raw(Dict::new(), draws.into_bytes()));
+        (Object::Ref(page), resources(inner))
+    });
+    if let Ok(images) = crate::reading_images(&doc, 0) {
+        assert!(images.len() <= crate::images::MAX_PAGE_IMAGES, "{} images", images.len());
+    }
+}
+
+#[test]
+fn reading_spends_one_decode_budget_on_content_and_forms() {
+    // 130 MiB of content and a 130 MiB form (a kilobyte each on disk): each fits a page's budget,
+    // together they don't, so reading leaves the form out and says so.
+    let doc = page_with(|doc| {
+        let mut body = b"%".to_vec();
+        body.resize(130 << 20, b'x');
+        let form: Dict = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect();
+        let form = doc.add(Stream::flate(form, &body));
+        let mut content = b"/X Do\n%".to_vec();
+        content.resize(130 << 20, b'x');
+        let content = doc.add(Stream::flate(Dict::new(), &content));
+        let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
+        (Object::Ref(content), [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect())
+    });
+    assert!(crate::text::reading_blocks_checked(&doc, 0).unwrap().truncated);
+}
+
+/// A page that can't take flattened content on top (marked content nested past the depth budget)
+/// refuses the whole flatten: the pages before it keep their comments and content.
+#[test]
+fn a_flatten_refused_on_a_later_page_changes_nothing() {
+    let deep = stream("", &"/Artifact BMC\n".repeat(10_001));
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>",
+        &stream("", " "),
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /F 4 /AP << /N 9 0 R >> >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 7 0 R /Annots [8 0 R] >>",
+        &deep,
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /F 4 /AP << /N 9 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let first = pdfcraft_cos::ObjRef::new(3, 0);
+    let before = (*doc.get(first)).clone();
+    assert!(matches!(flatten(&mut doc, &[0, 1], true, false), Err(EditError::Invalid(_))));
+    assert_eq!((*doc.get(first)).clone(), before, "the first page keeps its comment and content");
+}

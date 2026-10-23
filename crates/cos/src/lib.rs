@@ -13,6 +13,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod budget;
 mod bytes;
 mod document;
 mod object;
@@ -21,6 +22,7 @@ mod parser;
 mod security;
 mod writer;
 
+pub use budget::{DecodeBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
 pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};

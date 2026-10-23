@@ -665,17 +665,20 @@ pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
 /// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
 /// never one entry per child, so a child listed many times or shared between nodes is skipped by
 /// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
-/// Cycles end at the seen check and at most a million nodes are visited.
+/// Cycles end at the seen check, a `/Kids` array object shared by several nodes is read once,
+/// and at most a million nodes and four million `/Kids` entries are read.
 struct PageWalk<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<ObjRef>,
     pending: Vec<(std::sync::Arc<Object>, usize)>,
+    /// `/Kids` entries read so far.
+    examined: usize,
 }
 
 impl<'a> PageWalk<'a> {
     fn new(doc: &'a Document, top: ObjRef) -> Self {
         let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
-        Self { doc, seen: Default::default(), pending: vec![(top, 0)] }
+        Self { doc, seen: Default::default(), pending: vec![(top, 0)], examined: 0 }
     }
 }
 
@@ -690,8 +693,9 @@ impl Iterator for PageWalk<'_> {
             };
             let node = kid.as_ref();
             *next += 1;
+            self.examined += 1;
             let Some(node) = node else { continue };
-            if self.seen.len() >= 1_000_000 {
+            if self.seen.len() >= 1_000_000 || self.examined > 4_000_000 {
                 self.pending.clear();
                 return None;
             }
@@ -700,8 +704,15 @@ impl Iterator for PageWalk<'_> {
             }
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
-            match d.get(b"Kids").map(|k| self.doc.resolve(k)) {
-                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((kids, 0)),
+            match d.get(b"Kids") {
+                // A `/Kids` array object shared by several nodes is read under the first: under
+                // the others it would only list nodes already seen.
+                Some(Object::Ref(array)) if d.name(b"Type") != Some(b"Page") => {
+                    if self.seen.insert(*array) {
+                        self.pending.push((self.doc.get(*array), 0));
+                    }
+                }
+                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((self.doc.resolve(kids), 0)),
                 _ => return Some(node),
             }
         }
@@ -717,7 +728,16 @@ fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {
 fn annots(doc: &Document, page: ObjRef) -> Vec<Object> {
     let obj = doc.get(page);
     let Some(a) = obj.as_dict().and_then(|d| d.get(b"Annots")) else { return Vec::new() };
-    doc.resolve(a).as_array().cloned().unwrap_or_default()
+    let list = doc.resolve(a).as_array().cloned().unwrap_or_default();
+    #[cfg(test)]
+    ANNOTS_ENTRIES_COPIED.with(|n| n.set(n.get() + list.len()));
+    list
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Entries copied out of pages' `/Annots` arrays.
+    static ANNOTS_ENTRIES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Replace a page's `/Annots`, writing into the shared array object when it is indirect.

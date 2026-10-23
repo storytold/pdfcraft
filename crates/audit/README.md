@@ -33,7 +33,12 @@ Limits, by design and documented rather than hidden:
   less than 40% of its words (a sliver of a long value) is not flagged.
 
 It fails closed: an undecodable content stream, malformed `/Annots`, form XObjects nested deeper
-than 32 or in a cycle, or a walk past the operator bound is an error, never "no findings".
+than 32 or in a cycle, a walk past the operator bound, more than 50 million cover-against-word
+comparisons on a page, or more than 64 MiB of covered text in the report is an error, never "no
+findings".
+
+A document whose permissions withhold copying (Table 22, bit 5) still gets every finding, with
+an empty `covered_text`: the audit hands out no text that copying would refuse.
 
 Surfaces: the `doc_audit_redactions` automation tool and `pdfcraft-cli audit`. Both report each
 rectangle in points from the top-left of the page as displayed (y down, after `/Rotate`), like

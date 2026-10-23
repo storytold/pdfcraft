@@ -740,4 +740,23 @@ pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), 
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Steps taken on this thread by loops whose cost follows the input's shape, so a test can
+    /// bound the work a hostile document causes without timing it.
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count `n` steps of input-shaped work (see [`WORK`]).
+#[cfg(test)]
+fn work(n: usize) {
+    WORK.with(|w| w.set(w.get().saturating_add(n)));
+}
+
+/// The steps counted on this thread since the last call.
+#[cfg(test)]
+fn take_work() -> usize {
+    WORK.with(|w| w.replace(0))
+}
+
+#[cfg(test)]
 mod tests;

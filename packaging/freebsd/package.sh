@@ -14,7 +14,7 @@ LINUX="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.pdfcraft
 
 SKIP_BUILD=0
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     -h | --help) sed -n '2,9p' "$0"; exit 0 ;;
@@ -22,20 +22,35 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-  amd64 | x86_64) ARCH=x86_64 ;;
-  arm64 | aarch64) ARCH=aarch64 ;;
-  *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
+release_arch() {
+  case "$1" in
+    amd64 | x86_64) echo x86_64 ;;
+    arm64 | aarch64) echo aarch64 ;;
+    *) echo "unsupported architecture $1" >&2; return 2 ;;
+  esac
+}
+# The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
+# aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
+case "${CARGO_BUILD_TARGET:-}" in
+  "") ARCH="$(release_arch "$(uname -m)")" ;;
+  aarch64-unknown-freebsd | x86_64-unknown-freebsd) ARCH="$(release_arch "${CARGO_BUILD_TARGET%%-*}")" ;;
+  *) echo "CARGO_BUILD_TARGET=$CARGO_BUILD_TARGET is not a supported FreeBSD target" >&2; exit 2 ;;
 esac
+# Only binaries for this machine run here (the --version check at the end); a FreeBSD target built
+# on another OS never does.
+HOST_ARCH="$(release_arch "$(uname -m)" 2>/dev/null)" || HOST_ARCH="$(uname -m)"
+if [ -n "${CARGO_BUILD_TARGET:-}" ] && [ "$(uname -s)" != FreeBSD ]; then
+  HOST_ARCH="$(uname -s) $HOST_ARCH"
+fi
 BASENAME="pdfcraft-$VERSION-freebsd-$ARCH"
 
 echo "==> PdfCraft $VERSION for FreeBSD $ARCH"
 
-if [ "$SKIP_BUILD" = 0 ]; then
+if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
 fi
-BIN="$CARGO_TARGET_DIR/release"
+# Cargo puts a cross build under target/<triple>/release.
+BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 STAGE="$WORK/$BASENAME"
 rm -rf "$WORK"
@@ -51,10 +66,24 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PDFCRAFT_BUILD_DATE/g" \
   "$LINUX/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
 copy_docs "$STAGE/share/doc/pdfcraft"
-# OCR models: the app finds them at <bin>/../share/pdfcraft/models.
-stage_models "$STAGE/share/pdfcraft/models"
+# OCR models: the app finds them at <bin>/../share/pdfcraft/models. They come from cargo xtask,
+# which has to run here: build it for this machine, not for CARGO_BUILD_TARGET.
+(unset CARGO_BUILD_TARGET; stage_models "$STAGE/share/pdfcraft/models")
 
-"$STAGE/bin/pdfcraft" --version
+if [ "$ARCH" = "$HOST_ARCH" ]; then
+  "$STAGE/bin/pdfcraft" --version
+else
+  # They cannot run here, so check what they are instead: executables, not libraries or objects.
+  # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.
+  want="$ARCH"; [ "$ARCH" != x86_64 ] || want=x86-64
+  for b in "$STAGE"/bin/*; do
+    case "$(file -b "$b")" in
+      ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
+      *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
+    esac
+  done
+  echo "skipping --version: an $ARCH binary does not run on this $HOST_ARCH machine"
+fi
 mkdir -p "$DIST"
 tar -C "$WORK" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $DIST/$BASENAME.tar.gz"
