@@ -4,14 +4,21 @@
 //! Recognition is slow (about a second a page), so it is split from the edit: [`Session::ocr_job`]
 //! captures what it needs, [`OcrJob::run`] works anywhere (the UI runs it on a worker thread) and
 //! [`Session::apply_ocr`] applies the result as one undoable step.
+//!
+//! On a scan with no text of its own, recognition also straightens the page first, as Acrobat
+//! does: a slightly turned scan image is turned level ([`OcrSettings::deskew`], [`ImageEdit::RotateBy`])
+//! and a page scanned sideways or upside down gets the `/Rotate` that shows it upright
+//! ([`OcrSettings::auto_rotate`]). Both are lossless: the image's pixels are not changed.
 
 use std::sync::{Arc, Mutex};
 
-use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RenderedPage, RequestKind};
 
 pub use pdfcraft_ocr::{LANGUAGES, Models, Ocr, OcrError, PlacedWord};
 
-use crate::{DocId, Edit, EditError, Session};
+use pdfcraft_ocr::{Line, orient};
+
+use crate::{DocId, Edit, EditError, ImageEdit, Session};
 
 /// Recognize Text settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,11 +36,20 @@ pub struct OcrSettings {
     /// that is read, so a scan with a few comments on it is still a scan. `false`: everything
     /// the page shows.
     pub native_text_only: bool,
+    /// Turn pages scanned sideways or upside down upright (their `/Rotate`), when their text
+    /// only reads as words that way. Only pages without text of their own.
+    pub auto_rotate: bool,
+    /// Turn a slightly turned scan image level before reading it. Only pages without text of
+    /// their own whose scan image covers at least half the page.
+    pub deskew: bool,
 }
 
 /// A recognised word whose box is at least this much covered by the page's own text is that
 /// text read again, not a word in a picture.
 const ALREADY_ON_PAGE: f32 = 0.5;
+
+/// A scan image covers at least this share of its page (as `scan_fields::is_scan` counts it).
+const SCAN_COVERS: f64 = 0.5;
 
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
@@ -56,7 +72,7 @@ fn covered(word: [f32; 4], text: &[[f32; 4]]) -> f32 {
 
 impl Default for OcrSettings {
     fn default() -> Self {
-        OcrSettings { dpi: 300.0, language: "en".into(), skip_text_pages: true, native_text_only: false }
+        OcrSettings { dpi: 300.0, language: "en".into(), skip_text_pages: true, native_text_only: false, auto_rotate: true, deskew: true }
     }
 }
 
@@ -69,6 +85,24 @@ pub struct OcrPage {
     pub already_on_page: usize,
     /// Why the page was not read, if it was skipped.
     pub skipped: Option<String>,
+    /// Quarter turns clockwise added to the page's `/Rotate` to show it upright.
+    pub turn: u8,
+    /// The scan image to level, if it needs it.
+    pub straighten: Option<Straighten>,
+    /// The document's edit generation when the page was read. Recognition runs in the
+    /// background: [`Session::apply_ocr`] refuses the corrections when the document has changed
+    /// since (a page turned, a scan moved or replaced, text added), as they were worked out for
+    /// the page as it was.
+    pub generation: u64,
+}
+
+/// A scan image that recognition levels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Straighten {
+    /// Its index in `Document::page_images`.
+    pub image: usize,
+    /// The turn that levels it, in degrees counter-clockwise as displayed.
+    pub degrees: f32,
 }
 
 impl OcrPage {
@@ -94,6 +128,14 @@ pub fn available() -> bool {
     Models::find().is_some()
 }
 
+/// One page read by [`OcrJob::read`]: the quarter turns clockwise it was read at, the level it
+/// was read at, and what it says (in the pixels of the levelled, turned rendering).
+struct Reading {
+    turn: u8,
+    straighten: Option<Straighten>,
+    lines: Vec<Line>,
+}
+
 /// Everything recognition needs from a document, detached from the session.
 pub struct OcrJob {
     bytes: Arc<Vec<u8>>,
@@ -102,6 +144,11 @@ pub struct OcrJob {
     /// Per page: the render scale (pixels per point) that shows its images at their own
     /// resolution, if it has any.
     native: Vec<Option<f32>>,
+    /// Per page: its scan image, if one covers at least half of it (index in
+    /// `Document::page_images`, and where it is in user space).
+    scan_image: Vec<Option<(usize, [f64; 4])>>,
+    /// The document's edit generation when the job was made.
+    generation: u64,
     pub pages: Vec<usize>,
     pub settings: OcrSettings,
 }
@@ -120,7 +167,9 @@ impl OcrJob {
                 break;
             }
             let Some(info) = self.infos.get(page) else { continue };
-            let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()) };
+            let generation = self.generation;
+            let skip =
+                |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), turn: 0, straighten: None, generation };
             // The boxes of the page's own text (an earlier OCR layer's included), in view space.
             let existing: Vec<[f32; 4]> = r
                 .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
@@ -136,26 +185,105 @@ impl OcrJob {
                 out.push(skip(&e));
                 continue;
             }
-            let lines = match ocr.recognize(&shot.rgba, shot.width, shot.height) {
-                Ok(l) => l,
+            let scale = shot.width as f32 / info.width.max(1e-3);
+            // Straightening a page with text of its own would move the picture from under it.
+            let scan = if existing.is_empty() { self.scan_image.get(page).copied().flatten() } else { None };
+            let correct = existing.is_empty() && (self.settings.auto_rotate || self.settings.deskew);
+            let mut read = self.read(ocr, &shot, correct, scan, |[x, y]| info.user_to_view(x, y).map(|v| v * scale));
+            // A level that the text doesn't confirm (a photo, a drawing) is not applied.
+            if matches!(&read, Ok(r) if r.straighten.is_some() && orient::reads_as_words(&r.lines) != Some(true)) {
+                read = self.read(ocr, &shot, correct, None, |_| [0.0; 2]);
+            }
+            let read = match read {
+                Ok(r) => r,
                 Err(e) => {
                     out.push(skip(&e.to_string()));
                     continue;
                 }
             };
-            let scale = shot.width as f32 / info.width.max(1e-3);
+            let (w, h, turn) = (shot.width, shot.height, read.turn);
             let to_user = |x: f32, y: f32| {
+                let [x, y] = orient::unturn([x, y], w, h, turn);
                 let [u, v] = info.view_to_user(x / scale, y / scale);
                 [u as f64, v as f64]
             };
             // Words the page's own text already has are not added a second time.
             let (fresh, already): (Vec<_>, Vec<_>) =
-                lines.iter().flat_map(|l| &l.words).partition(|w| covered(w.rect.map(|v| v / scale), &existing) < ALREADY_ON_PAGE);
-            let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect();
-            out.push(OcrPage { page, words, already_on_page: already.len(), skipped: None });
+                read.lines.iter().flat_map(|l| &l.words).partition(|w| covered(w.rect.map(|v| v / scale), &existing) < ALREADY_ON_PAGE);
+            let words: Vec<PlacedWord> = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect();
+            // Nothing read: nothing confirms the corrections either.
+            let (turn, straighten) = if words.is_empty() { (0, None) } else { (read.turn, read.straighten) };
+            out.push(OcrPage { page, words, already_on_page: already.len(), skipped: None, turn, straighten, generation });
         }
         progress(total, total);
         out
+    }
+
+    /// Read one rendered page. With `correct`, first level it when
+    /// `scan` (its scan image and where it is in user space; `to_view` maps user space to
+    /// the rendering's pixels) is turned slightly and deskew is on, then read it turned each
+    /// way until its text reads as words, when auto-rotate is on.
+    fn read(
+        &self,
+        ocr: &Ocr,
+        shot: &RenderedPage,
+        correct: bool,
+        scan: Option<(usize, [f64; 4])>,
+        to_view: impl Fn([f32; 2]) -> [f32; 2],
+    ) -> Result<Reading, OcrError> {
+        let (rgba, width, height) = (&shot.rgba[..], shot.width, shot.height);
+        let found = if correct { orient::skew(rgba, width, height) } else { None };
+        let mut straighten = None;
+        let level: std::borrow::Cow<[u8]> = match (found, scan) {
+            (Some(s), Some((image, rect))) if self.settings.deskew && s.degrees != 0.0 => {
+                straighten = Some(Straighten { image, degrees: s.degrees });
+                // The same centre ImageEdit::RotateBy turns the image about.
+                let centre = [((rect[0] + rect[2]) / 2.0) as f32, ((rect[1] + rect[3]) / 2.0) as f32];
+                orient::rotate(rgba, width, height, s.degrees, to_view(centre)).into()
+            }
+            _ => rgba.into(),
+        };
+        // Lines running down the page: it lies on its side, so try the side turns first.
+        let pairs: &[[u8; 2]] = match found {
+            Some(s) if self.settings.auto_rotate && s.vertical => &[[1, 3], [0, 2]],
+            Some(_) if self.settings.auto_rotate => &[[0, 2], [1, 3]],
+            _ => &[],
+        };
+        let read_turned = |q: u8| {
+            if q == 0 {
+                return ocr.recognize(&level, width, height);
+            }
+            let (px, w, h) = orient::quarter_turn(&level, width, height, q);
+            ocr.recognize(&px, w, h)
+        };
+        let mut upright = None;
+        // Text read upside down still makes some lowercase "words", so each way is weighed
+        // against the opposite one: the way up reads many more plausible characters.
+        // ponytail: two recognitions a page (four when the lines' direction was misjudged); a
+        // pixel-only up/down test (ascenders against descenders) would save one.
+        for &[a, b] in pairs {
+            let (la, lb) = (read_turned(a)?, read_turned(b)?);
+            let (ga, gb) = (orient::plausibility(&la).0, orient::plausibility(&lb).0);
+            let (q, lines, other) = if gb > ga { (b, lb, la) } else { (a, la, lb) };
+            let verdict = orient::reads_as_words(&lines);
+            if verdict == Some(true) {
+                return Ok(Reading { turn: q, straighten, lines });
+            }
+            match (q, a, b) {
+                (0, ..) => upright = Some(lines),
+                (_, 0, _) | (_, _, 0) => upright = Some(other),
+                _ => {}
+            }
+            // Too little text to tell which way up it is: no other way finds more.
+            if verdict.is_none() {
+                break;
+            }
+        }
+        let lines = match upright {
+            Some(l) => l,
+            None => read_turned(0)?,
+        };
+        Ok(Reading { turn: 0, straighten, lines })
     }
 
     /// The render scale (pixels per point) `page` is read at. A scan is read at its own
@@ -193,13 +321,62 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
-        Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings })
+        let scan_image = (0..all)
+            .map(|p| {
+                let info = doc.info.pages.get(p)?;
+                if !pages.contains(&p) {
+                    return None;
+                }
+                let [cx0, cy0, cx1, cy1] = info.crop.map(f64::from);
+                let page_area = (cx1 - cx0) * (cy1 - cy0);
+                let (index, area, rect) = doc
+                    .page_images(p)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, i)| !i.is_form && i.width > 1 && i.height > 1)
+                    .map(|(n, i)| {
+                        let r = i.visible_rect.unwrap_or(i.rect);
+                        let w = (r[2].min(cx1) - r[0].max(cx0)).max(0.0);
+                        let h = (r[3].min(cy1) - r[1].max(cy0)).max(0.0);
+                        (n, w * h, r)
+                    })
+                    .filter(|(_, a, _)| a.is_finite())
+                    .max_by(|a, b| a.1.total_cmp(&b.1))?;
+                (page_area.is_finite() && area >= SCAN_COVERS * page_area).then_some((index, rect))
+            })
+            .collect();
+        Some(OcrJob {
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            infos: doc.info.pages.clone(),
+            native,
+            scan_image,
+            generation: doc.edit_generation(),
+            pages,
+            settings,
+        })
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
-        let edits: Vec<Edit> =
-            found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let changed = || EditError::Invalid("the document changed while its text was being recognised; recognise it again".into());
+        let mut edits = Vec::new();
+        for p in found.iter().filter(|p| !p.words.is_empty()) {
+            // Both corrections are relative to the page as it was read.
+            if (p.turn % 4 != 0 || p.straighten.is_some()) && p.generation != doc.edit_generation() {
+                return Err(changed());
+            }
+            // The words are in user space, which neither correction moves.
+            if let Some(s) = p.straighten {
+                // RotateBy turns clockwise as drawn; the level is counter-clockwise.
+                edits.push(Edit::EditPageImage { page: p.page, index: s.image, change: ImageEdit::RotateBy(-f64::from(s.degrees)) });
+            }
+            if p.turn % 4 != 0 {
+                edits.push(Edit::RotatePages { pages: vec![p.page], degrees: 90 * i64::from(p.turn % 4) });
+            }
+            edits.push(Edit::AddOcrText { page: p.page, words: p.words.clone() });
+        }
         let words = found.iter().map(|p| p.words.len()).sum();
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Recognize text".into(), edits })?;

@@ -30,18 +30,28 @@ pub struct OcrDraft {
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
     pub text_pages: bool,
+    /// Turn scans that lie sideways or upside down upright, and level turned scans.
+    pub auto_rotate: bool,
+    pub deskew: bool,
 }
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false, auto_rotate: true, deskew: true }
     }
 }
 
 impl OcrDraft {
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
-        OcrSettings { dpi: self.dpi as f32, language: self.language.clone(), skip_text_pages: !self.text_pages, ..Default::default() }
+        OcrSettings {
+            dpi: self.dpi as f32,
+            language: self.language.clone(),
+            skip_text_pages: !self.text_pages,
+            auto_rotate: self.auto_rotate,
+            deskew: self.deskew,
+            ..Default::default()
+        }
     }
 }
 
@@ -145,6 +155,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add_space(4.0);
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
+        ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Auto-rotate pages")));
+        ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Deskew pages")));
     });
     if !available {
         ui.label(
@@ -212,6 +224,9 @@ impl PdfCraftApp {
         let mut settings = self.ocr_draft.settings();
         settings.skip_text_pages = true;
         settings.native_text_only = true;
+        // Turning Edit on reads the page; it doesn't turn or level it (that is Recognize text's).
+        settings.auto_rotate = false;
+        settings.deskew = false;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
     }
 
@@ -632,7 +647,15 @@ mod tests {
         let word = || pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] };
         let finished = |app: &PdfCraftApp, automatic: bool| {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
-            let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None };
+            let page = pdfcraft_engine::ocr::OcrPage {
+                page: 0,
+                words: vec![word()],
+                already_on_page: 0,
+                skipped: None,
+                turn: 0,
+                straighten: None,
+                generation,
+            };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
             OcrRun { doc: app.active_ids().unwrap().1, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
         };
@@ -672,6 +695,9 @@ mod tests {
             words: vec![pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] }],
             already_on_page: 0,
             skipped: None,
+            turn: 0,
+            straighten: None,
+            generation,
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_run = Some(OcrRun { doc: id, progress, automatic: Some(AutoOcr { page: 0, generation }) });
