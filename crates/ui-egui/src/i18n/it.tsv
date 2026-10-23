@@ -2747,3 +2747,11 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+# Fast Web View (linearized saving)
+	Saving	Salvataggio
+	Save As optimizes for Fast Web View	Salva con nome ottimizza per la visualizzazione web veloce
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Salva con nome scrive un file linearizzato la cui prima pagina compare prima che il resto sia scaricato. Salva aggiunge le modifiche alla fine del file, disattivando la visualizzazione web veloce.
+	Fast Web View	Visualizzazione web veloce
+	Saved {name}, optimized for Fast Web View	{name} salvato, ottimizzato per la visualizzazione web veloce
+	Saved {name} without Fast Web View: {e}	{name} salvato senza visualizzazione web veloce: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} salvato. La visualizzazione web veloce è disattivata: Salva aggiunge le modifiche alla fine del file.

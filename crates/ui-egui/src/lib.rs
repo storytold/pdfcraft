@@ -564,6 +564,9 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Preferences: Save As writes the file linearized for Fast Web View (a full rewrite, ISO
+    /// 32000-2 Annex F). Off, so Save As writes what Save writes unless asked.
+    pub save_as_fast_web_view: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     pub dialog: Option<Dialog>,
@@ -973,6 +976,7 @@ impl PdfCraftApp {
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
+            save_as_fast_web_view: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             dialog: None,
             update_source: None,
@@ -2430,6 +2434,7 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["save_as_fast_web_view"] = serde_json::Value::Bool(self.save_as_fast_web_view);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
@@ -2524,6 +2529,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
+        }
+        if let Some(on) = v["save_as_fast_web_view"].as_bool() {
+            self.save_as_fast_web_view = on;
         }
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
@@ -2915,6 +2923,13 @@ impl PdfCraftApp {
                     "true" => true,
                     "false" => false,
                     _ => return Err("flatten-fill-sign must be true or false".into()),
+                };
+            }
+            ("fast-web-view", _) => {
+                self.save_as_fast_web_view = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("fast-web-view must be true or false".into()),
                 };
             }
             ("comment", Some(v)) => {

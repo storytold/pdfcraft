@@ -2537,3 +2537,11 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+# Fast Web View (linearized saving)
+	Saving	Збереження
+	Save As optimizes for Fast Web View	«Зберегти як» оптимізує для швидкого вебперегляду
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	«Зберегти як» записує лінеаризований файл: його перша сторінка з’являється ще до завантаження решти. «Зберегти» дописує зміни в кінець файлу, і швидкий вебперегляд вимикається.
+	Fast Web View	Швидкий вебперегляд
+	Saved {name}, optimized for Fast Web View	Збережено {name}, оптимізовано для швидкого вебперегляду
+	Saved {name} without Fast Web View: {e}	Збережено {name} без швидкого вебперегляду: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Збережено {name}. Швидкий вебперегляд вимкнено: «Зберегти» дописує зміни в кінець файлу.

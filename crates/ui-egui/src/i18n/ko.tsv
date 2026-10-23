@@ -2750,3 +2750,6 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Saving	저장
+	Save As optimizes for Fast Web View	다른 이름으로 저장 시 빠른 웹 보기에 최적화
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	다른 이름으로 저장은 나머지가 다운로드되기 전에 첫 페이지가 표시되는 선형화된 파일을 씁니다. 저장은 변경 내용을 파일 끝에 추가하므로 빠른 웹 보기가 꺼집니다.

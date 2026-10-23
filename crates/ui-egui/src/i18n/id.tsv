@@ -2751,3 +2751,6 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Saving	Penyimpanan
+	Save As optimizes for Fast Web View	Simpan Sebagai mengoptimalkan untuk Tampilan Web Cepat
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Simpan Sebagai menulis file terlinearisasi yang halaman pertamanya tampil sebelum sisanya selesai diunduh. Simpan menambahkan perubahan ke akhir file, sehingga Tampilan Web Cepat nonaktif.

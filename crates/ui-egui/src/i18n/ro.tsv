@@ -2774,3 +2774,10 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Saving	Salvare
+	Save As optimizes for Fast Web View	Salvare ca optimizează pentru vizualizare rapidă pe web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Salvare ca scrie un fișier liniarizat, a cărui primă pagină apare înainte ca restul să se fi descărcat. Salvare adaugă modificările la sfârșitul fișierului, ceea ce dezactivează vizualizarea rapidă pe web.
+	Fast Web View	Vizualizare rapidă pe web
+	Saved {name}, optimized for Fast Web View	S-a salvat {name}, optimizat pentru vizualizare rapidă pe web
+	Saved {name} without Fast Web View: {e}	S-a salvat {name} fără vizualizare rapidă pe web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	S-a salvat {name}. Vizualizarea rapidă pe web este dezactivată: Salvare adaugă modificările la sfârșitul fișierului.

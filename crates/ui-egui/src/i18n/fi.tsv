@@ -2783,3 +2783,10 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Saving	Tallennus
+	Save As optimizes for Fast Web View	Tallenna nimellä optimoi nopeaa verkkonäkymää varten
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Tallenna nimellä kirjoittaa linearisoidun tiedoston, jonka ensimmäinen sivu näkyy ennen kuin loput on ladattu. Tallenna lisää muutokset tiedoston loppuun, mikä poistaa nopean verkkonäkymän käytöstä.
+	Fast Web View	Nopea verkkonäkymä
+	Saved {name}, optimized for Fast Web View	{name} tallennettiin nopeaa verkkonäkymää varten optimoituna
+	Saved {name} without Fast Web View: {e}	{name} tallennettiin ilman nopeaa verkkonäkymää: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} tallennettiin. Nopea verkkonäkymä ei ole käytössä: Tallenna lisää muutokset tiedoston loppuun.

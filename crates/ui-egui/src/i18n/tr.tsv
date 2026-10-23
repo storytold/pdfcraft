@@ -2511,3 +2511,11 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+# Fast Web View (linearized saving)
+	Saving	Kaydetme
+	Save As optimizes for Fast Web View	Farklı kaydet, Hızlı Web Görünümü için iyileştirir
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Farklı kaydet, ilk sayfası geri kalanı inmeden önce görünen doğrusallaştırılmış bir dosya yazar. Kaydet, değişiklikleri dosyanın sonuna ekler; bu da Hızlı Web Görünümü’nü kapatır.
+	Fast Web View	Hızlı Web Görünümü
+	Saved {name}, optimized for Fast Web View	{name} kaydedildi, Hızlı Web Görünümü için iyileştirildi
+	Saved {name} without Fast Web View: {e}	{name} Hızlı Web Görünümü olmadan kaydedildi: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} kaydedildi. Hızlı Web Görünümü kapalı: Kaydet, değişiklikleri dosyanın sonuna ekler.

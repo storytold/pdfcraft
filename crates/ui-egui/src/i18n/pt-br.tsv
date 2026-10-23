@@ -2800,3 +2800,11 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+# Fast Web View (linearized saving)
+	Saving	Salvamento
+	Save As optimizes for Fast Web View	Salvar como otimiza para visualização rápida na Web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Salvar como grava um arquivo linearizado cuja primeira página aparece antes de o restante terminar de baixar. Salvar acrescenta as alterações ao final do arquivo, o que desativa a visualização rápida na Web.
+	Fast Web View	Visualização rápida na Web
+	Saved {name}, optimized for Fast Web View	{name} salvo e otimizado para visualização rápida na Web
+	Saved {name} without Fast Web View: {e}	{name} salvo sem visualização rápida na Web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} salvo. A visualização rápida na Web está desativada: Salvar acrescenta as alterações ao final do arquivo.
