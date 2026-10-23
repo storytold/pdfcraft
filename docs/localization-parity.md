@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Brazilian Portuguese now covers the 2,674-key catalog union; twelve-language mean still rounds to ≈68%; Spanish 100% of the current key union) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-22 · **Change:** minor (Georgian interface catalog; previously minor: Brazilian Portuguese now covers the 2,674-key catalog union; twelve-language mean still rounds to ≈68%; Spanish 100% of the current key union) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -78,11 +78,12 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Albanian | `sq` | 2,344 entries | partial; not yet reviewed by a native speaker | no |
 | Catalan | `ca` | 2,592 entries | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
 | Romanian | `ro` | 2,673 entries (every bundled key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Georgian | `ka` | 2,760 entries (every key of the current catalogs, 2026-10-22) | partial; reviewed by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,674 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
 
-**19 other languages** ship (33 catalogs plus English = **34** interface languages in Preferences).
-The entry counts without percentages were measured on 2026-10-12–14 (Norwegian Bokmål on 2026-10-18); they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
+The entry counts without percentages were measured on 2026-10-12–14 (Norwegian Bokmål on 2026-10-18, Georgian on 2026-10-22); they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese and Georgian are shipped here but not by Acrobat.
 
 ## Revision history
 
@@ -98,6 +99,7 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 | 2026-10-12 | minor | Added Albanian (`sq`): catalog, date names, Preferences entry |
 | 2026-10-14 | minor | Added Catalan (`ca`, 2,592 entries, measured 2026-10-14); retained existing language assessments |
 | 2026-10-15 | minor | Romanian (`ro`) catalog: 2,673 entries (every bundled key); three plural forms (`plural_ro`); not one of the twelve key languages, so the mean is unchanged |
+| 2026-10-22 | minor | Georgian (`ka`) row added: 2,760 entries |
 | 2026-10-15 | minor | Norwegian Bokmål added as an interface and date language with a 2,674-entry catalog |
 | 2026-10-12 | minor | Added current counts for Kazakh, Polish, Slovenian, Greek, Turkish and Lithuanian; retained existing language assessments and the original percentage snapshot |
 | 2026-10-10 | major | Created. Catalog counts measured from `crates/ui-egui/src/i18n/*.tsv` against the 2,143-key union; Acrobat's localizations from its bundle's `.lproj` and Sequences folder names |
