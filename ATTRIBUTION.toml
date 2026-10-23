@@ -3506,27 +3506,6 @@ kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "864ab2f19254e6ac7240bc6a98323197332e8f714d4d3f94831f41309e5ef2f7"
 
-[[asset]]
-path = "assets/fonts/Sarabun-Regular.ttf"
-title = "Sarabun Regular font"
-author = "The Sarabun Project Authors (Suppakit Chalermlarp)"
-source = "https://github.com/cadsondemak/Sarabun"
-licence = "OFL-1.1"
-licence_file = "assets/fonts/OFL-Sarabun.txt"
-kind = "font"
-usage = "Thai UI and fallback font for document rendering and form authoring"
-sha256 = "226d4f368fbc0457990ddef2692679badfd2c1a4e89e5ac4d43c10ba7743b2f1"
-
-[[asset]]
-path = "assets/fonts/TlwgTypewriter.ttf"
-title = "TlwgTypewriter Thai TrueType font"
-author = "Poonlap Veerathanabutr and TLWG"
-source = "https://github.com/tlwg/fonts-tlwg"
-licence = "GPL-2.0-with-font-exception"
-licence_file = "assets/fonts/GPL-TlwgTypewriter.txt"
-kind = "font"
-usage = "Thai fixed-width/monospace UI and fallback font"
-sha256 = "9dbc0e6915d66643270d5dcfccac1dd27294e5d7ca80cc6c910b4d23d8b18a26"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/sq.tsv"

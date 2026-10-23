@@ -29,20 +29,19 @@ impl CraftFont {
     }
 }
 
-/// Bundled Sarabun-Regular TrueType font (OFL-1.1), embedded at compile time from `assets/fonts/Sarabun-Regular.ttf`.
-pub static BUNDLED_SARABUN_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Sarabun-Regular.ttf");
-
-pub static BUNDLED_SARABUN: CraftFont = CraftFont { family: "Sarabun", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_SARABUN_BYTES };
-
-/// Bundled TlwgTypewriter TrueType font (GPL-2.0 with font exception), embedded at compile time from `assets/fonts/TlwgTypewriter.ttf`.
-pub static BUNDLED_TLWG_TYPEWRITER_BYTES: &[u8] = include_bytes!("../../../assets/fonts/TlwgTypewriter.ttf");
-
-pub static BUNDLED_TLWG_TYPEWRITER: CraftFont =
-    CraftFont { family: "TlwgTypewriter", style: "Regular", scripts: &["Thai"], bytes: BUNDLED_TLWG_TYPEWRITER_BYTES };
-
-/// Returns the bundled TlwgTypewriter font for fixed-pitch / monospace Thai rendering.
-pub fn bundled_tlwg_typewriter_font() -> &'static CraftFont {
-    &BUNDLED_TLWG_TYPEWRITER
+/// Returns the active or monospace Thai font if available.
+pub fn bundled_tlwg_typewriter_font() -> Option<&'static CraftFont> {
+    let list = available_thai_fonts();
+    if let Some(entry) = list.iter().find(|e| {
+        e.family.eq_ignore_ascii_case("TlwgTypewriter")
+            || e.family.eq_ignore_ascii_case("Tlwg Typewriter")
+            || e.file_name.eq_ignore_ascii_case("TlwgTypewriter.ttf")
+    })
+        && let Ok(font) = set_active_thai_font_entry(entry)
+    {
+        return Some(font);
+    }
+    document_thai_font()
 }
 
 /// The `Jpan` craft-fonts faces in the order the interface prefers them: BIZ UDPGothic (a UI
@@ -295,31 +294,6 @@ fn scan_thai_fonts_from_dirs() -> Vec<ThaiFontEntry> {
         scan_dir_recursive(&dir, 0, &mut entries);
     }
 
-    // Ensure Sarabun (bundled font) is always present as an available Thai font
-    if !entries.iter().any(|e| e.family.eq_ignore_ascii_case("Sarabun") && e.style.eq_ignore_ascii_case("Regular")) {
-        entries.push(ThaiFontEntry {
-            name: "Sarabun".to_string(),
-            family: "Sarabun".to_string(),
-            style: "Regular".to_string(),
-            file_name: "Sarabun-Regular.ttf".to_string(),
-            path: std::path::PathBuf::from("assets/fonts/Sarabun-Regular.ttf"),
-        });
-    }
-
-    // Ensure TlwgTypewriter (bundled font) is always present as an available Thai font
-    if !entries.iter().any(|e| {
-        (e.family.eq_ignore_ascii_case("TlwgTypewriter") || e.family.eq_ignore_ascii_case("Tlwg Typewriter"))
-            && e.style.eq_ignore_ascii_case("Regular")
-    }) {
-        entries.push(ThaiFontEntry {
-            name: "TlwgTypewriter".to_string(),
-            family: "TlwgTypewriter".to_string(),
-            style: "Regular".to_string(),
-            file_name: "TlwgTypewriter.ttf".to_string(),
-            path: std::path::PathBuf::from("assets/fonts/TlwgTypewriter.ttf"),
-        });
-    }
-
     // Sort entries:
     // 1. Sarabun Regular (bundled default font)
     // 2. TlwgTypewriter.ttf (TLWG Typewriter monospace)
@@ -408,15 +382,6 @@ pub fn load_custom_thai_font_named(bytes: Vec<u8>, family: String, style: String
 
 /// Set the active Thai font using a `ThaiFontEntry`.
 pub fn set_active_thai_font_entry(entry: &ThaiFontEntry) -> Result<&'static CraftFont, crate::GlyphError> {
-    if entry.file_name.eq_ignore_ascii_case("Sarabun-Regular.ttf")
-        || (entry.family.eq_ignore_ascii_case("Sarabun") && entry.style.eq_ignore_ascii_case("Regular"))
-    {
-        set_active_thai_font(Some(&BUNDLED_SARABUN));
-        set_active_thai_entry(Some(entry.clone()));
-        crate::shaping::invalidate_thai_cache();
-        return Ok(&BUNDLED_SARABUN);
-    }
-
     if let Some(Some(font)) = with_loaded_thai_cache_read(|map| map.get(&entry.path).copied()) {
         set_active_thai_font(Some(font));
         set_active_thai_entry(Some(entry.clone()));
@@ -568,12 +533,8 @@ fn auto_init_thai_font() -> Option<&'static CraftFont> {
         }
     }
 
-    // 3. Fallback to host system font, or bundled Sarabun
-    if let Some(font) = discover_host_thai_font() {
-        return Some(font);
-    }
-    set_active_thai_font(Some(&BUNDLED_SARABUN));
-    Some(&BUNDLED_SARABUN)
+    // 3. Fallback to host system font
+    discover_host_thai_font()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -672,9 +633,6 @@ pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
                 }
             }
         });
-        if !fonts.iter().any(|f| std::ptr::eq(*f, &BUNDLED_SARABUN)) {
-            fonts.push(&BUNDLED_SARABUN);
-        }
     }
     fonts
 }
@@ -697,7 +655,7 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
             return Some(f);
         }
     }
-    Some(&BUNDLED_SARABUN)
+    None
 }
 
 /// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
@@ -1017,15 +975,13 @@ mod tests {
 
         let fonts = available_thai_fonts();
         if !fonts.is_empty() {
-            // First font should be Sarabun-Regular.ttf (bundled OFL-1.1 font)
-            assert_eq!(fonts[0].file_name.to_ascii_uppercase(), "SARABUN-REGULAR.TTF");
-            assert_eq!(fonts[0].family, "Sarabun");
             // Auto-initialized font should be available
             let active = document_thai_font();
             assert!(active.is_some(), "document_thai_font() should auto-initialize");
 
             // Test switching font if multiple are available
-            if let Some(other) = fonts.iter().find(|f| !f.file_name.eq_ignore_ascii_case("Sarabun-Regular.ttf")) {
+            if fonts.len() > 1 {
+                let other = &fonts[1];
                 let switched = set_active_thai_font_by_name(&other.file_name);
                 assert!(switched.is_ok(), "switching Thai font to {} should succeed", other.file_name);
                 let current = active_thai_font_entry();

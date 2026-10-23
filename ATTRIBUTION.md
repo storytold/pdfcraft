@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (290)
+## In this repository (288)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -293,8 +293,6 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/subscript.svg` | Lucide icon "subscript" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/subscript.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/pilcrow.svg` | Lucide icon "pilcrow" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pilcrow.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/move-horizontal.svg` | Lucide icon "move-horizontal" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/move-horizontal.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
-| `assets/fonts/Sarabun-Regular.ttf` | Sarabun Regular font | The Sarabun Project Authors (Suppakit Chalermlarp) | OFL-1.1 | https://github.com/cadsondemak/Sarabun | Thai UI and fallback font for document rendering and form authoring |
-| `assets/fonts/TlwgTypewriter.ttf` | TlwgTypewriter Thai TrueType font | Poonlap Veerathanabutr and TLWG | GPL-2.0-with-font-exception | https://github.com/tlwg/fonts-tlwg | Thai fixed-width/monospace UI and fallback font |
 | `crates/ui-egui/src/i18n/sq.tsv` | Albanian interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources; 2026-10-22 page-gap labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 signature-appearance labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 text-field-table labels are contributor-original AI-assisted translations from English, not separately native-reviewed | Albanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/th.tsv` | Thai interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources; 2026-10-22 page-gap labels are contributor-original AI-assisted translations from English, not separately native-reviewed | Thai UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
 | `crates/ui-egui/src/i18n/ca.tsv` | Catalan interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, written from their meaning; no proprietary localisation resources; 2026-10-22 page-gap labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 text-field-table labels are contributor-original AI-assisted translations from English, not separately native-reviewed | Catalan UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
