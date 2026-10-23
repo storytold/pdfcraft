@@ -2419,6 +2419,11 @@ animation effects	Off	Өшірулі
 # Absolute local GoToR confirmation (#1364).
 	Allow	Рұқсат беру
 	Only allow this if you trust the source document.	Бастапқы құжатқа сенсеңіз ғана рұқсат беріңіз.
+	No file dialog could open	Ешбір файл терезесі ашылмады
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft істеп жатқан жұмысыңызды сақтап тұр. Файл таңдағыш жұмыс істей бастағанда, Қайталап көру түймесін таңдаңыз.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Жұмыс үстелі порталының файл таңдағышы іске қосылмаған ({packages}). Оны systemctl --user status {first} арқылы тексеріңіз немесе жүйеден шығып, қайта кіріңіз.
+	Try again	Қайталап көру
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Файл таңдағышын ұсынатын жұмыс үстелі порталы жоқ, ал zenity орнатылмаған. xdg-desktop-portal пакетін xdg-desktop-portal-gtk, -kde немесе -gnome сияқты бэкендпен орнатыңыз немесе zenity орнатыңыз.
 	Open in Full Screen mode?	Толық экран режимінде ашу керек пе?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Бұл құжат толық экран режимінде ашылуды сұрайды: бет экранды толтырады және басқа ештеңе көрсетілмейді. Шығу үшін кез келген уақытта Esc басыңыз.
 	Full Screen	Толық экран

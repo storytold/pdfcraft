@@ -2671,6 +2671,11 @@ key	Space	Tarpas
 # Absolute local GoToR confirmation (#1364).
 	Allow	Leisti
 	Only allow this if you trust the source document.	Leiskite tai tik tuo atveju, jei pasitikite pirminiu dokumentu.
+	No file dialog could open	Nepavyko atidaryti jokio failų lango
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft išsaugo tai, ką darėte. Kai failų parinkiklis veiks, pasirinkite Bandyti dar kartą.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Darbalaukio portalo failų parinkiklis neveikia ({packages}). Patikrinkite jį komanda systemctl --user status {first} arba atsijunkite ir vėl prisijunkite.
+	Try again	Bandyti dar kartą
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Joks darbalaukio portalas nesiūlo failų parinkiklio, o zenity neįdiegta. Įdiekite xdg-desktop-portal su posisteme, pvz., xdg-desktop-portal-gtk, -kde ar -gnome, arba įdiekite zenity.
 	Open in Full Screen mode?	Atidaryti viso ekrano režimu?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Šis dokumentas prašo būti atidarytas viso ekrano režimu: puslapis užpildo ekraną ir daugiau niekas nerodoma. Norėdami išeiti, bet kada paspauskite Esc.
 	Full Screen	Visas ekranas

@@ -2591,6 +2591,11 @@ certificate	SHA-256 digest	SHA-256 다이제스트
 	Move tag earlier	태그를 앞으로 이동
 	Move tag later	태그를 뒤로 이동
 	Only allow this if you trust the source document.	원본 문서를 신뢰하는 경우에만 이를 허용하세요.
+	No file dialog could open	파일 대화 상자를 열 수 없습니다
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft가 하던 작업을 보관하고 있습니다. 파일 선택기가 작동하면 다시 시도를 선택하세요.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	데스크톱 포털의 파일 선택기가 실행되고 있지 않습니다({packages}). systemctl --user status {first}로 확인하거나 로그아웃했다가 다시 로그인하세요.
+	Try again	다시 시도
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	파일 선택기를 제공하는 데스크톱 포털이 없고 zenity도 설치되어 있지 않습니다. xdg-desktop-portal-gtk, -kde, -gnome 같은 백엔드와 함께 xdg-desktop-portal을(를) 설치하거나 zenity를 설치하세요.
 	Open this local PDF?	이 로컬 PDF를 여시겠습니까?
 	Remove "{name}" from this list? The file itself is not deleted.	"{name}"을(를) 이 목록에서 제거하시겠습니까? 파일 자체는 삭제되지 않습니다.
 	Restore	복원

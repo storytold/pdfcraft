@@ -2601,6 +2601,11 @@ key	Space	Spațiu
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Afișează o bară de titlu simplă pentru butoanele ferestrei în locul barei de file. GNOME nu desenează bare de titlu pentru aplicații, așa că aceasta nu urmează tema sa.
 	Allow	Permitere
 	Only allow this if you trust the source document.	Permiteți acest lucru doar dacă aveți încredere în documentul sursă.
+	No file dialog could open	Nu s-a putut deschide nicio fereastră de fișiere
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft păstrează ce făceați. După ce selectorul de fișiere funcționează, alegeți Reîncercați.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Selectorul de fișiere al portalului de desktop nu rulează ({packages}). Verificați-l cu systemctl --user status {first} sau deconectați-vă și reconectați-vă.
+	Try again	Reîncercați
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Niciun portal de desktop nu oferă un selector de fișiere, iar zenity nu este instalat. Instalați xdg-desktop-portal cu un backend precum xdg-desktop-portal-gtk, -kde sau -gnome, sau instalați zenity.
 	Open this local PDF?	Deschideți acest PDF local?
 	This document is trying to open a local file:	Acest document încearcă să deschidă un fișier local:
 	Move tag earlier	Mutare etichetă mai devreme

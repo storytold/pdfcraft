@@ -2430,6 +2430,11 @@ animation effects	Off	Disattivati
 # Absolute local GoToR confirmation (#1364).
 	Allow	Consenti
 	Only allow this if you trust the source document.	Consenti questa operazione solo se ti fidi del documento di origine.
+	No file dialog could open	Impossibile aprire una finestra dei file
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft conserva ciò che stavi facendo. Quando il selettore di file funziona, scegli Riprova.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Il selettore di file del portale desktop non è in esecuzione ({packages}). Controllalo con systemctl --user status {first}, oppure esci e accedi di nuovo.
+	Try again	Riprova
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Nessun portale desktop offre un selettore di file e zenity non è installato. Installa xdg-desktop-portal con un backend come xdg-desktop-portal-gtk, -kde o -gnome, oppure installa zenity.
 	Open in Full Screen mode?	Aprire in modalità schermo intero?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Questo documento chiede di aprirsi in modalità schermo intero: la pagina riempie lo schermo e non viene mostrato altro. Premi Esc in qualsiasi momento per uscire.
 	Full Screen	Schermo intero

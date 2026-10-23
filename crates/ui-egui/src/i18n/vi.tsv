@@ -2651,6 +2651,11 @@ key	Space	Space
 	Move tag later	Chuyển thẻ ra sau
 	Tag form fields	Gắn thẻ các trường biểu mẫu
 	Only allow this if you trust the source document.	Chỉ cho phép nếu bạn tin tưởng tài liệu nguồn.
+	No file dialog could open	Không mở được hộp thoại tệp nào
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft đang giữ lại việc bạn đang làm. Khi trình chọn tệp hoạt động, hãy chọn Thử lại.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Trình chọn tệp của cổng máy tính không chạy ({packages}). Hãy kiểm tra bằng systemctl --user status {first}, hoặc đăng xuất rồi đăng nhập lại.
+	Try again	Thử lại
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Không có cổng máy tính nào cung cấp trình chọn tệp và zenity chưa được cài. Hãy cài xdg-desktop-portal cùng một backend như xdg-desktop-portal-gtk, -kde hoặc -gnome, hoặc cài zenity.
 	Open this local PDF?	Mở PDF cục bộ này?
 	This document is trying to open a local file:	Tài liệu này đang cố mở một tệp cục bộ:
 	Remove "{name}" from this list? The file itself is not deleted.	Gỡ "{name}" khỏi danh sách này? Bản thân tệp không bị xóa.

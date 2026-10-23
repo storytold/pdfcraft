@@ -2592,6 +2592,11 @@ key	Space	Space
 	Move tag earlier	Pindahkan tag lebih awal
 	Move tag later	Pindahkan tag lebih lambat
 	Only allow this if you trust the source document.	Hanya izinkan ini jika Anda mempercayai dokumen sumber.
+	No file dialog could open	Tidak ada dialog file yang dapat dibuka
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	PdfCraft menyimpan pekerjaan Anda. Setelah pemilih file berfungsi, pilih Coba lagi.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	Pemilih file portal desktop tidak berjalan ({packages}). Periksa dengan systemctl --user status {first}, atau keluar lalu masuk kembali.
+	Try again	Coba lagi
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Tidak ada portal desktop yang menyediakan pemilih file, dan zenity tidak terpasang. Pasang xdg-desktop-portal dengan backend seperti xdg-desktop-portal-gtk, -kde atau -gnome, atau pasang zenity.
 	Open this local PDF?	Buka PDF lokal ini?
 	Remove "{name}" from this list? The file itself is not deleted.	Hapus "{name}" dari daftar ini? File itu sendiri tidak dihapus.
 	Restore	Pulihkan

@@ -3058,12 +3058,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut badge_hover: Option<(Pos2, String)> = None;
     // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
     // windows, so a comment under the pointer would otherwise float over the dialog.
+    // Read here: `view` borrows the app's views for the rest of this function.
+    #[cfg(not(target_arch = "wasm32"))]
+    let picker_failed = app.pickers.failed.is_some();
+    #[cfg(target_arch = "wasm32")]
+    let picker_failed = false;
     let page_covered = app.dialog.is_some()
         || app.close_request.is_some()
         || app.palette_open
         || app.password_prompt.is_some()
         || app.pending_link.is_some()
         || app.pending_remote_link.is_some()
+        || picker_failed
         || app.updates.open;
     let mut clicked_link: Option<LinkTarget> = None;
     let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;

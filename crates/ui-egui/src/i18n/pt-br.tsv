@@ -2435,6 +2435,11 @@ animation effects	Off	Desativados
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir
 	Only allow this if you trust the source document.	Permita esta ação somente se confiar no documento de origem.
+	No file dialog could open	Nenhuma janela de arquivos pôde ser aberta
+	PdfCraft is keeping what you were doing. Once the file chooser works, choose Try again.	O PdfCraft está guardando o que você estava fazendo. Quando o seletor de arquivos funcionar, escolha Tentar novamente.
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	O seletor de arquivos do portal da área de trabalho não está em execução ({packages}). Verifique com systemctl --user status {first} ou saia da sessão e entre novamente.
+	Try again	Tentar novamente
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	Nenhum portal da área de trabalho oferece um seletor de arquivos, e o zenity não está instalado. Instale o xdg-desktop-portal com um backend como xdg-desktop-portal-gtk, -kde ou -gnome, ou instale o zenity.
 	Open in Full Screen mode?	Abrir no modo de tela cheia?
 	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Este documento pede para abrir no modo de tela cheia: a página preenche a tela e nada mais é exibido. Pressione Esc a qualquer momento para sair.
 	Full Screen	Tela cheia
