@@ -209,6 +209,7 @@
 	Import form data…	Importa dades de formulari…
 	Export form data…	Exporta dades de formulari…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Assistent d'accions…
 	Prepare for distribution…	Prepara per a la distribució…
 	Optimize scanned documents…	Optimitza documents escanejats…
@@ -461,6 +462,7 @@
 	Standards	Estàndards
 	Save as PDF/A	Anomena i desa com a PDF/A
 	Save as PDF/X	Anomena i desa com a PDF/X
+	Verify PDF/X	Verifica PDF/X
 	Save as PDF/UA	Anomena i desa com a PDF/UA
 	Add search index	Afegeix un índex de cerca
 	Index	Índex
@@ -1882,6 +1884,44 @@ action wizard	Start	Inicia
 	PostScript XObjects aren't allowed	No es permeten els XObjects PostScript
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Els fitxers incrustats han de ser fitxers PDF/A (utilitza PDF/A-3 per a la resta)
 	An embedded file has no AFRelationship	Un fitxer incrustat no té AFRelationship
+	The document information doesn't identify the file as {}	La informació del document no identifica el fitxer com a {}
+	The metadata has no {}	Les metadades no tenen {}
+	The document information and the metadata name different PDF/X versions	La informació del document i les metadades indiquen versions de PDF/X diferents
+	The file trailer has no document ID	El tràiler del fitxer no té ID de document
+	The document doesn't say whether it is trapped (Trapped)	El document no indica si té reventats (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped és {}, però ha de ser /True o /False
+	The Trapped key and the metadata's pdf:Trapped disagree	La clau Trapped i el pdf:Trapped de les metadades no coincideixen
+	There is no PDF/X output intent (GTS_PDFX)	No hi ha cap propòsit de sortida PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Hi ha més d'un propòsit de sortida PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	El propòsit de sortida PDF/X no té OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	El propòsit de sortida PDF/X no té perfil incrustat (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	El propòsit de sortida PDF/X no té ni un perfil incrustat ni una caracterització del registre ICC
+	The output intent's profile isn't a valid ICC profile	El perfil del propòsit de sortida no és un perfil ICC vàlid
+	The output intent's profile isn't an output (printer) profile	El perfil del propòsit de sortida no és un perfil de sortida (d'impressora)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	El perfil del propòsit de sortida descriu color {}, però PDF/X-1a necessita una condició d'impressió CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	El perfil del propòsit de sortida descriu color {}; ha de ser gris, RGB o CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	El perfil del propòsit de sortida té /N {}, que no coincideix amb el seu espai de color
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	El perfil del propòsit de sortida no té transformació de dispositiu a PCS (AToB1 o grayTRC)
+	The page has no valid MediaBox	La pàgina no té cap MediaBox vàlida
+	The page has neither a TrimBox nor an ArtBox	La pàgina no té ni TrimBox ni ArtBox
+	The page has both a TrimBox and an ArtBox	La pàgina té alhora una TrimBox i una ArtBox
+	The {} extends beyond the BleedBox	La {} sobresurt de la BleedBox
+	The {} extends beyond the CropBox	La {} sobresurt de la CropBox
+	The {} extends beyond the MediaBox	La {} sobresurt de la MediaBox
+	A {} annotation lies within the BleedBox	Una anotació {} és dins de la BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Una anotació PrinterMark se superposa a la TrimBox o l'ArtBox
+	A stream uses JBIG2 compression	Un flux fa servir compressió JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Un XObject de formulari fa referència a una pàgina d'un altre fitxer (XObject de referència)
+	An image or form has OPI information	Una imatge o un formulari té informació OPI
+	A graphics state uses a soft mask	Un estat gràfic fa servir una màscara suau
+	A graphics state sets an opacity below 1	Un estat gràfic estableix una opacitat inferior a 1
+	A graphics state uses the {} blend mode	Un estat gràfic fa servir el mode de fusió {}
+	An image has a soft mask	Una imatge té una màscara suau
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	L'espai de color {} no està permès: PDF/X-1a només permet CMYK, gris i colors plans
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	El contingut fa servir color DeviceRGB: PDF/X-1a només permet CMYK, gris i colors plans
+	{} colour doesn't match the output intent's colour space	El color {} no coincideix amb l'espai de color del propòsit de sortida
+	Content uses {} colour, which doesn't match the output intent's colour space	El contingut fa servir color {}, que no coincideix amb l'espai de color del propòsit de sortida
+	Device-independent colour is used, so the output intent needs an embedded profile	Es fa servir color independent del dispositiu, de manera que el propòsit de sortida necessita un perfil incrustat
 	Select Icon	Selecciona la icona
 	Choose images	Tria imatges
 	{dpi} pixels/inch	{dpi} píxels/polzada

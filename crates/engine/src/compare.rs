@@ -32,6 +32,17 @@ impl crate::Document {
         self.editor.as_ref().map(|e| pdfcraft_preflight::verify(&e.cos, level)).unwrap_or_default()
     }
 
+    /// Standards ▸ Verify PDF/X: the rules the document breaks for `level`, or `None` when the
+    /// document has no object graph to verify (an empty list would claim it conforms).
+    pub fn pdfx_verify(&self, level: pdfcraft_preflight::pdfx::Level) -> Option<Vec<pdfcraft_preflight::pdfx::Finding>> {
+        self.editor.as_ref().map(|e| pdfcraft_preflight::pdfx::verify(&e.cos, level))
+    }
+
+    /// The PDF/X level the document declares, if it is one PdfCraft verifies.
+    pub fn pdfx_declared(&self) -> Option<pdfcraft_preflight::pdfx::Level> {
+        self.editor.as_ref().and_then(|e| pdfcraft_preflight::pdfx::declared(&e.cos))
+    }
+
     /// The standards the document declares (Standards panel).
     pub fn standards(&self) -> pdfcraft_preflight::Declared {
         self.editor.as_ref().map(|e| pdfcraft_preflight::declared(&e.cos)).unwrap_or_default()

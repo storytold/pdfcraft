@@ -1485,6 +1485,7 @@
 	Output preview	Pratinjau keluaran
 	Oval	Oval
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Page grid	Kisi halaman
 	Page labels	Label halaman
 	Page options	Opsi halaman
@@ -1534,6 +1535,7 @@
 	Save as PDF/A	Simpan sebagai PDF/A
 	Save as PDF/UA	Simpan sebagai PDF/UA
 	Save as PDF/X	Simpan sebagai PDF/X
+	Verify PDF/X	Verifikasi PDF/X
 	Scan & OCR	Pindai & OCR
 	Security properties	Properti keamanan
 	Select files to compare	Pilih file untuk dibandingkan
