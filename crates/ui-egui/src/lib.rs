@@ -63,6 +63,7 @@ mod marks_ui;
 mod measure_ui;
 mod ocr_ui;
 mod optimize_ui;
+mod scan_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
@@ -345,6 +346,10 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ From scanner.
+    Scanner,
+    /// A scan stopped early (cover open, jam, empty feeder): Continue or Finish.
+    ScanInterrupted,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -679,6 +684,8 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Scan & OCR ▸ From scanner.
+    pub scan: scan_ui::ScanUi,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
@@ -734,6 +741,8 @@ pub struct PdfCraftApp {
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
+    /// Which job last wrote [`Self::progress_notice`], so Cancel stops that job and not another one that runs too.
+    pub progress_owner: widgets::ProgressOwner,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
@@ -934,6 +943,7 @@ pub enum OpenOutcome {
 }
 
 impl PdfCraftApp {
+    /// An app with an empty session and no open tabs.
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -1040,6 +1050,7 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            scan: scan_ui::ScanUi::default(),
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
@@ -1071,6 +1082,7 @@ impl PdfCraftApp {
             optimize_draft: OptimizeDraft::default(),
             optimize_run: None,
             progress_notice: None,
+            progress_owner: widgets::ProgressOwner::default(),
             page_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
@@ -2003,11 +2015,14 @@ impl PdfCraftApp {
         }
     }
 
+    /// Close the tab at `index` (ignored when out of range): ends any scan bound to its document, remembers its
+    /// path for reopening (at most ten) and closes the document.
     pub fn close_tab(&mut self, index: usize) {
         if index >= self.views.len() {
             return;
         }
         let id = self.views.remove(index).id;
+        self.scan_document_closed(id);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {
@@ -2154,10 +2169,33 @@ impl PdfCraftApp {
         self.desktop_theme_enabled = true;
     }
 
+    /// Show a job's progress card and remember whose it is, so Cancel reaches that job.
+    pub(crate) fn show_job_progress(&mut self, owner: widgets::ProgressOwner, notice: widgets::ProgressNotice) {
+        self.progress_notice = Some(notice);
+        self.progress_owner = owner;
+    }
+
+    /// Remove the progress card if it is `owner`'s. A job that ends must not take away the card of another job
+    /// that is still running.
+    pub(crate) fn clear_job_progress(&mut self, owner: widgets::ProgressOwner) {
+        if self.progress_owner == owner {
+            self.progress_notice = None;
+            self.progress_owner = widgets::ProgressOwner::Other;
+        }
+    }
+
     /// Draw the running job's progress card and pass a Cancel click on to the job.
     fn show_progress(&mut self, ctx: &egui::Context) {
         if widgets::progress_notice(self, ctx) {
-            self.cancel_optimize();
+            match self.progress_owner {
+                widgets::ProgressOwner::Optimize => self.cancel_optimize(),
+                widgets::ProgressOwner::Scan => {
+                    if let Some(job) = &self.scan.job {
+                        job.cancel.request();
+                    }
+                }
+                widgets::ProgressOwner::Other => {}
+            }
         }
     }
 
@@ -2697,6 +2735,7 @@ impl PdfCraftApp {
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
                     "recognize-text" => Some(Dialog::RecognizeText),
+                    "scanner" => Some(Dialog::Scanner),
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
@@ -3146,6 +3185,8 @@ impl eframe::App for PdfCraftApp {
         storage.set_string("pdfcraft", self.persist());
     }
 
+    /// The per-frame work outside drawing: stores the context, applies the language, then polls workers and other
+    /// pending events.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -3307,6 +3348,7 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_export();
         self.poll_ocr();
+        self.poll_scan();
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();

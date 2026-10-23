@@ -2937,6 +2937,7 @@ mod tests {
             "OK",
             "Digital ID",
             "ZIP",
+            "USB",
             "JavaScript",
             "Microsoft Word (.docx)",
             "PDF/A…",

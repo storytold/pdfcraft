@@ -123,6 +123,7 @@ impl McpServer {
         })
     }
 
+    /// Answer one JSON-RPC method with its result, or with an error as `(code, message)`.
     fn dispatch(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
@@ -156,7 +157,7 @@ impl McpServer {
                     return Ok(match self.automation.call(&inner, &inner_args) {
                         Ok(content) => tool_content(&inner, content),
                         Err(ToolError::UnknownTool(t)) => tool_error(&format!("unknown tool {t:?}; use tool_search to find the right name")),
-                        Err(e) => tool_error(&e.to_string()),
+                        Err(e) => tool_error_for(&e),
                     });
                 }
                 if let Some(def) = crate::tools::find(name) {
@@ -171,7 +172,7 @@ impl McpServer {
                 match self.automation.call(name, &args) {
                     Ok(content) => Ok(tool_content(name, content)),
                     Err(ToolError::UnknownTool(t)) => Err((INVALID_PARAMS, format!("unknown tool {t:?}"))),
-                    Err(e) => Ok(tool_error(&e.to_string())),
+                    Err(e) => Ok(tool_error_for(&e)),
                 }
             }
             "resources/list" => Ok(json!({ "resources": self.resource_list() })),
@@ -344,6 +345,16 @@ fn tool_content(name: &str, content: Vec<Content>) -> Value {
 /// A failed tool call, as the agent should read it.
 fn tool_error(message: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": message }], "isError": true })
+}
+
+/// A failed tool call. A failure that carries data (`ToolError::FailedWith`) adds it as
+/// `structuredContent`; the text content is the same message either way.
+fn tool_error_for(error: &ToolError) -> Value {
+    let mut out = tool_error(&error.to_string());
+    if let (ToolError::FailedWith { data, .. }, Some(map)) = (error, out.as_object_mut()) {
+        map.insert("structuredContent".into(), data.clone());
+    }
+    out
 }
 
 /// The resource behind a `pdfcraft://` URI.

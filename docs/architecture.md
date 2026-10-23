@@ -92,7 +92,7 @@ Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
 
 ## Safety
 
-- `unsafe_code = "forbid"` workspace-wide; crates deny `unwrap`/`expect`/`panic!`; engine entry
+- `unsafe_code = "forbid"` workspace-wide (one audited exception, the WIA backend `pdfcraft-wia`: [unsafe-audit.md](unsafe-audit.md)); crates deny `unwrap`/`expect`/`panic!`; engine entry
   points keep a last-resort `catch_unwind` (`AGENTS.md` §4).
 - Every input-derived size is bounded (decompression, images, recursion, content per page).
 - `cargo xtask fuzz` runs nightly; every finding becomes a synthetic regression test.
