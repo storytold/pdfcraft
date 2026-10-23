@@ -83,6 +83,10 @@ jobs:
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
       linux-env: PDFCRAFT_ORACLES_REQUIRED=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1
+      # Vendored winit is excluded from the workspace tests, including nextest.
+      command: |
+        cargo xtask ci
+        cargo test --locked --manifest-path vendor/winit/Cargo.toml --lib dnd::tests
       # Windows checks what differs by platform: the build (with resources) and the tests.
       windows-command: |
         cargo clippy --workspace --all-targets --locked -- -D warnings

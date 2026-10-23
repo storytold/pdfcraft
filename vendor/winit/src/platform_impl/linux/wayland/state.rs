@@ -25,6 +25,7 @@ use sctk::subcompositor::SubcompositorState;
 
 use crate::platform_impl::wayland::event_loop::sink::EventSink;
 use crate::platform_impl::wayland::output::MonitorHandle;
+use crate::platform_impl::wayland::seat::dnd::DndState;
 use crate::platform_impl::wayland::seat::{
     PointerConstraintsState, RelativePointerState, TextInputState, WinitPointerData,
     WinitPointerDataExt, WinitSeatState,
@@ -53,6 +54,9 @@ pub struct WinitState {
 
     /// The seat state responsible for all sorts of input.
     pub seat_state: SeatState,
+
+    /// PdfCraft patch: native file offers and their independently owned transfers (#634).
+    pub dnd: DndState,
 
     /// The shm for software buffers, such as cursors.
     pub shm: Shm,
@@ -142,10 +146,13 @@ impl WinitState {
         let monitors = output_state.outputs().map(MonitorHandle::new).collect();
 
         let seat_state = SeatState::new(globals, queue_handle);
+        let dnd = DndState::new(globals, queue_handle);
 
         let mut seats = AHashMap::default();
         for seat in seat_state.seats() {
-            seats.insert(seat.id(), WinitSeatState::new());
+            let mut state = WinitSeatState::new();
+            state.bind_data_device(dnd.manager.as_ref(), queue_handle, &seat);
+            seats.insert(seat.id(), state);
         }
 
         let (viewporter_state, fractional_scaling_manager) =
@@ -164,6 +171,7 @@ impl WinitState {
             subcompositor_state: subcompositor_state.map(Arc::new),
             output_state,
             seat_state,
+            dnd,
             shm,
             custom_cursor_pool,
 
