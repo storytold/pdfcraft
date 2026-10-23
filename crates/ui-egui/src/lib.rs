@@ -108,6 +108,11 @@ mod print_ui;
 mod signature_drag;
 pub mod units;
 mod web_print;
+mod fling;
+mod organize_panel;
+mod wheel_boost;
+mod window_controls;
+mod window_state;
 mod word_count_ui;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 mod redact_ui;
@@ -274,6 +279,7 @@ struct GridDrop {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
+    WordCount,
     CreateImages,
     Properties(PropsTab),
     About,
@@ -308,6 +314,8 @@ pub enum Dialog {
     Print,
     /// File ▸ Revert confirmation.
     Revert,
+    /// Save over a file that changed on disk since the document came from it (#2166).
+    OverwriteChanged,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.
@@ -614,6 +622,14 @@ pub struct PdfCraftApp {
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
+    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
+    /// carries these window buttons and the window's edges resize it.
+    pub window_controls: Option<window_controls::Layout>,
+    /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
+    /// winit's frame instead of drawing the header bar (#1001).
+    pub system_title_bar: bool,
+    /// Whether the window currently has the app's header bar (`None` until the first frame).
+    app_frame_shown: Option<bool>,
     pub password_prompt: Option<PasswordPrompt>,
     pub unlock_prompt: Option<UnlockPrompt>,
     pub full_screen: bool,
@@ -771,6 +787,9 @@ pub struct PdfCraftApp {
     dialog_epoch: u64,
     /// The egui context, for commands that change window or theme state.
     ctx: Option<egui::Context>,
+    /// The window's size and place kept across a minimized close (desktop).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub window_state: window_state::WindowState,
     styled: bool,
     fonts_ready: bool,
     /// The CJK fallback order the installed fonts follow (see `theme::installed_font_definitions`).
@@ -783,6 +802,7 @@ pub struct PdfCraftApp {
     pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
+    pub(crate) word_count_draft: word_count_ui::Draft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
     /// Set Page Boxes dialog state.
@@ -812,6 +832,10 @@ pub struct PdfCraftApp {
     pub field_props: Option<prepare::FieldDraft>,
     pub bulk_field_props: Option<bulk_fields::Draft>,
     pub redact_prefs: RedactPrefs,
+    /// The Redaction Tool Properties kept for the next run (what the last OK with "Make
+    /// properties default" ticked left), and the values before the dialog opened, for Cancel.
+    pub redact_defaults: RedactPrefs,
+    pub redact_before: Option<RedactPrefs>,
     pub redact_pages_draft: RedactPagesDraft,
     pub redact_search: RedactSearchDraft,
     pub hidden_draft: HiddenDraft,
@@ -825,6 +849,9 @@ pub struct PdfCraftApp {
     pub last_opened_url: Option<String>,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
     pub pending_link: Option<PendingLink>,
+    /// A document just opened asks to be shown in Full Screen mode (`/PageMode /FullScreen`):
+    /// the person is asked first, as in Acrobat, and this is the document waiting for the answer.
+    pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
     /// Open and Save against cloud storage. Connected by the host application when a
@@ -1011,6 +1038,9 @@ impl PdfCraftApp {
             pinned: Default::default(),
             toast: None,
             integrated_titlebar: false,
+            window_controls: None,
+            system_title_bar: false,
+            app_frame_shown: None,
             password_prompt: None,
             unlock_prompt: None,
             full_screen: false,
@@ -1099,13 +1129,17 @@ impl PdfCraftApp {
             dialog_seen: None,
             dialog_epoch: 0,
             ctx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            window_state: Default::default(),
             styled: false,
             fonts_ready: false,
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
             bookmark_rename: None,
+            word_count_draft: word_count_ui::Draft::default(),
             last_opened_url: None,
             pending_link: None,
+            pending_full_screen: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
@@ -1126,6 +1160,8 @@ impl PdfCraftApp {
             field_props: None,
             bulk_field_props: None,
             redact_prefs: RedactPrefs::default(),
+            redact_defaults: RedactPrefs::default(),
+            redact_before: None,
             redact_pages_draft: RedactPagesDraft::default(),
             redact_search: RedactSearchDraft::default(),
             hidden_draft: HiddenDraft::default(),
@@ -1590,6 +1626,37 @@ impl PdfCraftApp {
         }
     }
 
+    /// [`Self::attachment_action`] for the file of the attachment comment at (page, index).
+    pub fn comment_attachment_action(&mut self, doc: DocId, page: usize, index: usize, open: bool) {
+        let source = pdfcraft_render::AttachmentSource::Annotation { page, index };
+        // The menus offer the items only for a listed file, so a miss is a comment gone since.
+        if let Some(i) = self.session.get(doc).and_then(|d| d.info.attachments.iter().position(|a| a.source == source)) {
+            self.attachment_action(doc, i, open);
+        }
+    }
+
+    /// Whether the app draws the window's title bar, buttons and resize edges: the desktop leaves
+    /// the frame to the app and Use system title bar is off.
+    pub fn draws_window_frame(&self) -> bool {
+        self.window_controls.is_some() && !self.system_title_bar
+    }
+
+    /// Follow Use system title bar at once: the window starts without winit's frame wherever the
+    /// app may draw its own, and gets it back (or loses it again) when the preference changes.
+    fn sync_window_frame(&mut self, ctx: &egui::Context) {
+        if self.window_controls.is_none() {
+            return;
+        }
+        let app_frame = self.draws_window_frame();
+        if self.app_frame_shown != Some(app_frame) {
+            // The window opens undecorated, so only a change from that needs a command.
+            if self.app_frame_shown.is_some() || !app_frame {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
+            }
+            self.app_frame_shown = Some(app_frame);
+        }
+    }
+
     /// Enter or leave full-screen reading (Acrobat: View ▸ Full Screen Mode, ⌘L).
     pub fn set_full_screen(&mut self, ctx: &egui::Context, on: bool) {
         self.apply_full_screen(on);
@@ -1960,6 +2027,20 @@ impl PdfCraftApp {
             Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
             other => other,
         };
+    }
+
+    /// Moves the tab at `from` so it sits at `to` (#1537). The same document stays active
+    /// wherever it lands; an index out of range changes nothing.
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if from >= self.views.len() || to >= self.views.len() || from == to {
+            return;
+        }
+        let active = self.active_ids().map(|(_, id)| id);
+        let view = self.views.remove(from);
+        self.views.insert(to, view);
+        if let Some(id) = active {
+            self.active = self.views.iter().position(|v| v.id == id);
+        }
     }
 
     pub fn active_ids(&self) -> Option<(usize, DocId)> {
@@ -2951,6 +3032,18 @@ impl PdfCraftApp {
         false
     }
 
+    /// Shared permission gate for copying selected page text from menus and keyboard events.
+    pub(crate) fn copy_selected_text(&mut self, i: usize, ctx: &egui::Context) -> bool {
+        let Some((id, text)) = self.views.get(i).and_then(|v| Some((v.id, v.selected_text()?))).filter(|(_, text)| !text.is_empty()) else {
+            return false;
+        };
+        if !self.may_copy(id) {
+            return false;
+        }
+        ctx.copy_text(text);
+        true
+    }
+
     /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
     fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
         // ⌘C arrives as a Copy event on most platforms.
@@ -3275,6 +3368,10 @@ impl eframe::App for PdfCraftApp {
             widgets::toast(self, &ctx);
             self.finish_render_frame(&ctx);
             return;
+        }
+        self.sync_window_frame(&ctx);
+        if self.draws_window_frame() {
+            window_controls::resize_edges(&ctx);
         }
         chrome::tab_strip(self, ui);
         chrome::mode_bar(self, ui);

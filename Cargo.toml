@@ -16,8 +16,8 @@ repository = "https://github.com/storytold/pdfcraft"
 craft-ui = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "ffdf0556cefc0e7c14ceb32bf4138609702c6f13", features = ["serde", "cloud", "esign"] }
 # Provider-neutral cloud types (Entry, Capability, Permission). Types and contracts only: the
 # crate opens no socket and names no provider, so this builds for the web too.
-craft-cloud = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "3aa7841deee2f9919a4dcca55487db5063293654" }
-craft-esign = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "3aa7841deee2f9919a4dcca55487db5063293654" }
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "ffdf0556cefc0e7c14ceb32bf4138609702c6f13" }
+craft-esign = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "ffdf0556cefc0e7c14ceb32bf4138609702c6f13" }
 # How the desktop and browser apps reach CollabCraft. No provider credential or URL compiled in.
 craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "23a3b6612eb73a51d54139e25658c94689adbb06" }
 # The share dialog's backend: the half that opens a socket, kept here so only one session lives

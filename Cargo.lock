@@ -912,9 +912,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.9.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877bf67ac8e52449eb2f9e98a344ea163beb70dd1f9eebe3cc5357dcfeaee4df"
+checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -4493,8 +4493,8 @@ dependencies = [
  "block2 0.6.2",
  "bytemuck",
  "chrono",
- "craft-cloud 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=3aa7841deee2f9919a4dcca55487db5063293654)",
- "craft-esign 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=3aa7841deee2f9919a4dcca55487db5063293654)",
+ "craft-cloud 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=ffdf0556cefc0e7c14ceb32bf4138609702c6f13)",
+ "craft-esign 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=ffdf0556cefc0e7c14ceb32bf4138609702c6f13)",
  "craft-quit",
  "craft-ui 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=ffdf0556cefc0e7c14ceb32bf4138609702c6f13)",
  "eframe",
@@ -7076,9 +7076,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.28.0"
+version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
  "js-sys",
  "serde_core",
@@ -7435,18 +7435,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]
