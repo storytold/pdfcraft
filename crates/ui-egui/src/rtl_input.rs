@@ -28,6 +28,12 @@ const MAX_CHARS: usize = 100_000;
 /// point can cover far more than egui's 100 stored points. 4096 is that whole burst, twice over.
 const SNAPSHOT_CAP: usize = 4096;
 
+/// Screen text egui has already shown, paired with the typed query at that moment.
+///
+/// egui clones temp data on every read, so the history is an `Arc`. An unchanged frame
+/// copies the pointer. A new edit copies the list once.
+type UndoSnapshots = std::sync::Arc<std::collections::VecDeque<(String, String)>>;
+
 /// Which single-line search field is on screen. The two share one buffer so they cannot drift.
 #[derive(Clone, Copy)]
 pub(crate) enum QueryField {
@@ -134,7 +140,8 @@ pub(crate) fn show_query(ui: &mut egui::Ui, text: &mut String, kind: QueryField)
     };
     // egui's undo stores the on-screen string from an earlier frame. The map from that string
     // back to the typed query has to outlive this widget, which is built again every frame.
-    let snapshots = ui.data(|d| d.get_temp::<Vec<(String, String)>>(id.with("rtl-undo"))).unwrap_or_default();
+    let snapshots =
+        ui.data(|d| d.get_temp::<UndoSnapshots>(id.with("rtl-undo"))).unwrap_or_else(|| std::sync::Arc::new(std::collections::VecDeque::new()));
     let logical = Rc::new(RefCell::new(text.clone()));
     let mut edit = RtlEdit::new(Rc::clone(&logical), snapshots);
     let shared = Rc::clone(&logical);
@@ -164,7 +171,7 @@ pub(crate) fn show_query(ui: &mut egui::Ui, text: &mut String, kind: QueryField)
         }
     }
     *text = logical.borrow().clone();
-    ui.data_mut(|d| d.insert_temp(id.with("rtl-undo"), edit.snapshots.clone()));
+    ui.data_mut(|d| d.insert_temp(id.with("rtl-undo"), std::sync::Arc::clone(&edit.snapshots)));
     output.response.response
 }
 
@@ -240,13 +247,13 @@ struct RtlEdit {
     screen: Screen,
     /// Screen text egui has already been shown, with the stored query at that moment.
     /// Undo restores one of these instead of writing the on-screen order into the query.
-    snapshots: Vec<(String, String)>,
+    snapshots: UndoSnapshots,
     /// Logical text removed by a cut this frame, for the clipboard.
     deleted: Option<String>,
 }
 
 impl RtlEdit {
-    fn new(logical: Rc<RefCell<String>>, snapshots: Vec<(String, String)>) -> Self {
+    fn new(logical: Rc<RefCell<String>>, snapshots: UndoSnapshots) -> Self {
         let screen = analyze(&logical.borrow());
         let mut edit = Self { logical, screen, snapshots, deleted: None };
         edit.remember();
@@ -259,13 +266,20 @@ impl RtlEdit {
     }
 
     fn remember(&mut self) {
-        let logical = self.logical.borrow().clone();
-        if self.snapshots.last().is_some_and(|(screen, stored)| screen == &self.screen.text && stored == &logical) {
-            return;
-        }
-        self.snapshots.push((self.screen.text.clone(), logical));
-        if self.snapshots.len() > SNAPSHOT_CAP {
-            self.snapshots.remove(0);
+        let logical = {
+            let logical = self.logical.borrow();
+            if let Some((screen, stored)) = self.snapshots.back()
+                && screen == &self.screen.text
+                && stored == logical.as_str()
+            {
+                return;
+            }
+            logical.clone()
+        };
+        let snapshots = std::sync::Arc::make_mut(&mut self.snapshots);
+        snapshots.push_back((self.screen.text.clone(), logical));
+        if snapshots.len() > SNAPSHOT_CAP {
+            snapshots.pop_front();
         }
     }
 
@@ -535,7 +549,7 @@ mod tests {
     use egui::epaint::text::cursor::CCursor;
 
     fn edit(text: &str) -> RtlEdit {
-        RtlEdit::new(Rc::new(RefCell::new(text.to_owned())), Vec::new())
+        RtlEdit::new(Rc::new(RefCell::new(text.to_owned())), std::sync::Arc::new(std::collections::VecDeque::new()))
     }
 
     fn type_into(start: &str, added: &str) -> (String, usize) {
@@ -684,6 +698,50 @@ mod tests {
         assert!(field.logical.borrow().chars().count() > stored.chars().count());
         field.replace_with(&screen);
         assert_eq!(field.logical.borrow().as_str(), stored, "undo lost the phrase from before the burst");
+    }
+
+    /// An unchanged frame must not copy the history. egui clones temp data on every read,
+    /// so the history stays behind one `Arc` until an edit actually changes it.
+    #[test]
+    fn an_unchanged_refresh_keeps_the_undo_allocation() {
+        let mut field = edit("page");
+        let mut cursor = CCursor::default();
+        for i in 0..40 {
+            field.insert_text_at(&mut cursor, &format!("{i:02}"), usize::MAX);
+        }
+        let before = std::sync::Arc::as_ptr(&field.snapshots);
+        let retained: usize = field.snapshots.iter().map(|(screen, stored)| screen.len().saturating_add(stored.len())).sum();
+        assert!(retained > 1_000, "the history is too small to show a copy: {retained}");
+        field.refresh();
+        assert_eq!(std::sync::Arc::as_ptr(&field.snapshots), before, "refresh copied the undo history");
+        let screen = field.as_str().to_owned();
+        let stored = field.logical.borrow().clone();
+        field.replace_with(&screen);
+        assert_eq!(field.logical.borrow().as_str(), stored);
+    }
+
+    /// Two frames with the same query share one history allocation, for both fields.
+    #[test]
+    fn two_frames_share_one_undo_history() {
+        let ctx = egui::Context::default();
+        let mut query = String::from("page");
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show_query(ui, &mut query, QueryField::FindBar);
+                show_query(ui, &mut query, QueryField::SearchPanel);
+                let ptr = ui
+                    .data(|d| d.get_temp::<UndoSnapshots>(egui::Id::new("find-input").with("rtl-undo")))
+                    .map(|history| std::sync::Arc::as_ptr(&history) as usize)
+                    .unwrap_or(0);
+                seen.push(ptr);
+            });
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0], 0, "the find field stored no undo history");
+        assert_eq!(seen[0], seen[1], "the second frame copied the undo history");
+        assert_eq!(query, "page");
     }
 
     /// Alt+Backspace deletes the previous word in typing order. On a pure right-to-left line
