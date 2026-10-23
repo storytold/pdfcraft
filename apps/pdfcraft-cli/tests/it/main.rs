@@ -8,6 +8,7 @@ mod edit;
 mod extract;
 mod help;
 mod info_standards;
+mod invoice;
 mod mcp_compact;
 mod options;
 mod owner_password;

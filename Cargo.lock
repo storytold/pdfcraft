@@ -4124,6 +4124,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-forms",
  "pdfcraft-geom",
+ "pdfcraft-invoice",
  "pdfcraft-js",
  "pdfcraft-measure",
  "pdfcraft-model",
@@ -4188,6 +4189,16 @@ dependencies = [
 [[package]]
 name = "pdfcraft-geom"
 version = "0.13.0"
+
+[[package]]
+name = "pdfcraft-invoice"
+version = "0.13.0"
+dependencies = [
+ "chrono",
+ "proptest",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "pdfcraft-js"

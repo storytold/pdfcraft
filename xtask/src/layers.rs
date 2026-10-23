@@ -60,6 +60,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("sign", Class::Layer(4)),
     ("ocr", Class::Layer(4)),
     ("create", Class::Layer(4)),
+    ("invoice", Class::Layer(4)),
     ("export", Class::Layer(4)),
     ("optimize", Class::Layer(4)),
     ("preflight", Class::Layer(4)),

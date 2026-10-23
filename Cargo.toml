@@ -22,6 +22,7 @@ craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.13.0" }
+pdfcraft-invoice = { path = "crates/invoice", version = "0.13.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.13.0" }
 pdfcraft-cos = { path = "crates/cos", version = "0.13.0" }
 pdfcraft-crypt = { path = "crates/crypt", version = "0.13.0" }

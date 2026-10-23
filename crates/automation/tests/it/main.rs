@@ -6,4 +6,5 @@ mod batch;
 mod button_caption;
 mod form_bulk;
 mod hostile_args;
+mod invoice;
 mod optimize_content_boundaries;
