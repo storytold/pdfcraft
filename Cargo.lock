@@ -4357,6 +4357,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -4409,6 +4410,7 @@ dependencies = [
  "web-sys",
  "winsafe",
  "xattr",
+ "zeroize",
 ]
 
 [[package]]

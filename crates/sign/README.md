@@ -17,7 +17,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
 - **Keys:** RSA, ECDSA P-256 and P-384. Verification uses RustCrypto everywhere. RSA
   private-key operations (signing, key generation) use `aws-lc-rs` on native targets and are
   refused in the browser (ADR-0009: the `rsa` crate's Marvin advisory, RUSTSEC-2023-0071, has
-  no fix, so `rsa` is only used to verify). ECDSA signs with deterministic nonces (RFC 6979).
+  no fix, so `rsa` is only used to verify); the web build signs RSA through the browser's Web
+  Crypto instead, as an `ExternalKey` in two steps (`pdfcraft-engine`'s `SigningRequest`). ECDSA
+  signs with deterministic nonces (RFC 6979). A `PrivateKey` wipes its PKCS #8 copy when
+  dropped, and `pkcs12::open` wipes the key bags it decrypted.
 - **Signing:** PAdES B-B (`ETSI.CAdES.detached`, signing-certificate-v2, SHA-256/384, no SHA-1).
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
   or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`

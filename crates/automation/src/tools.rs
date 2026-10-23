@@ -115,6 +115,46 @@ impl T {
 
 /// Every tool, in a stable order.
 pub fn tools() -> Vec<ToolDef> {
+    let mut all = table();
+    // The two signing steps come after sign_document, whose options they take.
+    if let Some(at) = all.iter().position(|t| t.name == "sign_document") {
+        let steps = signing_steps(&all[at].input_schema);
+        all.splice(at + 1..at + 1, steps);
+    }
+    all
+}
+
+/// sign_prepare and sign_finish. sign_prepare takes sign_document's options (from its schema, so
+/// the two can't drift apart), with the signer's certificate instead of a digital ID.
+fn signing_steps(sign_document: &Value) -> [ToolDef; 2] {
+    let mut props = serde_json::Map::new();
+    for key in ["doc", "field", "page", "rect", "reason", "location", "contact", "certify", "graphic", "appearance", "labels"] {
+        if let Some(p) = sign_document["properties"].get(key) {
+            props.insert(key.into(), p.clone());
+        }
+    }
+    props.insert(
+        "certificate".into(),
+        json!({ "type": "string", "description": "The signer's certificate (.cer/.crt/.pem/.der). A PEM file may go on with its issuers, which the signature carries as a .p12's chain." }),
+    );
+    [
+        t("sign_prepare", "Prepare a signature for an outside key", "The first of two signing steps, for a key PdfCraft can't use itself (a hardware security module, a signing service, the browser's Web Crypto): what the key must sign for the signature sign_document would make with the same options, given the signer's certificate instead of a digital ID. Returns to_sign (hex: the CMS signed attributes, which cover the document's digest), the digest the key hashes them with (SHA-256, or SHA-384 for a P-384 key), the scheme (RSA PKCS #1 v1.5 or ECDSA) and the signing time the signature will carry. Pass the key's signature to sign_finish. Nothing is written; preparing the document again replaces the earlier request.")
+            .ro()
+            .with(schema(Value::Object(props), &["doc", "certificate"])),
+        t("sign_finish", "Finish a signature with an outside key", "The second signing step: sign with `signature`, the value the key made over sign_prepare's to_sign, and save the signed file to `out` (the document then shows it, as after sign_document). RSA: the PKCS #1 v1.5 value; ECDSA: DER or the raw r and s. Refused, writing nothing, when the signature doesn't verify with the certificate, or the document changed since sign_prepare (prepare it again). PAdES B-B, the same file sign_document writes.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "signature": { "type": "string", "description": "The signature value in hex (two digits per byte)." },
+                    "out": { "type": "string", "description": "Where to save the signed document." },
+                }),
+                &["doc", "signature", "out"],
+            )),
+    ]
+}
+
+/// The tool table without the two signing steps, which [`tools`] adds.
+fn table() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
