@@ -21,9 +21,11 @@ pub fn arrow_size(w: f64) -> f64 {
     6.0 + 3.0 * w.max(0.0)
 }
 
-/// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1).
+/// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1). ISO 32000-2
+/// Table 169 leaves the size open; this keeps a 2 pt cloud's bumps about 9 pt across, small
+/// enough to read as a cloud rather than a row of lobes.
 pub fn cloud_radius(w: f64) -> f64 {
-    6.0 + 1.5 * w.max(0.0)
+    3.0 + 0.75 * w.max(0.0)
 }
 
 /// One of the ten `/LE` names (ISO 32000-2 Table 217). Unknown names are not drawn.
