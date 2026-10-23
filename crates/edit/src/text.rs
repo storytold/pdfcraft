@@ -2571,12 +2571,17 @@ fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
     for row in text.split('\n') {
         let mut line = String::new();
         let start = out.len();
-        for word in row.split(paragraph_separator).filter(|word| !word.is_empty()) {
+        let mut separator = String::new();
+        let mut ascii_separator = true;
+        for segment in row.split_inclusive(paragraph_separator) {
+            let word = segment.trim_end_matches(paragraph_separator);
             for (i, piece) in crate::linebreak::pieces(word).into_iter().enumerate() {
-                let candidate = match (line.is_empty(), i) {
-                    (true, _) => piece.to_string(),
-                    (false, 0) => format!("{line} {piece}"),
-                    (false, _) => format!("{line}{piece}"),
+                let candidate = if line.is_empty() {
+                    piece.to_string()
+                } else if i == 0 {
+                    format!("{line}{separator}{piece}")
+                } else {
+                    format!("{line}{piece}")
                 };
                 if !line.is_empty() && advance(&candidate) > width {
                     out.push(std::mem::take(&mut line));
@@ -2584,6 +2589,21 @@ fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
                 } else {
                     line = candidate;
                 }
+            }
+            if !word.is_empty() {
+                separator.clear();
+                ascii_separator = true;
+            }
+            // Preserve typed ASCII gaps within a row. Other whitespace keeps the old
+            // single-space normalization; separators at a wrap are replaced by the break.
+            if segment.ends_with(' ') {
+                if ascii_separator {
+                    separator.push(' ');
+                }
+            } else if segment.chars().last().is_some_and(paragraph_separator) {
+                separator.clear();
+                separator.push(' ');
+                ascii_separator = false;
             }
         }
         if !line.is_empty() || out.len() == start {
@@ -2722,15 +2742,10 @@ fn rewrite_block_from(
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
-    // Explicit line breaks stay (#1443); within a line, runs of white space become one space.
-    let text = text
-        .unwrap_or(&b.text)
-        .split('\n')
-        .map(|row| row.split(paragraph_separator).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" "))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Let the wrapper retain explicit line breaks and typed ASCII space runs (#4199).
+    let text = text.unwrap_or(&b.text);
     // The characters to show, for choosing fonts: the breaks are moves, not glyphs.
-    let flat = text.replace('\n', " ");
+    let flat: String = text.chars().map(|c| if paragraph_separator(c) { ' ' } else { c }).collect();
     let o = &first.origin;
     let last = members.last().copied().unwrap_or(first);
     let emit = &last.origin;
@@ -2860,7 +2875,7 @@ fn rewrite_block_from(
         width
     };
     let right_edge = if anchored_right { right_edge } else { width };
-    let wrapped = wrap(&text, width + 0.5, advance);
+    let wrapped = wrap(text, width + 0.5, advance);
     let mut substituted = None;
     let new_font = !reuse;
     let (show_font, encode): (String, Encoder) = if let Some(m) = metrics.clone().filter(|_| reuse) {
@@ -3354,7 +3369,17 @@ mod tests {
         assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
         assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
         assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A B", "C"]);
+        assert_eq!(wrap(" \tA  B\r\nC ", 3.0, width), ["A", "B", "C"]);
+    }
+
+    #[test]
+    fn paragraph_wrapping_preserves_repeated_ascii_spaces() {
+        let width = |s: &str| s.chars().count() as f64;
+        assert_eq!(wrap("Hello     world   end", 100.0, width), ["Hello     world   end"]);
+        assert_eq!(wrap("A   B C", 5.0, width), ["A   B", "C"]);
+        assert_eq!(wrap("A B", 2.0, width), ["A", "B"]);
+        assert_eq!(wrap("A \t B", 100.0, width), ["A B"]);
+        assert_eq!(wrap("A\t\tB", 100.0, width), ["A B"]);
     }
 
     #[test]

@@ -2335,6 +2335,25 @@ fn a_line_whose_operator_starts_the_next_stream_can_be_edited() {
 }
 
 #[test]
+fn edited_paragraph_preserves_ascii_spaces_after_save_and_restyle() {
+    for replacement in ["Hello     world   end", "Hello  world", "Hello     world\nNext   line"] {
+        for family in [None, Some((added::Family::Helvetica, false, false))] {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+            let style = text::BlockStyle { family, width: Some(450.0), ..Default::default() };
+            text::rewrite_block(&mut doc, 0, 0, Some(replacement), &style).unwrap();
+            let mut doc = reopen(&doc);
+            let actual = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+            assert_eq!(actual, replacement, "family: {family:?}");
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { size: Some(14.0), ..style }).unwrap();
+            let doc = reopen(&doc);
+            let actual = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+            // Restyling reflows source rows, but must retain the gaps within each row.
+            assert_eq!(actual, replacement.replace('\n', " "), "restyle, family: {family:?}");
+        }
+    }
+}
+
+#[test]
 fn win_ansi_high_glyphs_use_helvetica_not_the_fallback_font() {
     // š ž Š Ž Œ Ÿ ƒ † ‰ (WinAnsi 0x80–0x9F) are standard-font glyphs (#347): no Type3 fallback.
     let text = "Šumava žaba œuvre Ÿ ƒ † ‰ €";
