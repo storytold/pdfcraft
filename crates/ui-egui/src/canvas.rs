@@ -26,8 +26,10 @@ const TEXT_TAG: u64 = 1 << 62;
 /// A page rendered for the organize grid at the size it is drawn there.
 const GRID_TAG: u64 = 1 << 61;
 /// Preview rasters tagged with this bit are converted to luminance on receipt, matching the
-/// monochrome print requested by Print ▸ Print in grayscale.
-const GRAYSCALE_TAG: u64 = 1 << 60;
+/// monochrome print requested by Print ▸ Print in grayscale. It is a bit of its own: the
+/// renderer's print bit ([`PRINT_TAG`]) is carried by every print preview, so sharing it would
+/// turn colour previews into monochrome ones too.
+const GRAYSCALE_TAG: u64 = 1 << 59;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
 const STALE_TAG: u64 = u64::MAX;
 /// Pages whose raster would exceed this many device pixels on a side are drawn in tiles.
@@ -79,6 +81,17 @@ pub enum Fit {
     Page,
     Height,
     None,
+}
+
+/// The page display as it was before full screen, put back on leaving it
+/// ([`DocView::enter_presentation`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedDisplay {
+    pub layout: PageLayout,
+    pub continuous: bool,
+    pub cover: bool,
+    pub fit: Fit,
+    pub zoom: f32,
 }
 
 /// The base page display: one page across, or a two-page spread. Whether it scrolls continuously
@@ -169,19 +182,21 @@ pub struct ViewDefaults {
     pub layout: PageLayout,
     /// Whether the base layout scrolls continuously.
     pub continuous: bool,
+    /// Separate pages with a gutter and shadow; off joins adjacent page edges.
+    pub show_page_gaps: bool,
     /// [`Fit::Width`] or [`Fit::Page`], or [`Fit::None`] for a fixed `zoom`.
     pub fit: Fit,
     /// The zoom with [`Fit::None`] (1.0 = 100%).
     pub zoom: f32,
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
-    /// document and the next session.
+    /// document and the next session. On for new settings; a stored choice wins.
     pub highlight_fields: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, fit: Fit::Width, zoom: 1.0, highlight_fields: false }
+        Self { layout: PageLayout::Single, continuous: true, show_page_gaps: true, fit: Fit::Width, zoom: 1.0, highlight_fields: true }
     }
 }
 
@@ -374,6 +389,7 @@ pub struct DocView {
     pub layout: PageLayout,
     /// Whether the base layout scrolls continuously (independent of `layout`, as in Acrobat).
     pub continuous: bool,
+    pub show_page_gaps: bool,
     /// View rotation in degrees clockwise (0, 90, 180, 270); display only, never saved.
     pub rotation: u16,
     pub current: usize,
@@ -414,6 +430,9 @@ pub struct DocView {
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
+    /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
+    /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
+    presentation: Option<SavedDisplay>,
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
@@ -456,6 +475,9 @@ pub struct DocView {
     clicks: u32,
     last_press_time: f64,
     last_press_pos: Option<Pos2>,
+    /// Full screen: a click's page turn, when it falls due (input time) and which way. It waits
+    /// out the double-click time, as the click may be the first of a double-click selecting a word.
+    present_turn: Option<(f64, bool)>,
     last_queue: Vec<RenderRequest>,
     /// Finished renders wait in the pool instead of reaching the view (tests): what the view
     /// shows before a raster arrives can be looked at however fast the renderer is.
@@ -499,9 +521,13 @@ pub struct DocView {
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
     pub line_editor: Option<crate::edit_text_ui::LineEditor>,
+    /// The paragraph editor whose edit was just queued. It opens again with its typing if the
+    /// edit fails, as a refused form field does.
+    pub(crate) applied_editor: Option<crate::edit_text_ui::LineEditor>,
     /// The box a click switched to while another paragraph was being edited: it opens once the
     /// queued edit has applied, so its index and geometry come from the document it now is (#2022).
-    pub(crate) pending_text_open: Option<(usize, usize)>,
+    /// It is held as the paragraph's text and box, not an index: the edit can regroup the page.
+    pub(crate) pending_text_open: Option<(usize, pdfcraft_engine::BlockKey)>,
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
@@ -519,6 +545,8 @@ pub struct DocView {
     pub forms: crate::forms_ui::FormView,
     /// Prepare a form: the selected field and the gesture in progress.
     pub prepare: crate::prepare::PrepareView,
+    /// Prepare a form ▸ Calculation order.
+    pub(crate) calc_order: crate::calc_order_ui::CalcOrderView,
     /// Edit a PDF: the selected added item, the text being typed.
     pub content: crate::content_ui::ContentView,
     /// Edit a PDF ▸ Link tool state.
@@ -563,6 +591,8 @@ pub struct DocView {
     /// The current page the Pages panel last followed: it scrolls to the current page's
     /// thumbnail only when the page changes.
     pub(crate) panel_followed: Option<usize>,
+    /// Scale of the thumbnails in the Pages inspector, independent of document and grid zoom.
+    thumbnail_zoom: f32,
     /// How large the page grid draws its pages (1.0 = the usual thumbnails).
     grid_zoom: f32,
     /// A zoom asked for this frame (toolbar, pinch, keys); the grid applies it once it has laid
@@ -601,6 +631,8 @@ pub struct DocView {
 
 /// The page grid's zoom range and the step of its buttons and keys.
 pub const GRID_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+/// Thumbnail size in the Pages inspector, relative to its usual size.
+pub const THUMBNAIL_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=1.5;
 const GRID_ZOOM_STEP: f32 = 1.25;
 /// How far a sharp grid render may be from the size drawn before it is redone: a pinch changes
 /// the size on every frame, and a slightly soft or slightly large image is fine meanwhile.
@@ -703,6 +735,7 @@ impl DocView {
             fit: defaults.fit,
             layout: defaults.layout,
             continuous: defaults.continuous,
+            show_page_gaps: defaults.show_page_gaps,
             rotation: 0,
             current: 0,
             organize: false,
@@ -723,6 +756,7 @@ impl DocView {
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
+            presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
@@ -746,6 +780,7 @@ impl DocView {
             clicks: 0,
             last_press_time: 0.0,
             last_press_pos: None,
+            present_turn: None,
             last_queue: Vec::new(),
             hold_rasters: false,
             viewport_w: 800.0,
@@ -769,6 +804,7 @@ impl DocView {
             pending_edit: None,
             edit_lines: HashMap::new(),
             line_editor: None,
+            applied_editor: None,
             pending_text_open: None,
             text_background: Default::default(),
             move_background: Default::default(),
@@ -783,6 +819,7 @@ impl DocView {
             pages_panel: None,
             panel_gap: None,
             panel_followed: None,
+            thumbnail_zoom: 1.0,
             grid_zoom: 1.0,
             grid_zoom_request: None,
             grid_anchor: None,
@@ -799,6 +836,7 @@ impl DocView {
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
+            calc_order: Default::default(),
             content: Default::default(),
             links: Default::default(),
             redact_drag: None,
@@ -844,9 +882,9 @@ impl DocView {
     }
 
     /// The document was replaced by a newer version of its file (#431). The reader's place
-    /// stays: zoom, layout, rotation, page, scroll, view history and the find bar, the snapshot
-    /// marker and its pending close, and the page images on screen until their replacements
-    /// are drawn, so nothing flashes. Everything that pointed into the old version (a selected
+    /// stays: zoom, layout, rotation, page, scroll, full screen, view history and the find bar,
+    /// the snapshot marker and its pending close, and the page images on screen until their
+    /// replacements are drawn, so nothing flashes. Everything that pointed into the old version (a selected
     /// comment, a field being typed in, text being edited, a drag, page selection) starts
     /// afresh, so no stale index reaches the new one.
     pub fn document_replaced(&mut self, info: &DocInfo) {
@@ -855,10 +893,12 @@ impl DocView {
         fresh.fit = self.fit;
         fresh.layout = self.layout;
         fresh.continuous = self.continuous;
+        fresh.show_page_gaps = self.show_page_gaps;
         fresh.rotation = self.rotation;
         fresh.current = self.current;
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
+        fresh.thumbnail_zoom = self.thumbnail_zoom;
         // Same document id, so the scroll offset egui keeps for it is still this document's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
@@ -866,6 +906,8 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        // Still presenting, with the display to go back to on leaving.
+        fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
         fresh.find = self.find.take();
@@ -1036,6 +1078,53 @@ impl DocView {
         (!quads.is_empty()).then_some((s.page, quads))
     }
 
+    /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
+    /// space. With text selected it is the corner of the selection that shows at its top-left
+    /// (its page, both coordinates); otherwise the top of the window (the page showing there, and
+    /// only the position along the window's vertical, so the reader's other scroll position and
+    /// zoom are kept). `None` before the first frame has laid pages out, when the bookmark just
+    /// goes to the current page.
+    pub(crate) fn bookmark_position(&self, info: &DocInfo) -> Option<(usize, [Option<f32>; 2])> {
+        if let Some(sel) = self.selection
+            && let Some(text) = self.texts.get(&sel.page)
+            && let Some(p) = info.pages.get(sel.page)
+        {
+            // The selection's bounds in view space, which View ▸ Rotate View leaves unturned: the
+            // corner at the screen's top-left is a different one for each quarter turn.
+            let [x0, y0, x1, y1] = sel.rects(text).iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, r| {
+                [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])]
+            });
+            let (x, y) = match self.rotation {
+                90 => (x0, y1),
+                180 => (x1, y1),
+                270 => (x1, y0),
+                _ => (x0, y0),
+            };
+            if x.is_finite() && y.is_finite() {
+                return Some((sel.page, p.xyz_for_view(Some(x), Some(y))));
+            }
+        }
+        // The page showing at the window's top edge: one that crosses it (the first, in a spread
+        // of pages of different heights, whose shorter page can start below it), else the
+        // nearest one below.
+        let top = self.viewport_screen.top();
+        let showing = || self.screen_xforms.iter().filter(|(_, xf)| xf.rect.bottom() > top);
+        let (page, xf) = showing()
+            .filter(|(_, xf)| xf.rect.top() <= top)
+            .min_by_key(|(p, _)| *p)
+            .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))?;
+        let p = info.pages.get(*page)?;
+        // Above the page (in the gap before it) is the page's own top. The window's vertical is
+        // the view's y, or its x when the view is turned a quarter.
+        let (x, y) = xf.screen_to_view(pos2(xf.rect.center().x, top.max(xf.rect.top())));
+        let at = if xf.rot.is_multiple_of(180) {
+            p.xyz_for_view(None, Some(y.clamp(0.0, p.height)))
+        } else {
+            p.xyz_for_view(Some(x.clamp(0.0, p.width)), None)
+        };
+        Some((*page, at))
+    }
+
     /// A page's thumbnail texture, when rendered.
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
         self.thumbs.get(&page).map(|t| t.tex.id())
@@ -1044,6 +1133,18 @@ impl DocView {
     /// The whole-page raster on screen for `page` (the low-res backdrop of a tiled page), if any.
     pub(crate) fn page_raster(&self, page: usize) -> Option<egui::TextureId> {
         self.pages.get(&page).map(|p| p.tex.id())
+    }
+
+    /// Whether `page`'s whole-page raster (a tiled page's backdrop too) is still the one from
+    /// before its last change, whatever its tiles are.
+    pub(crate) fn page_raster_out_of_date(&self, page: usize) -> bool {
+        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG)
+    }
+
+    /// Whether `page` is still drawn, somewhere, as it was before its last change: its whole-page
+    /// raster (a tiled page's backdrop too) or any of its tiles waits for a replacement.
+    pub(crate) fn page_out_of_date(&self, page: usize) -> bool {
+        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG) || self.stale_tiles.iter().any(|k| k.0 == page)
     }
 
     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
@@ -1207,6 +1308,21 @@ impl DocView {
         self.current = page;
     }
 
+    /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
+    pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
+        self.go_to_page(page);
+        self.goto_point = None;
+        let Some(p) = info.pages.get(self.current) else { return };
+        if !rect.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        // Halve before adding so even large finite coordinates cannot overflow the midpoint.
+        let x = rect[0] * 0.5 + rect[2] * 0.5;
+        let y = rect[1] * 0.5 + rect[3] * 0.5;
+        let [fx, fy] = p.dest_fraction(Some(x), Some(y), self.rotation);
+        self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
+    }
+
     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
     /// and zoomed as `dest` asks, as Acrobat does. `/XYZ` puts (left, top) at the window's
     /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit
@@ -1275,8 +1391,7 @@ impl DocView {
         let last = self.page_count.saturating_sub(1);
         let (target, first) = match self.layout {
             PageLayout::TwoUp => {
-                // Spreads are [0, 1], [2, 3], … or, with a cover page, [0], [1, 2], [3, 4], ….
-                let first = if self.cover { c.saturating_sub((c + 1) % 2) } else { c - c % 2 };
+                let first = self.spread_first(c);
                 let target = match (forward, self.cover && c == 0) {
                     (true, true) => 1,
                     (true, false) => first.saturating_add(2),
@@ -1372,6 +1487,37 @@ impl DocView {
         self.reset_coarse_state();
     }
 
+    /// Full screen, as Acrobat's Full Screen Mode (#379, #1459): one page at a time (or one
+    /// spread, when two-page view was on: #1353), fitted to the screen, from the current page.
+    /// The display it replaces is kept for [`Self::leave_presentation`]. A no-op while presenting.
+    pub fn enter_presentation(&mut self) {
+        if self.presentation.is_some() {
+            return;
+        }
+        self.presentation =
+            Some(SavedDisplay { layout: self.layout, continuous: self.continuous, cover: self.cover, fit: self.fit, zoom: self.zoom });
+        self.continuous = false;
+        self.fit = Fit::Page;
+        self.selection = None;
+        self.goto = Some((self.current, 0.0));
+    }
+
+    /// Leave full screen: the display from before it comes back, at the page reached meanwhile.
+    pub fn leave_presentation(&mut self) {
+        let Some(saved) = self.presentation.take() else { return };
+        self.layout = saved.layout;
+        self.continuous = saved.continuous;
+        self.cover = saved.cover;
+        self.fit = saved.fit;
+        self.zoom = saved.zoom;
+        self.goto = Some((self.current, 0.0));
+    }
+
+    /// Whether the view is in full screen's one-page-at-a-time display.
+    pub fn presenting(&self) -> bool {
+        self.presentation.is_some()
+    }
+
     /// Switch the base page display (Single or Two-page), leaving continuous scrolling as it is.
     /// A no-op when the layout is already current, so re-selecting it never yanks a scrolled view
     /// back to the top.
@@ -1387,6 +1533,31 @@ impl DocView {
     /// Whether the view scrolls continuously (as opposed to one page or spread at a time).
     pub fn continuous(&self) -> bool {
         self.continuous
+    }
+
+    /// Change page separation without editing the PDF or losing the reader's place.
+    pub fn set_page_gaps(&mut self, show: bool) {
+        if self.show_page_gaps == show {
+            return;
+        }
+        if !self.organize && self.viewport_screen.is_positive() {
+            let at = self.viewport_screen.center();
+            if let Some((page, r)) = self
+                .screen_rects
+                .iter()
+                .filter(|(_, r)| r.is_positive())
+                .min_by(|(_, a), (_, b)| a.distance_sq_to_pos(at).total_cmp(&b.distance_sq_to_pos(at)))
+            {
+                let fraction = (at - r.min) / r.size();
+                self.zoom_anchor = Some((*page, fraction.x, fraction.y, at - self.viewport_screen.min));
+            }
+        }
+        self.show_page_gaps = show;
+    }
+
+    /// Separation between adjacent page rectangles, in logical screen points.
+    fn page_gap(&self) -> f32 {
+        if self.show_page_gaps { GAP } else { 0.0 }
     }
 
     /// Turn continuous scrolling on or off, keeping the current page in view. A no-op when it is
@@ -1493,6 +1664,23 @@ impl DocView {
     /// How large the page grid draws its pages (1.0 = the usual thumbnails).
     pub fn grid_zoom(&self) -> f32 {
         self.grid_zoom
+    }
+
+    /// Scale of the thumbnails in the Pages inspector (1.0 is the usual size).
+    pub fn thumbnail_zoom(&self) -> f32 {
+        self.thumbnail_zoom
+    }
+
+    /// Resize the inspector thumbnails, keeping the current page in view after layout.
+    /// Out-of-range values are clamped; non-finite values are ignored.
+    pub fn set_thumbnail_zoom(&mut self, zoom: f32) {
+        if zoom.is_finite() {
+            let zoom = zoom.clamp(*THUMBNAIL_ZOOM_RANGE.start(), *THUMBNAIL_ZOOM_RANGE.end());
+            if zoom != self.thumbnail_zoom {
+                self.thumbnail_zoom = zoom;
+                self.panel_followed = None;
+            }
+        }
     }
 
     /// Zoom the page grid; out-of-range values are clamped and nonsense is ignored.
@@ -1879,6 +2067,9 @@ impl DocView {
                 self.forms.unbaked.retain(|(_, p)| *p != page);
                 self.comments.page_rendered(page);
             }
+            if !self.page_out_of_date(page) {
+                self.text_background.page_received(page);
+            }
         } else if r.request.tag & PRINT_TAG != 0 {
             let tex = ctx.load_texture(
                 format!("print-{:?}-{page}", self.id),
@@ -1898,6 +2089,9 @@ impl DocView {
             self.pages.insert(page, PageTex { tag: r.request.tag, tex });
             self.signature_drag.page_received(page);
             self.move_background.page_received(page);
+            if !self.page_out_of_date(page) {
+                self.text_background.page_received(page);
+            }
             self.comments.page_rendered(page);
             self.waiting_since.remove(&page);
             if !self.stale_tiles.iter().any(|k| k.0 == page) {
@@ -1941,23 +2135,39 @@ impl DocView {
         }
     }
 
+    /// The first page of the two-page spread page `c` is in: spreads are [0, 1], [2, 3], … or,
+    /// with a cover page, [0], [1, 2], [3, 4], ….
+    fn spread_first(&self, c: usize) -> usize {
+        if self.cover { c.saturating_sub((c + 1) % 2) } else { c - c % 2 }
+    }
+
     fn fit_zoom(&mut self, info: &DocInfo) {
         let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().map(|p| side(self.display_size(p))).fold(1.0, f32::max);
         let max_w = largest(|s| s.0);
-        // A single page shown on its own fits that page. Every other display (scrolling, or a
-        // two-page spread) fits its largest page, so the zoom holds still while pages of other
-        // sizes scroll or page past.
+        // A single page shown on its own fits that page, and full screen in two-page view fits
+        // the spread it shows (review on #2070). Every other display (scrolling, or two-page
+        // view in the window) fits its largest page, so the zoom holds still while pages of
+        // other sizes scroll or page past.
         let (w, h) = if self.layout == PageLayout::Single && !self.continuous {
             info.pages.get(self.current).map_or_else(|| (max_w, largest(|s| s.1)), |p| self.display_size(p))
+        } else if self.presentation.is_some() && self.layout == PageLayout::TwoUp && !self.continuous {
+            let first = self.spread_first(self.current);
+            let last = if self.cover && first == 0 { 0 } else { first.saturating_add(1) };
+            let spread: Vec<(f32, f32)> = info.pages.iter().skip(first).take(last - first + 1).map(|p| self.display_size(p)).collect();
+            if spread.is_empty() {
+                (max_w, largest(|s| s.1))
+            } else {
+                (spread.iter().map(|s| s.0).fold(1.0, f32::max), spread.iter().map(|s| s.1).fold(1.0, f32::max))
+            }
         } else {
             (max_w, largest(|s| s.1))
         };
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
-                let zw = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row);
+                let zw = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row);
                 let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
                 self.zoom = zw.min(zh);
             }
@@ -1978,17 +2188,27 @@ impl DocView {
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
-    fn layout(&self, info: &DocInfo, content_w: f32) -> Vec<Rect> {
+    fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
         let s = self.zoom * PT;
+        let gap = self.page_gap();
+        let page_size = |p: &pdfcraft_render::PageInfo| {
+            let (w, h) = self.display_size(p);
+            if self.show_page_gaps {
+                vec2(w * s, h * s)
+            } else {
+                // Match the raster's whole physical pixels. Snapping each page's origin
+                // independently with fractional sizes would leave hairline seams.
+                vec2(device_pixels(w, s * ppp) as f32 / ppp, device_pixels(h, s * ppp) as f32 / ppp)
+            }
+        };
         let mut rects = Vec::with_capacity(info.pages.len());
         let mut y = MARGIN;
         match self.layout {
             PageLayout::Single => {
                 for p in &info.pages {
-                    let (w, h) = self.display_size(p);
-                    let size = vec2(w * s, h * s);
+                    let size = page_size(p);
                     rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(SIDE), y), size));
-                    y += size.y + GAP;
+                    y += size.y + gap;
                 }
             }
             PageLayout::TwoUp => {
@@ -1999,15 +2219,15 @@ impl DocView {
                     info.pages.chunks(2).collect()
                 };
                 for (ri, pair) in rows.into_iter().enumerate() {
-                    let sizes: Vec<Vec2> = pair.iter().map(|p| self.display_size(p)).map(|(w, h)| vec2(w * s, h * s)).collect();
-                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + GAP * (sizes.len() as f32 - 1.0);
+                    let sizes: Vec<Vec2> = pair.iter().map(page_size).collect();
+                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + GAP / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
                     for size in sizes {
                         rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + GAP;
+                        x += size.x + gap;
                     }
-                    y += row_h + GAP;
+                    y += row_h + gap;
                 }
             }
         }
@@ -2121,6 +2341,13 @@ pub struct PageXform {
 }
 
 impl PageXform {
+    /// Screen pixels per page point. The view's rotation swaps the rectangle's sides, so a page
+    /// turned a quarter shows its width down the screen.
+    pub(crate) fn zoom(&self) -> f32 {
+        let across = if self.rot % 180 == 90 { self.rect.height() } else { self.rect.width() };
+        across / self.pw.max(1.0)
+    }
+
     /// Draw an image in the PDF user-space `rect` as a custom stamp's appearance draws it: turned
     /// back by `turn` (the page /Rotate it was placed for), so with the page's own rotation it
     /// reads upright as displayed.
@@ -2235,9 +2462,13 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find_step(true);
         }
     }
-    if ctx.egui_wants_keyboard_input() {
+    // A focused check box or radio button holds egui's keyboard focus only for Space, and a
+    // radio button for the arrows that move within its group: the other page keys still work.
+    let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
+    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
         return;
     }
+    let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus))
         || pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Equals))
@@ -2284,8 +2515,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if pressed(cmd(Key::CloseBracket)) {
         view.view_history(true);
     }
-    let key = |k| ctx.input(|i| i.key_pressed(k));
-    if key(Key::Escape) {
+    let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
+    // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() {
@@ -2299,6 +2531,16 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     }
     if key(Key::End) {
         view.go_to_page(usize::MAX);
+    }
+    // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
+    // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).
+    if view.presentation.is_some() {
+        if key(Key::Space) || key(Key::Enter) {
+            view.step_page(true);
+        }
+        if key(Key::Backspace) {
+            view.step_page(false);
+        }
     }
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
@@ -2365,6 +2607,8 @@ fn page_scroll<R>(
     ui.scope_builder(egui::UiBuilder::new().id(id), |ui| scroll.show_viewport(ui, draw)).inner
 }
 
+/// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
+/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // Keyboard scrolling applies to this frame's page view only, never later.
@@ -2392,6 +2636,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
+    let paper = app.session.reading_colors(app.views[index].id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
+        let [r, g, b] = p.background;
+        Color32::from_rgb(r, g, b)
+    });
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
@@ -2403,6 +2651,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
     let preparing = app.is_preparing();
+    // Prepare a form ▸ Calculation order: the order's steps and links on the page.
+    let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
     // Edit a PDF: added text and images can be selected, moved and edited.
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
@@ -2433,9 +2683,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = !app.modal_open() && !app.palette_open;
+    let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
     if view.organize {
+        // One remembered grid size for every document, kept in the settings.
+        view.set_grid_zoom(organize_zoom);
         organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        app.organize_zoom = view.grid_zoom();
         return;
     }
 
@@ -2469,6 +2723,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Exclude the previous frame's scrollbar tracks from gesture activation.
     let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
     let navigation_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open && ui.is_enabled() && ui.input(|i| i.focused);
+    // Full screen: a click on the document goes forward a page and a shift-click back, as in
+    // Acrobat, unless the click did something else (a link, a word selected). Decided below,
+    // once the pages have had the click.
+    let present_click = view.presentation.is_some()
+        && navigation_enabled
+        && ui.rect_contains_pointer(navigation_rect)
+        && ui.input(|i| i.pointer.primary_clicked())
+        && app.quick_tool == QuickTool::Select;
+    // Shift as held now, or as the click's own event carried it (a synthetic click).
+    let present_back = present_click
+        && ui.input(|i| {
+            i.modifiers.shift
+                || i.events.iter().any(|e| {
+                    matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } if modifiers.shift)
+                })
+        });
     if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && navigation_enabled && ui.rect_contains_pointer(navigation_rect) {
         let z = view.zoom * zoom_delta;
         match ui.input(|i| i.pointer.hover_pos()) {
@@ -2497,7 +2767,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
 
     let content_w = view.content_width(info, avail.width());
-    let rects = view.layout(info, content_w);
+    let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
     // When not scrolling continuously, only one row is shown at a time: the current page, or the
     // current two-page spread (with the cover rule). These indices drive paging, which pages are
     // drawn, and the content height (#752). Empty for a document with no pages.
@@ -2699,11 +2969,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else if let Some((page, frac)) = view.goto.take() {
         let page = page.min(rects.len() - 1);
         let r = rects[page];
-        // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - GAP
+        // Clamped here: egui clamps only after drawing, so a page that fits was drawn MARGIN - page_gap()
         // too high for a frame and then hopped into place. (`avail` is the viewport, as the
         // scroll bars float.)
         let max_y = (content_h - avail.height()).max(0.0);
-        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - GAP + frac * r.height()).max(0.0).min(max_y));
+        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - view.page_gap() + frac * r.height()).max(0.0).min(max_y));
         // Horizontally too, as Acrobat does (#2665): beside a much wider page the others sit off
         // to one side. A page already shown whole, or one filling the window's width, keeps the
         // scroll, so paging through a zoomed-in document stays on the same column. Otherwise a
@@ -2763,6 +3033,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut copy_selected = false;
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
+    let generation = doc.edit_generation();
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
     let mut open_boxes = false;
@@ -2800,6 +3071,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_props: Option<(usize, usize)> = None;
     let mut field_props = false;
     let mut field_placed = false;
+    let mut open_table: Option<(usize, [f64; 4])> = None;
+    // The table being set up in its window, shown on its own document's page.
+    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
     if preparing {
         crate::prepare::after_refresh(view, &form);
@@ -2888,6 +3162,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Set again below when the right-click lands on a link.
             view.links.context = None;
         }
+        let mut calc_hover = None;
         for &i in &visible_pages {
             badge_hover = None;
             let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
@@ -2915,9 +3190,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 current = i;
             }
             let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
-            // Soft shadow + paper.
-            painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
-            painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+            // Shadows would darken the preceding page when pages touch.
+            if view.show_page_gaps {
+                painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
+            }
+            painter.rect_filled(r, CornerRadius::ZERO, paper);
             if let Some(err) = view.errors.get(&i) {
                 painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
                 icons::paint(
@@ -3037,7 +3314,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 let page_tex = view.pages.get(&i).map(|p| p.tex.id());
                 view.move_background.paint(ui, painter, &xf, i, info, &view.content, page_tex);
             }
-            painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+            if view.show_page_gaps {
+                painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+            }
 
             // Comments: tools, selection, moving and resizing come before text selection.
             let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
@@ -3141,9 +3420,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     QuickTool::Field(f) => Some(f),
                     _ => None,
                 };
-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, can_modify, view);
+                // While a table is being set up, nothing else is drawn or moved.
+                let allowed = can_modify && table_preview.is_none() && open_table.is_none();
+                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, allowed, view);
                 field_props |= o.properties;
                 field_placed |= o.placed;
+                open_table = open_table.or(o.table);
                 (o.consumed || field_tool.is_some(), false)
             } else {
                 use crate::forms_ui::FieldPointer;
@@ -3302,7 +3584,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     let column = tool == QuickTool::ColumnSelect || ui.input(|inp| inp.modifiers.alt);
                     // A link or a form field under the pointer keeps its own cursor: a check box
                     // drawn with a glyph, or set on printed text, shows the hand, not the I-beam.
-                    let cursor_free = !over_link && !over_field;
+                    // So do the mode bar and side panels over a page scrolled under them (#2755),
+                    // unless a selection is being dragged there.
+                    let cursor_free = !over_link && !over_field && (resp.contains_pointer() || resp.dragged());
                     if column && cursor_free {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                     } else if over_text && cursor_free {
@@ -3456,17 +3740,28 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if preparing {
                 crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
+                if let Some(preview) = &table_preview {
+                    crate::field_table_ui::paint_preview(painter, &xf, i, preview);
+                }
+                if calc_order {
+                    let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+                    if let Some(name) = crate::calc_order_ui::paint_page(ui, painter, &xf, i, info, &form, &view.calc_order, generation, selected) {
+                        calc_hover = Some(name);
+                    }
+                }
             } else {
                 crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
-            // red border. Radio buttons are round, and so is theirs (as in Acrobat).
+            // red border. Radio buttons are round, and so is theirs (as in Acrobat). Only what can
+            // be filled is marked: a read-only widget (its field's, or a radio button's own) is
+            // left as it is drawn.
             if view.highlight_fields {
                 for f in form.iter() {
                     let required = f.has(pdfcraft_engine::field_flags::REQUIRED);
                     let round = f.kind == pdfcraft_engine::FormFieldKind::Radio;
-                    for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden) {
+                    for w in f.widgets.iter().filter(|w| w.page == Some(i) && !w.hidden && !w.read_only) {
                         let r = w.rect;
                         let sr = xf.user_rect(info, i, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]);
                         let tint = Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
@@ -3511,16 +3806,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 // freehand, where it would cover the next stroke (#429).
                 let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
                 let gesturing = view.comments.gesture.is_some() || freehand;
-                for a in info.annotations.iter().filter(|a| a.page == i && !gesturing) {
-                    let sr = xf.user_rect(info, i, a.rect);
-                    let hidden = prefs.hide_empty_highlight_hover && a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty);
-                    if sr.contains(p)
-                        && hover_text.is_none()
-                        && !hidden
-                        && let Some(text) = annotation_hover_text(a)
-                    {
-                        hover_text = Some((p, text));
-                    }
+                // Inspection sorts annotations spatially, but the renderer paints in /Annots
+                // order. Keep the shared list intact and choose the last eligible raw index.
+                if hover_text.is_none()
+                    && !gesturing
+                    && let Some((_, text)) = info
+                        .annotations
+                        .iter()
+                        .filter(|a| a.page == i)
+                        .filter(|a| {
+                            !(prefs.hide_empty_highlight_hover && a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty))
+                        })
+                        .filter(|a| pcx.screen_rects(a).any(|r| r.contains(p)))
+                        .filter_map(|a| annotation_hover_text(a).map(|text| (a.index, text)))
+                        .max_by_key(|(index, _)| *index)
+                {
+                    hover_text = Some((p, text));
                 }
             }
             for (mp, mr, mc) in &view.compare_marks {
@@ -3576,6 +3877,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if hover_text.is_none() {
                 hover_text = badge_hover.take();
             }
+        }
+        if calc_order {
+            view.calc_order.set_hover_page(calc_hover);
+            let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+            crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
         }
         // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
         // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
@@ -3734,7 +4040,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // below the window's top). Within a point, as for wheel paging, so layout rounding
         // can't hide an edge.
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        (page, out.state.offset.y <= MARGIN - GAP + 1.0, out.state.offset.y >= max_y - 1.0)
+        (page, out.state.offset.y <= MARGIN - view.page_gap() + 1.0, out.state.offset.y >= max_y - 1.0)
     });
 
     view.viewport_screen = out.inner_rect;
@@ -3953,6 +4259,26 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
+    // Full screen: the click turns the page unless it did something else first. It waits out the
+    // double-click time: turning on the first click's release sent a double-click's second click,
+    // meant to select a word, to the next page (review on #2070). A selection cancels it, and so
+    // do a link followed meanwhile and leaving full screen; a double-click elsewhere still turns
+    // once.
+    let now = ui.input(|i| i.time);
+    if present_click && clicked_link.is_none() && view.selection.is_none() && view.clicks < 2 {
+        let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+        view.present_turn = Some((now + delay, !present_back));
+    }
+    if let Some((due, forward)) = view.present_turn {
+        if clicked_link.is_some() || view.selection.is_some() || view.presentation.is_none() {
+            view.present_turn = None;
+        } else if now >= due {
+            view.present_turn = None;
+            view.step_page(forward);
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.0)));
+        }
+    }
     match clicked_link {
         Some(LinkTarget::Page(p, dest)) => view.go_to_dest(p, dest, info),
         Some(LinkTarget::Uri(u)) => app.request_document_url(&u, crate::LinkOrigin::Link),
@@ -4058,6 +4384,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.boxes_draft.seeded = None;
         app.dialog = Some(crate::Dialog::PageBoxes);
     }
+    if let Some((page, rect)) = open_table {
+        app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
+        app.dialog = Some(crate::Dialog::FieldTable);
+        // The window lasts while the form is prepared. Drawn with the tool picked but its panel
+        // closed, the tool goes back to Select above, so the panel opens to keep it prepared.
+        app.left = crate::LeftPanel::Tool("form");
+        app.reveal_tools();
+    }
     if let Some(n) = form_notice {
         match n {
             crate::forms_ui::FormNotice::Security => app.notify_tr("The document's security settings don't allow filling in form fields"),
@@ -4071,8 +4405,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if copy_selected {
         app.execute("edit.copy");
     }
-    // Read mode hides the tools (#2646).
-    if app.mode != crate::Mode::Read {
+    // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
+    // the quick tools come back with the window.
+    if app.mode != crate::Mode::Read && !app.full_screen {
         quick_bar(app, avail, ui);
     }
     if let Some((source, file, destination)) = remote_open {
@@ -4783,12 +5118,29 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         });
                     if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
                         ui.label(tl!("Font size:"));
-                        ui.add(
+                        let size = ui.add(
                             egui::DragValue::new(&mut app.fill_text_size)
                                 .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
                                 .speed(0.25)
                                 .suffix(" pt"),
                         );
+                        // #1274: the size also applies to the Fill & Sign text that is selected,
+                        // once per change (a typed value, or the end of a drag), so a drag adds
+                        // one undo step and not one per frame.
+                        if ((size.changed() && !size.dragged()) || size.drag_stopped())
+                            && let Some((index, id)) = app.active_ids()
+                            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
+                            && app.session.get(id).is_some_and(|doc| {
+                                doc.allows_annotation()
+                                    && doc
+                                        .info
+                                        .annotations
+                                        .iter()
+                                        .any(|a| a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked)
+                            })
+                        {
+                            app.apply_edit(Edit::FontSizeAnnotation { page, index: annotation, size: app.fill_text_size });
+                        }
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
@@ -5392,6 +5744,7 @@ mod tests {
             locked: false,
             intent: None,
             fill_sign,
+            points: Vec::new(),
         }
     }
 
@@ -5467,6 +5820,18 @@ mod tests {
         let signatures: Vec<_> = hostile.into_iter().map(|rect| signature(true, true, Some(0), Some(rect))).collect();
         let badges = signature_badges(&signatures, 0);
         assert_eq!(badges.len(), 1);
+    }
+
+    #[test]
+    fn page_zoom_reads_the_side_the_page_width_is_on() {
+        // A 200 x 100 pt page at 2 pixels per point: 400 x 200 on screen, or 200 x 400 turned.
+        let xf = |rot: u16, size: Vec2| PageXform { rect: Rect::from_min_size(Pos2::ZERO, size), rot, pw: 200.0, ph: 100.0 };
+        for rot in [0, 180] {
+            assert_eq!(xf(rot, vec2(400.0, 200.0)).zoom(), 2.0, "{rot}");
+        }
+        for rot in [90, 270] {
+            assert_eq!(xf(rot, vec2(200.0, 400.0)).zoom(), 2.0, "{rot}: the width runs down the screen");
+        }
     }
 
     #[test]
@@ -5843,6 +6208,25 @@ trailer << /Root 1 0 R >>
             assert_eq!(view.receive_result(&ctx, solid_result(request, 32, 64)), 32 * 64 * 4);
             assert_eq!(texture(&view)[0].1, [32, 64], "valid results still make progress");
         }
+    }
+
+    /// A print preview carries the renderer's print bit; the bit that asks for luminance is
+    /// its own, so a colour preview is not converted to monochrome and the two modes are told
+    /// apart by their tags.
+    #[test]
+    fn print_preview_tag_distinguishes_grayscale_from_colour() {
+        let mut v = view(1, PageLayout::Single, true);
+        v.set_print_grayscale(false);
+        v.queue_print_previews(&[(0, 1.0)]);
+        let colour = v.frame_queue.last().expect("a print preview was queued").tag;
+        assert_ne!(colour & PRINT_TAG, 0, "a print preview carries the renderer's print bit");
+        assert_eq!(colour & GRAYSCALE_TAG, 0, "a colour print preview must not ask for luminance");
+
+        v.set_print_grayscale(true);
+        v.queue_print_previews(&[(0, 1.0)]);
+        let gray = v.frame_queue.last().expect("a grayscale print preview was queued").tag;
+        assert_ne!(gray & GRAYSCALE_TAG, 0, "a grayscale print preview asks for luminance");
+        assert_ne!(gray, colour, "the two print preview modes must not share a tag");
     }
 
     #[test]
@@ -6365,6 +6749,55 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    /// Review on #2070: full screen in two-page view fits the spread it shows, the cover page
+    /// on its own included; two-page view in the window keeps one zoom for the document.
+    #[test]
+    fn full_screen_two_page_view_fits_the_spread_it_shows() {
+        let page =
+            |width: f32, height: f32| pdfcraft_render::PageInfo { width, height, label: String::new(), crop: [0.0, 0.0, width, height], rotation: 0 };
+        // Spreads [0, 1] small, [2, 3] large; with a cover page [0], [1, 2] mixed, [3].
+        let info = DocInfo { pages: vec![page(300.0, 400.0), page(300.0, 400.0), page(600.0, 800.0), page(600.0, 800.0)], ..Default::default() };
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        (v.layout, v.continuous, v.viewport_w, v.viewport_h) = (PageLayout::TwoUp, false, 1000.0, 800.0);
+        v.fit = Fit::Page;
+        v.fit_zoom(&info);
+        let windowed = v.zoom;
+        v.enter_presentation();
+        v.fit_zoom(&info);
+        let small = v.zoom;
+        assert!(small > windowed * 1.9, "the small spread fills the screen: {small} vs {windowed}");
+        v.current = 3;
+        v.fit_zoom(&info);
+        assert!((v.zoom - windowed).abs() < 1e-4, "the large spread fits as before");
+        v.current = 1;
+        v.fit_zoom(&info);
+        assert_eq!(v.zoom, small, "page 2 is in the first spread");
+        // With a cover page: [0] alone, then [1, 2] (the large page decides), then [3].
+        v.cover = true;
+        v.current = 0;
+        v.fit_zoom(&info);
+        assert_eq!(v.zoom, small, "the cover page alone");
+        v.current = 1;
+        v.fit_zoom(&info);
+        assert!((v.zoom - windowed).abs() < 1e-4, "page 2 shares a spread with the large page 3");
+        // Scrolling while in full screen fits the document, as scrolling does in the window.
+        (v.continuous, v.current) = (true, 0);
+        v.fit_zoom(&info);
+        assert!((v.zoom - windowed).abs() < 1e-4, "continuous full screen keeps one zoom");
+        v.continuous = false;
+        // The cover page is a spread of its own even when the next page is larger.
+        let mixed = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 800.0), page(600.0, 800.0)], ..Default::default() };
+        v.current = 0;
+        v.fit_zoom(&mixed);
+        assert_eq!(v.zoom, small, "the small cover alone, not with page 2");
+        // Leaving full screen brings the document-wide fit back.
+        v.leave_presentation();
+        (v.fit, v.current) = (Fit::Page, 0);
+        (v.layout, v.continuous) = (PageLayout::TwoUp, false);
+        v.fit_zoom(&info);
+        assert!((v.zoom - windowed).abs() < 1e-4, "in the window, one zoom for the document");
+    }
+
     #[test]
     fn fit_width_fits_the_shown_page_in_single_page_view_only() {
         let page =
@@ -6377,7 +6810,7 @@ trailer << /Root 1 0 R >>
         v.fit_zoom(&info);
         let narrow = v.zoom;
         // The shown page fills the width between the side gutters, not centred for the wide page.
-        let shown = v.layout(&info, v.content_width(&info, 1000.0))[0];
+        let shown = v.layout(&info, v.content_width(&info, 1000.0), 1.0)[0];
         assert!((shown.left() - SIDE).abs() < 1e-2 && (shown.width() - 860.0).abs() < 1e-2, "{shown:?}");
         v.current = 1;
         v.fit_zoom(&info);
@@ -6477,5 +6910,121 @@ trailer << /Root 1 0 R >>
         assert_eq!(v.find.as_ref().unwrap().current, Some(0));
         assert_eq!(v.find.as_ref().unwrap().matches, vec![(1, 5..9)]);
         assert!(v.goto.is_none());
+    }
+
+    /// A page whose picture moved can get its whole-page raster back before its last stale tile.
+    /// From then on the raster has the picture where it went: it is drawn from there, not from
+    /// where it was (which the raster now shows empty), and another drag starts from there too.
+    #[test]
+    fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() {
+        let content = b"q 60 0 0 60 40 260 cm /Im0 Do Q";
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content.as_slice(), b"\nendstream"].concat(),
+            [
+                b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Length 3 >>\nstream\n".as_slice(),
+                &[200, 30, 30],
+                b"\nendstream",
+            ]
+            .concat(),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            bytes.extend_from_slice(o);
+            bytes.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("picture.pdf", None, bytes.clone()).unwrap();
+            app.set_option("zoom", "100").unwrap();
+            app.quick_tool = QuickTool::EditText;
+            app
+        });
+        let settle = |h: &mut egui_kittest::Harness<'static, PdfCraftApp>| {
+            for _ in 0..400 {
+                h.step();
+                if !h.state().render_pending() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        h.run_steps(4);
+        settle(&mut h);
+        let page = h.state().views[0].page_screen_rect(0).unwrap();
+        let at = |x: f32, y: f32| egui::pos2(page.left() + x / 300.0 * page.width(), page.top() + (400.0 - y) / 400.0 * page.height());
+        let red = |pixels: &image::RgbaImage, r: Rect| {
+            let (w, hh) = (pixels.width(), pixels.height());
+            (r.top().max(0.0) as u32..(r.bottom() as u32).min(hh))
+                .flat_map(|y| (r.left().max(0.0) as u32..(r.right() as u32).min(w)).map(move |x| (x, y)))
+                .filter(|(x, y)| matches!(pixels.get_pixel(*x, *y).0, [r, g, b, _] if r > 150 && g < 90 && b < 90))
+                .count()
+        };
+        let (old, new) = (Rect::from_two_pos(at(42.0, 262.0), at(98.0, 318.0)), Rect::from_two_pos(at(182.0, 82.0), at(238.0, 138.0)));
+        // Select the picture and drag it, without overlap, from (40, 260) to (180, 80).
+        let drag = |h: &mut egui_kittest::Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2, release: bool| {
+            h.hover_at(from);
+            h.run_steps(1);
+            h.drag_at(from);
+            h.run_steps(1);
+            for k in 1..=4 {
+                h.hover_at(from + (to - from) * (k as f32 / 4.0));
+                h.run_steps(1);
+            }
+            if release {
+                h.drop_at(to);
+                h.step();
+            }
+        };
+        let (grab, put) = (at(70.0, 290.0), at(210.0, 110.0));
+        h.hover_at(grab);
+        h.run_steps(1);
+        h.drag_at(grab);
+        h.run_steps(1);
+        h.drop_at(grab);
+        h.run_steps(3);
+        assert!(h.state().views[0].image_selection.is_some(), "the picture is selected");
+        h.state_mut().views[0].hold_rasters = true;
+        drag(&mut h, grab, put, true);
+        // One tile stays stale, as a tile result arriving after the whole-page raster would; then
+        // the whole-page raster is let through.
+        let tile = h.ctx.load_texture("stale-tile", egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), TextureOptions::LINEAR);
+        h.state_mut().views[0].tiles.insert((0, 1, 0, 0), tile);
+        h.state_mut().views[0].stale_tiles.insert((0, 1, 0, 0));
+        h.state_mut().views[0].hold_rasters = false;
+        for _ in 0..400 {
+            h.step();
+            if !h.state().views[0].page_raster_out_of_date(0) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().views[0].page_raster_out_of_date(0), "the whole-page raster is fresh");
+        assert!(h.state().views[0].page_out_of_date(0), "a tile is still stale");
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        assert!(red(&pixels, new) > 100, "the picture shows where it went");
+        assert_eq!(red(&pixels, old), 0, "and not where it was");
+        // Another drag in that interval takes its pixels from where the raster has them.
+        let further = at(210.0, 200.0);
+        drag(&mut h, put, further, false);
+        let pixels = h.render().unwrap();
+        let moving = Rect::from_two_pos(at(182.0, 172.0), at(238.0, 228.0));
+        assert!(red(&pixels, moving) > 100, "the dragged picture is drawn from the fresh raster");
+        assert_eq!(red(&pixels, old), 0, "nothing shows where it first was");
+        h.state_mut().views[0].stale_tiles.clear();
+        h.state_mut().views[0].tiles.clear();
     }
 }

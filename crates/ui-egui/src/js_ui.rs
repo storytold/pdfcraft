@@ -260,8 +260,18 @@ fn reading_mode_label(mode: &str) -> &'static str {
     }
 }
 
-/// Preferences: interface language and size, appearance, identity and JavaScript. Returns `true` to close.
-pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
+/// The height the Preferences dialog keeps below its scrolling settings for the OK row: the
+/// button, and the space above it.
+pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
+
+/// The least height the scrolling settings are given. The dialog around them takes about 80 more,
+/// so this still fits the smallest window (520 pt) at the largest interface size (300%, which
+/// leaves 173 pt): a taller floor would push OK off the screen again.
+pub(crate) const PREFERENCES_MIN_SCROLL: f32 = 60.0;
+
+/// Preferences: interface language and size, appearance, identity and JavaScript. Drawn in a scroll
+/// area; [`preferences_buttons`] goes below it, outside the scroll, so OK is always in reach.
+pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
         ui.label(tl!("Interface language"));
@@ -271,7 +281,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                 ui.close();
             }
-            for language in crate::i18n::Lang::all() {
+            for language in crate::i18n::Lang::for_picker() {
                 if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
                     ui.close();
                 }
@@ -351,6 +361,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
         ui.add(widgets::checkbox(&mut defaults.continuous, tl!("Continuous scrolling")));
     });
+    ui.add(widgets::checkbox(&mut defaults.show_page_gaps, tl!("Show gaps between pages")));
+    ui.label(egui::RichText::new(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")).small().color(t.text_muted));
     ui.horizontal(|ui| {
         use crate::canvas::Fit;
         ui.label(tl!("Default zoom"));
@@ -368,6 +380,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.add(widgets::checkbox(&mut app.always_default_view, tl!("Always use my default zoom and page layout")));
     ui.horizontal(|ui| {
         ui.label(tl!("Units"));
         for u in crate::units::Unit::ALL {
@@ -490,6 +503,10 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
                 .color(t.text_muted),
         );
     });
+}
+
+/// The Preferences dialog's OK row. Returns `true` to close.
+pub(crate) fn preferences_buttons(ui: &mut egui::Ui) -> bool {
     ui.add_space(10.0);
     buttons(ui, tl!("OK"), &[]).is_some()
 }

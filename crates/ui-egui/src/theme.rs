@@ -224,6 +224,10 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
 /// The name of the installed Tamil face [`installed_font_definitions`] may add.
 pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
+/// The name of the installed Hebrew face [`installed_font_definitions`] may add.
+pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
+/// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
+pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
@@ -236,9 +240,10 @@ pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala and Tamil faces, when there are, end every family just
-/// before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) text, such as a file
-/// name, draws in a build without such faces.
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
+/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
+/// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
+/// without such faces.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -253,6 +258,8 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
+            (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
+            (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
         ] {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
@@ -382,13 +389,14 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         }
     }
     // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,
-    // file names), Hebrew faces (file names, text being edited) and Thai faces after the CJK ones; the
-    // ranges don't overlap.
+    // file names), Hebrew faces (file names, text being edited), Thai faces and Devanagari faces
+    // (the Hindi interface) after the CJK ones; the ranges don't overlap.
     for face in pdfcraft_fonts::ui_arabic_fonts()
         .into_iter()
         .chain(pdfcraft_fonts::ui_telugu_fonts())
         .chain(pdfcraft_fonts::ui_hebrew_fonts())
         .chain(pdfcraft_fonts::ui_thai_fonts())
+        .chain(pdfcraft_fonts::ui_devanagari_fonts())
     {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {

@@ -3,7 +3,7 @@
 //! preview of the current page. "Update" opens the same dialog in replace mode.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Background, Edit, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -111,7 +111,9 @@ impl Default for MarksDraft {
 }
 
 const PAGE_FORMATS: [&str; 5] = ["<<1>>", "<<1 of n>>", "<<1/n>>", "<<Page 1>>", "<<Page 1 of n>>"];
-const DATE_FORMATS: [&str; 6] = ["<<m/d/yyyy>>", "<<mm/dd/yyyy>>", "<<d/m/yyyy>>", "<<yyyy-mm-dd>>", "<<m/d/yy>>", "<<mmmm d, yyyy>>"];
+// New formats go last: `date_format` is an index into this list.
+const DATE_FORMATS: [&str; 8] =
+    ["<<m/d/yyyy>>", "<<mm/dd/yyyy>>", "<<d/m/yyyy>>", "<<yyyy-mm-dd>>", "<<m/d/yy>>", "<<mmmm d, yyyy>>", "<<yyyy/mm/dd>>", "<<yyyy/m/d>>"];
 const BOX_NAMES: [&str; 6] =
     ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
 
@@ -160,7 +162,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     match kind {
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
-                ui.label(tl!("Font: Helvetica"));
+                // The standard faces a header can be drawn in (#3754).
+                ui.label(tl!("Font:"));
+                egui::ComboBox::from_id_salt("hf-font").selected_text(d.hf.font.label()).width(100.0).show_ui(ui, |ui| {
+                    for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
+                        ui.selectable_value(&mut d.hf.font, f, f.label());
+                    }
+                });
                 ui.label(tl!("Size"));
                 ui.add(egui::DragValue::new(&mut d.hf.font_size).range(4.0..=72.0).speed(0.5));
                 ui.add(widgets::checkbox(&mut d.hf.underline, tl!("Underline")));
@@ -223,6 +231,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 ui.label(tl!("Start page number"));
                 ui.add(egui::DragValue::new(&mut d.hf.start_number).range(1..=999_999));
             });
+            ui.add(widgets::checkbox(&mut d.hf.shrink, tl!("Shrink the page content to make room for the header and footer")));
         }
         MarkKind::Watermark => {
             ui.horizontal(|ui| {
@@ -306,11 +315,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     ui.add_space(8.0);
     // Preview of the current page.
     let hf = d.hf.clone();
+    let size_h = page.1.max(1.0);
     let (wm, bg, fit) = (d.wm.clone(), d.bg.clone(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
     ui.horizontal(|ui| {
         preview(ui, t, page, |p, r, s| match kind {
             MarkKind::HeaderFooter => {
+                if hf.shrink {
+                    // The band the page content shrinks into, centred across.
+                    let (top, bottom) = hf.bands();
+                    let k = ((size_h - top - bottom) / size_h).clamp(0.0, 1.0) as f32;
+                    let band = Rect::from_min_max(pos2(r.left(), r.top() + top as f32 * s), pos2(r.right(), r.bottom() - bottom as f32 * s));
+                    let content = Rect::from_center_size(band.center(), vec2(r.width() * k, band.height().max(0.0)));
+                    p.rect_filled(content, CornerRadius::ZERO, Color32::from_gray(232));
+                }
                 for (k, text) in hf.text.iter().enumerate() {
                     if text.trim().is_empty() {
                         continue;
@@ -322,7 +340,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         1 => (r.center().x, egui::Align2::CENTER_CENTER),
                         _ => (r.right() - hf.margins[3] as f32 * s, egui::Align2::RIGHT_CENTER),
                     };
-                    p.text(pos2(x, y), align, shown, egui::FontId::proportional((hf.font_size as f32 * s).max(5.0)), rgb32(hf.color));
+                    // Courier previews in the monospaced UI face, the others proportional.
+                    let size = (hf.font_size as f32 * s).max(5.0);
+                    let font = if hf.font == FontFamily::Courier { egui::FontId::monospace(size) } else { egui::FontId::proportional(size) };
+                    p.text(pos2(x, y), align, shown, font, rgb32(hf.color));
                 }
             }
             MarkKind::Watermark if file_name.is_some() => {

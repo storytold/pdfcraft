@@ -16,6 +16,10 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
 - Each result is Passed, Failed (with findings and pages), Needs manual check, or Skipped.
 - **Content checks** walk the page content streams (and form XObjects) tracking marked
   content: painting outside MCID-marked or `/Artifact` content is untagged.
+- **Character encoding** accepts a predefined non-Identity CJK CMap or an Adobe CJK
+  character collection (`GB1`, `CNS1`, `Japan1`, `Korea1`, `KR`), including Identity-H/V.
+  Unknown CMaps and foreign registries do not establish that route. This is a font-level
+  declaration check, not validation of every ToUnicode entry or used glyph.
 - **Structure checks** read the structure tree through the role map; table regularity counts
   `ColSpan`/`RowSpan` attributes.
 - The report is a self-contained HTML page. Fixes that edit the document (language, title, tab

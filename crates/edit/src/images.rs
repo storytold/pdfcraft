@@ -9,6 +9,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use std::sync::Arc;
 
 use crate::EditError;
+use crate::text::content_streams;
 
 /// An image drawn on a page.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,23 +74,12 @@ struct ClipPath {
     even_odd: bool,
 }
 
-fn streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
-    let list: Vec<Object> = match page.get(b"Contents") {
-        None => Vec::new(),
-        Some(c) => match &*doc.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        },
-    };
-    list.into_iter()
-        .map(|o| {
-            let data = match &*doc.resolve(&o) {
-                Object::Stream(s) => s.decoded().unwrap_or_default(),
-                _ => Vec::new(),
-            };
-            (o, data)
-        })
-        .collect()
+/// Image draws one page's inventory lists at most: a form drawn many times from other forms
+/// would otherwise multiply a few hundred bytes into millions of records.
+pub(crate) const MAX_PAGE_IMAGES: usize = 100_000;
+
+fn too_many_images() -> EditError {
+    EditError::Invalid(format!("the page draws more than {MAX_PAGE_IMAGES} images"))
 }
 
 /// The page's streams joined into the one stream they are: an operator may span two of them.
@@ -165,12 +155,19 @@ impl ImageState {
                 }
             }
             b"l" => {
-                if let Some([x, y]) = op.nums::<2>() {
+                // A segment before any m (or re) has no subpath to extend: BezPath's line_to and
+                // friends panic on an empty path by contract, so the segment is skipped, as the
+                // renderer, MuPDF and pdftotext do (#3581).
+                if let Some([x, y]) = op.nums::<2>()
+                    && self.path.elements().last().is_some()
+                {
                     self.path.line_to(self.point(x, y));
                 }
             }
             b"c" => {
-                if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>() {
+                if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>()
+                    && self.path.elements().last().is_some()
+                {
                     self.path.curve_to(self.point(x1, y1), self.point(x2, y2), self.point(x3, y3));
                 }
             }
@@ -182,12 +179,19 @@ impl ImageState {
                 }
             }
             b"y" => {
-                if let Some([x1, y1, x2, y2]) = op.nums::<4>() {
+                if let Some([x1, y1, x2, y2]) = op.nums::<4>()
+                    && self.path.elements().last().is_some()
+                {
                     let end = self.point(x2, y2);
                     self.path.curve_to(self.point(x1, y1), end, end);
                 }
             }
-            b"h" => self.path.close_path(),
+            b"h" => {
+                // ClosePath with no subpath panics by the same contract (#3581).
+                if self.path.elements().last().is_some() {
+                    self.path.close_path();
+                }
+            }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>() {
                     self.path.move_to(self.point(x, y));
@@ -223,7 +227,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     let mut out = Vec::new();
     // The streams are one stream in pieces, so the graphics state and operators carry over.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
-    let pieces = joined(&streams(doc, &p.dict));
+    let pieces = joined(&content_streams(doc, &p.dict)?);
     for (i, op) in pieces.parse().ops.iter().enumerate() {
         state.apply(op)?;
         let ctm = state.placement.matrix;
@@ -270,6 +274,9 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 || rect[3] <= rect[1]
             {
                 continue;
+            }
+            if out.len() >= MAX_PAGE_IMAGES {
+                return Err(too_many_images());
             }
             out.push(PageImage {
                 rect,
@@ -344,6 +351,9 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                 if s.dict.name(b"Subtype") != Some(b"Image") {
                     continue;
                 }
+                if out.len() >= MAX_PAGE_IMAGES {
+                    return Err(too_many_images());
+                }
                 out.push(PageImage {
                     rect: ctm.bbox([0.0, 0.0, 1.0, 1.0]),
                     visible_rect: intersection(ctm.bbox([0.0, 0.0, 1.0, 1.0]), st.placement.clip),
@@ -367,8 +377,9 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
     let mut st = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
-    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::default() };
-    let pieces = joined(&streams(doc, &p.dict));
+    let mut decode = pdfcraft_cos::DecodeBudget::page();
+    let pieces = joined(&crate::text::content_streams_within(doc, &p.dict, &mut decode)?);
+    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
     walk(doc, &pieces.parse().ops, &res, &mut st, &|op| pieces.piece_of(op.span.start), &mut forms, &mut out)?;
     Ok(out)
 }
@@ -407,6 +418,20 @@ pub fn turn_about_centre(rect: [f64; 4], quarters: i32, flip_h: bool, flip_v: bo
     let (a, b, c, d) = (a * fx, b * fy, c * fx, d * fy);
     // Translate the centre to the origin, turn, translate back.
     [a, b, c, d, cx - a * cx - c * cy, cy - b * cx - d * cy]
+}
+
+/// Turn the image `degrees` clockwise (as drawn, whatever the page's `/Rotate`) about the centre
+/// of `rect`. `None` for a non-finite angle; whole turns of 360 are the identity.
+pub fn turn_by_degrees(rect: [f64; 4], degrees: f64) -> Option<[f64; 6]> {
+    if !degrees.is_finite() {
+        return None;
+    }
+    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+    let t = (degrees % 360.0).to_radians();
+    let (s, c) = t.sin_cos();
+    // Clockwise in a y-up space: (x, y) -> (x cos t + y sin t, -x sin t + y cos t).
+    let (a, b, cc, d) = (c, -s, s, c);
+    Some([a, b, cc, d, cx - a * cx - cc * cy, cy - b * cx - d * cy])
 }
 
 /// For a `Do` at `op` that sits alone in `q re W n cm Do Q`: the index of the `re` and the `cm` matrix.
@@ -455,7 +480,7 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
     let images = page_images(doc, page)?;
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
     if !ops.get(img.op).is_some_and(|op| op.is("Do")) {
@@ -503,7 +528,7 @@ pub(crate) fn selectable_images(
     excluded: &std::collections::BTreeSet<ObjRef>,
 ) -> Result<Vec<(usize, PageImage)>, EditError> {
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     Ok(page_images(doc, page)?
         .into_iter()
         .enumerate()
@@ -727,7 +752,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     }
     let images = page_images(doc, page)?;
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     let mut plans = std::collections::BTreeMap::new();
     for index in indexes {
         let image = images.get(*index).ok_or_else(|| EditError::Invalid("a selected image no longer exists".into()))?;

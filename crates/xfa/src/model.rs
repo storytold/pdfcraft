@@ -155,6 +155,8 @@ pub struct FontSpec {
     pub italic: Option<bool>,
     pub underline: Option<bool>,
     pub color: Option<Color>,
+    /// `fontHorizontalScale`, as a fraction (0.9 for `90%`).
+    pub h_scale: Option<f64>,
 }
 
 /// A font with every property resolved.
@@ -166,16 +168,20 @@ pub struct Font {
     pub italic: bool,
     pub underline: bool,
     pub color: Color,
+    /// Horizontal scale of the glyphs, as a fraction (1.0: as designed).
+    pub h_scale: f64,
 }
 
 impl Default for Font {
     /// XFA's default font: Courier 10 pt.
     fn default() -> Self {
-        Font { typeface: "Courier".into(), size: 10.0, bold: false, italic: false, underline: false, color: Color::BLACK }
+        Font { typeface: "Courier".into(), size: 10.0, bold: false, italic: false, underline: false, color: Color::BLACK, h_scale: 1.0 }
     }
 }
 
 impl Font {
+    /// This font with the properties `spec` sets in place of its own; those `spec` leaves
+    /// `None` are inherited.
     pub fn apply(&self, spec: &FontSpec) -> Font {
         Font {
             typeface: spec.typeface.clone().unwrap_or_else(|| self.typeface.clone()),
@@ -184,6 +190,7 @@ impl Font {
             italic: spec.italic.unwrap_or(self.italic),
             underline: spec.underline.unwrap_or(self.underline),
             color: spec.color.unwrap_or(self.color),
+            h_scale: spec.h_scale.unwrap_or(self.h_scale),
         }
     }
 }
@@ -493,6 +500,9 @@ pub struct Field {
     pub access: Access,
     /// The edit picture clause (`<ui>…<picture>`), e.g. `date{YYYY-MM-DD}`.
     pub picture: Option<String>,
+    /// The data picture clause (`<bind>…<picture>`), e.g. `date{YYYYMMDD}`: how the value is
+    /// written in the data. Without one, dates there are ISO.
+    pub data_picture: Option<String>,
     /// `<event activity="…"><script>`: click, change, exit, initialize, …
     pub scripts: Vec<Script>,
     /// `<calculate><script>`: the value is the script's result.
@@ -503,9 +513,17 @@ pub struct Field {
     pub validate_message: Option<String>,
     /// Numeric fields (numericEdit, or a decimal/integer/float value) give scripts numbers.
     pub numeric: bool,
+    /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
+    /// shows when not being edited, and what scripts read as `formattedValue`.
+    pub display_picture: Option<String>,
 }
 
 impl Field {
+    /// Whether the text can determine this field's height.
+    pub(crate) fn grows_with_text(&self) -> bool {
+        self.ui == Ui::TextEdit && self.multiline && self.common.h.is_none()
+    }
+
     /// A choice list's value as saved to the data: an item's shown text becomes its saved
     /// value (an editable list keeps typed text); several values stay on separate lines.
     /// Other fields keep `v`.
@@ -611,6 +629,8 @@ pub struct Run {
     pub italic: Option<bool>,
     pub underline: Option<bool>,
     pub size: Option<f64>,
+    /// `xfa-font-horizontal-scale`, as a fraction.
+    pub h_scale: Option<f64>,
     /// A floating field embedded in the text (`xfa:embed="#id"`), shown by its value.
     pub embed: Option<String>,
 }

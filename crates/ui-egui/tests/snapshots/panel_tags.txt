@@ -1,0 +1,24 @@
+Label = "Tags"
+Button "Close" [off]
+Label = "Find a tag"
+TextInput "Find a tag"
+Label = "1 tags"
+Button "P · 16" [on]
+Label = "16 0 R"
+Button "Go to page 1"
+Label = "Tag type"
+TextInput "Tag type" = "P"
+Label = "Title"
+TextInput "Title"
+Label = "Actual text"
+MultilineTextInput "Actual text"
+Label = "Alternate text"
+MultilineTextInput "Alternate text"
+Label = "Language"
+TextInput "Language"
+Button "Save tag properties" [disabled]
+Button "Revert changes" [disabled]
+Button "Move tag earlier" [disabled]
+Button "Move tag later" [disabled]
+Button "Mark as artifact"
+Button "MCID 0 · Go to page 1 · Panel sample"

@@ -47,7 +47,7 @@ pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.b
 /// technical data we hold ourselves rather than through a dependency. Each still needs an
 /// `[[asset]]` entry with `adobe_data = true`, so its SHA-256 is checked and any change to the
 /// table has to be re-attested deliberately.
-pub const ADOBE_DATA_FILES: &[&str] = &["crates/fonts/src/std14_metrics.rs"];
+pub const ADOBE_DATA_FILES: &[&str] = &["crates/fonts/src/std14_metrics.rs", "vendor/hayro-cmap/assets/cmaps.brotli"];
 
 /// File extensions that count as assets wherever they appear in the repository.
 const ASSET_EXTENSIONS: &[&str] = &[

@@ -1,0 +1,174 @@
+//! Header & footer, watermark and background dialogs in the real shell (egui_kittest).
+
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
+use pdfcraft_engine::MarkKind;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+
+const FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+fn harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+fn marks(h: &Harness<'static, PdfCraftApp>) -> Vec<MarkKind> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().marks().to_vec()
+}
+
+#[test]
+fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
+    let mut h = harness();
+    assert!(!h.state_mut().execute("edit.header_footer.remove"), "nothing to remove yet");
+    assert!(h.state_mut().execute("edit.header_footer"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Marks(MarkKind::HeaderFooter)));
+    // The center footer box takes the page-number token.
+    h.state_mut().marks_draft.focused_box = 4;
+    h.get_by_label("Insert Page Number").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.text[4], "<<1>>");
+    h.state_mut().marks_draft.range.subset = pdfcraft_ui_egui::marks::Subset::Odd;
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
+    // Update and Remove are now available.
+    assert!(h.state_mut().execute("edit.header_footer.update"));
+    h.run_steps(2);
+    h.get_by_label("Update Header and Footer");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.header_footer.remove"));
+    assert!(marks(&h).is_empty());
+}
+
+#[test]
+fn header_and_footer_dialog_draws_in_the_chosen_face() {
+    // #3754: the dialog offers Helvetica, Times and Courier (it only said "Font: Helvetica"),
+    // and the face chosen is the one the page's header is drawn in.
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.header_footer"));
+    h.run_steps(3);
+    h.get_by_label("Font:");
+    h.get_by_value("Helvetica").click();
+    h.run_steps(2);
+    h.get_by_label("Times").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.font, pdfcraft_engine::FontFamily::Times);
+    h.state_mut().marks_draft.hf.text[0] = "Serif".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
+    let s = h.state();
+    let doc = pdfcraft_cos::Document::open(s.session.get(s.views[0].id).unwrap().bytes.clone()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let face = doc.resolve(fonts.get(b"PCTimes").expect("Times is added")).as_dict().cloned().unwrap();
+    assert_eq!(face.name(b"BaseFont"), Some(&b"Times-Roman"[..]));
+}
+
+#[test]
+fn header_and_footer_dialog_can_shrink_the_page_content() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(3);
+    assert!(!h.state().marks_draft.hf.shrink, "off by default, as in Acrobat");
+    h.get_by_label("Shrink the page content to make room for the header and footer").click();
+    h.run_steps(2);
+    assert!(h.state().marks_draft.hf.shrink);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
+}
+
+#[test]
+fn watermark_and_background_dialogs() {
+    let mut h = harness();
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_some(), "OK waits for text");
+    h.get_by_label("Offset from centre");
+    h.state_mut().marks_draft.wm.text = "DRAFT".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().execute("edit.background");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h).len(), 2);
+}
+
+#[test]
+fn backgrounds_and_watermarks_from_a_file() {
+    let mut h = harness();
+    h.state_mut().execute("edit.background");
+    h.run_steps(2);
+    h.get_by_label("File").click();
+    h.run_steps(2);
+    h.get_by_label("No file chosen");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_some(), "OK waits for a file");
+    // (Browse… opens the system picker; the test supplies the file directly.)
+    h.state_mut().marks_draft.file = Some(("letterhead.pdf".into(), std::sync::Arc::new(FIXTURE.to_vec())));
+    h.run_steps(2);
+    h.get_by_label("Page number");
+    h.get_by_label("Scale relative to target page");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), vec![MarkKind::Background]);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add background"));
+}
+
+/// Pages from 1 to 1 stays one page: the dialog used to turn "to" back into the last page on
+/// every frame while both were 1, so only page 1 could not be chosen alone. The field starts on
+/// the last page.
+#[test]
+fn page_range_from_one_to_one_selects_only_the_first_page() {
+    let mut h = harness();
+    h.state_mut().execute("edit.background");
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.range.pages(3), [0, 1, 2]);
+    h.get_by_label("Pages from").click();
+    h.run_steps(2);
+    let range = h.state().marks_draft.range;
+    assert_eq!((range.from, range.to), (1, 3), "from the first page to the last");
+    h.state_mut().marks_draft.range.to = 1;
+    h.run_steps(3);
+    let range = h.state().marks_draft.range;
+    assert_eq!((range.from, range.to), (1, 1), "the range stays as typed");
+    h.get_by_label("Applies to 1 page");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.marks(), [MarkKind::Background]);
+    // Rendered: page 1 has the (default cream) background, page 2 is still blank.
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), pdfcraft_render::RenderConfig::default());
+    let corner = |r: &mut pdfcraft_render::PageRenderer, page: usize| {
+        let p = r.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        p.rgba[..4].to_vec()
+    };
+    assert_eq!(corner(&mut r, 0), vec![255, 255, 217, 255], "page 1 has the background");
+    assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
+}

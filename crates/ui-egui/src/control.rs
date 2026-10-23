@@ -36,8 +36,9 @@
 //!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
-//! - `ui.open {path}`: accept a file open; native opens report `pending: true` until they
-//!   complete and are listed in `ui.state.pending_opens`.
+//! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
+//!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until
+//!   they complete and are listed in `ui.state.pending_opens`; only a failed open replies `Err`.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
 use std::collections::{HashMap, VecDeque};
@@ -678,8 +679,11 @@ impl Host for crate::PdfCraftApp {
                 "zoom_percent": (v.zoom * 100.0).round(),
                 "fit": format!("{:?}", v.fit),
                 "layout": format!("{:?}", v.layout),
+                "continuous": v.continuous(),
+                "page_gaps": v.show_page_gaps,
                 "organize": v.organize,
                 "grid_zoom": v.grid_zoom(),
+                "thumbnail_zoom": v.thumbnail_zoom(),
                 // Pages picked in the organize grid or the Pages panel (empty: the current page).
                 "selected_pages": v.selected.iter().map(|p| p + 1).collect::<Vec<_>>(),
                 "auto_scrolling": v.auto_scrolling(),
@@ -766,14 +770,11 @@ impl Host for crate::PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open(&mut self, path: &str) -> Reply {
-        let before = self.views.len();
-        self.open_path(path);
-        if self.views.len() > before || self.password_prompt.is_some() {
-            Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() }))
-        } else if self.pending_opens.iter().any(|pending| pending.path.as_deref() == Some(path)) {
-            Ok(json!({ "accepted": path, "pending": true }))
-        } else {
-            Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}")))
+        match self.open_path(path) {
+            crate::OpenOutcome::Opened => Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() })),
+            crate::OpenOutcome::Focused => Ok(json!({ "opened": path, "focused": true })),
+            crate::OpenOutcome::Pending => Ok(json!({ "accepted": path, "pending": true })),
+            crate::OpenOutcome::Failed => Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}"))),
         }
     }
 
@@ -916,6 +917,18 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
     serve_with(client, LIMITS)
 }
 
+/// How long the accepting thread waits after a failed accept. Accepting can keep failing, for
+/// example while the process has no file descriptors left, and retrying at once would keep a
+/// core busy until it recovers. The single-instance listener waits the same way.
+#[cfg(not(target_arch = "wasm32"))]
+const ACCEPT_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The connections `incoming` accepts, calling `wait` after each failed accept.
+#[cfg(not(target_arch = "wasm32"))]
+fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: impl FnMut()) -> impl Iterator<Item = T> {
+    incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint> {
     use std::io::{BufReader, Write};
@@ -926,7 +939,7 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
     let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let lingering = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     std::thread::Builder::new().name("pdfcraft-control".into()).spawn(move || {
-        for stream in listener.incoming().flatten() {
+        for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
             let _ = stream.set_write_timeout(Some(limits.write_timeout));
             // Admitted only while fewer than the limit wait to authenticate: refused on the
             // accepting thread, so a refused connection costs no thread at all.
@@ -1083,6 +1096,19 @@ fn random_token() -> std::io::Result<String> {
 
 #[cfg(test)]
 mod transport_tests {
+    /// A failed accept is followed by a wait before the next one, so a listener that keeps
+    /// failing does not spin, and the connections around the failures still come through.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_failed_accept_waits_before_the_next() {
+        let failed = || Err(std::io::Error::other("no file descriptors left"));
+        let incoming = vec![failed(), Ok(1), failed(), failed(), Ok(2)];
+        let mut waits = 0;
+        let connections: Vec<i32> = super::accepted(incoming.into_iter(), || waits += 1).collect();
+        assert_eq!(connections, [1, 2]);
+        assert_eq!(waits, 3, "one wait per failed accept");
+    }
+
     /// Before authenticating, a line that isn't JSON gets a parse error and closes the
     /// connection, as [`super::serve`] documents for any first request other than `auth`.
     #[cfg(not(target_arch = "wasm32"))]

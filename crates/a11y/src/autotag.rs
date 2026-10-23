@@ -70,7 +70,7 @@ fn content_bytes(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> R
                 .map_err(|e| unsupported(index, format!("content cannot be decoded strictly: {e}")))?
         };
         all.extend_from_slice(&decoded);
-        all.push(b'\n');
+        all.push(b' ');
     }
     Ok(all)
 }

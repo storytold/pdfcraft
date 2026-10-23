@@ -48,7 +48,6 @@
 	Lines +/−	新增 / 删除行数
 	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	仅在您信任此文档时继续。链接地址可能携带文档中的信息，例如您在表单中输入的内容。
 	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	请使用单面打印。保持纸张顺序，沿裁切标记切开，然后按从左到右、从上到下的顺序叠放各摞纸张。
-
 	Menu	菜单
 	File	文件
 	Edit	编辑
@@ -63,12 +62,8 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	“自动”会跟随系统的文字大小。页面始终以显示器的完整分辨率渲染。
 	Identity	身份
 	Name on new comments	新注释的作者姓名
+	Hide hover previews for highlights without comment text	隐藏无评论文字的高亮的悬停预览
 	Open…	打开…
-	Open from cloud…	从云端打开…
-	Open local file…	打开本地文件…
-	Open from cloud	从云端打开
-	Save as to cloud…	另存为到云端…
-	Save as to cloud	另存为到云端
 	Open Recent	打开最近的文件
 	Clear Recent Files	清除最近的文件
 	Remove from Recent	从最近的文件中移除
@@ -127,6 +122,8 @@
 	Column select	列选择
 	Full screen mode	全屏模式
 	Read mode	阅读模式
+	Next tab	下一个标签页
+	Previous tab	上一个标签页
 	Switch light / dark theme	切换浅色/深色主题
 	Comments panel	注释面板
 	Form fields panel	表单域面板
@@ -199,6 +196,36 @@
 	Could not save: {e}	无法保存：{e}
 	Earlier in tab order	在 Tab 顺序中前移
 	Later in tab order	在 Tab 顺序中后移
+	Calculation order	计算顺序
+	Fix order	修正顺序
+	Move only what must move, so every field calculates after the fields it reads.	只移动必须移动的字段，使每个字段都在它读取的字段之后计算。
+	Earlier in calculation order	在计算顺序中前移
+	Later in calculation order	在计算顺序中后移
+	Too early	过早
+	Reads {name}, which calculates later, so it shows an old value.	读取 {name}，而它在之后才计算，因此显示的是旧值。
+	Loop	循环
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
+	Not in order	不在顺序中
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Back to Prepare a form	返回准备表单
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
+	{names} and {last}	{names}和{last}
+	{field} reads no other field	{field} 不读取其他字段
+	{field} reads {fields}	{field} 读取 {fields}
+	No field reads it	没有字段读取它
+	The order saved in the PDF needs tidying	PDF 中保存的顺序需要整理
+	Moves only what must move	只移动必须移动的
+	Every field calculates after the fields it reads.	每个字段都在它读取的字段之后计算。
+	Every field outside a loop calculates after the fields it reads.	循环之外的每个字段都在它读取的字段之后计算。
+	{field} reads its own value	{field} 读取自身的值
+	{fields} read each other	{fields} 相互读取
+	No order can fix a loop. Change one of the formulas.	任何顺序都无法修复循环。请修改其中一个公式。
+	Edit {field}'s formula	编辑 {field} 的公式
+	Order · top calculates first	顺序 · 上方的先计算
+	Script	脚本
+	Links on page	页面上的关联
+	Show on the page which fields each field reads	在页面上显示每个字段读取哪些字段
+	Drag a field to move it, or select it and press {up} or {down}.	拖动字段以移动它，或选中它后按 {up} 或 {down}。
 	From:	从：
 	To:	至：
 	High Resolution	高分辨率
@@ -266,6 +293,7 @@
 	Remove unused objects and merge identical ones	删除未使用的对象并合并相同的对象
 	Audit space usage…	审计空间使用情况…
 	Space Audit	空间审计
+	What takes up the space in this file, by kind of content.	此文件的空间被哪些内容占用，按内容类型列出。
 	Bytes	字节
 	Content Streams	内容流
 	X Object Forms	XObject 表单
@@ -390,14 +418,12 @@
 	of the following fields:	以下字段的：
 	Simplified field notation:	简化字段表示法：
 	Field names with + - * / and parentheses; put \\ before spaces in names.	字段名支持 + - * / 和括号；名称中的空格前加 \\。
-
 # Document font selection
 	Finding document fonts…	正在查找文档字体…
 	Installed fonts…	已安装字体…
 	Keep source fonts	保留原始字体
 	Load font…	加载字体…
 	No openly licensed document fonts found. Load a font file.	未找到采用开放许可证的字体。请加载字体文件。
-
 	Format text	设置文本格式
 	Bold	粗体
 	Italic	斜体
@@ -492,6 +518,7 @@
 	Insert Page Number	插入页码
 	Insert Date	插入日期
 	Start page number	起始页码
+	Shrink the page content to make room for the header and footer	缩小页面内容，为页眉和页脚留出空间
 	Source	来源
 	Fit to page	适合页面
 	Rotation	旋转
@@ -540,8 +567,15 @@
 	Windows store  ·  	Windows 证书存储 · 
 	Issued by: 	颁发者：
 	, Expires: 	，有效期至：
+	Digitally signed by	数字签名者
+	DN: 	DN：
+	Reason: 	原因：
+	Location: 	位置：
+	Date: 	日期：
+	The labels are in English: the signature's font can't draw them in this language.	签名所用的字体无法显示此语言的标签，因此标签使用英文。
 	No digital IDs yet.	尚无数字 ID。
 	Configure New Digital ID	配置新数字 ID
+	Remove "{name}" from this list? The file itself is not deleted.	从此列表中移除“{name}”？文件本身不会被删除。
 	Continue	继续
 	Configure a Digital ID for Signing	配置用于签名的数字 ID
 	Use a Digital ID from a file	使用文件中的数字 ID
@@ -837,6 +871,7 @@
 	Redaction code:	密文代码：
 	Font:	字体：
 	Font size:	字号：
+	Font size	字号
 	Auto-size text to fit redaction region	自动调整文本大小以适应密文区域
 	Font colour:	字体颜色：
 	Repeat overlay text	重复覆盖文本
@@ -869,6 +904,7 @@
 	Off	关
 	Flip on long edge	沿长边翻转
 	Flip on short edge	沿短边翻转
+	Printer default	打印机默认
 	Paper:	纸张：
 	Pages to Print	要打印的页面
 	More options:	更多选项：
@@ -936,6 +972,8 @@
 	Next view	下一个视图
 	Page display	页面显示
 	Continuous scrolling	连续滚动
+	Show gaps between pages	显示页面间距
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隐藏间距以连接页面边缘。PDF 内的页边距保持不变。
 	Two-page view	双页视图
 	Single page	单页
 	Show cover page in two-page view	在双页视图中显示封面页
@@ -982,6 +1020,7 @@
 	Replace	替换
 	Split	拆分
 	Set page boxes	设置页面框
+	Set page transitions	设置页面切换效果
 	Page labels	页面标签
 	Page transitions	页面切换
 	Sticky note	附注
@@ -1122,6 +1161,7 @@
 	Next page	下一页
 	Previous page	上一页
 	Current page — type a page number or label (such as iv) and press Enter	当前页 — 输入页码或标签（如 iv）后按 Enter
+	Zoom — type a percentage and press Enter	缩放 — 输入百分比并按 Enter
 	Open a PDF ({key})	打开 PDF ({key})
 	Dark gray theme	深灰色主题
 	Light theme	浅色主题
@@ -1236,6 +1276,7 @@
 	Copy text	复制文本
 	Properties…	属性…
 	Make Current Properties Default	将当前属性设为默认
+	Make Properties Default	将属性设为默认
 	More options	更多选项
 	Sort by	排序方式
 	Author	作者
@@ -1271,6 +1312,8 @@
 	This document has no layers.	本文档没有图层。
 	This document has no attachments.	本文档没有附件。
 	Hide layer	隐藏图层
+	Layer options	图层选项
+	Reset to Initial Visibility	重置为初始可见性
 	Show layer	显示图层
 	Set layer visibility	设置图层可见性
 	on page {label}	第 {label} 页
@@ -1368,6 +1411,9 @@
 	Sort comments by:	注释排序依据：
 	Create PDF Comment Summary	创建 PDF 注释摘要
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	还原到“{name}”的上次保存版本？此后的更改将无法撤销。
+	Save over the changed file?	覆盖已更改的文件？
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}”在打开或上次保存后已在磁盘上更改。现在保存会用此版本替换那个较新的版本。
+	Save anyway	仍然保存
 	Number pages	页面编号
 	Style	样式
 	None (prefix only)	无（仅前缀）
@@ -1573,6 +1619,9 @@
 	Sent to {printer}	已发送到{printer}
 	Sent to {printer}: {msg}	已发送到{printer}：{msg}
 	Looking for printers…	正在查找打印机…
+	Sending sheet {s} of {n} to {printer}…	正在将第 {s} 张（共 {n} 张）发送到{printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	未找到打印机。请检查打印机是否已安装、打印后台处理程序是否在运行，然后重新打开“打印”。
+	Reading the printer's settings…	正在读取打印机设置…
 	Sending to {printer}…	正在发送到{printer}…
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
 	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
@@ -1657,6 +1706,7 @@
 	Couldn't use {name}: {e}	无法使用{name}：{e}
 	Couldn't extract pages: {e}	无法提取页面：{e}
 	Couldn't write {name}: {e}	无法写入{name}：{e}
+	the name is not a plain file name	名称不是单纯的文件名
 	Wrote 1 file to {dir}	已将 1 个文件写入{dir}
 	Wrote {n} files to {dir}	已将{n}个文件写入{dir}
 	No pages match those choices	所选条件没有匹配的页面
@@ -1718,6 +1768,7 @@
 	This document has no restrictions to lift	此文档没有可解除的限制
 	The document's security settings don't allow this change	文档安全设置不允许此更改
 	The document's security settings don't allow copying text and images	文档安全设置不允许复制文本和图像
+	The document's security settings don't allow printing	文档安全设置不允许打印
 	Open a document first	请先打开文档
 	Security will be removed when you save	保存时将删除安全性设置
 	Click text or an image to edit it	单击文本或图像进行编辑
@@ -1844,7 +1895,6 @@
 	Digitally sign	数字签名
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
-
 	Measure distance	测量距离
 	Measure perimeter	测量周长
 	Measure area	测量面积
@@ -1889,7 +1939,6 @@
 	{n} measurements use an unsupported format and are left out.	{n} 个测量使用了不支持的格式，已被排除。
 	This area has too many overlapping paths; intersection snapping is limited.	此区域有太多重叠路径；交点吸附受到限制。
 	This measurement needs at least {n} points.	此测量至少需要 {n} 个点。
-
 # Remaining dialogs, generated history labels and diagnostics. Translated from the English meaning.
 	{0}: {1}	{0}：{1}
 	{dpi} pixels/inch	{dpi} 像素/英寸
@@ -2037,6 +2086,7 @@
 	Set status Rejected	将状态设为已拒绝
 	Set status Unmarked	将状态设为未标记
 	Set tab order	设置 Tab 键顺序
+	Set calculation order	设置计算顺序
 	Set the image of {name}	设置 {name} 的图像
 	Spreadsheet (.xlsx)	电子表格（.xlsx）
 	Square	正方形
@@ -2067,7 +2117,6 @@
 	Update header & footer	更新页眉和页脚
 	Update watermark	更新水印
 	Your name	您的姓名
-
 # Additional UI labels, including newer workspace and security prompts.
 	Change {what}	更改{what}
 	Cut and stack	裁切后堆叠
@@ -2088,7 +2137,8 @@
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
 	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此文件已在磁盘上更改。请重新加载以查看新版本；未保存的更改将会丢失。
+	Always use my default zoom and page layout	始终使用我的默认缩放和页面布局
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此文件已在磁盘上更改。“重新加载”显示新版本并放弃未保存的更改；“保存”则用此版本替换它。
 	Reload	重新加载
 	Couldn't reload {name}: {e}	无法重新加载{name}：{e}
 	Write this email?	是否撰写此邮件？
@@ -2155,7 +2205,6 @@
 	This printer offers no settings of its own.	此打印机没有专属设置。
 	Scroll tabs left	向左滚动选项卡
 	Scroll tabs right	向右滚动选项卡
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	共享字段属性
 	{n} fields selected	已选择 {n} 个字段
@@ -2176,7 +2225,6 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	已选择 {n} 个对象
 	Drag the selection to move it. Esc clears the selection.	拖动选区即可移动。按 Esc 清除选择。
@@ -2192,7 +2240,6 @@
 	Fill colour	填充颜色
 	No fill	无填充
 	Fill colour: none	填充颜色：无
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2210,9 +2257,10 @@ key	Space	空格
 	Switch to List view to change the pages it takes.	切换到列表视图以更改要使用的页面。
 	Expand all	全部展开
 	Collapse all	全部折叠
+	Collapse all pages	折叠所有页面
+	Expand all pages	展开所有页面
 	Remove page	删除页面
 	Remove {n} pages	删除 {n} 页
-
 # Shared panel docking
 	Reset panel layout	重置面板布局
 	Float panel	浮动面板
@@ -2222,7 +2270,6 @@ key	Space	空格
 	Resize panel window	调整面板窗口大小
 	Tools	工具
 	Inspector	检查器
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	PDF 页面：{size}
 	Match page at 100%	匹配页面并设为 100%
@@ -2233,7 +2280,7 @@ key	Space	空格
 	Rotate page {label} counterclockwise	逆时针旋转页面 {label}
 	Rotate page {label} clockwise	顺时针旋转页面 {label}
 	Delete page {label}	删除页面 {label}
-	Mouse wheel scroll speed	鼠标滚轮滚动速度
+	Scroll speed (mouse wheel and arrow keys)	滚动速度（鼠标滚轮和方向键）
 scroll speed	Slow	慢
 scroll speed	Normal	正常
 scroll speed	Fast	快
@@ -2287,6 +2334,13 @@ animation effects	Off	关
 	no unused output name	没有可用的输出文件名
 	no output folder was chosen	未选择输出文件夹
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下载 {n} 个 PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 个计算已改用新名称。
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	计算顺序中有 {n} 个不计算任何内容的条目。“修正顺序”会将其删除。
+@plural	{fields} reads it|{fields} read it	{fields} 读取它
+@plural	{n} field shows an old value|{n} fields show old values	{n} 个字段显示旧值
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…
@@ -2295,7 +2349,6 @@ animation effects	Off	关
 	Ink sensitivity	墨迹灵敏度
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	框内未找到签名。请将框移到签名上，或提高墨迹灵敏度。
 	Couldn't use the photo: {e}	无法使用该照片：{e}
-
 # PDF tab context menu (#1233)
 	Close Tab	关闭标签页
 	Reopen Closed Tab	重新打开已关闭的标签页
@@ -2307,11 +2360,114 @@ animation effects	Off	关
 	The linked PDF opened, but its named destination was not applied.	已打开链接的 PDF，但未应用其命名目标。
 	The linked PDF opened, but its page destination was out of range.	已打开链接的 PDF，但其页面目标超出范围。
 	Local cross-PDF links require the desktop app	PDF 之间的本地链接需要桌面应用
-
+	Cut Image	剪切图像
+	Redact Image	密文图像
+	Create Link…	创建链接…
+	Recognize Text…	识别文本…
+	Minimize	最小化
+	Maximize	最大化
+	Restore	还原
+	Use system title bar	使用系统标题栏
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	用简单的标题栏显示窗口按钮，而不是在标签栏中。GNOME 不为应用绘制标题栏，因此此标题栏不会跟随其主题。
 # Absolute local GoToR confirmation (#1364).
 	Allow	允许
 	Only allow this if you trust the source document.	仅在您信任源文档时才允许此操作。
+	Open in Full Screen mode?	以全屏模式打开？
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	此文档要求以全屏模式打开：页面充满屏幕，不显示其他内容。随时按 Esc 即可退出。
+	Full Screen	全屏
+	Not now	暂不
 	Open this local PDF?	是否打开此本地 PDF？
 	This document is trying to open a local file:	此文档正尝试打开本地文件：
 	Move tag earlier	将标签前移
 	Move tag later	将标签后移
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的已签名版本（修订版本 {rev}）。这是快照：在此处所做的更改不会影响原始文档。
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的修订版本 {rev}。这是快照：在此处所做的更改不会影响原始文档。
+	Turn upside down (180°)	上下颠倒 (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 英寸标签 (101.6 × 152.4 毫米)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	将每页裁切到其打印区域，转正后不拉伸地适合纸张。每张纸一个标签。
+	Find untagged content	查找未标记的内容
+	No untagged content was found.	未找到未标记的内容。
+	Found {n} untagged content problems.	发现 {n} 个未标记内容问题。
+	Tag form fields	标记表单字段
+	Mark as artifact	标记为工件
+	Remove this leaf tag from reading order and mark its direct content as an artifact	从阅读顺序中移除此叶标签，并将其直接内容标记为工件
+	Mark content as artifact	将内容标记为工件
+	Word count	字词统计
+	Current page only	仅当前页
+	Exclude tagged tables	排除带标签的表格
+	Exclude tagged code blocks	排除带标签的代码块
+	Exclude image/OCR text	排除图像/OCR文本
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	排除规则使用PDF标签。无标签的表格和代码仍计入统计。排除图像时也会排除不可见文本。
+	Words	词数
+	Characters	字符数
+	Characters without spaces	不含空白的字符数
+	Pages counted	已统计页数
+	Some pages contain no countable text. Scanned images need OCR first.	部分页面没有可统计的文本。扫描图像需要先进行OCR识别。
+	Some content could not be classified safely and was kept in the count.	部分内容无法可靠分类，已保留在统计中。
+	Counting words… {n} pages read	正在统计字词… 已读取{n}页
+	Word counting stopped unexpectedly.	字词统计意外停止。
+	Word count…	字词统计…
+@id	file.word_count	字词统计…
+	Standard	标准
+	Mobile	移动设备
+	Merge image fragments	合并图像碎片
+	Optimizing… merging image fragments	正在优化… 正在合并图像碎片
+	Side by side	并排
+	New file only	仅新文件
+	Old file: {name}	旧文件：{name}
+	New file: {name}	新文件：{name}
+	Print as image	作为图像打印
+	Resolution:	分辨率：
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	当打印机漏印文字、渐变或透明效果时使用。打印结果不再是可搜索的文字；配合灰度打印时图像为灰色。
+	Crop Image	裁剪图像
+	Remove Crop	移除裁剪
+	Trim the picture with its handles; Enter or Done applies	用控制柄裁剪图片;按 Enter 或“完成”应用
+	Redaction mark appearance	涂黑标记外观
+	Outline colour:	轮廓颜色:
+	Fill colour:	填充颜色:
+	Shown while the pointer is over a mark.	指针位于标记上方时显示。
+	Opacity:	不透明度:
+	Make properties default	将属性设为默认
+	Pages selected	选定的页面
+	Page properties	页面属性
+	Font	字体
+	Bulleted list	项目符号列表
+	Numbered list	编号列表
+	Alignment	对齐
+	Superscript	上标
+	Subscript	下标
+	Paragraph spacing	段落间距
+	Less	收起
+	Other options	其他选项
+	Thumbnail size	缩略图大小
+	Smaller thumbnails	缩小缩略图
+	Larger thumbnails	放大缩略图
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	更改注释形状
+# Prepare a form ▸ Text field table
+	Add text field table	添加文本字段表格
+	Text field table	文本字段表格
+	Text Field Table	文本字段表格
+	Columns	列
+	Row spacing	行间距
+	Column spacing	列间距
+	First row number	起始行号
+	Column widths	列宽
+	Distribute evenly	平均分布
+	Field names	字段名称
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 表示行号，{col} 表示列号，{seq} 表示单元格序号。如果都没有，行号加在末尾。
+	Column {n}	第 {n} 列
+	Add fields	添加字段
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	行太矮：请增加区域高度，或减少行数或行间距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某列太窄：请加宽区域、给该列更多宽度，或减少列数或列间距
+	field names can't contain a period: {name}	字段名称不能包含句点：{name}
+	two cells would both be named {name}	两个单元格的名称都会是 {name}
+	a field named {name} already exists	已存在名为 {name} 的字段
+	Open from cloud…	从云端打开…
+	Open local file…	打开本地文件…
+	Open from cloud	从云端打开
+	Save as to cloud…	另存为到云端…
+	Save as to cloud	另存为到云端
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此文件已在磁盘上更改。请重新加载以查看新版本；未保存的更改将会丢失。
+	Mouse wheel scroll speed	鼠标滚轮滚动速度

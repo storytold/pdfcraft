@@ -17,7 +17,7 @@
 //! - layers (optional content groups) used by the pages are registered in the destination's
 //!   `/OCProperties`, keeping their default on/off state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -154,8 +154,8 @@ impl<'a> Copier<'a> {
     }
 
     /// Rewrite `/P`, `/Dest` and GoTo actions on copied annotations.
-    fn fix_annotations(&self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
-        for &a in &self.annots {
+    fn fix_annotations(&mut self, dst: &mut Document, annot_pages: &HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+        for &a in &std::mem::take(&mut self.annots) {
             let src_dict = dst.get(a).as_dict().cloned();
             let Some(d) = src_dict else { continue };
             let mut d = d;
@@ -188,10 +188,13 @@ impl<'a> Copier<'a> {
                             }
                         }
                     } else {
-                        // Other actions (URI, Launch, JavaScript…) carry no page references.
-                        let mut c = Copier::new(self.src, self.map.clone(), HashMap::new());
-                        let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None)?;
-                        d.set(b"A".to_vec(), copied);
+                        // Other actions (URI, Launch, JavaScript…) carry no page references. The
+                        // copier lends its map out and takes it back with the new copies in it,
+                        // so actions sharing an object share its one copy.
+                        let mut c = Copier::new(self.src, std::mem::take(&mut self.map), HashMap::new());
+                        let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None);
+                        self.map = c.map;
+                        d.set(b"A".to_vec(), copied?);
                     }
                 }
             }
@@ -240,21 +243,29 @@ pub fn import_pages_with(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
-    let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
+    let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
         Ok(imported) => imported,
         Err(e) => {
             // A refusal while copying (a source too deep to follow) has only added objects:
             // take them back, so the destination is as it was.
-            for n in dst.object_numbers().into_iter().filter(|n| *n >= first_new) {
-                dst.free(ObjRef::new(n, dst.generation(n)));
+            for r in added_objects(dst, &before) {
+                dst.free(r);
             }
             return Err(e);
         }
     };
-    let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
+    let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
+}
+
+/// The objects in `dst` that are not among `before`, the numbers it held before an import: the
+/// ones the import added. They are not always numbered above the others: when no number is left
+/// above the highest (the document holds object 4294967295, or its `/Size` is exhausted),
+/// [`Document::add`] fills free numbers below it.
+fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
+    dst.object_numbers().into_iter().filter(|n| !before.contains(n)).map(|n| ObjRef::new(n, dst.generation(n))).collect()
 }
 
 /// Insert Pages from File: [`import_pages_with`], and the inserted file's bookmarks come along
@@ -270,9 +281,9 @@ pub fn insert_file_pages(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
-    let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
+    let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
-    let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
+    let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
     let outline = source_outline(src, imported.page_map);
     if let Some(first) = imported.pages.first()
@@ -533,13 +544,16 @@ fn named_dest(src: &Document, name: &[u8]) -> Option<Object> {
     }
     let names = src.resolve(catalog.get(b"Names")?);
     let tree = names.as_dict()?.get(b"Dests")?.clone();
-    name_tree_lookup(src, &tree, name, 0)
+    name_tree_lookup(src, &tree, name, 0, &mut HashSet::new())
 }
 
-fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8) -> Option<Object> {
-    if depth > 32 {
+/// Name trees are read once per node: a node listed twice (or a cycle) is skipped.
+fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8, seen: &mut HashSet<ObjRef>) -> Option<Object> {
+    if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
         return None;
     }
+    #[cfg(test)]
+    crate::work(1);
     let node = src.resolve(node);
     let d = node.as_dict()?;
     if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
@@ -552,14 +566,16 @@ fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8) -> Opt
         }
     }
     let kids = d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-    kids.iter().find_map(|k| name_tree_lookup(src, k, key, depth + 1))
+    kids.iter().find_map(|k| name_tree_lookup(src, k, key, depth + 1, seen))
 }
 
-/// All (key, value) pairs of a name tree, in order.
-fn name_tree_entries(src: &Document, node: &Object, depth: u8, out: &mut Vec<(Vec<u8>, Object)>) {
-    if depth > 32 {
+/// All (key, value) pairs of a name tree, in order, each node read once.
+fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<(Vec<u8>, Object)>) {
+    if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
         return;
     }
+    #[cfg(test)]
+    crate::work(1);
     let node = src.resolve(node);
     let Some(d) = node.as_dict() else { return };
     if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
@@ -572,7 +588,7 @@ fn name_tree_entries(src: &Document, node: &Object, depth: u8, out: &mut Vec<(Ve
         }
     }
     for k in d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default() {
-        name_tree_entries(src, &k, depth + 1, out);
+        name_tree_entries(src, &k, depth + 1, seen, out);
     }
 }
 
@@ -672,11 +688,19 @@ pub fn combine_field_conflicts(sources: &[&Document]) -> Vec<Vec<(String, String
 /// Read-only: returns (node, new `/T`, old name, new name). Cycle- and depth-safe.
 fn plan_renames(doc: &Document, roots: &[ObjRef], taken: &mut std::collections::HashSet<String>) -> Vec<(ObjRef, String, String, String)> {
     let mut planned = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut walk = RenameWalk::default();
     for &root in roots {
-        plan_renames_under(doc, root, "", taken, &mut seen, 0, &mut planned);
+        plan_renames_under(doc, root, "", taken, &mut walk, 0, &mut planned);
     }
     planned
+}
+
+/// What one [`plan_renames`] call remembers: the nodes it visited, and for each colliding name
+/// the suffix to try next.
+#[derive(Default)]
+struct RenameWalk {
+    seen: HashSet<ObjRef>,
+    next: HashMap<String, u32>,
 }
 
 /// One node of [`plan_renames`].
@@ -685,11 +709,11 @@ fn plan_renames_under(
     node: ObjRef,
     prefix: &str,
     taken: &mut std::collections::HashSet<String>,
-    seen: &mut std::collections::HashSet<ObjRef>,
+    walk: &mut RenameWalk,
     depth: u8,
     planned: &mut Vec<(ObjRef, String, String, String)>,
 ) {
-    if depth > 32 || !seen.insert(node) {
+    if depth > 32 || !walk.seen.insert(node) {
         return;
     }
     let Some(d) = doc.get(node).as_dict().cloned() else { return };
@@ -697,14 +721,19 @@ fn plan_renames_under(
     if !name.is_empty() {
         let fqn = qualified(prefix, &name);
         if taken.contains(&fqn) {
-            let mut n = 1u32;
+            // `taken` only grows, so every suffix below the last one handed out for this name is
+            // still taken: resume there instead of at 1.
+            let mut n = walk.next.get(&fqn).copied().unwrap_or(1);
             let mut variant;
             while {
+                #[cfg(test)]
+                crate::work(1);
                 variant = format!("{name}-{n}");
                 taken.contains(&qualified(prefix, &variant))
             } {
-                n += 1;
+                n = n.saturating_add(1);
             }
+            walk.next.insert(fqn.clone(), n.saturating_add(1));
             let new_fqn = qualified(prefix, &variant);
             planned.push((node, variant.clone(), fqn, new_fqn.clone()));
             taken.insert(new_fqn);
@@ -716,7 +745,7 @@ fn plan_renames_under(
     let prefix = qualified_optional(prefix, &name);
     let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
     for kid in kids.iter().filter_map(|k| k.as_ref()) {
-        plan_renames_under(doc, kid, &prefix, taken, seen, depth + 1, planned);
+        plan_renames_under(doc, kid, &prefix, taken, walk, depth + 1, planned);
     }
 }
 
@@ -818,8 +847,11 @@ fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(), Organize
         _ => (None, Dict::new()),
     };
     let mut list = form.get(b"Fields").map(|f| dst.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let mut listed: HashSet<ObjRef> = list.iter().filter_map(Object::as_ref).collect();
     for f in fields {
-        if !list.contains(&Object::Ref(*f)) {
+        #[cfg(test)]
+        crate::work(1);
+        if listed.insert(*f) {
             list.push(Object::Ref(*f));
         }
     }
@@ -1136,7 +1168,7 @@ fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8
         return Ok(());
     };
     let mut entries = Vec::new();
-    name_tree_entries(src, &tree, 0, &mut entries);
+    name_tree_entries(src, &tree, 0, &mut HashSet::new(), &mut entries);
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     for (k, v) in entries {
         let v = copier.copy_value(dst, &v, None)?;
@@ -1346,19 +1378,10 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     let (w, h) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
     let rotate = d.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
     // Content: the page's streams, decoded and joined.
-    let mut content = Vec::new();
-    if let Some(c) = own.get(b"Contents") {
-        let list = match &*src.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        };
-        for o in list {
-            if let Object::Stream(s) = &*src.resolve(&o) {
-                content.extend(s.decoded().map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?);
-                content.push(b'\n');
-            }
-        }
-    }
+    let content = match own.get(b"Contents") {
+        Some(c) => crate::prune::content_bytes(src, c).map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?,
+        None => Vec::new(),
+    };
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     let resources = match d.get(b"Resources") {
         Some(r) => copier.copy_value(dst, r, None)?,

@@ -192,6 +192,44 @@ fn an_untagged_document_fails_the_document_rules() {
     assert_eq!((only.count(Status::Failed), only.count(Status::Skipped)), (1, 31));
 }
 
+/// `/MarkInfo /Marked` may be written as an indirect reference, like any value. The rule read the
+/// reference itself and so reported a tagged document as untagged (#3671).
+#[test]
+fn marked_as_an_indirect_reference_still_counts_as_tagged() {
+    let mut bodies = good();
+    // The catalog is object 1; point /Marked at a new object holding `true`.
+    let last = bodies.len() + 1;
+    bodies[0] = bodies[0].replace("/MarkInfo << /Marked true >>", &format!("/MarkInfo << /Marked {last} 0 R >>"));
+    bodies.push("true".into());
+    let doc = pdf(&bodies, "");
+    let report = check(&doc, &Options { rules: [Rule::TaggedPdf].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed, "{:?}", failed(&report));
+
+    // A reference to a reference is followed too: the render inspector follows chains, so the
+    // two readers of the flag would otherwise disagree about one file.
+    let mut chain = good();
+    let first = chain.len() + 1;
+    chain[0] = chain[0].replace("/MarkInfo << /Marked true >>", &format!("/MarkInfo << /Marked {first} 0 R >>"));
+    chain.push(format!("{} 0 R", first + 1));
+    chain.push("true".into());
+    let report = check(&pdf(&chain, ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed, "{:?}", failed(&report));
+
+    // A reference that points at itself is no value, not a hang.
+    let mut loops = good();
+    let at = loops.len() + 1;
+    loops[0] = loops[0].replace("/MarkInfo << /Marked true >>", &format!("/MarkInfo << /Marked {at} 0 R >>"));
+    loops.push(format!("{at} 0 R"));
+    let report = check(&pdf(&loops, ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedPdf), Status::Failed);
+
+    // The direct form is unchanged, and a document with no flag at all still fails.
+    assert_eq!(status(&check(&pdf(&good(), ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None }), Rule::TaggedPdf), Status::Passed);
+    let mut none = good();
+    none[0] = none[0].replace("/MarkInfo << /Marked true >>", "");
+    assert_eq!(status(&check(&pdf(&none, ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None }), Rule::TaggedPdf), Status::Failed);
+}
+
 /// A tagged document that passes every automatic rule.
 fn good() -> Vec<String> {
     vec![
@@ -536,6 +574,126 @@ fn scans_identity_fonts_and_long_documents() {
     assert_eq!(some.result(Rule::CharacterEncoding).unwrap().findings[0].page, Some(3));
 }
 
+fn cid_encoding_pdf(encoding: &str, system: &str, to_unicode: bool) -> Document {
+    let unicode = if to_unicode { "/ToUnicode 7 0 R" } else { "" };
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream("/P << /MCID 0 >> BDC BT /F1 12 Tf <002200230024> Tj ET EMC"),
+            format!("<< /Type /Font /Subtype /Type0 /BaseFont /SyntheticCID /Encoding {encoding} /DescendantFonts [6 0 R] {unicode} >>"),
+            format!("<< /Type /Font /Subtype /CIDFontType0 /BaseFont /SyntheticCID /CIDSystemInfo {system} >>"),
+            stream(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /SyntheticUnicode def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 beginbfchar <0022> <0041> <0023> <0042> <0024> <0043> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+            ),
+        ],
+        "",
+    )
+}
+
+#[test]
+fn character_encoding_accepts_identity_cjk_collections() {
+    for encoding in ["/Identity-H", "/Identity-V"] {
+        for ordering in ["Japan1", "GB1", "CNS1", "Korea1", "KR"] {
+            let system = format!("<< /Registry (Adobe) /Ordering ({ordering}) /Supplement 0 >>");
+            let doc = cid_encoding_pdf(encoding, &system, false);
+            let report = checked(&doc, &[Rule::CharacterEncoding]);
+            let result = report.result(Rule::CharacterEncoding).unwrap();
+            assert_eq!(result.status, Status::Passed, "{encoding}, Adobe-{ordering}: {:?}", result.findings);
+            assert!(result.findings.is_empty());
+        }
+    }
+}
+
+#[test]
+fn character_encoding_accepts_predefined_cmaps_without_a_known_collection() {
+    // The predefined CMap and the descendant's character collection are alternative routes.
+    let system = "<< /Registry (Private) /Ordering (Custom) /Supplement 0 >>";
+    for name in [
+        "GB-EUC-H",
+        "GB-EUC-V",
+        "GBK2K-H",
+        "GBK2K-V",
+        "UniGB-UTF16-H",
+        "UniGB-UTF16-V",
+        "B5pc-H",
+        "B5pc-V",
+        "UniCNS-UCS2-H",
+        "UniCNS-UCS2-V",
+        "83pv-RKSJ-H",
+        "90pv-RKSJ-H",
+        "90ms-RKSJ-H",
+        "90ms-RKSJ-V",
+        "H",
+        "V",
+        "UniJIS-UCS2-HW-H",
+        "UniJIS-UCS2-HW-V",
+        "KSCpc-EUC-H",
+        "KSC-EUC-V",
+        "KSCms-UHC-HW-H",
+        "KSCms-UHC-HW-V",
+        "UniKS-UTF16-H",
+        "UniKS-UTF16-V",
+        "UniAKR-UTF8-H",
+        "UniAKR-UTF16-H",
+        "UniAKR-UTF32-H",
+    ] {
+        let doc = cid_encoding_pdf(&format!("/{name}"), system, false);
+        let report = checked(&doc, &[Rule::CharacterEncoding]);
+        assert_eq!(status(&report, Rule::CharacterEncoding), Status::Passed, "{name}");
+    }
+}
+
+#[test]
+fn character_encoding_rejects_unknown_cmaps_and_foreign_collections() {
+    for encoding in
+        ["/Identity-H", "/Identity-V", "/Custom-H", "/UniCustom-UTF16-H", "/UniJIS-UCS2-HW-extra-H", "/83pv-RKSJ-V", "/KSCpc-EUC-V", "null"]
+    {
+        for system in [
+            "<< /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>",
+            "<< /Registry (Adobe) /Ordering (Custom) /Supplement 0 >>",
+            "<< /Registry (Private) /Ordering (Japan1) /Supplement 0 >>",
+            "<< /Registry (adobe) /Ordering (Japan1) /Supplement 0 >>",
+            "<< /Ordering (Japan1) /Supplement 0 >>",
+            "<< /Registry /Adobe /Ordering /Japan1 /Supplement 0 >>",
+            "null",
+        ] {
+            let doc = cid_encoding_pdf(encoding, system, false);
+            let report = checked(&doc, &[Rule::CharacterEncoding]);
+            let result = report.result(Rule::CharacterEncoding).unwrap();
+            assert_eq!(result.status, Status::Failed, "{encoding}, {system}");
+            assert_eq!(result.findings.len(), 1);
+            assert_eq!(result.findings[0].page, Some(0));
+            assert!(result.findings[0].message.contains("SyntheticCID"));
+        }
+    }
+    let doc = cid_encoding_pdf("/Identity-H", "<< /Registry (Private) /Ordering (Custom) /Supplement 0 >>", true);
+    assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Passed, "ToUnicode is still sufficient");
+}
+
+#[test]
+fn character_encoding_resolves_indirect_cid_metadata() {
+    use pdfcraft_cos::{Dict, ObjRef, PdfString};
+    let mut doc = cid_encoding_pdf("/Identity-H", "null", false);
+    let registry = doc.add(Object::String(PdfString::literal(b"Adobe".to_vec())));
+    let ordering = doc.add(Object::String(PdfString::literal(b"Japan1".to_vec())));
+    let mut system = Dict::new();
+    system.set(b"Registry".to_vec(), Object::Ref(registry));
+    system.set(b"Ordering".to_vec(), Object::Ref(ordering));
+    let system = doc.add(Object::Dict(system));
+    doc.update_dict(ObjRef::new(6, 0), |d| d.set(b"CIDSystemInfo".to_vec(), Object::Ref(system))).unwrap();
+    let descendants = doc.add(Object::Array(vec![Object::Ref(ObjRef::new(6, 0))]));
+    let encoding = doc.add(Object::Name(b"Identity-V".to_vec()));
+    doc.update_dict(ObjRef::new(5, 0), |d| {
+        d.set(b"DescendantFonts".to_vec(), Object::Ref(descendants));
+        d.set(b"Encoding".to_vec(), Object::Ref(encoding));
+    })
+    .unwrap();
+    let report = checked(&doc, &[Rule::CharacterEncoding]);
+    assert_eq!(status(&report, Rule::CharacterEncoding), Status::Passed);
+}
+
 #[test]
 fn rules_have_ids_and_the_report_lists_them() {
     assert_eq!(Rule::ALL.len(), 32);
@@ -865,6 +1023,67 @@ fn glyph_by_tm(text: &str, size: f64, y: f64) -> String {
     ops + " ET"
 }
 
+/// Marked-content stack reads while `f` runs.
+fn mark_reads(f: impl FnOnce()) -> usize {
+    MARK_READS.with(|c| c.set(0));
+    f();
+    MARK_READS.with(|c| c.get())
+}
+
+/// Page content nesting `depth` unmarked `BMC` blocks around a marked one, with `ops` operators inside.
+fn deeply_nested_page(doc: &mut Document, depth: usize, ops: usize) -> pdfcraft_cos::Dict {
+    use pdfcraft_cos::{Dict, Stream};
+    let mut data = "/Figure << /MCID 0 >> BDC ".to_string();
+    data.push_str(&"/X BMC ".repeat(depth));
+    data.push_str(&"0 0 1 1 re f ".repeat(ops));
+    data.push_str(&"EMC ".repeat(depth + 1));
+    let content = doc.add(Stream::flate(Dict::new(), data.as_bytes()));
+    [(b"Contents".to_vec(), Object::Ref(content))].into_iter().collect()
+}
+
+#[test]
+fn marked_text_reads_its_enclosing_id_in_constant_steps() {
+    let mut doc = Document::new_empty();
+    let page = deeply_nested_page(&mut doc, 5_000, 5_000);
+    let reads = mark_reads(|| {
+        crate::headings::mcid_texts(&doc, &page);
+    });
+    // About 15 000 operators; a scan of the stack per operator reads millions of entries.
+    assert!(reads <= 4 * 15_000, "{reads} stack reads");
+}
+
+#[test]
+fn figure_bounds_read_the_marked_content_state_in_constant_steps() {
+    let mut doc = Document::new_empty();
+    let page = deeply_nested_page(&mut doc, 5_000, 5_000);
+    // No mark encloses figure 7, so a scan of the stack per operator reads all of it.
+    let reads = mark_reads(|| {
+        crate::alt::content_bboxes(&doc, &page, &std::collections::HashSet::from([7]));
+    });
+    assert!(reads <= 4 * 15_000, "{reads} stack reads");
+}
+
+#[test]
+fn figure_bounds_take_one_pass_over_each_page() {
+    let n = 50;
+    let content: Vec<String> = (0..n).map(|i| format!("/Figure << /MCID {i} >> BDC {i} 0 1 1 re f EMC")).collect();
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+        stream(&content.join(" ")),
+        format!("<< /Type /StructTreeRoot /K [{}] >>", kids.join(" ")),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /S /Figure /Pg 3 0 R /K {i} >>")));
+    let doc = pdf(&objs, "");
+    BOUNDS_PASSES.with(|c| c.set(0));
+    let f = figures(&doc);
+    assert_eq!(BOUNDS_PASSES.with(|c| c.get()), 1, "page passes");
+    assert_eq!(f.len(), n);
+    assert!(f.iter().enumerate().all(|(i, f)| f.bbox == Some([i as f64, 0.0, i as f64 + 1.0, 1.0])));
+}
+
 /// One tagged page whose H1 headings show `contents` (one marked-content sequence each).
 fn heading_page(contents: &[String]) -> Document {
     let marked: Vec<String> = contents.iter().enumerate().map(|(i, c)| format!("/H1 << /MCID {i} >> BDC {c} EMC")).collect();
@@ -924,6 +1143,16 @@ fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();
     objs[0] = "<< /Type /Catalog /Pages 2 0 R >>".into();
     assert!(headings(&pdf(&objs, "")).is_empty());
+}
+
+/// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
+/// draws only the one immediately before it, as the renderer and every other reader agree (#3569)
+/// -- not the first, which is never drawn at all.
+#[test]
+fn a_heading_with_a_tj_surplus_array_reads_the_one_the_page_draws() {
+    let doc = heading_page(&["BT /F1 20 Tf 72 700 Td [(FIRSTARR)] [(LASTARR)] TJ ET".into()]);
+    let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
+    assert_eq!(titles, ["LASTARR"]);
 }
 
 /// The text of every `"…"` literal with a space in it, outside comments and byte strings.
@@ -1022,4 +1251,76 @@ fn horizontally_scaled_wrapped_heading_keeps_a_space_between_lines() {
     let doc = heading_page(&["BT /F1 20 Tf 400 Tz 72 700 Td (I) Tj 0 -30 Td (Overview) Tj ET".into()]);
     let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
     assert_eq!(titles, ["I Overview"]);
+}
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    use pdfcraft_cos::{Dict, MAX_PAGE_DECODED, Object, Stream};
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let page: Dict = [(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream); 300]))].into_iter().collect();
+    let data = crate::alt::page_content(&doc, &page);
+    assert!(data.len() <= MAX_PAGE_DECODED + 300, "{} bytes", data.len());
+}
+
+/// A figure whose marked content goes on in a stream past the page's decode budget is refused,
+/// not removed with that content still pointing at it.
+#[test]
+fn marking_decorative_refuses_content_past_the_decode_budget() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let last = doc.add(Stream::from_raw(Dict::new(), b"/Figure << /MCID 0 >> BDC 0 0 5 5 re f EMC".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(last));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    assert!(mark_decorative(&mut doc, ObjRef::new(7, 0)).is_err());
+    assert_eq!(figures(&doc).len(), 2, "the figure stays");
+}
+
+/// Text past the page's decode budget is unread, so a page that shows images and no text so far
+/// can't be called image-only, nor its content all tagged.
+#[test]
+fn content_past_the_decode_budget_needs_a_manual_check() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> /Font << /F1 6 0 R >> >> >>"
+                .into(),
+            stream("/Artifact BMC q 200 0 0 200 0 0 cm /Im Do Q EMC"),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+                .into(),
+            FONT.into(),
+        ],
+        "",
+    );
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let text = doc.add(Stream::from_raw(Dict::new(), b"BT /F1 12 Tf 10 10 Td (Hello) Tj ET".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(text));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::ImageOnly), Status::Manual);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Manual);
+}
+
+/// Marking a tag as an artifact replaces the page's content with what it decoded, so content past
+/// the page's decode budget is refused rather than dropped from the page.
+#[test]
+fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let last = doc.add(Stream::from_raw(Dict::new(), b"0 0 5 5 re f".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(last));
+    let contents = Object::Array(contents);
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
+    assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }

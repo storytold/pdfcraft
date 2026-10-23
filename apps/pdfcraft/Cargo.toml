@@ -29,6 +29,8 @@ egui = { workspace = true }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
+# The log timestamp goes through chrono (no hand-rolled calendar code).
+chrono = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited

@@ -23,6 +23,10 @@ pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
 base64 = "0.22"
 
+[dev-dependencies]
+# Decodes `render` output in tests/it/owner_password.rs; already a dependency of the engine.
+png = "0.18"
+
 [target.'cfg(unix)'.dependencies]
 # `geteuid` for `ui`'s control-file owner check: safe, so no `unsafe` libc call here.
 # Already in Cargo.lock through the GUI crates.

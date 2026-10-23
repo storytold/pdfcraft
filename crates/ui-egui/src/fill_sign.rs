@@ -495,7 +495,8 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
     }
     let k = ((h as f64 * 0.9) / span).min((w as f64 * 0.95) / width);
     let x0 = (w as f64 - width * k) / 2.0;
-    // Device points (y down), then an even-odd scanline fill.
+    // Device points (y down), then a non-zero winding scanline fill so overlapping same-direction
+    // TrueType contours (such as Inter's composite Ђ and ћ) stay filled where strokes cross.
     let polys: Vec<Vec<(f64, f64)>> = o
         .contours
         .iter()
@@ -503,20 +504,29 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
         .collect();
     for y in 0..h {
         let sy = y as f64 + 0.5;
-        let mut xs: Vec<f64> = Vec::new();
+        let mut xs: Vec<(f64, i32)> = Vec::new();
         for poly in &polys {
             for i in 0..poly.len() {
                 let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
                 if (a.1 <= sy) != (b.1 <= sy) {
-                    xs.push(a.0 + (sy - a.1) / (b.1 - a.1) * (b.0 - a.0));
+                    let dir = if a.1 < b.1 { 1 } else { -1 };
+                    xs.push((a.0 + (sy - a.1) / (b.1 - a.1) * (b.0 - a.0), dir));
                 }
             }
         }
-        xs.sort_by(|a, b| a.total_cmp(b));
-        for pair in xs.as_chunks::<2>().0 {
-            let (from, to) = (pair[0].round().clamp(0.0, w as f64) as usize, pair[1].round().clamp(0.0, w as f64) as usize);
-            for x in from..to {
-                img[(x, y)] = Color32::BLACK;
+        xs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut winding = 0i32;
+        let mut start = 0.0;
+        for (x, dir) in xs {
+            if winding == 0 {
+                start = x;
+            }
+            winding += dir;
+            if winding == 0 {
+                let (from, to) = (start.round().clamp(0.0, w as f64) as usize, x.round().clamp(0.0, w as f64) as usize);
+                for px in from..to {
+                    img[(px, y)] = Color32::BLACK;
+                }
             }
         }
     }
@@ -676,8 +686,7 @@ pub(crate) fn page_input(
         },
         mark => {
             let mark = mark.mark()?;
-            let (w, h) = if mark == FillMark::Line { (36.0, 4.0) } else { (12.0, 12.0) };
-            let rect = [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0];
+            let rect = mark.rect_at(at, rotation);
             Some(FillAction::Edit(Box::new(new(page, Shape::Mark { rect, mark }, String::new(), author))))
         }
     }
@@ -706,33 +715,43 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let zoom = xf.rect.width() / xf.pw.max(1.0);
     let mut commit = false;
     let mut cancel = false;
-    egui::Area::new(egui::Id::new(("fill-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
-        let Some(t) = view.fill_text.as_mut() else { return };
-        // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
-        let width = ((t.text.chars().count().max(8) as f32) * t.size as f32 * 0.6 * zoom).clamp(60.0, 600.0);
-        // The area's max rect is last frame's size, which caps the edit's width; widen it so the
-        // box grows as text is typed.
-        ui.set_min_width(width);
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut t.text)
-                .font(egui::FontId::proportional((t.size as f32 * zoom).max(8.0)))
-                .desired_width(width)
-                .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
-                .text_color(Color32::BLACK)
-                .hint_text(tl!("Type text"))
-                .id_salt("fill-text-edit"),
-        );
-        if t.focus {
-            r.request_focus();
-            t.focus = false;
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
-        } else if r.lost_focus() {
-            commit = true;
-        }
-    });
+    // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it.
+    // Over the page, so only where the document shows: a box scrolled under the mode bar or a
+    // side panel must leave them their pointer (#2755). It stays where it was placed, cut off as
+    // the page is, rather than pushed back into the window.
+    egui::Area::new(egui::Id::new(("fill-text", view.id.0)))
+        .fade_in(false)
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .constrain_to(view.viewport_rect())
+        .constrain(false)
+        .show(ctx, |ui| {
+            let Some(t) = view.fill_text.as_mut() else { return };
+            // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
+            let width = ((t.text.chars().count().max(8) as f32) * t.size as f32 * 0.6 * zoom).clamp(60.0, 600.0);
+            // The area's max rect is last frame's size, which caps the edit's width; widen it so the
+            // box grows as text is typed.
+            ui.set_min_width(width);
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut t.text)
+                    .font(egui::FontId::proportional((t.size as f32 * zoom).max(8.0)))
+                    .desired_width(width)
+                    .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 230))
+                    .text_color(Color32::BLACK)
+                    .hint_text(tl!("Type text"))
+                    .id_salt("fill-text-edit"),
+            );
+            if t.focus {
+                r.request_focus();
+                t.focus = false;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            } else if r.lost_focus() {
+                commit = true;
+            }
+        });
     if cancel {
         view.fill_text = None;
         return None;
@@ -1269,5 +1288,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn overlapping_glyph_contours_fill_without_holes_while_keeping_counters() {
+        let runs =
+            |img: &egui::ColorImage, y: usize| (0..img.width()).filter(|&x| img[(x, y)].a() > 0 && (x == 0 || img[(x - 1, y)].a() == 0)).count();
+        // #1786: Inter's Ђ (T + right hook) and ћ (h + crossbar) have two same-direction contours
+        // that overlap on the stem; non-zero winding fills the join instead of punching a hole.
+        let dje = super::script_preview("Ђ", 200, 200);
+        assert_eq!(dje[(97, 108)], egui::Color32::BLACK, "stem-hook overlap of Ђ is filled");
+        assert_eq!(runs(&dje, 108), 2, "stem and right loop of Ђ are two solid strokes");
+        let tshe = super::script_preview("ћ", 200, 200);
+        assert_eq!(tshe[(93, 53)], egui::Color32::BLACK, "stem-crossbar overlap of ћ is filled");
+        assert_eq!(runs(&tshe, 53), 1, "crossbar of ћ is one unbroken stroke across the stem");
+        // Counter-clockwise inner contours remain open holes.
+        let omicron = super::script_preview("О", 200, 200);
+        assert_eq!(omicron[(109, 94)].a(), 0, "counter of О stays transparent");
+        assert_eq!(runs(&omicron, 94), 2);
+        assert!(super::script_preview("", 200, 200).pixels.iter().all(|p| p.a() == 0));
+        assert!(super::script_preview("Ђћ", 0, 0).pixels.is_empty());
     }
 }

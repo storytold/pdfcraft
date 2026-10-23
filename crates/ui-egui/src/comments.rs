@@ -347,6 +347,7 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("FreeText", _) => CommentTool::TextBox,
         ("Highlight", _) => CommentTool::Highlight,
         ("Underline", _) => CommentTool::Underline,
+        ("StrikeOut", Some("StrikeOutTextEdit")) => CommentTool::ReplaceText,
         ("StrikeOut", _) => CommentTool::StrikeOut,
         ("Squiggly", _) => CommentTool::Squiggly,
         ("Ink", _) => CommentTool::Ink,
@@ -385,12 +386,19 @@ pub enum Gesture {
     Move { page: usize, index: usize, from: Pos2 },
     /// Resizing a comment by one of its handles: (dx, dy) ∈ {-1, 0, 1}² says which sides move.
     Resize { page: usize, index: usize, handle: (i8, i8), from: Pos2, aspect_ratio: Option<f32> },
+    /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
+    /// before the drag, in user space) to where the pointer is.
+    Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ComposerKind {
     Note,
-    TextBox,
+    /// A text box; `size` is the box dragged out (displayed width and height, in user space
+    /// units), `None` after a click: then the box fits its text.
+    TextBox {
+        size: Option<[f64; 2]>,
+    },
     /// A callout whose arrow touches `point`; the composer's anchor is the text box's top-left.
     Callout {
         point: [f64; 2],
@@ -521,6 +529,19 @@ pub struct CommentView {
     pub context_at: Option<(usize, [f64; 2])>,
     /// A one-shot tool just finished; the app returns to the Select tool unless pinned.
     pub tool_done: bool,
+    /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
+    pub(crate) editor_focus: Option<EditorFocus>,
+}
+
+/// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor
+/// never asks for the keyboard on its own: when it did so on every frame, it took the keyboard
+/// back after every click elsewhere, and the tool keys (V, H) were typed into it (#2669).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditorFocus {
+    /// The editor just opened: it takes the keyboard, once.
+    Take,
+    /// Another comment was added: the editor keeps its text but gives the keyboard back.
+    Release,
 }
 
 impl CommentView {
@@ -536,6 +557,25 @@ impl CommentView {
             self.gesture = None;
         }
         true
+    }
+
+    /// Open the inline editor on comment (page, index) with `text`. It takes the keyboard once,
+    /// as it opens; after that the keyboard goes wherever the user clicks.
+    pub(crate) fn open_editor(&mut self, page: usize, index: usize, text: String) {
+        self.editing = Some((page, index, text));
+        self.editor_focus = Some(EditorFocus::Take);
+    }
+
+    /// A comment was just added. The editor open on another one must not keep the keyboard, or
+    /// the tool keys pressed next are typed into it (#2669): an empty editor closes, and one
+    /// holding text stays open with it, without the keyboard.
+    pub(crate) fn comment_added(&mut self) {
+        if self.editing.as_ref().is_some_and(|(_, _, text)| !text.is_empty()) {
+            self.editor_focus = Some(EditorFocus::Release);
+        } else {
+            self.editing = None;
+            self.editor_focus = None;
+        }
     }
 }
 
@@ -588,21 +628,19 @@ impl PageCx<'_> {
     }
 
     /// Where a comment is on screen: one rectangle, or one per marked line for text markup.
-    fn screen_rects(&self, a: &Annotation) -> Vec<Rect> {
-        if is_markup(&a.subtype) && !a.quads.is_empty() {
-            a.quads
-                .iter()
-                .map(|q| {
-                    let xs = [q[0], q[2], q[4], q[6]];
-                    let ys = [q[1], q[3], q[5], q[7]];
-                    let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                    let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                    self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-                })
-                .collect()
-        } else {
-            vec![self.screen_rect(a)]
-        }
+    pub(crate) fn screen_rects<'b>(&'b self, a: &'b Annotation) -> impl Iterator<Item = Rect> + 'b {
+        let quads = if is_markup(&a.subtype) { a.quads.as_slice() } else { &[] };
+        let fallback = quads.is_empty().then(|| self.screen_rect(a));
+        quads
+            .iter()
+            .map(|q| {
+                let xs = [q[0], q[2], q[4], q[6]];
+                let ys = [q[1], q[3], q[5], q[7]];
+                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
+            })
+            .chain(fallback)
     }
 
     /// A redaction mark's areas: one per marked quad, or its rectangle.
@@ -624,7 +662,7 @@ impl PageCx<'_> {
 
     /// The topmost comment under `p`.
     fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).iter().any(|r| r.expand(3.0).contains(p))).last()
+        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).last()
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
@@ -679,6 +717,42 @@ fn is_markup(subtype: &str) -> bool {
 /// `/Rect` also holds its leader line, so it only moves.
 fn resizable(a: &Annotation) -> bool {
     matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
+}
+
+/// Lines, connected lines, polygons and clouds: their ends and corners have handles of their own
+/// (measurements keep the points they measured, and a locked comment its shape).
+fn reshapable(a: &Annotation) -> bool {
+    matches!(a.subtype.as_str(), "Line" | "PolyLine" | "Polygon")
+        && !a.points.is_empty()
+        && !a.locked
+        && !a.intent.as_deref().is_some_and(|i| i.ends_with("Dimension"))
+}
+
+/// Whether `tool` picks up a line's end and corner handles: the Select and Fill & Sign tools.
+/// The drawing tools draw from where they are pressed, so a new line starts at the end of the
+/// one just drawn rather than dragging it.
+fn grabs_points(tool: QuickTool) -> bool {
+    !matches!(tool, QuickTool::Comment(t) if t.draws() || t.clicks_points())
+}
+
+/// The point of `a` (an end or a corner) whose handle is at `p` on screen.
+fn point_handle(cx: &PageCx<'_>, a: &Annotation, p: Pos2) -> Option<usize> {
+    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= 7.0)
+}
+
+/// `points` with point `i` moved to `to`; with Shift, held to the nearest 45° from the point
+/// before it (a line's other end; the first corner turns about the second).
+pub(crate) fn reshaped(points: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
+    let mut out = points.to_vec();
+    let anchor = if i == 0 { points.get(1) } else { points.get(i - 1) };
+    let to = match anchor {
+        Some(a) if shift => pdfcraft_engine::measure::snap::constrain(*a, to),
+        _ => to,
+    };
+    if let Some(p) = out.get_mut(i) {
+        *p = to;
+    }
+    out
 }
 
 const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
@@ -953,11 +1027,43 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             if over_page {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
+            // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
+            // text wraps inside it (#2669).
+            if tool == CommentTool::TextBox {
+                if resp.drag_started()
+                    && pressed_here
+                    && let Some(o) = origin
+                {
+                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                    cv.selected = None;
+                }
+                if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
+                    && *page == cx.page
+                    && let Some(p) = pointer
+                {
+                    points.truncate(1);
+                    points.push(cx.to_user(clamp_to(page_rect, p)));
+                }
+                if resp.drag_stopped()
+                    && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
+                    && page == cx.page
+                {
+                    cv.gesture = None;
+                    if let (Some(first), Some(last)) = (points.first(), points.last()) {
+                        let r = Rect::from_two_pos(cx.to_screen(*first), cx.to_screen(*last));
+                        // A drag of a few pixels is a click: the box fits its text.
+                        let drawn =
+                            (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
+                        let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
+                        cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                    }
+                }
+            }
             if resp.clicked()
                 && over_page
                 && let Some(p) = pointer
             {
-                let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox };
+                let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
                 cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
                 cv.selected = None;
             }
@@ -993,7 +1099,7 @@ pub(crate) fn draw_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool
         return false;
     }
     let cv = &view.comments;
-    if matches!(cv.gesture, Some(Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         return true;
     }
     // A polygon being clicked out keeps its clicks, even near an old shape's handle.
@@ -1009,7 +1115,8 @@ fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotati
     if cx.hidden {
         return false;
     }
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
+    {
         return true;
     }
     let Some(p) = press_point(ui, cx) else { return false };
@@ -1025,12 +1132,10 @@ fn press_point(ui: &egui::Ui, cx: &PageCx<'_>) -> Option<Pos2> {
 
 /// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
 fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation) -> bool) -> bool {
-    view.comments
-        .selected
-        .filter(|(page, _)| *page == cx.page)
-        .and_then(|(_, i)| cx.get(i))
-        .filter(|a| pick(a) && cx.allowed && resizable(a))
-        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
+    view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed).is_some_and(|a| {
+        (resizable(a) && HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
+            || (grabs_points(cx.tool) && reshapable(a) && point_handle(cx, a, p).is_some())
+    })
 }
 
 fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
@@ -1055,9 +1160,14 @@ fn select_input(
         let r = cx.screen_rect(a);
         HANDLES.into_iter().find(|h| handle_pos(r, *h).distance(p) <= 7.0)
     };
+    // Ends and corners of a selected line, connected lines, polygon or cloud.
+    let point_at =
+        |p: Pos2| -> Option<usize> { selected.filter(|a| cx.allowed && grabs_points(cx.tool) && reshapable(a)).and_then(|a| point_handle(cx, a, p)) };
     let mut consumed = false;
     if let Some(p) = pointer {
-        if let Some(h) = handle_at(p) {
+        if point_at(p).is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        } else if let Some(h) = handle_at(p) {
             ui.ctx().set_cursor_icon(match h {
                 (0, _) => egui::CursorIcon::ResizeVertical,
                 (_, 0) => egui::CursorIcon::ResizeHorizontal,
@@ -1073,7 +1183,11 @@ fn select_input(
         && pressed_here
         && let Some(o) = origin
     {
-        if let (Some(h), Some(a)) = (handle_at(o), selected) {
+        if let (Some(point), Some(a)) = (point_at(o), selected) {
+            let points = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+            cv.gesture = Some(Gesture::Reshape { page: cx.page, index: a.index, point, points });
+            consumed = true;
+        } else if let (Some(h), Some(a)) = (handle_at(o), selected) {
             // On screen, the image is also turned by the view's rotation.
             let turned = !cx.xf.rot.is_multiple_of(180);
             let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
@@ -1095,7 +1209,7 @@ fn select_input(
             consumed = true;
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
     if resp.drag_stopped()
@@ -1120,6 +1234,14 @@ fn select_input(
                     if r.width() >= 4.0 && r.height() >= 4.0 {
                         view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
                     }
+                }
+            }
+            Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
+                cv.gesture = None;
+                let shift = ui.input(|i| i.modifiers.shift);
+                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+                if moved {
+                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
                 }
             }
             _ => {}
@@ -1232,6 +1354,9 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
+        if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
+            return paint_points(painter, cx, view, a, pointer, shift);
+        }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
@@ -1240,6 +1365,56 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
                 painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
             }
         }
+    }
+    paint_gesture(painter, cx, view);
+}
+
+/// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while
+/// one is dragged (or its edit is on its way), the new shape over the old.
+/// The points a selected line, polygon or cloud is drawn with while it changes: an end or corner
+/// being dragged, the whole comment being moved by its body, or the edit just released (until the
+/// page is drawn again). `None` while it isn't changing.
+fn changing_points(
+    gesture: Option<&Gesture>,
+    pending: Option<&Edit>,
+    (page, index): (usize, usize),
+    points: &[[f64; 2]],
+    to_user: impl Fn(Pos2) -> [f64; 2],
+    pointer: Option<Pos2>,
+    shift: bool,
+) -> Option<Vec<[f64; 2]>> {
+    let shifted = |dx: f64, dy: f64| points.iter().map(|q| [q[0] + dx, q[1] + dy]).collect();
+    match (gesture, pending) {
+        (Some(Gesture::Reshape { page: p, index: i, point, points: from }), _) if (*p, *i) == (page, index) => {
+            pointer.map(|at| reshaped(from, *point, to_user(at), shift))
+        }
+        (Some(Gesture::Move { page: p, index: i, from }), _) if (*p, *i) == (page, index) => pointer.map(|at| {
+            let (a, b) = (to_user(*from), to_user(at));
+            shifted(b[0] - a[0], b[1] - a[1])
+        }),
+        (_, Some(Edit::ReshapeAnnotation { page: p, index: i, points: to })) if (*p, *i) == (page, index) => Some(to.clone()),
+        (_, Some(Edit::MoveAnnotation { page: p, index: i, dx, dy })) if (*p, *i) == (page, index) => Some(shifted(*dx, *dy)),
+        _ => None,
+    }
+}
+
+fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
+    let cv = &view.comments;
+    let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
+    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
+    let changed = changing.is_some();
+    let points = changing.unwrap_or(points);
+    let screen: Vec<Pos2> = points.iter().map(|q| cx.to_screen(*q)).collect();
+    if changed {
+        let stroke = Stroke::new(1.5, SELECT_BLUE);
+        painter.add(if a.subtype == "Polygon" {
+            egui::Shape::closed_line(screen.clone(), stroke)
+        } else {
+            egui::Shape::line(screen.clone(), stroke)
+        });
+    }
+    for c in screen {
+        painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
     paint_gesture(painter, cx, view);
 }
@@ -1260,7 +1435,7 @@ fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
 fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]]) {
     {
         let style = cx.prefs.style(*tool);
-        let zoom = cx.xf.rect.width() / cx.xf.pw.max(1.0);
+        let zoom = cx.xf.zoom();
         let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color));
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
@@ -1268,7 +1443,9 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 painter.add(egui::Shape::line(pts, stroke));
             }
             CommentTool::Eraser => {
-                painter.add(egui::Shape::line(pts, Stroke::new(12.0, Color32::from_gray(128).gamma_multiply(0.35))));
+                // As wide as what it rubs out (see `erase`).
+                let width = (2.0 * eraser_radius_px(style.width)) as f32;
+                painter.add(egui::Shape::line(pts, Stroke::new(width, Color32::from_gray(128).gamma_multiply(0.35))));
             }
             CommentTool::Line | CommentTool::Arrow if pts.len() == 2 => {
                 painter.line_segment([pts[0], pts[1]], stroke);
@@ -1298,6 +1475,9 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 if let Some(first) = pts.first().filter(|_| *tool != CommentTool::PolyLine && pts.len() >= 3) {
                     painter.circle_stroke(*first, 5.0, Stroke::new(1.0, SELECT_BLUE));
                 }
+            }
+            CommentTool::TextBox if pts.len() == 2 => {
+                painter.rect_stroke(Rect::from_two_pos(pts[0], pts[1]), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Inside);
             }
             CommentTool::Callout if pts.len() == 2 => {
                 painter.line_segment([pts[0], pts[1]], stroke);
@@ -1334,10 +1514,23 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     }
 }
 
-/// Eraser: rub out drawings along `path` (user space); one undo step for all of them.
+/// The eraser's radius on screen, in pixels, from its thickness setting (#3747): three pixels
+/// per point, so the default 2 pt keeps the 12-pixel eraser it always had, and the thickness
+/// slider's 0.5–12 pt gives 3 to 72 pixels across. A setting that isn't a number is the default.
+fn eraser_radius_px(width: f64) -> f64 {
+    3.0 * if width.is_finite() { width.clamp(0.5, 12.0) } else { 2.0 }
+}
+
+/// Eraser: rub out drawings along `path` (user space); one undo step for all of them. It rubs
+/// as wide on screen as its preview, whatever the zoom.
 fn erase(cx: &PageCx<'_>, path: &[[f64; 2]]) -> Option<Edit> {
-    let zoom = (cx.xf.rect.width() / cx.xf.pw.max(1.0)) as f64;
-    let radius = (6.0 / zoom).max(1.0);
+    let zoom = f64::from(cx.xf.zoom());
+    // A page with no size on screen has nothing to rub out (and no finite radius).
+    if !(zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    // Exactly the preview's width: no floor, which at a high zoom rubbed past it.
+    let radius = eraser_radius_px(cx.prefs.style(CommentTool::Eraser).width) / zoom;
     let b = path.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
     let mut hits: Vec<usize> = cx
         .comments()
@@ -1377,7 +1570,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let c = view.comments.composer.as_mut()?;
     let title = match c.kind {
         ComposerKind::Note => "Sticky note",
-        ComposerKind::TextBox => "Text box",
+        ComposerKind::TextBox { .. } => "Text box",
         ComposerKind::Callout { .. } => "Callout",
         ComposerKind::Caret { .. } => "Inserted text",
         ComposerKind::Replace => "Replacement text",
@@ -1393,7 +1586,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             });
             ui.add_space(6.0);
             let hint = match c.kind {
-                ComposerKind::TextBox | ComposerKind::Callout { .. } => tl!("Type text"),
+                ComposerKind::TextBox { .. } | ComposerKind::Callout { .. } => tl!("Type text"),
                 ComposerKind::Caret { .. } => tl!("Text to insert"),
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
@@ -1444,14 +1637,15 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
         }
-        ComposerKind::TextBox => {
+        ComposerKind::TextBox { size } => {
             view.comments.tool_done = true;
-            Some(new_comment(
-                &cx,
-                CommentTool::TextBox,
-                Shape::TextBox { rect: text_box_rect(c.at, &text, 12.0, page_rotation(info, page)), font_size: 12.0 },
-                text,
-            ))
+            let rotation = page_rotation(info, page);
+            let border = prefs.style(CommentTool::TextBox).width;
+            let rect = match (size, info.pages.get(page)) {
+                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
+                _ => text_box_rect(c.at, &text, 12.0, rotation),
+            };
+            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
@@ -1571,6 +1765,32 @@ pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64
     let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
     let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
     pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
+}
+
+/// The box dragged between user-space points `a` and `b`: its displayed top-left corner (user
+/// space) and its displayed width and height. Measured in the page's view space, so the view's
+/// own rotation and zoom (View > Rotate View) do not turn or scale it.
+fn drawn_box(page: &PageInfo, a: [f64; 2], b: [f64; 2]) -> ([f64; 2], [f64; 2]) {
+    let (a, b) = (page.user_to_view(a[0] as f32, a[1] as f32), page.user_to_view(b[0] as f32, b[1] as f32));
+    let at = page.view_to_user(a[0].min(b[0]), a[1].min(b[1]));
+    ([f64::from(at[0]), f64::from(at[1])], [f64::from((a[0] - b[0]).abs()), f64::from((a[1] - b[1]).abs())])
+}
+
+/// A text box dragged out `size` (displayed width and height) from its displayed top-left corner
+/// `at`, with a border `border` wide: the text wraps to its width inside the border, as its
+/// appearance lays it out. When the text needs more lines the box grows down, and moves up to stay
+/// on the page; text that cannot fit even so keeps the drawn height and is clipped.
+pub fn drawn_text_box_rect(page: &PageInfo, at: [f64; 2], size: [f64; 2], text: &str, font_size: f64, border: f64) -> [f64; 4] {
+    use pdfcraft_engine::annot_text::wrap;
+    let pad = 2.0 + border.max(0.0);
+    let [w, drawn] = size;
+    let lines = wrap(text, font_size, (w - 2.0 * pad).max(1.0)).len().max(1);
+    let needed = lines as f64 * font_size * 1.2 + 2.0 * pad + 2.0;
+    let [vx, vy] = page.user_to_view(at[0] as f32, at[1] as f32).map(f64::from);
+    let bottom = f64::from(page.height);
+    let (top, h) = if needed <= drawn || needed > bottom { (vy, drawn) } else { (vy.min(bottom - needed).max(0.0), needed) };
+    let at = page.view_to_user(vx as f32, top as f32).map(f64::from);
+    pdfcraft_engine::text_box_at(i64::from(page.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
 }
 
 /// The `/Rotate` of `page` (0 when it is unknown).
@@ -1952,6 +2172,24 @@ pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A selected line is drawn where it is going: moved by its body (both ends follow the
+    /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
+    #[test]
+    fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
+        let line = [[10.0, 10.0], [50.0, 10.0]];
+        let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
+        let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
+        let at = Some(pos2(25.0, 30.0));
+        assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+        assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+        let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
+        assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+        let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
+        let to = Some(pos2(60.0, 10.0));
+        assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+        assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    }
     use pdfcraft_render::TextGlyph;
 
     /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn

@@ -49,8 +49,10 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
         out.push(b'0');
         return;
     }
-    if r.fract() == 0.0 && r.abs() < 1e15 {
-        let _ = write!(out, "{}", r as i64);
+    // A whole number is written as an integer only within the integer range Annex C gives
+    // (±2³¹−1), so `4e9` or `1e30` stays a real token for readers with 32-bit integers.
+    if r.fract() == 0.0 && r.abs() <= f64::from(i32::MAX) {
+        let _ = write!(out, "{}", r as i32);
         return;
     }
     // Plain decimal notation (§7.3.3 has no exponents). Rust's `Display` for f64 prints the
@@ -58,6 +60,10 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
     // round-trip exactly (rounding to a fixed number of places visibly shifted shading colours).
     let s = format!("{r}");
     out.extend_from_slice(if s == "-0" { b"0" } else { s.as_bytes() });
+    // A whole number past that range prints without a point; the trailing `.` keeps it a real.
+    if !s.contains('.') && s != "-0" {
+        out.push(b'.');
+    }
 }
 
 fn write_name(n: &[u8], out: &mut Vec<u8>) {
@@ -126,7 +132,10 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => Cow::Owned(crate::security::transform(h, o, num, generation, false)),
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
+            let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
+            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+        }
         _ => Cow::Borrowed(o),
     }
 }
@@ -578,20 +587,31 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
 
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
 pub fn pdf_date(unix_secs: i64) -> String {
-    let days = unix_secs.div_euclid(86_400);
-    let secs = unix_secs.rem_euclid(86_400);
-    // Civil-from-days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
+    let (days, secs) = (unix_secs.div_euclid(86_400), unix_secs.rem_euclid(86_400));
+    let (y, m, d) = civil_from_days(days);
+    // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999 (and a PDF date is a
+    // bare four-plus-digit year, never signed). No year clamp — the old code wrote `y` as-is.
     format!("D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+///
+/// A `from_timestamp` epoch fallback would change dates past `NaiveDate`'s ±262143-year range,
+/// which the old hand-rolled converter formatted directly. The Gregorian calendar repeats every
+/// 400 years (146_097 days), so chrono converts the day within one cycle and whole cycles go back
+/// into the year (an `i128` so the extremes can't overflow), keeping chrono as the only calendar
+/// logic and reproducing the old result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    use chrono::Datelike;
+    let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+    // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+    match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(d) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), d.month(), d.day())
+        }
+        None => (1970, 1, 1), // unreachable
+    }
 }
 
 #[cfg(test)]
@@ -657,6 +677,26 @@ mod tests {
     }
 
     #[test]
+    fn pdf_dates_are_utc_and_byte_identical() {
+        // `D:YYYYMMDDHHmmSSZ` (ISO 32000-2 §7.9.4), the same strings the hand-rolled code wrote.
+        assert_eq!(pdf_date(0), "D:19700101000000Z");
+        assert_eq!(pdf_date(1_790_000_000), "D:20260921141320Z");
+        // Leap days, including the 400-year rule, and the last second of a year.
+        assert_eq!(pdf_date(1_709_164_800), "D:20240229000000Z");
+        assert_eq!(pdf_date(951_782_400), "D:20000229000000Z");
+        assert_eq!(pdf_date(1_767_225_599), "D:20251231235959Z");
+        // Before the epoch (seconds into a day are counted forward from midnight UTC).
+        assert_eq!(pdf_date(-1), "D:19691231235959Z");
+        // Years past 9999 keep the plain zero-padded year (no `+`), as the hand-rolled code did.
+        assert_eq!(pdf_date(253_402_300_800), "D:100000101000000Z");
+        // Past chrono's ±262143-year range the proleptic Gregorian date is kept, not the epoch.
+        // Pinned to the old hand-rolled output (which had no year clamp — a negative year keeps
+        // its sign, exactly as before).
+        assert_eq!(pdf_date(10_000_000_000_000), "D:3188570520174640Z");
+        assert_eq!(pdf_date(-10_000_000_000_000), "D:-3149180813061320Z");
+    }
+
+    #[test]
     fn reals_keep_full_precision_without_exponents() {
         for r in [0.1, -0.000_000_123_456_789, 1e-12, 123_456.789_012_345, 1.0 / 3.0, -2.5e7 + 0.25] {
             let mut out = Vec::new();
@@ -666,14 +706,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn whole_reals_past_the_integer_limit_stay_reals() {
+        for (r, text) in [
+            (2_147_483_647.0, "2147483647"),
+            (-2_147_483_647.0, "-2147483647"),
+            (2_147_483_648.0, "2147483648."),
+            (4e9, "4000000000."),
+            (-4e9, "-4000000000."),
+            (1e30, "1000000000000000000000000000000."),
+            (595.0, "595"),
+            (-0.0, "0"),
+        ] {
+            let mut out = Vec::new();
+            serialize(&Object::Real(r), &mut out);
+            assert_eq!(String::from_utf8_lossy(&out), text, "{r}");
+            let back = roundtrip(&Object::Real(r));
+            if r.abs() > f64::from(i32::MAX) {
+                assert_eq!(back, Object::Real(r), "{r} must read back as a real");
+            }
+        }
+    }
+
     proptest! {
         #[test]
         fn any_finite_real_round_trips(r in proptest::num::f64::NORMAL | proptest::num::f64::SUBNORMAL | proptest::num::f64::ZERO) {
-            prop_assume!(r.abs() < 1e15 || r.fract() == 0.0);
             let back = roundtrip(&Object::Real(r));
             match back {
                 Object::Real(b) => prop_assert_eq!(b, r),
-                Object::Int(i) => prop_assert_eq!(i as f64, r),
+                Object::Int(i) => {
+                    prop_assert!(i.unsigned_abs() <= i32::MAX as u64, "{r} came back as integer {i}");
+                    prop_assert_eq!(i as f64, r);
+                }
                 other => prop_assert!(false, "unexpected {other:?}"),
             }
         }

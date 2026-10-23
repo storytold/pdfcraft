@@ -165,6 +165,9 @@ const PROCESSED_EXTENSIONS: [&str; 11] = [
     "1.3.6.1.5.5.7.1.3",
 ];
 
+/// id-kp-timeStamping (RFC 5280 §4.2.1.12), required of a timestamp authority (RFC 3161 §2.3).
+const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
 /// Extended key usages that allow signing documents: anyExtendedKeyUsage, emailProtection,
 /// codeSigning, documentSigning (RFC 9336), Adobe Authentic Documents and Microsoft document
 /// signing.
@@ -384,6 +387,18 @@ impl Certificate {
         }
     }
 
+    /// Whether this certificate may stamp trusted time (RFC 3161 §2.3): its extended key usage
+    /// includes timeStamping, its key usage (if any) allows digital signatures or
+    /// non-repudiation, and it has no critical extension PdfCraft doesn't process. A certificate
+    /// issued for another purpose proves who signed, not when.
+    pub fn may_timestamp(&self) -> bool {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        self.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_TIME_STAMPING))
+            && self.key_usage.is_none_or(|u| u & SIGNING_BITS != 0)
+            && self.unknown_critical.is_empty()
+    }
+
     /// [`signing_problem`](Self::signing_problem) as a clause that follows the certificate's
     /// name ("it is not issued for signing documents (…)"), for lists of digital IDs.
     pub fn signing_problem_clause(&self) -> Option<String> {
@@ -492,7 +507,8 @@ pub fn subject_of(raw: &[u8]) -> Option<Name> {
 }
 
 /// The chain from `leaf` up through `pool`, as far as issuers can be found and may issue: each
-/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, its
+/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, it
+/// has no critical extension PdfCraft doesn't process (unless it is self-signed), its
 /// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
 /// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
 /// too, so an ordinary end-entity certificate must never be accepted as an issuer.
@@ -522,6 +538,10 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
             // two names where it needs them.
             let why = if !c.may_issue() {
                 Some("The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.")
+            } else if !c.unknown_critical.is_empty() && !c.is_self_signed() {
+                // What such an extension limits (name constraints, policy constraints) would
+                // go unchecked. A self-signed root's extensions are the trust store's business.
+                Some("The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.")
             } else if c.path_len.is_some_and(|n| below > n as usize) {
                 Some("The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.")
             } else if at.is_some_and(|t| !c.valid_at(t)) {
@@ -545,27 +565,44 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
 }
 
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
-/// `.pem`, Acrobat's `.fdf`-free exports).
+/// `.pem`, Acrobat's `.fdf`-free exports), or a PKCS #7 bundle (`.p7b`, `.p7c`) in DER or as a
+/// PEM `PKCS7`/`CMS` block, as Windows, Acrobat and certificate authorities export chains.
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
-        return Ok(vec![Certificate::parse(bytes)?]);
+        // One DER certificate, else a DER bundle; a file that is neither reports the
+        // certificate's error, the common case.
+        return match Certificate::parse(bytes) {
+            Ok(cert) => Ok(vec![cert]),
+            Err(e) => crate::cms::certificate_bundle(bytes).map_err(|_| e),
+        };
     }
     let text = String::from_utf8_lossy(bytes);
     let mut out = Vec::new();
-    let mut block: Option<String> = None;
+    // The block being read: its label and its base64 so far.
+    let mut block: Option<(&str, String)> = None;
     for line in text.lines().map(str::trim) {
-        if line == "-----BEGIN CERTIFICATE-----" {
-            block = Some(String::new());
-        } else if line == "-----END CERTIFICATE-----" {
-            if let Some(b) = block.take() {
-                out.push(Certificate::parse(&base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?)?);
+        if let Some(label) = line.strip_prefix("-----BEGIN ").and_then(|l| l.strip_suffix("-----")) {
+            block = matches!(label, "CERTIFICATE" | "PKCS7" | "CMS").then(|| (label, String::new()));
+        } else if let Some(label) = line.strip_prefix("-----END ").and_then(|l| l.strip_suffix("-----")) {
+            // An END that doesn't close the open block ends nothing.
+            if let Some((open, b)) = block.take_if(|(open, _)| *open == label) {
+                let der = base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?;
+                if open == "CERTIFICATE" {
+                    out.push(Certificate::parse(&der)?);
+                } else {
+                    out.extend(crate::cms::certificate_bundle(&der)?);
+                }
             }
-        } else if let Some(b) = block.as_mut() {
+        } else if let Some((_, b)) = block.as_mut() {
             b.push_str(line);
         }
     }
+    // Certificates before a block that never ends are not a smaller set: the file is damaged.
+    if block.is_some() {
+        return Err(SignError::Malformed("a PEM block is not closed".into()));
+    }
     if out.is_empty() {
-        return Err(SignError::Malformed("no certificate found (expected DER or PEM)".into()));
+        return Err(SignError::Malformed("no certificate found (expected DER, PEM or a PKCS #7 bundle)".into()));
     }
     Ok(out)
 }

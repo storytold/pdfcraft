@@ -18,7 +18,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   drawn with nothing else between them), become one lossless image at their finest resolution,
   which the image settings then resample; the strips are dropped by Clean Up. A real page
   printed this way went from 4.3 MB to 231 KB (Standard) and 161 KB (Mobile). Not merged yet:
-  side-by-side tiles, rotated strips, masks.
+  side-by-side tiles, rotated strips, masks. Content arrays use the shared space boundary
+  policy, so trailing comments, split operands and graphics state keep their meaning after merging.
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
   through form XObjects, up to 12 deep; the smallest over all uses). If a use can't be
   measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a

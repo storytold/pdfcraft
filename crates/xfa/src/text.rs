@@ -75,9 +75,14 @@ pub struct Face {
     pub size: f64,
     pub color: [f64; 3],
     pub underline: bool,
+    /// Horizontal scale of the glyphs (`fontHorizontalScale`), as a fraction: widths are
+    /// measured at it and the text is written with `Tz`.
+    pub h_scale: f64,
 }
 
 impl Face {
+    /// The face a resolved font is drawn in: the standard-14 family its typeface maps to,
+    /// with its size and horizontal scale clamped to a drawable range.
     pub fn of(font: &Font) -> Face {
         Face {
             family: Family::of(&font.typeface),
@@ -86,9 +91,12 @@ impl Face {
             size: font.size.clamp(1.0, 300.0),
             color: font.color.0,
             underline: font.underline,
+            h_scale: font.h_scale.clamp(0.01, 10.0),
         }
     }
 
+    /// This face with what a rich-text run sets in place of its own: weight, posture,
+    /// underline, size and horizontal scale. The family and color stay.
     pub fn with_run(&self, run: &Run) -> Face {
         Face {
             family: self.family,
@@ -97,21 +105,39 @@ impl Face {
             size: run.size.unwrap_or(self.size).clamp(1.0, 300.0),
             color: self.color,
             underline: run.underline.unwrap_or(self.underline),
+            h_scale: run.h_scale.unwrap_or(self.h_scale).clamp(0.01, 10.0),
         }
     }
 
+    /// This face as designed, without a horizontal scale: field text is drawn by the forms
+    /// layer, whose appearances have none, so it is measured that way too.
+    pub fn unscaled(self) -> Face {
+        Face { h_scale: 1.0, ..self }
+    }
+
+    /// The resource name of this face's standard font, as content streams and `/DA` strings
+    /// refer to it.
     pub fn resource_name(&self) -> &'static str {
         self.family.resource_name(self.bold, self.italic)
     }
 
     /// Advance of `s` at this face's size.
     pub fn width(&self, s: &str) -> f64 {
-        match self.family {
+        #[cfg(test)]
+        MEASURED.with(|m| m.set(m.get().saturating_add(s.len() as u64)));
+        let designed = match self.family {
             Family::Courier => s.chars().count() as f64 * 0.6 * self.size,
             Family::Helvetica => pdfcraft_fonts::helvetica_width(s, self.size) * if self.bold { 1.04 } else { 1.0 },
             Family::Times => pdfcraft_fonts::helvetica_width(s, self.size) * if self.bold { 0.96 } else { 0.92 },
-        }
+        };
+        designed * self.h_scale
     }
+}
+
+// Bytes of text measured on this thread, for tests that bound layout work.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MEASURED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Default line height: XFA's font leading for the standard faces.
@@ -144,13 +170,43 @@ struct Word {
     width: f64,
 }
 
+/// The width of `w` without the spaces it ends with: what it takes at the end of a line, where
+/// a space is never drawn.
+fn ink_width(w: &Word) -> f64 {
+    let ink = w.text.trim_end_matches(' ');
+    if ink.len() == w.text.len() { w.width } else { w.face.width(ink) }
+}
+
+/// Most bytes of embedded field values one text block shows, as much as a text of its own
+/// holds: a value embedded over and over is expanded only so far.
+pub(crate) const MAX_EMBEDDED: usize = 1 << 20;
+
+/// The longest prefix of `s` at most `max` bytes long that ends on a character boundary.
+pub fn prefix(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let end = s.char_indices().map(|(i, _)| i).take_while(|i| *i <= max).last().unwrap_or(0);
+    s.get(..end).unwrap_or_default()
+}
+
 /// Break the runs of a paragraph into words (spaces stay attached to the word before them).
-fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str) -> String) -> Vec<Word> {
+/// Embedded values take from `embed_left` bytes and are cut when it runs out; `embed` is asked
+/// for at most that many bytes of each.
+fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str, usize) -> String, embed_left: &mut usize) -> Vec<Word> {
     let mut out = Vec::new();
     for run in runs {
         let face = base.with_run(run);
         let text: String = match &run.embed {
-            Some(id) => embed(id),
+            Some(_) if *embed_left == 0 => String::new(),
+            Some(id) => {
+                let mut v = embed(id, *embed_left);
+                if v.len() > *embed_left {
+                    v = prefix(&v, *embed_left).to_string();
+                }
+                *embed_left = embed_left.saturating_sub(v.len());
+                v
+            }
             None => run
                 .text
                 .chars()
@@ -181,7 +237,7 @@ fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str) -> String) -> Vec<Word>
 
 /// Lay `rich` out inside `rect` with `para` and `base` face. `embed` resolves embedded fields to
 /// their text. Returns the spans (absolute coordinates) and the height the text takes.
-pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn Fn(&str) -> String) -> Block {
+pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> Block {
     struct Line {
         words: Vec<Word>,
         width: f64,
@@ -191,23 +247,34 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
     let avail = (rect.w - para.margin_left - para.margin_right).max(1.0);
     let mut lines: Vec<(Line, Option<HAlign>)> = Vec::new();
     let mut total = 0.0;
+    let mut embed_left = MAX_EMBEDDED;
     for (pi, p) in rich.paragraphs.iter().enumerate() {
-        let ws = words(&p.runs, base, embed);
+        let ws = words(&p.runs, base, embed, &mut embed_left);
         let mut line = Line { words: Vec::new(), width: 0.0, size: base.size, first: true };
         let mut first_in_para = true;
         let indent = |first: bool| if first { para.text_indent.max(0.0) } else { 0.0 };
         for w in ws {
-            let fits = line.width + w.width <= avail - indent(line.first) || line.words.is_empty() && w.width <= avail - indent(line.first);
+            // A word fits when what it draws does: the spaces after it would end the line. Spaces
+            // alone draw nothing, so they always stay on the line (keeping their width, so a word
+            // after them still starts past them).
+            let ink = ink_width(&w);
+            let blank = w.text.trim_end_matches(' ').is_empty();
+            let fits = blank || line.width + ink <= avail - indent(line.first) || line.words.is_empty() && ink <= avail - indent(line.first);
             if !fits && !line.words.is_empty() {
                 let done = std::mem::replace(&mut line, Line { words: Vec::new(), width: 0.0, size: base.size, first: false });
                 lines.push((done, p.h_align));
             }
-            if w.width > avail - indent(line.first) && line.words.is_empty() {
-                // A word longer than a line: break it by character.
+            if ink > avail - indent(line.first) && line.words.is_empty() {
+                // A word longer than a line: break it by character. The piece's advance grows by
+                // each character's (widths add up), so no prefix is measured again.
                 let mut piece = String::new();
+                let mut advance = 0.0;
+                let mut buf = [0u8; 4];
                 for ch in w.text.chars() {
+                    let ch_width = w.face.width(ch.encode_utf8(&mut buf));
                     piece.push(ch);
-                    if w.face.width(&piece) > avail - indent(line.first) && piece.chars().count() > 1 {
+                    advance += ch_width;
+                    if advance > avail - indent(line.first) && piece.len() > ch.len_utf8() {
                         piece.pop();
                         let width = w.face.width(&piece);
                         line.words.push(Word { text: std::mem::take(&mut piece), face: w.face.clone(), width });
@@ -216,6 +283,7 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
                         let done = std::mem::replace(&mut line, Line { words: Vec::new(), width: 0.0, size: base.size, first: false });
                         lines.push((done, p.h_align));
                         piece.push(ch);
+                        advance = ch_width;
                     }
                 }
                 if !piece.is_empty() {
@@ -248,8 +316,16 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
     let mut y = start_y + para.space_above;
     for ((line, align), lh) in lines.into_iter().zip(heights) {
         let indent = if line.first { para.text_indent.max(0.0) } else { 0.0 };
-        // Trailing spaces don't count for alignment.
-        let trailing = line.words.last().map_or(0.0, |w| if w.text.ends_with(' ') { w.face.width(" ") } else { 0.0 });
+        // Trailing spaces don't count for alignment: those of the last word with ink, and any
+        // words of spaces alone after it.
+        let mut trailing = 0.0;
+        for w in line.words.iter().rev() {
+            let ink = ink_width(w);
+            trailing += w.width - ink;
+            if !w.text.trim_end_matches(' ').is_empty() {
+                break;
+            }
+        }
         let used = (line.width - trailing).max(0.0);
         let mut x = rect.x + para.margin_left + indent;
         x += match align.unwrap_or(para.h_align) {
@@ -280,8 +356,18 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
     Block { spans, height: total }
 }
 
+/// The width `rich` takes with no line wrapped (its longest paragraph, with the paragraph's
+/// margins and first-line indent): how wide a box without an explicit width grows.
+pub fn natural_width(rich: &RichText, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> f64 {
+    let indent = para.text_indent.max(0.0);
+    let mut embed_left = MAX_EMBEDDED;
+    let widest =
+        rich.paragraphs.iter().map(|p| words(&p.runs, base, embed, &mut embed_left).iter().map(|w| w.width).sum::<f64>()).fold(0.0, f64::max);
+    (para.margin_left + indent + widest + para.margin_right).max(0.0)
+}
+
 /// Height `rich` needs at `width` (for boxes without an explicit height).
-pub fn measure_height(rich: &RichText, width: f64, para: &Para, base: &Face, embed: &dyn Fn(&str) -> String) -> f64 {
+pub fn measure_height(rich: &RichText, width: f64, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> f64 {
     let p = Para { v_align: crate::model::VAlign::Top, ..para.clone() };
     layout(rich, Rect::new(0.0, 0.0, width.max(1.0), 0.0), &p, base, embed).height
 }

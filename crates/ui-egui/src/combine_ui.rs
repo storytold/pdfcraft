@@ -1861,22 +1861,35 @@ pub(crate) fn ago(time: SystemTime) -> String {
     }
 }
 
-/// `time` as "2026-10-08 14:05 UTC".
+/// `time` as "2026-10-08 14:05 UTC". A clock before 1970 reads as the epoch; past chrono's year
+/// 262143 range the proleptic Gregorian date is kept via the 400-year cycle, not the epoch.
 fn utc_stamp(time: SystemTime) -> String {
     let secs = time.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let days = i64::try_from(secs / 86_400).unwrap_or(0);
-    let rem = secs % 86_400;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    let (y, m, d) = civil_from_days(days);
+    // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", rem / 3600, rem % 3600 / 60)
+}
+
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+///
+/// A pre-1970 time already clamps to the epoch (`unwrap_or(0)`), so `days` is an unsigned count
+/// that can run past `NaiveDate`'s ±262143-year range, where the old hand-rolled converter still
+/// produced a date. The Gregorian calendar repeats every 400 years (146_097 days), so chrono
+/// converts the day within one cycle and whole cycles go back into the year (an `i128`, then
+/// saturated into `i64`), keeping chrono as the only calendar logic and reproducing the old
+/// result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
+fn civil_from_days(days: u64) -> (i64, u32, u32) {
+    use chrono::Datelike;
+    let (cycles, rest) = (days / 146_097, days % 146_097);
+    // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+    match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(d) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(i64::MAX), d.month(), d.day())
+        }
+        None => (1970, 1, 1), // unreachable
+    }
 }
 
 impl PdfCraftApp {
@@ -2595,6 +2608,29 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_stamp_is_utc_minutes_and_clamps_pre_epoch() {
+        use std::time::Duration;
+        let at = |s: u64| utc_stamp(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
+        assert_eq!(at(0), "1970-01-01 00:00 UTC");
+        assert_eq!(at(1_791_446_357), "2026-10-08 07:59 UTC");
+        // The 400-year leap rule.
+        assert_eq!(at(951_782_400), "2000-02-29 00:00 UTC");
+        // A clock before 1970 reads as the epoch, as the old `unwrap_or(0)` did.
+        assert_eq!(utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)), "1970-01-01 00:00 UTC");
+        // Past chrono's range keeps the proleptic Gregorian date the old code gave, not the epoch.
+        // Windows' SystemTime holds only up to about year 30828, so this is checked where it fits.
+        if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(10_000_000_000_000)) {
+            assert_eq!(utc_stamp(far), "318857-05-20 17:46 UTC");
+        }
+        // Windows' SystemTime can't hold u64::MAX / 2 seconds, so it is only checked where it exists.
+        if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(u64::MAX / 2)) {
+            assert_eq!(utc_stamp(far), "292277026596-12-04 15:30 UTC");
+        }
+        // Years past 9999 keep the plain zero-padded year (no `+`).
+        assert_eq!(at(253_402_300_800), "10000-01-01 00:00 UTC");
+    }
 
     /// A one-page PDF that opens with "pw".
     fn locked() -> Vec<u8> {

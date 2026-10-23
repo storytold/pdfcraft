@@ -670,3 +670,35 @@ fn startup_files_wait_for_absolute_link_consent_and_preparation() {
     assert_eq!(app.active, Some(1), "the user's approved navigation keeps focus");
     let _ = std::fs::remove_file(path);
 }
+
+/// #1928: a new file handed over by the OS (Finder, or another launch) raises the window at once,
+/// before it is prepared, and is the selected tab once it opens.
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
+    let (mut harness, _client) = harness();
+    let (gate, started, release, finished) = open_worker::prepare_gate();
+    harness.state_mut().open_prepare_gate = Some(gate);
+    let path = std::env::temp_dir().join(format!("pdfcraft-os-open-worker-{}.pdf", std::process::id()));
+    std::fs::write(&path, fixture(2)).expect("write the handed-over PDF");
+    let mut queue = vec![crate::OsEvent::Open(vec![path.to_string_lossy().into_owned()])];
+    harness.state_mut().os_events = Some(Box::new(move || std::mem::take(&mut queue)));
+    harness.step();
+    started.recv_timeout(Duration::from_secs(5)).expect("the handed-over PDF reached preparation");
+    let commands: Vec<_> = harness.output().viewport_output.values().flat_map(|v| v.commands.clone()).collect();
+    let visible = harness.state().views.len();
+    // Always release before asserting: a failure must not strand the worker at the barrier.
+    release.send(()).expect("release the handed-over PDF");
+    finished.recv_timeout(Duration::from_secs(5)).expect("the handed-over PDF prepared");
+    assert!(commands.contains(&egui::ViewportCommand::Minimized(false)), "{commands:?}");
+    assert!(commands.contains(&egui::ViewportCommand::Focus), "{commands:?}");
+    assert_eq!(visible, 1, "the window comes forward while the file is still preparing");
+    harness.step();
+    let app = harness.state();
+    assert_eq!(app.views.len(), 2);
+    let active = app.active.expect("a selected document");
+    let doc = app.session.get(app.views[active].id).expect("the handed-over document");
+    assert_eq!(doc.path.as_deref(), Some(path.to_string_lossy().as_ref()), "the new file is the selected tab");
+    assert_eq!(doc.info.pages.len(), 2);
+    let _ = std::fs::remove_file(path);
+}

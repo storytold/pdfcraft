@@ -53,6 +53,7 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
+                view.applied_editor = None;
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
                 view.picked_image = None;
@@ -68,6 +69,7 @@ impl PdfCraftApp {
                 }
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
+                view.text_background.committed(&edit);
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
@@ -126,6 +128,9 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(info);
                 }
+                if matches!(edit, Edit::AddAnnotation(_)) {
+                    view.comments.comment_added();
+                }
                 // Keep the pages the user acted on selected, where they now are.
                 match edit {
                     Edit::MovePages { pages, to } => {
@@ -157,9 +162,9 @@ impl PdfCraftApp {
                         // unless a note typed into another card is still unsaved.
                         if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
                             && a.contents.is_empty()
-                            && view.comments.editing.as_ref().is_none_or(|(_, _, text)| text.is_empty())
+                            && view.comments.editing.is_none()
                         {
-                            view.comments.editing = Some((a.page, n, String::new()));
+                            view.comments.open_editor(a.page, n, String::new());
                         }
                     }
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
@@ -181,6 +186,15 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
+                    // A paragraph that couldn't be applied opens again with its typing, instead of
+                    // the box the click moved to.
+                    if let Edit::EditTextBlock { page, block, .. } = &edit
+                        && let Some(mut ed) = view.applied_editor.take().filter(|ed| (ed.page, ed.block) == (*page, *block))
+                    {
+                        ed.focus = true;
+                        view.line_editor = Some(ed);
+                        view.pending_text_open = None;
+                    }
                 }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
@@ -695,7 +709,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
-        if own && self.watch.disk_differs(id, dest) {
+        if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
             self.dialog = Some(crate::Dialog::OverwriteChanged);
             return false;
@@ -771,6 +785,8 @@ impl PdfCraftApp {
                     view.disk_changed = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                #[cfg(target_os = "macos")]
+                crate::macos_association::repair(std::path::Path::new(dest));
                 true
             }
             Err(e) => {
@@ -835,6 +851,8 @@ impl PdfCraftApp {
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
+        // The next question (another dirty document) starts on Save again.
+        self.save_prompt_button = Default::default();
         let index = match req {
             CloseRequest::Tab(id) => match self.views.iter().position(|v| v.id == id) {
                 Some(i) => i,
@@ -969,6 +987,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::ReplyToAnnotation { page, .. }
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
+        | Edit::ReshapeAnnotation { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
@@ -990,6 +1009,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
             | Edit::SetFieldScript { .. }
+            | Edit::SetCalculationOrder { .. }
             | Edit::ApplyScriptChanges { .. }
     )
 }
@@ -1070,7 +1090,11 @@ impl PdfCraftApp {
         let edit = match action {
             A::New => {
                 let n = self.session.get(id).map_or(0, |d| d.info.outline.len());
-                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page: current });
+                // Where the reader is: the selection's corner, else the top of the window.
+                let (page, [left, top]) =
+                    self.session.get(id).and_then(|d| self.views.get(i)?.bookmark_position(&d.info)).unwrap_or((current, [None, None]));
+                let (left, top) = (left.map(f64::from), top.map(f64::from));
+                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page, left, top });
                 // Like Acrobat: the new bookmark starts in rename mode.
                 self.bookmark_rename = Some((vec![n], "Untitled".into()));
                 self.right = Some(crate::RightPanel::Bookmarks);
@@ -1312,6 +1336,26 @@ mod tests {
         assert_eq!(read(&target), "OLD");
         assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_save_preserves_opening_settings_changed_while_staging() {
+        let dir = staging_dir("opening-metadata-changed");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        xattr::set(&target, "com.apple.LaunchServices.OpenWith", b"old handler").unwrap();
+        xattr::set(&target, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
+        let suffixes = std::iter::once_with(|| {
+            xattr::set(&target, "com.apple.LaunchServices.OpenWith", b"new handler").unwrap();
+            xattr::set(&target, "com.apple.quarantine", b"0082;5678;another app;").unwrap();
+            7
+        });
+        write_atomically_with(&target.to_string_lossy(), b"NEW", suffixes).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(xattr::get(&target, "com.apple.LaunchServices.OpenWith").unwrap(), Some(b"new handler".to_vec()));
+        assert_eq!(xattr::get(&target, "com.apple.quarantine").unwrap(), Some(b"0082;5678;another app;".to_vec()));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

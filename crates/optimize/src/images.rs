@@ -2,8 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_content::Matrix;
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_content::{Matrix, Pieces};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
 
@@ -23,22 +23,11 @@ pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
     None
 }
 
-pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Vec<u8> {
-    match &*doc.resolve(contents) {
-        Object::Stream(s) => s.decoded().unwrap_or_default(),
-        Object::Array(a) => a
-            .iter()
-            .flat_map(|c| match &*doc.resolve(c) {
-                Object::Stream(s) => {
-                    let mut v = s.decoded().unwrap_or_default();
-                    v.push(b'\n');
-                    v
-                }
-                _ => Vec::new(),
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
+/// The page content `contents` names, decoded against `budget` and joined. `None` when a stream
+/// doesn't decode or the budget runs out: the content is not all known.
+pub(crate) fn content_bytes(doc: &Document, contents: &Object, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
+    let pieces = budget.decode_contents(doc, contents).into_iter().collect::<Result<Vec<_>, _>>().ok()?;
+    Some(Pieces::join(&pieces).data().to_vec())
 }
 
 /// Forms nested deeper than this aren't followed.
@@ -58,6 +47,8 @@ struct Walk<'a> {
     /// Forms walked at least once.
     seen: HashSet<ObjRef>,
     rewalks: usize,
+    /// Decoded bytes left for the page being walked.
+    budget: DecodeBudget,
     /// False once a use may have been missed (depth or work limit).
     complete: bool,
     out: HashMap<ObjRef, f64>,
@@ -136,23 +127,46 @@ impl Walk<'_> {
             }
             self.rewalks += 1;
         }
+        if !self.budget.enter_form() {
+            self.complete = false;
+            return;
+        }
+        let Ok(data) = self.budget.decode(s) else {
+            self.complete = false;
+            return;
+        };
         self.path.push(r);
-        self.content(&s.decoded().unwrap_or_default(), own.as_ref().unwrap_or(resources), inner);
+        self.content(&data, own.as_ref().unwrap_or(resources), inner);
         self.path.pop();
     }
 }
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
 ///
-/// If forms nest too deeply or are drawn too many times to measure every use, every image is
-/// given `INFINITY` (never resampled), since its largest use may be among those missed.
+/// If forms nest too deeply, are drawn too many times, or a page's content doesn't decode within
+/// its budget, every image is given `INFINITY` (never resampled), since its largest use may be
+/// among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    let mut walk = Walk { doc, path: Vec::new(), walked: HashSet::new(), seen: HashSet::new(), rewalks: 0, complete: true, out: HashMap::new() };
+    let mut walk = Walk {
+        doc,
+        path: Vec::new(),
+        walked: HashSet::new(),
+        seen: HashSet::new(),
+        rewalks: 0,
+        budget: DecodeBudget::page(),
+        complete: true,
+        out: HashMap::new(),
+    };
     for p in pages {
         let Some(d) = doc.get(*p).as_dict().cloned() else { continue };
         let Some(contents) = d.get(b"Contents") else { continue };
         let res = page_resources(doc, *p).unwrap_or_default();
-        walk.content(&content_bytes(doc, contents), &res, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+        walk.budget = DecodeBudget::page();
+        let Some(data) = content_bytes(doc, contents, &mut walk.budget) else {
+            walk.complete = false;
+            continue;
+        };
+        walk.content(&data, &res, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
     }
     if !walk.complete {
         walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
@@ -228,17 +242,42 @@ fn is_dct(s: &Stream) -> Option<bool> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Pixels decoded from JPEG data, for the test that keeps a mismatched JPEG from decoding.
+    static DECODED_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` decoded pixels (tests only).
+#[inline]
+fn count_decoded(_n: u64) {
+    #[cfg(test)]
+    DECODED_PIXELS.with(|c| c.set(c.get().saturating_add(_n)));
+}
+
 /// 8-bit samples of an image (`n` components), decoded.
 pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
-    let (w, h) = (s.dict.int(b"Width")? as usize, s.dict.int(b"Height")? as usize);
+    let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return None;
+    }
+    let bytes = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(n)?;
     if is_dct(s)? {
-        let img = image::load_from_memory_with_format(&s.raw, image::ImageFormat::Jpeg).ok()?;
+        use image::ImageDecoder as _;
+        // The JPEG's own size is what gets decoded: one other than the dictionary's is refused from
+        // its header, before any pixels are.
+        let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&s.raw[..])).ok()?;
+        if decoder.dimensions() != (w, h) {
+            return None;
+        }
+        let img = image::DynamicImage::from_decoder(decoder).ok()?;
+        count_decoded(u64::from(img.width()) * u64::from(img.height()));
         // Adobe CMYK/YCCK JPEGs aren't handled (the colour space check excludes them).
         let v = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
-        (v.len() == w * h * n).then_some(v)
+        (v.len() == bytes).then_some(v)
     } else {
         let v = s.decoded().ok()?;
-        (v.len() >= w * h * n).then(|| v[..w * h * n].to_vec())
+        Some(v.get(..bytes)?.to_vec())
     }
 }
 
@@ -316,7 +355,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         return None;
     }
     let was_dct = is_dct(s)?;
-    let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
     }
@@ -347,7 +386,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
             if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
                 return None;
             }
-            let (mw, mh) = (m.dict.int(b"Width")? as u32, m.dict.int(b"Height")? as u32);
+            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
             let mpx = pixels(m, 1)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
             smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
@@ -408,4 +447,56 @@ pub(crate) fn run(
         return Err(OptimizeError::Cancelled);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod dimension_tests {
+    use super::*;
+
+    #[test]
+    fn pixel_reader_rejects_hostile_dimensions_before_decoding() {
+        for (width, height, channels) in [(-1, 1, 1), (0, 1, 1), (i64::from(u32::MAX) + 101, 1, 1), (80_000_001, 1, 1), (2, 2, usize::MAX)] {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(width));
+            dict.set(b"Height".to_vec(), Object::Int(height));
+            let stream = Stream::from_raw(dict, vec![0; 4]);
+            assert!(pixels(&stream, channels).is_none(), "{width} x {height} x {channels}");
+        }
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(2));
+        dict.set(b"Height".to_vec(), Object::Int(2));
+        let stream = Stream::from_raw(dict, vec![1, 2, 3, 4, 5]);
+        assert_eq!(pixels(&stream, 1), Some(vec![1, 2, 3, 4]));
+    }
+
+    /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
+    #[test]
+    fn a_jpeg_of_another_size_than_its_dictionary_is_not_decoded() {
+        let data = jpeg(&vec![128; 1000 * 1000], 1, 1000, 1000, 50).unwrap_or_default();
+        let stream = |w: i64, h: i64| {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(w));
+            dict.set(b"Height".to_vec(), Object::Int(h));
+            dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+            Stream::from_raw(dict, data.clone())
+        };
+        DECODED_PIXELS.with(|c| c.set(0));
+        assert!(pixels(&stream(10, 10), 1).is_none());
+        assert_eq!(DECODED_PIXELS.with(|c| c.get()), 0, "pixels decoded");
+        assert_eq!(pixels(&stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_cos::{DecodeBudget, Dict, Document, MAX_PAGE_DECODED, Object, Stream};
+
+    #[test]
+    fn repeated_content_references_share_one_decode_budget() {
+        let mut doc = Document::new_empty();
+        let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+        let contents = Object::Array(vec![Object::Ref(stream); 300]);
+        let data = super::content_bytes(&doc, &contents, &mut DecodeBudget::page());
+        assert!(data.is_none_or(|d| d.len() <= MAX_PAGE_DECODED + 300));
+    }
 }

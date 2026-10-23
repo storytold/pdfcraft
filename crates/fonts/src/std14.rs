@@ -81,7 +81,7 @@ impl Std14 {
         if has("times") {
             return Some((times(), Match::Alias));
         }
-        if has("serif") || has("roman") {
+        if (has("serif") && !has("sans")) || has("roman") {
             return Some((times(), Match::FamilyHint));
         }
         if has("helvetica") || has("arial") {
@@ -124,6 +124,12 @@ impl Std14 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sans_serif_names_are_not_mapped_to_times() {
+        assert!(!matches!(Std14::recognise("SansSerif"), Some((Std14::TimesRoman, _))));
+        assert_eq!(Std14::recognise("Arial-SansSerif"), Some((Std14::Helvetica, Match::Alias)));
+    }
 
     /// Widths from the published Core14 metrics, typed in here by hand so the table is checked
     /// against the specification rather than against whatever produced it.

@@ -9,12 +9,8 @@
 	Interface language	Интерфейс тілі
 	Identity	Жеке деректер
 	Name on new comments	Жаңа түсініктемелердегі аты
+	Hide hover previews for highlights without comment text	Түсініктеме мәтіні жоқ белгілеулер үшін меңзер алдын ала қарауын жасыру
 	Open…	Ашу…
-	Open from cloud…	Бұлттан ашу…
-	Open local file…	Жергілікті файлды ашу…
-	Open from cloud	Бұлттан ашу
-	Save as to cloud…	Бұлтқа басқа атаумен сақтау…
-	Save as to cloud	Бұлтқа басқа атаумен сақтау
 	Open Recent	Соңғы файлдарды ашу
 	Pin folder to Home…	Қалтаны Басты бетке бекіту…
 	Folders	Қалталар
@@ -59,6 +55,8 @@
 	Take a snapshot	Суретке түсіру
 	Full screen mode	Толық экран режимі
 	Read mode	Оқу режимі
+	Next tab	Келесі қойынды
+	Previous tab	Алдыңғы қойынды
 	Switch light / dark theme	Ашық / қараңғы теманы ауыстыру
 	Comments panel	Түсініктемелер панелі
 	Form fields panel	Форма өрістері панелі
@@ -104,6 +102,8 @@
 	Next view	Келесі көрініс
 	Page display	Беттерді көрсету
 	Continuous scrolling	Үздіксіз айналдыру
+	Show gaps between pages	Беттер арасындағы бос орындарды көрсету
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Беттердің шеттерін біріктіру үшін олардың арасындағы бос орындарды жасырыңыз. PDF ішіндегі жиектер өзгеріссіз қалады.
 	Two-page view	Екі беттік көрініс
 	Single page	Бір бет
 	Show cover page in two-page view	Екі беттік көріністе мұқаба бетін көрсету
@@ -125,6 +125,7 @@
 	Next page	Келесі бет
 	Previous page	Алдыңғы бет
 	Current page — type a page number or label (such as iv) and press Enter	Ағымдағы бет — бет нөмірін немесе белгісін (мысалы, iv) теріңіз де, Enter пернесін басыңыз
+	Zoom — type a percentage and press Enter	Масштаб — пайызды енгізіп, Enter пернесін басыңыз
 	Welcome to PdfCraft	PdfCraft-ге қош келдіңіз
 	An open-source PDF workbench — local, private, and scriptable.	Ашық бастапқы кодты PDF жұмыс орны — жергілікті, жеке әрі скрипттерді қолдайтын.
 	Join the ArtCraft community	ArtCraft қауымдастығына қосылыңыз
@@ -333,6 +334,7 @@
 	Split	Бөлу
 	More	Қосымша
 	Set page boxes	Бет шектерін орнату
+	Set page transitions	Бет ауысуларын орнату
 	Page labels	Бет белгілері
 	Page transitions	Бет ауысуы
 	Add comments	Түсініктеме қосу
@@ -479,6 +481,36 @@
 	Could not save: {e}	Сақтау мүмкін болмады: {e}
 	Earlier in tab order	Табуляция реті бойынша алдыңғы
 	Later in tab order	Табуляция реті бойынша кейінгі
+	Calculation order	Есептеу реті
+	Fix order	Ретті түзету
+	Move only what must move, so every field calculates after the fields it reads.	Әр өріс өзі оқитын өрістерден кейін есептелуі үшін тек жылжуы қажет нәрсені ғана жылжытады.
+	Earlier in calculation order	Есептеу реті бойынша алдыңғы
+	Later in calculation order	Есептеу реті бойынша кейінгі
+	Too early	Тым ерте
+	Reads {name}, which calculates later, so it shows an old value.	{name} өрісін оқиды, ол кейінірек есептеледі, сондықтан ескі мәнді көрсетеді.
+	Loop	Цикл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} өрістерін оқиды, олар оны қайта оқиды. Ешбір рет циклды түзете алмайды: формулалардың бірін өзгертіңіз.
+	Not in order	Ретте жоқ
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF ішінде сақталған есептеу ретінде жоқ: басқа PDF қарау құралдары оны есептемеуі мүмкін.
+	Back to Prepare a form	Форманы дайындауға оралу
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Бұл формада мәнін есептейтін өріс әлі жоқ. Өріс сипаттарының «Есептеу» қойындысында оған есептеу беріңіз, сонда ол осында көрсетіледі.
+	{names} and {last}	{names} және {last}
+	{field} reads no other field	{field} басқа өрісті оқымайды
+	{field} reads {fields}	{field} мыналарды оқиды: {fields}
+	No field reads it	Оны ешбір өріс оқымайды
+	The order saved in the PDF needs tidying	PDF-те сақталған ретті ретке келтіру керек
+	Moves only what must move	Тек жылжуы тиістіні ғана жылжытады
+	Every field calculates after the fields it reads.	Әр өріс өзі оқитын өрістерден кейін есептеледі.
+	Every field outside a loop calculates after the fields it reads.	Циклден тыс әр өріс өзі оқитын өрістерден кейін есептеледі.
+	{field} reads its own value	{field} өз мәнін оқиды
+	{fields} read each other	{fields} бірін-бірі оқиды
+	No order can fix a loop. Change one of the formulas.	Ешбір рет циклді түзете алмайды. Формулалардың бірін өзгертіңіз.
+	Edit {field}'s formula	{field} формуласын өңдеу
+	Order · top calculates first	Рет · жоғарғысы бірінші есептеледі
+	Script	Скрипт
+	Links on page	Беттегі байланыстар
+	Show on the page which fields each field reads	Әр өріс қай өрістерді оқитынын бетте көрсету
+	Drag a field to move it, or select it and press {up} or {down}.	Өрісті жылжыту үшін сүйреңіз немесе оны таңдап, {up} не {down} пернесін басыңыз.
 	From:	Бастап:
 	To:	Дейін:
 	High Resolution	Жоғары ажыратымдылық
@@ -545,6 +577,7 @@
 	Remove unused objects and merge identical ones	Пайдаланылмаған нысандарды алып тастау және ұқсастарын біріктіру
 	Audit space usage…	Кеңістікті пайдалануды тексеру…
 	Space Audit	Кеңістікті пайдалану аудиті
+	What takes up the space in this file, by kind of content.	Бұл файлдағы орынды не алып жатыр, мазмұн түрі бойынша.
 	Bytes	Байт
 	Content Streams	Мазмұн ағындары
 	X Object Forms	XObject формалары
@@ -767,6 +800,7 @@
 	Insert Page Number	Бет нөмірін енгізу
 	Insert Date	Күнді енгізу
 	Start page number	Бастапқы бет нөмірі
+	Shrink the page content to make room for the header and footer	Жоғарғы және төменгі колонтитулға орын босату үшін бет мазмұнын кішірейту
 	Source	Дереккөз
 	Fit to page	Бетке сыйдыру
 	Rotation	Бұрылу
@@ -814,8 +848,15 @@
 	Windows store  ·  	Windows қоймасы  ·  
 	Issued by: 	Шығарушы: 
 	, Expires: 	, Жарамдылық мерзімі: 
+	Digitally signed by	Цифрлық қолтаңба қойған
+	DN: 	DN: 
+	Reason: 	Себебі: 
+	Location: 	Орны: 
+	Date: 	Күні: 
+	The labels are in English: the signature's font can't draw them in this language.	Белгілер ағылшын тілінде: қолтаңба қаріпі оларды бұл тілде сала алмайды.
 	No digital IDs yet.	Әзірге цифрлық ID жоқ.
 	Configure New Digital ID	Жаңа цифрлық ID теңшеу
+	Remove "{name}" from this list? The file itself is not deleted.	«{name}» осы тізімнен алып тасталсын ба? Файлдың өзі жойылмайды.
 	Continue	Жалғастыру
 	Configure a Digital ID for Signing	Қол қоюға арналған цифрлық ID теңшеу
 	Use a Digital ID from a file	Файлдағы цифрлық ID-ді пайдалану
@@ -1093,6 +1134,7 @@
 	Custom text:	Жеке мәтін:
 	Font:	Қаріп:
 	Font size:	Қаріп өлшемі:
+	Font size	Қаріп өлшемі
 	Auto-size text to fit redaction region	Мәтін өлшемін жасыру аймағына автоматты бейімдеу
 	Font colour:	Қаріп түсі:
 	Repeat overlay text	Үстеме мәтінді қайталау
@@ -1125,6 +1167,7 @@
 	Off	Өшірулі
 	Flip on long edge	Ұзын жиек бойынша аудару
 	Flip on short edge	Қысқа жиек бойынша аудару
+	Printer default	Принтер әдепкісі
 	Paper:	Қағаз:
 	Pages to Print	Басып шығарылатын беттер
 	More options:	Қосымша параметрлер:
@@ -1232,6 +1275,7 @@
 	Copy text	Мәтінді көшіру
 	Properties…	Сипаттар…
 	Make Current Properties Default	Ағымдағы сипаттарды әдепкі етіп орнату
+	Make Properties Default	Сипаттарды әдепкі етіп орнату
 	More options	Қосымша параметрлер
 	Sort by	Бойынша сұрыптау
 	Author	Автор
@@ -1265,6 +1309,8 @@
 	This document has no layers.	Бұл құжатта қабаттар жоқ.
 	This document has no attachments.	Бұл құжатта тіркемелер жоқ.
 	Hide layer	Қабатты жасыру
+	Layer options	Қабат параметрлері
+	Reset to Initial Visibility	Бастапқы көрінуді қалпына келтіру
 	Show layer	Қабатты көрсету
 	Set layer visibility	Қабаттың көрінісін орнату
 	on page {label}	{label} бетінде
@@ -1350,6 +1396,9 @@
 	Sort comments by:	Түсініктемелерді сұрыптау:
 	Create PDF Comment Summary	Түсініктемелердің PDF қорытындысын жасау
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	«{name}» бұрын сақталған нұсқасына оралу керек пе? Осы уақыттан кейінгі өзгерістерді кейін болдырмауға болмайды.
+	Save over the changed file?	Өзгертілген файлдың үстіне сақтау керек пе?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» ашылғаннан немесе соңғы сақталғаннан кейін дискіде өзгертілді. Қазір сақтау сол жаңарақ нұсқаны осымен алмастырады.
+	Save anyway	Бәрібір сақтау
 	Number pages	Беттерді нөмірлеу
 	Style	Стиль
 	None (prefix only)	Жоқ (тек префикс)
@@ -1622,6 +1671,7 @@
 	Couldn't use {name}: {e}	{name} файлын пайдалану мүмкін болмады: {e}
 	Couldn't extract pages: {e}	Беттерді шығарып алу мүмкін болмады: {e}
 	Couldn't write {name}: {e}	{name} файлына жазу мүмкін болмады: {e}
+	the name is not a plain file name	атау қарапайым файл атауы емес
 	Wrote 1 file to {dir}	1 файл {dir} ішіне жазылды
 	Wrote {n} files to {dir}	{n} файл {dir} ішіне жазылды
 	No pages match those choices	Ешбір бет бұл таңдауларға сәйкес келмейді
@@ -1837,6 +1887,7 @@
 	Delete field	Өрісті жою
 	Duplicate field	Өрістің көшірмесін жасау
 	Set tab order	Қойынды ретін орнату
+	Set calculation order	Есептеу ретін орнату
 	Change initial view	Бастапқы көріністі өзгерту
 	Set alternate text	Балама мәтінді орнату
 	Mark figure as decorative	Кескінді декоративті деп белгілеу
@@ -2130,6 +2181,8 @@ calendar date	December	Желтоқсан
 	Check the pages	Беттерді белгілеу
 	Closed arrow	Жабық көрсеткі
 	Collapse all	Барлығын жию
+	Collapse all pages	Барлық беттерді жию
+	Expand all pages	Барлық беттерді жаю
 	Column select	Баған бойынша таңдау
 	Comb of characters	Таңбалар торы
 	Custom font	Арнаулы қаріп
@@ -2227,6 +2280,9 @@ key	Space	Бос орын
 	Fill & Sign signature	«Толтыру және қол қою» қолтаңбасы
 	Choose image…	Сурет таңдау…
 	Looking for printers…	Принтерлер ізделуде…
+	Sending sheet {s} of {n} to {printer}…	{n} парақтың {s}-парағы {printer} құрылғысына жіберілуде…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтерлер табылмады. Принтердің орнатылғанын және басып шығару кезегі қызметінің жұмыс істеп тұрғанын тексеріп, «Басып шығару» терезесін қайта ашыңыз.
+	Reading the printer's settings…	Принтер параметрлері оқылуда…
 	Sending to {printer}…	{printer} құрылғысына жіберілуде…
 	Enter permissions password…	Рұқсаттар құпиясөзін енгізу…
 	Permissions password	Рұқсаттар құпиясөзі
@@ -2235,6 +2291,7 @@ key	Space	Бос орын
 	Couldn't unlock {name}: {e}	{name} құлпын ашу мүмкін болмады: {e}
 	This document has no restrictions to lift	Бұл құжатта алып тасталатын шектеулер жоқ
 	The document's security settings don't allow copying text and images	Құжаттың қауіпсіздік параметрлері мәтін мен суреттерді көшіруге рұқсат бермейді
+	The document's security settings don't allow printing	Құжаттың қауіпсіздік параметрлері басып шығаруға рұқсат бермейді
 	Add the files to combine	Біріктірілетін файлдарды қосыңыз
 	Leave out files that can't be read?	Оқылмайтын файлдарды қалдырып кету керек пе?
 	These files can't be read, so they won't be in the combined PDF:	Бұл файлдар оқылмайды, сондықтан біріктірілген PDF-ке кірмейді:
@@ -2261,10 +2318,11 @@ key	Space	Бос орын
 	Printer paper and scaling may differ. Check driver settings.	Принтер қағазы мен масштабы өзгеше болуы мүмкін. Драйвер параметрлерін тексеріңіз.
 	Drawing scale changes. Use Actual size for full-scale plans.	Сызба масштабы өзгереді. Толық масштабты жоспарлар үшін Нақты өлшемді пайдаланыңыз.
 	Reload documents when their files change on disk	Дискідегі файлдары өзгергенде құжаттарды қайта жүктеу
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Бұл файл дискіде өзгерді. Жаңа нұсқасын көру үшін оны қайта жүктеңіз; сақталмаған өзгерістер жоғалады.
+	Always use my default zoom and page layout	Әрқашан әдепкі масштаб пен бет орналасуын пайдалану
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Бұл файл дискіде өзгертілді. «Қайта жүктеу» жаңа нұсқаны көрсетіп, сақталмаған өзгерістеріңізді тастайды; «Сақтау» оны осы нұсқамен алмастырады.
 	Reload	Қайта жүктеу
 	Couldn't reload {name}: {e}	{name} қайта жүктеу мүмкін болмады: {e}
-	Mouse wheel scroll speed	Тінтуір дөңгелегімен айналдыру жылдамдығы
+	Scroll speed (mouse wheel and arrow keys)	Айналдыру жылдамдығы (тінтуір дөңгелегі және көрсеткі пернелері)
 scroll speed	Slow	Баяу
 scroll speed	Normal	Қалыпты
 scroll speed	Fast	Жылдам
@@ -2310,6 +2368,13 @@ animation effects	Off	Өшірулі
 	no unused output name	бос шығыс атауы жоқ
 	no output folder was chosen	шығыс қалтасы таңдалмады
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF жүктелді|{n} PDF жүктелді
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} есептеу енді жаңа атауды пайдаланады.|{n} есептеу енді жаңа атауды пайдаланады.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Есептеу ретінде ештеңе есептемейтін {n} жазба бар. «Ретті түзету» оны жояды.|Есептеу ретінде ештеңе есептемейтін {n} жазба бар. «Ретті түзету» оларды жояды.
+@plural	{fields} reads it|{fields} read it	Оны {fields} оқиды|Оны {fields} оқиды
+@plural	{n} field shows an old value|{n} fields show old values	{n} өріс ескі мәнді көрсетеді|{n} өріс ескі мәндерді көрсетеді
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} өзі оқитын {fields} өрісінен бұрын есептеледі.|{field} өзі оқитын {fields} өрістерінен бұрын есептеледі.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Тағы {n} өріс тым ерте есептеледі.|Тағы {n} өріс тым ерте есептеледі.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} PDF-те сақталған ретте жоқ, сондықтан басқа PDF қаралымдары оны есептемеуі мүмкін.|{fields} PDF-те сақталған ретте жоқ, сондықтан басқа PDF қаралымдары оларды есептемеуі мүмкін.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}|{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}
 	Scan	Сканерлеу
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Ақ қағаз парағына қол қойып, оны жарық әрі біркелкі жарықта суретке түсіріңіз (жарқылды қосыңыз). Суретті таңдаңыз немесе осында тастаңыз: PdfCraft қолтаңбаны тауып, қағазды алып тастайды.
@@ -2319,7 +2384,6 @@ animation effects	Off	Өшірулі
 	Ink sensitivity	Сия сезімталдығы
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Жақтауда қолтаңба табылмады. Жақтауды қолтаңбаның үстіне жылжытыңыз немесе сия сезімталдығын арттырыңыз.
 	Couldn't use the photo: {e}	Суретті пайдалану мүмкін болмады: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Қойындыны жабу
 	Reopen Closed Tab	Жабылған қойындыны қайта ашу
@@ -2341,11 +2405,114 @@ animation effects	Off	Өшірулі
 	The linked PDF opened, but its named destination was not applied.	Байланысты PDF ашылды, бірақ оның аталған мақсаты қолданылмады.
 	The linked PDF opened, but its page destination was out of range.	Байланысты PDF ашылды, бірақ оның мақсатты беті ауқымнан тыс.
 	Local cross-PDF links require the desktop app	PDF файлдары арасындағы жергілікті сілтемелер үшін жұмыс үстелі қолданбасы қажет
-
+	Cut Image	Суретті кесу
+	Redact Image	Суретті жасыру
+	Create Link…	Сілтеме жасау…
+	Recognize Text…	Мәтінді тану…
+	Minimize	Жию
+	Maximize	Жаю
+	Restore	Қалпына келтіру
+	Use system title bar	Жүйелік тақырып жолағын пайдалану
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Терезе батырмалары үшін қойындылар жолағының орнына қарапайым тақырып жолағын көрсету. GNOME қолданбаларға тақырып жолағын салмайды, сондықтан бұл жолақ оның тақырыбына сәйкес келмейді.
 # Absolute local GoToR confirmation (#1364).
 	Allow	Рұқсат беру
 	Only allow this if you trust the source document.	Бастапқы құжатқа сенсеңіз ғана рұқсат беріңіз.
+	Open in Full Screen mode?	Толық экран режимінде ашу керек пе?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Бұл құжат толық экран режимінде ашылуды сұрайды: бет экранды толтырады және басқа ештеңе көрсетілмейді. Шығу үшін кез келген уақытта Esc басыңыз.
+	Full Screen	Толық экран
+	Not now	Қазір емес
 	Open this local PDF?	Осы жергілікті PDF файлын ашу керек пе?
 	This document is trying to open a local file:	Бұл құжат жергілікті файлды ашуға әрекеттеніп жатыр:
 	Move tag earlier	Тегті ертерек жылжыту
 	Move tag later	Тегті кейінірек жылжыту
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының қол қойылған нұсқасын ({rev} нұсқа) қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының {rev} нұсқасын қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
+	Turn upside down (180°)	Төңкеру (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 дюйм жапсырма (101,6 × 152,4 мм)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Әр бетті басылған аймағына дейін қиып, тік бұрып, созбай параққа сыйғызады. Әр параққа бір жапсырма.
+	Find untagged content	Тегтелмеген мазмұнды табу
+	No untagged content was found.	Тегтелмеген мазмұн табылмады.
+	Found {n} untagged content problems.	Тегтелмеген мазмұнға қатысты {n} мәселе табылды.
+	Tag form fields	Пішін өрістерін тегтеу
+	Mark as artifact	Артефакт ретінде белгілеу
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Осы жапырақ тегін оқу ретінен алып тастап, оның тікелей мазмұнын артефакт ретінде белгілеңіз
+	Mark content as artifact	Мазмұнды артефакт ретінде белгілеу
+	Word count	Сөздер саны
+	Current page only	Тек ағымдағы бет
+	Exclude tagged tables	Белгіленген кестелерді есепке алмау
+	Exclude tagged code blocks	Белгіленген код блоктарын есепке алмау
+	Exclude image/OCR text	Сурет/OCR мәтінін есепке алмау
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Есептен шығару PDF тегтерін пайдаланады. Тегсіз кестелер мен код есепте қалады. Суреттерді алып тастау көрінбейтін мәтінді де алып тастайды.
+	Words	Сөздер
+	Characters	Таңбалар
+	Characters without spaces	Бос орынсыз таңбалар
+	Pages counted	Есептелген беттер
+	Some pages contain no countable text. Scanned images need OCR first.	Кейбір беттерде санауға болатын мәтін жоқ. Сканерленген суреттерге алдымен OCR қажет.
+	Some content could not be classified safely and was kept in the count.	Кейбір мазмұнды сенімді түрде жіктеу мүмкін болмады, сондықтан ол есепте қалды.
+	Counting words… {n} pages read	Сөздер саналуда… {n} бет оқылды
+	Word counting stopped unexpectedly.	Сөздерді санау күтпеген жерден тоқтады.
+	Word count…	Сөздер саны…
+@id	file.word_count	Сөздер саны…
+	Standard	Стандартты
+	Mobile	Мобильді құрылғы
+	Merge image fragments	Сурет фрагменттерін біріктіру
+	Optimizing… merging image fragments	Оңтайландыру… сурет фрагменттерін біріктіру
+	Side by side	Қатар
+	New file only	Тек жаңа файл
+	Old file: {name}	Ескі файл: {name}
+	New file: {name}	Жаңа файл: {name}
+	Print as image	Сурет ретінде басып шығару
+	Resolution:	Ажыратымдылық:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Принтер мәтінді, көлеңкені немесе мөлдірлікті өткізіп жіберсе, қолданыңыз. Басылған құжат енді іздеуге болатын мәтін емес; сұр реңкпен басып шығарғанда суреттер сұр болады.
+	Crop Image	Суретті қию
+	Remove Crop	Қиюды алып тастау
+	Trim the picture with its handles; Enter or Done applies	Суретті тұтқаларымен қиыңыз; Enter немесе Дайын қолданады
+	Redaction mark appearance	Жасыру белгісінің көрінісі
+	Outline colour:	Контур түсі:
+	Fill colour:	Толтыру түсі:
+	Shown while the pointer is over a mark.	Меңзер белгінің үстінде тұрғанда көрсетіледі.
+	Opacity:	Мөлдірсіздік:
+	Make properties default	Қасиеттерді әдепкі ету
+	Pages selected	Таңдалған беттер
+	Page properties	Бет қасиеттері
+	Font	Қаріп
+	Bulleted list	Таңбалауыш тізім
+	Numbered list	Нөмірленген тізім
+	Alignment	Туралау
+	Superscript	Жоғарғы индекс
+	Subscript	Төменгі индекс
+	Paragraph spacing	Абзац аралығы
+	Less	Азырақ
+	Other options	Басқа параметрлер
+	Thumbnail size	Нобай өлшемі
+	Smaller thumbnails	Кішірек нобайлар
+	Larger thumbnails	Үлкенірек нобайлар
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Пікір пішінін өзгерту
+# Prepare a form ▸ Text field table
+	Add text field table	Мәтін өрістерінің кестесін қосу
+	Text field table	Мәтін өрістерінің кестесі
+	Text Field Table	Мәтін өрістерінің кестесі
+	Columns	Бағандар
+	Row spacing	Жолдар аралығы
+	Column spacing	Бағандар аралығы
+	First row number	Бірінші жол нөмірі
+	Column widths	Баған ендері
+	Distribute evenly	Біркелкі бөлу
+	Field names	Өріс атаулары
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N немесе {row} — жол нөмірі, {col} — баған нөмірі, {seq} — ұяшық нөмірі. Олардың ешқайсысы болмаса, жол нөмірі соңына қосылады.
+	Column {n}	{n}-баған
+	Add fields	Өрістерді қосу
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	жолдар тым аласа: аймақты биіктетіңіз немесе жолдар санын не жолдар аралығын азайтыңыз
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	баған тым тар: аймақты кеңейтіңіз, бағанға көбірек ен беріңіз немесе бағандар санын не бағандар аралығын азайтыңыз
+	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
+	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
+	a field named {name} already exists	{name} атты өріс бар
+	Open from cloud…	Бұлттан ашу…
+	Open local file…	Жергілікті файлды ашу…
+	Open from cloud	Бұлттан ашу
+	Save as to cloud…	Бұлтқа басқа атаумен сақтау…
+	Save as to cloud	Бұлтқа басқа атаумен сақтау
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Бұл файл дискіде өзгерді. Жаңа нұсқасын көру үшін оны қайта жүктеңіз; сақталмаған өзгерістер жоғалады.
+	Mouse wheel scroll speed	Тінтуір дөңгелегімен айналдыру жылдамдығы

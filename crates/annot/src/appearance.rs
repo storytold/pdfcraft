@@ -120,12 +120,18 @@ fn smooth_curve(pts: &[(f64, f64)]) -> String {
     smooth_segments(pts).iter().map(|[a, b, e]| format!("{} {} {} {} {} {} c\n", n(a.0), n(a.1), n(b.0), n(b.1), n(e.0), n(e.1))).collect()
 }
 
+/// Bumps one cloudy outline draws at most (plus one per edge); past it the bumps grow.
+pub(crate) const MAX_CLOUD_BUMPS: usize = 20_000;
+
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
 pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
     let area: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     // Outward normal of an edge: to the right of travel for counter-clockwise outlines.
     let sign = if area >= 0.0 { 1.0 } else { -1.0 };
+    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| (b.0 - a.0).hypot(b.1 - a.1)).sum();
+    // Each edge rounds to at least one bump, so the total stays within the budget plus one per edge.
+    let r = r.max(perimeter / (2.0 * MAX_CLOUD_BUMPS as f64));
     let mut c = String::new();
     for (i, (a, b)) in pts.iter().zip(pts.iter().cycle().skip(1)).enumerate() {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -559,7 +565,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                         c.push_str("h\n");
                     }
                 }
-                c.push_str("f*\n");
+                c.push_str("f\n");
                 return Some(form(rect, c.as_bytes(), res));
             }
             // A custom stamp: its picture (an image, or a form mapped to /PCPictureSize) fills
@@ -593,7 +599,28 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // Only PdfCraft's own Fill & Sign marks are drawn here.
             let name = d.name(b"Name")?;
             let col = stroke.unwrap_or([0.0; 3]);
-            let [x0, y0, x1, y1] = rect;
+            // A mark or stamp placed on a turned page is drawn upright in its displayed box, then
+            // mapped into `/Rect` the way the page maps display space into user space. Viewers
+            // fit that box to `/Rect`; the page rotation then shows it the right way up.
+            let turn = stamp_turn(d);
+            let draw = if turn == 0 {
+                rect
+            } else {
+                let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
+                let (dw, dh) = if matches!(turn, 90 | 270) { (rh, rw) } else { (rw, rh) };
+                if dw < 1.0 || dh < 1.0 {
+                    return None;
+                }
+                [0.0, 0.0, dw, dh]
+            };
+            let turned = |mut stream: Stream| {
+                if turn != 0 {
+                    let m = pdfcraft_model::view_matrix_for(turn, rect);
+                    stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
+                }
+                stream
+            };
+            let [x0, y0, x1, y1] = draw;
             let (w, h) = (x1 - x0, y1 - y0);
             let lw = w.min(h) * 0.12;
             match name {
@@ -643,27 +670,11 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     }
                     let kind = crate::StampKind::from_name(other)?;
                     let by = d.get(b"PCByLine").and_then(|o| o.as_string()).map(PdfString::to_text);
-                    let turn = stamp_turn(d);
-                    let draw = if turn == 0 {
-                        rect
-                    } else {
-                        let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
-                        let (dw, dh) = if matches!(turn, 90 | 270) { (rh, rw) } else { (rw, rh) };
-                        if dw < 1.0 || dh < 1.0 {
-                            return None;
-                        }
-                        [0.0, 0.0, dw, dh]
-                    };
-                    let mut stream = stamp(kind, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res);
-                    if turn != 0 {
-                        // Upright in the stamp's displayed box, then mapped into `/Rect` the way
-                        // the page maps display space into user space. Viewers fit that box to
-                        // `/Rect`; the page rotation then shows the label the right way up.
-                        let m = pdfcraft_model::view_matrix_for(turn, rect);
-                        stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
-                    }
-                    return Some(stream);
+                    return Some(turned(stamp(kind, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res)));
                 }
+            }
+            if turn != 0 {
+                return Some(turned(form(draw, c.as_bytes(), res)));
             }
         }
         b"FreeText" => {

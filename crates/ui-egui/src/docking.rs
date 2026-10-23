@@ -396,12 +396,17 @@ pub fn show(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui) {
         // Availability is a render projection: the saved group, selection and width survive Home.
         let _ = rendered.apply(Action::Close { panel: Panel::Inspector });
     }
+    // Tools docked on its own is drawn bare, without a tab strip, like Acrobat's tool pane. Grouped
+    // with another panel, or floating, it keeps its tab so it can be dragged away again; moving it
+    // to the other side stays a preference and a command.
+    let bare_tools = rendered.location(&Panel::Tools).is_ok_and(|l| l.floating.is_none() && matches!(l.placement, Placement::Split(_)));
+    let render_permissions = move |panel: &Panel| if bare_tools && *panel == Panel::Tools { Permissions::PROTECTED } else { permissions(panel) };
     let output = DockArea::new(egui::Id::new("pdfcraft-docking")).show_with_limits(
         ui,
         &rendered,
         &style,
         |panel| crate::i18n::t(panel.label()).into(),
-        permissions,
+        render_permissions,
         panel_limits,
         |ui, panel| match panel {
             Panel::Canvas => {

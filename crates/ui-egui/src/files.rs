@@ -816,7 +816,11 @@ impl PdfCraftApp {
                 // The reading-colours preference is app-wide: the newly created document starts with it.
                 self.session.set_reading_colors(id, self.reading_colors);
                 let Some(doc) = self.session.get(id) else { return };
-                self.views.push(crate::DocView::new(id, &doc.info, self.view_defaults));
+                let mut view = crate::DocView::new(id, &doc.info, self.view_defaults);
+                if self.full_screen {
+                    view.enter_presentation();
+                }
+                self.views.push(view);
                 self.active = Some(self.views.len() - 1);
                 self.notify_tr(message);
             }
