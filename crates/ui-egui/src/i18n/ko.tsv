@@ -2750,3 +2750,20 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	스마트 카드 또는 토큰 사용
+	Card driver (PKCS #11)	카드 드라이버(PKCS #11)
+	Smart card  ·  	스마트 카드  ·  
+	Card PIN	카드 PIN
+	No signing certificate was found on a card. Is the card in the reader?	카드에서 서명 인증서를 찾지 못했습니다. 카드가 리더기에 있나요?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN은 카드로만 전달되며 PdfCraft는 저장하지 않습니다.
+	The smart card's digital IDs couldn't be listed: {e}	스마트 카드의 디지털 ID를 나열할 수 없습니다: {e}
+	Timestamp server	타임스탬프 서버
+	Include revocation information when signing (LTV)	서명할 때 해지 정보 포함(LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	이 경우 서명 시 온라인에 연결합니다. 타임스탬프 서버는 서명의 해시를 받고, 인증 기관에 인증서가 해지되었는지 확인합니다. 둘 다 사용하면 서명은 PAdES B-LTA가 됩니다.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	타임스탬프와 해지 정보에는 데스크톱 앱이 필요합니다. 여기에서 서명하려면 환경설정 ▸ 서명에서 끄세요.
+	the certificate authorities	인증 기관
+	Asking {server}…	{server}에 확인 중…
+	Signing was cancelled; nothing was saved.	서명이 취소되었습니다. 저장된 것은 없습니다.
+	Signed and saved to {path}, without some revocation information: {problems}	{path}에 서명하고 저장했으나 일부 해지 정보가 없습니다: {problems}
+	The document wasn't signed: {e}	문서에 서명하지 않았습니다: {e}

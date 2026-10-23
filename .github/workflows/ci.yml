@@ -74,14 +74,17 @@ jobs:
       os: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '["ubuntu-24.04","windows-latest"]' || '["ubuntu-24.04"]' }}
       # Same craft-fonts commit as release.yml and freebsd.yml.
       craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
-      # egui/winit/rfd, and the independent oracles (crates/oracle).
+      # egui/winit/rfd, the independent oracles (crates/oracle), and SoftHSM/OpenSC for PKCS #11.
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
-        libgtk-3-dev qpdf poppler-utils
+        libgtk-3-dev qpdf poppler-utils softhsm2 opensc
       # cargo-deny for the deny step of `cargo xtask ci`, which requires it under CI.
       tools: cargo-nextest@0.9.149,cargo-deny@0.20.2
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
-      linux-env: PDFCRAFT_ORACLES_REQUIRED=1
+      # The PKCS #11 signing test runs against SoftHSM instead of skipping.
+      linux-env: |
+        PDFCRAFT_ORACLES_REQUIRED=1
+        PDFCRAFT_REQUIRE_SOFTHSM=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1
       # Windows checks what differs by platform: the build (with resources) and the tests.
       windows-command: |

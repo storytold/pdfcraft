@@ -38,6 +38,7 @@ macro_rules! mcp_usage {
 pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
                                                            MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
+                                                           --network and --card-module PATH as for run (cards with a PIN pad only)
                                                            --automation-read-root / --automation-write-root confine the files the
                                                            agent's tools read (open, combine, import, fonts, certificates…) and
                                                            write (save, export, extract, split, reports…) to DIR, links followed;
@@ -75,6 +76,9 @@ pdfcraft-cli tools                                       automation tools and th
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR] [--report]
                       [{\"tool\": \"doc_open\", \"args\": {…}}, …]; --report prints one JSON document for the run
+                      --network lets sign_document use a timestamp server and fetch revocation information;
+                      --card-module PATH picks the smart card driver (default: the first known one installed);
+                      a card's PIN is asked at this terminal
 ",
     mcp_usage!(),
     "\
@@ -272,11 +276,21 @@ const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--script", takes_value: true },
     OptionSpec { name: "--out", takes_value: true },
     OptionSpec { name: "--report", takes_value: false },
+    OptionSpec { name: "--network", takes_value: false },
+    OptionSpec { name: "--card-module", takes_value: true },
 ];
 const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
 
 #[cfg(feature = "mcp")]
-const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--root", takes_value: true }, OptionSpec { name: "--compact", takes_value: false }];
+const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--root", takes_value: true },
+    OptionSpec { name: "--compact", takes_value: false },
+    OptionSpec { name: "--network", takes_value: false },
+    OptionSpec { name: "--card-module", takes_value: true },
+];
+
+/// Options that take no value, so the token after them is an argument of its own.
+const VALUELESS: &[&str] = &["--compact", "--edit", "--full", "--network", "--report"];
 
 fn positional(args: &[String]) -> Vec<&str> {
     let mut out = Vec::new();
@@ -287,7 +301,7 @@ fn positional(args: &[String]) -> Vec<&str> {
             continue;
         }
         if a.starts_with("--") {
-            skip = true;
+            skip = !VALUELESS.contains(&a.as_str());
             continue;
         }
         out.push(a.as_str());
@@ -866,7 +880,12 @@ fn run_child(exe: &Path, file: &Path, dpi: &str, timeout: Duration) -> serde_jso
 // ---- automation --------------------------------------------------------------------------------
 
 fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
-    let a = pdfcraft_automation::Automation::new();
+    let mut a = pdfcraft_automation::Automation::new();
+    // Signing online and with smart cards: only what the user allowed on the command line.
+    if args.iter().any(|a| a == "--network") {
+        a = a.with_network(std::sync::Arc::new(pdfcraft_platform::http::Http));
+    }
+    a = a.with_card(flag(args, "--card-module").map(std::path::PathBuf::from), None);
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),
@@ -968,7 +987,10 @@ fn run(args: &[String]) -> Result<(), CliError> {
     if report && flag(args, "--script").is_none() {
         return Err("run: --report needs --script".to_string().into());
     }
-    let mut auto = automation(args)?;
+    // `run` has the user at a terminal to type a card's PIN (not echoed); the MCP server doesn't.
+    let pin: pdfcraft_automation::signing::PinPrompt =
+        std::sync::Arc::new(|name: &str| rpassword::prompt_password(format!("Card PIN for {name} (not shown while typing): ")).ok());
+    let mut auto = automation(args)?.with_card(flag(args, "--card-module").map(std::path::PathBuf::from), Some(pin));
     if let Some(script) = flag(args, "--script") {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
         let steps: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| format!("{script}: {e}"))?;
@@ -1150,6 +1172,12 @@ fn current_uid() -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn valueless_options_do_not_swallow_the_next_argument() {
+        let args: Vec<String> = ["--network", "sign_document", "doc=1", "--network", "ltv=true", "--root", "dir", "out=x"].map(String::from).to_vec();
+        assert_eq!(super::positional(&args), ["sign_document", "doc=1", "ltv=true", "out=x"]);
+    }
+
     use super::control_file_problem;
 
     #[test]

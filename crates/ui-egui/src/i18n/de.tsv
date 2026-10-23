@@ -2516,3 +2516,21 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Smartcard oder Token verwenden
+	Card driver (PKCS #11)	Kartentreiber (PKCS #11)
+	Smart card  ·  	Smartcard  ·  
+	Card PIN	Karten-PIN
+	No signing certificate was found on a card. Is the card in the reader?	Auf keiner Karte wurde ein Signaturzertifikat gefunden. Steckt die Karte im Lesegerät?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	Die PIN geht nur an die Karte; PdfCraft speichert sie nicht.
+	The smart card's digital IDs couldn't be listed: {e}	Die digitalen IDs der Smartcard konnten nicht aufgelistet werden: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Zeitstempelserver
+	Include revocation information when signing (LTV)	Sperrinformationen beim Signieren einbetten (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Beim Signieren geht PdfCraft dann online: Der Zeitstempelserver erhält einen Hash der Signatur, und die Zertifizierungsstellen werden gefragt, ob die Zertifikate gesperrt sind. Mit beidem sind Signaturen PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Zeitstempel und Sperrinformationen brauchen die Desktop-App. Schalten Sie sie unter Einstellungen ▸ Signaturen aus, um hier zu signieren.
+	the certificate authorities	die Zertifizierungsstellen
+	Asking {server}…	{server} wird gefragt …
+	Signing was cancelled; nothing was saved.	Signieren abgebrochen; nichts wurde gespeichert.
+	Signed and saved to {path}, without some revocation information: {problems}	Signiert und unter {path} gespeichert, ohne einige Sperrinformationen: {problems}
+	The document wasn't signed: {e}	Das Dokument wurde nicht signiert: {e}

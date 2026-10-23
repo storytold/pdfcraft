@@ -2791,3 +2791,21 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	خادم الختم الزمني
+	Include revocation information when signing (LTV)	تضمين معلومات الإلغاء عند التوقيع (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	يتصل التوقيع عندئذٍ بالشبكة: يتلقى خادم الختم الزمني تجزئة للتوقيع، وتُسأل جهات إصدار الشهادات عمّا إذا كانت الشهادات ملغاة. مع الخيارين معًا تكون التواقيع PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	تحتاج الأختام الزمنية ومعلومات الإلغاء إلى تطبيق سطح المكتب. أوقفها من التفضيلات ▸ التواقيع للتوقيع هنا.
+	the certificate authorities	جهات إصدار الشهادات
+	Asking {server}…	جارٍ سؤال {server}…
+	Signing was cancelled; nothing was saved.	أُلغي التوقيع؛ لم يُحفظ شيء.
+	Signed and saved to {path}, without some revocation information: {problems}	تم التوقيع والحفظ في {path} دون بعض معلومات الإلغاء: {problems}
+	The document wasn't signed: {e}	لم يُوقَّع المستند: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	استخدام بطاقة ذكية أو رمز أمان
+	Card driver (PKCS #11)	برنامج تشغيل البطاقة (PKCS #11)
+	Smart card  ·  	بطاقة ذكية  ·  
+	Card PIN	رمز PIN للبطاقة
+	No signing certificate was found on a card. Is the card in the reader?	لم يُعثر على شهادة توقيع في أي بطاقة. هل البطاقة في القارئ؟
+	The PIN goes only to the card; PdfCraft doesn't keep it.	يذهب رمز PIN إلى البطاقة فقط؛ ولا يحتفظ به PdfCraft.
+	The smart card's digital IDs couldn't be listed: {e}	تعذّر سرد المعرّفات الرقمية للبطاقة الذكية: {e}

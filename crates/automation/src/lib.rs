@@ -29,7 +29,7 @@ mod measure;
 mod printing;
 mod reading;
 mod redact;
-mod signing;
+pub mod signing;
 mod text_cache;
 mod tools;
 
@@ -128,6 +128,8 @@ pub struct Automation {
     /// Documents that lost a listing to the cap. A page of one with no listing is refused rather
     /// than read as "a number is a position", which the page may no longer match.
     evicted: HashSet<DocId>,
+    /// What the user allowed signing to use: the network, a smart card driver, a PIN prompt.
+    signing: signing::Host,
 }
 
 impl Default for Automation {
@@ -146,7 +148,24 @@ impl Automation {
             texts: TextCache::default(),
             listed: HashMap::new(),
             evicted: HashSet::new(),
+            signing: signing::Host::default(),
         }
+    }
+
+    /// Let `sign_document` ask timestamp servers and revocation services through `fetch`. The
+    /// host decides (`pdfcraft-cli --network`); no tool argument turns the network on.
+    pub fn with_network(mut self, fetch: Arc<dyn pdfcraft_engine::sign::ltv::Fetch + Send + Sync>) -> Self {
+        self.signing.fetch = Some(fetch);
+        self
+    }
+
+    /// Smart cards: the PKCS #11 module to load (`None`: the first known card driver installed)
+    /// and how to ask the user for the card's PIN (`None`: only PIN-pad readers can sign). The
+    /// module and the PIN come from the user, never from a tool argument.
+    pub fn with_card(mut self, module: Option<PathBuf>, pin: Option<signing::PinPrompt>) -> Self {
+        self.signing.card_module = module;
+        self.signing.pin = pin;
+        self
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
@@ -903,6 +922,7 @@ impl Automation {
             "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,
+            "sign_card_ids" => self.sign_card_ids()?,
             "sign_keychain_ids" => {
                 #[cfg(target_os = "macos")]
                 let ids: Vec<Value> = pdfcraft_engine::sign::keychain::identities(None)

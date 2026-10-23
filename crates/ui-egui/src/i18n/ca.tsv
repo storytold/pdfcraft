@@ -2774,3 +2774,20 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	Utilitza una targeta intel·ligent o un testimoni
+	Card driver (PKCS #11)	Controlador de la targeta (PKCS #11)
+	Smart card  ·  	Targeta intel·ligent  ·  
+	Card PIN	PIN de la targeta
+	No signing certificate was found on a card. Is the card in the reader?	No s'ha trobat cap certificat de signatura a cap targeta. És la targeta al lector?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	El PIN només va a la targeta; el PdfCraft no el desa.
+	The smart card's digital IDs couldn't be listed: {e}	No s'han pogut llistar els identificadors digitals de la targeta intel·ligent: {e}
+	Timestamp server	Servidor de segellat de temps
+	Include revocation information when signing (LTV)	Inclou informació de revocació en signar (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Aleshores la signatura es connecta a la xarxa: el servidor de segellat de temps rep un resum de la signatura i es pregunta a les autoritats de certificació si els certificats estan revocats. Amb totes dues opcions, les signatures són PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Els segells de temps i la informació de revocació necessiten l'aplicació d'escriptori. Desactiveu-los a Preferències ▸ Signatures per signar aquí.
+	the certificate authorities	les autoritats de certificació
+	Asking {server}…	S'està consultant {server}…
+	Signing was cancelled; nothing was saved.	S'ha cancel·lat la signatura; no s'ha desat res.
+	Signed and saved to {path}, without some revocation information: {problems}	Signat i desat a {path}, sense part de la informació de revocació: {problems}
+	The document wasn't signed: {e}	El document no s'ha signat: {e}

@@ -2774,3 +2774,20 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	Folosește un card inteligent sau un token
+	Card driver (PKCS #11)	Driverul cardului (PKCS #11)
+	Smart card  ·  	Card inteligent  ·  
+	Card PIN	PIN-ul cardului
+	No signing certificate was found on a card. Is the card in the reader?	Nu s-a găsit niciun certificat de semnare pe vreun card. Este cardul în cititor?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN-ul ajunge doar la card; PdfCraft nu îl păstrează.
+	The smart card's digital IDs couldn't be listed: {e}	ID-urile digitale ale cardului inteligent nu au putut fi listate: {e}
+	Timestamp server	Server de marcare temporală
+	Include revocation information when signing (LTV)	Include informațiile de revocare la semnare (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Semnarea folosește atunci rețeaua: serverul de marcare temporală primește un hash al semnăturii, iar autoritățile de certificare sunt întrebate dacă certificatele sunt revocate. Cu ambele, semnăturile sunt PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Marcajele temporale și informațiile de revocare necesită aplicația desktop. Dezactivează-le în Preferințe ▸ Semnături pentru a semna aici.
+	the certificate authorities	autoritățile de certificare
+	Asking {server}…	Se interoghează {server}…
+	Signing was cancelled; nothing was saved.	Semnarea a fost anulată; nu s-a salvat nimic.
+	Signed and saved to {path}, without some revocation information: {problems}	Semnat și salvat în {path}, fără o parte din informațiile de revocare: {problems}
+	The document wasn't signed: {e}	Documentul nu a fost semnat: {e}

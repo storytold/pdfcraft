@@ -2511,3 +2511,21 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Zaman damgası sunucusu
+	Include revocation information when signing (LTV)	İmzalarken iptal bilgilerini ekle (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	İmzalama bu durumda ağa bağlanır: zaman damgası sunucusu imzanın bir özetini alır ve sertifika yetkililerine sertifikaların iptal edilip edilmediği sorulur. İkisiyle birlikte imzalar PAdES B-LTA olur.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Zaman damgaları ve iptal bilgileri masaüstü uygulamasını gerektirir. Burada imzalamak için bunları Tercihler ▸ İmzalar bölümünden kapatın.
+	the certificate authorities	sertifika yetkilileri
+	Asking {server}…	{server} sorgulanıyor…
+	Signing was cancelled; nothing was saved.	İmzalama iptal edildi; hiçbir şey kaydedilmedi.
+	Signed and saved to {path}, without some revocation information: {problems}	İmzalandı ve {path} konumuna kaydedildi, bazı iptal bilgileri olmadan: {problems}
+	The document wasn't signed: {e}	Belge imzalanmadı: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Akıllı kart veya belirteç kullan
+	Card driver (PKCS #11)	Kart sürücüsü (PKCS #11)
+	Smart card  ·  	Akıllı kart  ·  
+	Card PIN	Kart PIN'i
+	No signing certificate was found on a card. Is the card in the reader?	Hiçbir kartta imzalama sertifikası bulunamadı. Kart okuyucuda mı?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN yalnızca karta gider; PdfCraft onu saklamaz.
+	The smart card's digital IDs couldn't be listed: {e}	Akıllı kartın dijital kimlikleri listelenemedi: {e}

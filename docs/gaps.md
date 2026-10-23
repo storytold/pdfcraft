@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (gap 10: PKCS #11 in the CLI and agent tools; opt-in timestamp server and LTV fetching make PAdES B-LTA; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -200,13 +201,14 @@ update the numbers.
 
 ### 10. Signatures: no PKCS #11, timestamp servers or online revocation
 
-- **Missing:** PKCS #11 tokens and smart cards on macOS and Linux; timestamp-server preferences;
-  fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
-  Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
-  browser.
-- **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
-  `sign.eutl` planned; `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl` partial (caller-supplied
-  evidence). Users ask for Acrobat-like validation
+- **Missing:** a list of named timestamp servers with credentials (one URL in Preferences ▸
+  Signatures today); Add Verification Information for existing signatures; online revocation
+  checks while validating; FieldMDP and locking fields on signing; the OS trust store; EU Trusted
+  Lists; signature graphics and saved appearances; compare signed version; signing in the browser.
+  PKCS #11 cards sign in the dialog, the CLI and the agent tools; signing online makes PAdES B-T to
+  B-LTA (opt-in), tested against a fake network.
+- **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl`
+  partial; `sign.field-mdp`, `sign.os-trust`, `sign.eutl` planned. Users ask for Acrobat-like validation
   ([#824](https://github.com/storytold/pdfcraft/issues/824),
   [#775](https://github.com/storytold/pdfcraft/issues/775),
   [#718](https://github.com/storytold/pdfcraft/issues/718)).

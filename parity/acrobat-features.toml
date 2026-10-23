@@ -1850,7 +1850,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/perf.rs::scrolling_a_500_page_document_stays_within_the_frame_budget", "crates/ui-egui/tests/perf.rs::panels_with_hundreds_of_items_stay_within_the_frame_budget"]
+evidence = ["crates/ui-egui/tests/it/perf.rs::scrolling_a_500_page_document_stays_within_the_frame_budget", "crates/ui-egui/tests/it/perf.rs::panels_with_hundreds_of_items_stay_within_the_frame_budget"]
 notes = "UI work per frame ~6 ms scrolling 500 pages (comments panel with 500 cards ~6 ms, thumbnails ~2 ms); rendering is off-thread and tiled"
 
 # ==================================================================================================
@@ -5962,11 +5962,11 @@ title = "Sign with PKCS#11 tokens and smart cards"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["sign.digital"]
+tools = ["sign_card_ids", "sign_document"]
+evidence = ["crates/sign/tests/it/pkcs11.rs::signing_on_a_softhsm_token", "crates/ui-egui/tests/it/signing.rs::smart_card_identities_are_read_each_time_and_the_driver_is_kept", "crates/ui-egui/tests/it/signing.rs::configuring_a_smart_card_with_a_missing_driver_says_so", "crates/ui-egui/tests/it/signing.rs::a_smart_card_identity_asks_for_the_card_pin_and_forgets_it", "crates/automation/tests/it/automation.rs::signing_online_and_with_cards_takes_only_what_the_user_allowed"]
+notes = "Native only, through the card vendor's PKCS #11 module (cryptoki). Certificates are listed without a PIN; signing logs in with a zeroized PIN (none on a PIN-pad reader) and signs on the token with RSA PKCS #1 v1.5 or ECDSA P-256/P-384; the card's CAs become the chain. The sign dialog's Configure step has \"Use a smart card or token\" (module prefilled from known Windows middleware locations) and Sign as asks for the card PIN; card IDs are listed on Linux too. sign_card_ids lists card certificates and sign_document takes their pkcs11: reference; the driver comes only from the user (pdfcraft-cli --card-module, else the first known one installed) and the PIN only from a terminal prompt in `pdfcraft-cli run` (the MCP server signs with PIN-pad readers only). Tested against SoftHSM (pdfsig agrees) and signed with a real national eID card (NXP JCOP 3, Smart Card Middleware) on Windows. Still missing: PIN-pad and multi-slot UI, P-521/Brainpool/Ed25519 keys, and a real card in CI."
 
 [[feature]]
 id = "sign.self-signed-id"
@@ -6154,11 +6154,11 @@ title = "Configure timestamp servers"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["sign.digital"]
+tools = ["sign_document"]
+evidence = ["crates/ui-egui/tests/it/signing.rs::a_timestamp_server_in_preferences_timestamps_the_signature_off_the_ui_thread", "crates/ui-egui/tests/it/signing.rs::signing_online_without_a_network_says_so_and_saves_nothing", "crates/automation/tests/it/automation.rs::signing_online_and_with_cards_takes_only_what_the_user_allowed"]
+notes = "Preferences ▸ Signatures has one timestamp server URL (empty by default) and an LTV checkbox; signing then runs on a thread behind a cancellable modal. sign_document takes timestamp_server and ltv, only when the CLI was started with --network. HTTP and HTTPS (OS roots) through pdfcraft-platform::http. Missing: Acrobat's list of named servers with credentials, and a real TSA in tests."
 
 [[feature]]
 id = "sign.pades-bt"
@@ -6168,9 +6168,9 @@ tier = "P1"
 milestone = "M9"
 status = "partial"
 commands = []
-tools = []
-evidence = ["crates/sign/tests/it/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token"]
-notes = "Sign with an embedded RFC 3161 token (sign_with_timestamp): imprint and TSA signature verified at signing and validation time, trusted time reported. Missing: timestamp-server configuration and a fetcher (transport is caller-injected), the standalone document timestamp, automation tool."
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/it/pdf.rs::signing_with_a_timestamp_embeds_a_verified_rfc3161_token", "crates/sign/tests/it/ltv.rs::online_signing_makes_a_b_lta_file_that_validates_offline", "crates/sign/tests/it/ltv.rs::a_failing_timestamp_authority_fails_signing"]
+notes = "Sign with an embedded RFC 3161 token: imprint and TSA signature verified at signing and validation time, trusted time reported. The server is set in Preferences ▸ Signatures or sign_document's timestamp_server and reached over HTTP(S) (ltv::HttpTsa). A failing server fails the signing, with no file. Missing: TSA credentials and the TSA's own trust (its CA must be trusted by hand)."
 
 [[feature]]
 id = "sign.ltv"
@@ -6180,9 +6180,9 @@ tier = "P1"
 milestone = "M9"
 status = "partial"
 commands = []
-tools = []
-evidence = ["crates/sign/tests/it/pdf.rs::embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid", "crates/sign/tests/it/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
-notes = "dss::embed merges caller-supplied evidence into the catalog /DSS with /VRI entries per signature, deduplicating blobs, as a permitted incremental change; revocation.rs verifies the embedded CRLs and OCSP responses (signature, responder identity, CertID, window) and a verified revocation invalidates the signature. Missing: fetching evidence, automation tool."
+tools = ["sign_document"]
+evidence = ["crates/sign/tests/it/pdf.rs::embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid", "crates/sign/tests/it/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature", "crates/sign/tests/it/ltv.rs::online_signing_makes_a_b_lta_file_that_validates_offline", "crates/sign/tests/it/ltv.rs::unreachable_revocation_servers_are_reported_and_the_file_is_still_signed"]
+notes = "Signing with LTV on (Preferences ▸ Signatures, or sign_document ltv) fetches the chain's missing issuers (AIA caIssuers), an OCSP response or else a CRL for every certificate below a root, the timestamp authority's included, embeds them in /DSS with /VRI, and with a timestamp server closes the file with a document timestamp (B-LTA). Only answers that verify and cover the signing time are kept; what couldn't be fetched is reported, and a revoked certificate stops the signing. Missing: Add Verification Information for existing signatures, LTV of the document timestamp's own TSA chain, and refreshing an archive timestamp."
 
 [[feature]]
 id = "sign.pades-blta"
@@ -6205,8 +6205,8 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/sign/tests/it/crypto.rs::crls_verify_and_report_revocation", "crates/sign/tests/it/crypto.rs::ocsp_responses_verify_and_match_the_certificate", "crates/sign/tests/it/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature"]
-notes = "RFC 5280 CRLs and RFC 6960 OCSP responses are parsed and verified (issuer/responder signature, delegated responder's OCSP-signing EKU, CertID hash match, validity window) and checked against the DSS during validation. Missing: network fetching of fresh evidence and the OS trust store."
+evidence = ["crates/sign/tests/it/crypto.rs::crls_verify_and_report_revocation", "crates/sign/tests/it/crypto.rs::ocsp_responses_verify_and_match_the_certificate", "crates/sign/tests/it/pdf.rs::an_embedded_verified_revocation_invalidates_the_signature", "crates/sign/tests/it/ltv.rs::a_revoked_signer_stops_online_signing"]
+notes = "RFC 5280 CRLs and RFC 6960 OCSP responses are parsed and verified (issuer/responder signature, delegated responder's OCSP-signing EKU, CertID hash match, validity window) and checked against the DSS during validation. When signing with LTV on they are fetched (OCSP first, CRL as fallback) through ltv::gather. Missing: online checking while validating someone else's signature, and the OS trust store."
 
 [[feature]]
 id = "sign.validate-all"

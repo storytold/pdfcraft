@@ -2838,3 +2838,21 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Usar una tarjeta inteligente o token
+	Card driver (PKCS #11)	Controlador de la tarjeta (PKCS #11)
+	Smart card  ·  	Tarjeta inteligente  ·  
+	Card PIN	PIN de la tarjeta
+	No signing certificate was found on a card. Is the card in the reader?	No se encontró ningún certificado de firma en una tarjeta. ¿Está la tarjeta en el lector?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	El PIN solo va a la tarjeta; PdfCraft no lo guarda.
+	The smart card's digital IDs couldn't be listed: {e}	No se pudieron listar los ID digitales de la tarjeta inteligente: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Servidor de sellado de tiempo
+	Include revocation information when signing (LTV)	Incluir información de revocación al firmar (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Al firmar se usa la red: el servidor de sellado de tiempo recibe un hash de la firma y se consulta a las autoridades de certificación si los certificados están revocados. Con ambas opciones, las firmas son PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Los sellos de tiempo y la información de revocación requieren la aplicación de escritorio. Desactívelos en Preferencias ▸ Firmas para firmar aquí.
+	the certificate authorities	las autoridades de certificación
+	Asking {server}…	Consultando a {server}…
+	Signing was cancelled; nothing was saved.	Se canceló la firma; no se guardó nada.
+	Signed and saved to {path}, without some revocation information: {problems}	Firmado y guardado en {path}, sin parte de la información de revocación: {problems}
+	The document wasn't signed: {e}	El documento no se firmó: {e}

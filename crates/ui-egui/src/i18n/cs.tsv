@@ -2822,3 +2822,21 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Server časových razítek
+	Include revocation information when signing (LTV)	Při podepisování vložit informace o odvolání (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Podepisování pak používá síť: server časových razítek obdrží hash podpisu a certifikačních autorit se aplikace zeptá, zda certifikáty nejsou odvolané. S oběma volbami jsou podpisy PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Časová razítka a informace o odvolání vyžadují desktopovou aplikaci. Chcete-li podepsat zde, vypněte je v Předvolby ▸ Podpisy.
+	the certificate authorities	certifikační autority
+	Asking {server}…	Dotaz na {server}…
+	Signing was cancelled; nothing was saved.	Podepisování bylo zrušeno; nic nebylo uloženo.
+	Signed and saved to {path}, without some revocation information: {problems}	Podepsáno a uloženo do {path} bez části informací o odvolání: {problems}
+	The document wasn't signed: {e}	Dokument nebyl podepsán: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Použít čipovou kartu nebo token
+	Card driver (PKCS #11)	Ovladač karty (PKCS #11)
+	Smart card  ·  	Čipová karta  ·  
+	Card PIN	PIN karty
+	No signing certificate was found on a card. Is the card in the reader?	Na kartě nebyl nalezen žádný podpisový certifikát. Je karta ve čtečce?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN jde pouze do karty; PdfCraft si jej neukládá.
+	The smart card's digital IDs couldn't be listed: {e}	Digitální ID čipové karty se nepodařilo vypsat: {e}

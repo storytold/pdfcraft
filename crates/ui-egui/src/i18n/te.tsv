@@ -2424,3 +2424,13 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	టైమ్‌స్టాంప్ సర్వర్
+	Include revocation information when signing (LTV)	సంతకం చేసేటప్పుడు రద్దు సమాచారాన్ని చేర్చు (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	అప్పుడు సంతకం చేయడం ఆన్‌లైన్‌కు వెళ్తుంది: టైమ్‌స్టాంప్ సర్వర్‌కు సంతకం యొక్క హాష్ వెళ్తుంది, సర్టిఫికెట్లు రద్దయ్యాయా అని సర్టిఫికెట్ అధికారులను అడుగుతుంది. రెండూ ఉంటే, సంతకాలు PAdES B-LTA అవుతాయి.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	టైమ్‌స్టాంప్‌లు, రద్దు సమాచారానికి డెస్క్‌టాప్ యాప్ అవసరం. ఇక్కడ సంతకం చేయడానికి వాటిని అభిరుచులు ▸ సంతకాలు లో ఆపివేయండి.
+	the certificate authorities	సర్టిఫికెట్ అధికారులు
+	Asking {server}…	{server}‌ను అడుగుతోంది…
+	Signing was cancelled; nothing was saved.	సంతకం రద్దు చేయబడింది; ఏదీ సేవ్ కాలేదు.
+	Signed and saved to {path}, without some revocation information: {problems}	సంతకం చేసి {path}‌లో సేవ్ చేయబడింది, కొంత రద్దు సమాచారం లేకుండా: {problems}
+	The document wasn't signed: {e}	పత్రంపై సంతకం కాలేదు: {e}

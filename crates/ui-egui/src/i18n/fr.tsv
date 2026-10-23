@@ -2781,3 +2781,21 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Utiliser une carte à puce ou un jeton
+	Card driver (PKCS #11)	Pilote de la carte (PKCS #11)
+	Smart card  ·  	Carte à puce  ·  
+	Card PIN	Code PIN de la carte
+	No signing certificate was found on a card. Is the card in the reader?	Aucun certificat de signature n'a été trouvé sur une carte. La carte est-elle dans le lecteur ?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	Le code PIN n'est transmis qu'à la carte ; PdfCraft ne le conserve pas.
+	The smart card's digital IDs couldn't be listed: {e}	Impossible de lister les ID numériques de la carte à puce : {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Serveur d'horodatage
+	Include revocation information when signing (LTV)	Inclure les informations de révocation lors de la signature (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	La signature passe alors par le réseau : le serveur d'horodatage reçoit une empreinte de la signature, et les autorités de certification sont interrogées sur la révocation des certificats. Avec les deux, les signatures sont PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	L'horodatage et les informations de révocation nécessitent l'application de bureau. Désactivez-les dans Préférences ▸ Signatures pour signer ici.
+	the certificate authorities	les autorités de certification
+	Asking {server}…	Interrogation de {server}…
+	Signing was cancelled; nothing was saved.	Signature annulée ; rien n'a été enregistré.
+	Signed and saved to {path}, without some revocation information: {problems}	Signé et enregistré dans {path}, sans certaines informations de révocation : {problems}
+	The document wasn't signed: {e}	Le document n'a pas été signé : {e}

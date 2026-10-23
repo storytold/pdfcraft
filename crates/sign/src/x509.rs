@@ -137,6 +137,8 @@ pub struct Certificate {
     pub extended_key_usage: Option<Vec<String>>,
     /// OCSP responder URLs from the Authority Information Access (1.3.6.1.5.5.7.1.1).
     pub ocsp_urls: Vec<String>,
+    /// Where the issuer's certificate can be downloaded, from the Authority Information Access.
+    pub ca_issuer_urls: Vec<String>,
     /// CRL distribution point URLs (2.5.29.31).
     pub crl_urls: Vec<String>,
     /// The `version` field: 0 for v1, 1 for v2, 2 for v3.
@@ -188,6 +190,7 @@ struct Extensions {
     authority_key_id: Option<Vec<u8>>,
     extended_key_usage: Option<Vec<String>>,
     ocsp_urls: Vec<String>,
+    ca_issuer_urls: Vec<String>,
     crl_urls: Vec<String>,
 }
 
@@ -249,8 +252,15 @@ impl Extensions {
                 let Ok(aia) = Tlv::parse_all(value.value) else { return };
                 for access in aia.children().unwrap_or_default() {
                     let Ok(a) = access.children() else { continue };
-                    if a.len() >= 2 && a[0].oid().ok().as_deref() == Some("1.3.6.1.5.5.7.48.1") && a[1].tag == tag::ctx_prim(6) {
-                        self.ocsp_urls.push(String::from_utf8_lossy(a[1].value).into_owned());
+                    let [method, location, ..] = a.as_slice() else { continue };
+                    if location.tag != tag::ctx_prim(6) {
+                        continue;
+                    }
+                    let url = String::from_utf8_lossy(location.value).into_owned();
+                    match method.oid().ok().as_deref() {
+                        Some("1.3.6.1.5.5.7.48.1") => self.ocsp_urls.push(url),
+                        Some("1.3.6.1.5.5.7.48.2") => self.ca_issuer_urls.push(url),
+                        _ => {}
                     }
                 }
             }
@@ -333,6 +343,7 @@ impl Certificate {
             authority_key_id,
             extended_key_usage,
             ocsp_urls,
+            ca_issuer_urls,
             crl_urls,
         } = ext;
         Ok(Certificate {
@@ -354,6 +365,7 @@ impl Certificate {
             authority_key_id,
             extended_key_usage,
             ocsp_urls,
+            ca_issuer_urls,
             crl_urls,
             version,
             unknown_critical,

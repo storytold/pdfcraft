@@ -752,12 +752,16 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("sign.digital")
             .with(schema(json!({}), &[])),
-        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. appearance chooses what a visible signature shows (default: name, date and labels; reason, location and distinguished_name are off unless turned on). labels gives the words of its labels, e.g. in another language (default English: \"Digitally signed by\", \"DN: \", \"Reason: \", \"Location: \", \"Date: \"; include the separator); each must be in Western European characters (Windows-1252), the only ones the signature's font draws, or the call is refused naming the label and character. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
+        t("sign_card_ids", "List smart card digital IDs", "The signing certificates on the smart cards and tokens in the readers, through the card's PKCS #11 driver (the one the user chose with pdfcraft-cli --card-module, or the first known driver installed), with the pkcs11: reference sign_document takes. Listing needs no PIN.")
+            .ro()
+            .cmd("sign.digital")
+            .with(schema(json!({}), &[])),
+        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids, or a smart card certificate: \"pkcs11:…\" from sign_card_ids, whose PIN the user types at the terminal or on the reader, never passed as an argument) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. appearance chooses what a visible signature shows (default: name, date and labels; reason, location and distinguished_name are off unless turned on). labels gives the words of its labels, e.g. in another language (default English: \"Digitally signed by\", \"DN: \", \"Reason: \", \"Location: \", \"Date: \"; include the separator); each must be in Western European characters (Windows-1252), the only ones the signature's font draws, or the call is refused naming the label and character. PAdES B-B, SHA-256 (SHA-384 for P-384 keys); timestamp_server adds an RFC 3161 timestamp (B-T) and ltv embeds the chain's OCSP/CRL revocation information, with both making B-LTA (a document timestamp closes the file). Both need network access, which only the user can grant (pdfcraft-cli --network); revocation information that couldn't be fetched is listed in missing_revocation_info.")
             .cmd("sign.digital")
             .with(schema(
                 json!({
                     "doc": doc(),
-                    "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, or windows: reference on Windows." },
+                    "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, windows: reference on Windows, or pkcs11: reference from sign_card_ids." },
                     "password": { "type": "string" },
                     "field": { "type": "string" },
                     "page": { "type": "integer", "minimum": 1 },
@@ -803,6 +807,8 @@ pub fn tools() -> Vec<ToolDef> {
                         "additionalProperties": false,
                     },
                     "out": { "type": "string", "description": "Where to save the signed document." },
+                    "timestamp_server": { "type": "string", "description": "An RFC 3161 timestamp server URL, e.g. the one your certificate authority runs." },
+                    "ltv": { "type": "boolean", "description": "Embed OCSP/CRL revocation information for the signer's chain (and the timestamp authority's). Default false." },
                 }),
                 &["doc", "id", "out"],
             )),

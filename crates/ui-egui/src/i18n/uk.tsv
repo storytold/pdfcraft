@@ -2537,3 +2537,21 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Використати смарт-картку або токен
+	Card driver (PKCS #11)	Драйвер картки (PKCS #11)
+	Smart card  ·  	Смарт-картка  ·  
+	Card PIN	PIN-код картки
+	No signing certificate was found on a card. Is the card in the reader?	На картці не знайдено сертифіката для підпису. Чи вставлено картку в зчитувач?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN-код передається лише картці; PdfCraft його не зберігає.
+	The smart card's digital IDs couldn't be listed: {e}	Не вдалося отримати список цифрових ідентифікаторів смарт-картки: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Сервер позначок часу
+	Include revocation information when signing (LTV)	Додавати відомості про відкликання під час підписування (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Під час підписування застосунок звертається до мережі: сервер позначок часу отримує хеш підпису, а центри сертифікації перевіряють, чи не відкликано сертифікати. З обома параметрами підписи відповідають PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Для позначок часу й відомостей про відкликання потрібен настільний застосунок. Вимкніть їх у Налаштування ▸ Підписи, щоб підписати тут.
+	the certificate authorities	центри сертифікації
+	Asking {server}…	Запит до {server}…
+	Signing was cancelled; nothing was saved.	Підписування скасовано; нічого не збережено.
+	Signed and saved to {path}, without some revocation information: {problems}	Підписано й збережено в {path} без частини відомостей про відкликання: {problems}
+	The document wasn't signed: {e}	Документ не підписано: {e}

@@ -9,6 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-sign = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `http`: timestamp servers and revocation checks the user turned on. Both already in the tree
+# through the desktop app's update check.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.

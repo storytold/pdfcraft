@@ -2520,3 +2520,21 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Strežnik časovnih žigov
+	Include revocation information when signing (LTV)	Ob podpisovanju vključi podatke o preklicu (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Podpisovanje nato uporablja omrežje: strežnik časovnih žigov prejme zgoščeno vrednost podpisa, overitelje pa vpraša, ali so potrdila preklicana. Z obema možnostma so podpisi PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Časovni žigi in podatki o preklicu potrebujejo namizno aplikacijo. Če želite podpisati tukaj, jih izklopite v Nastavitve ▸ Podpisi.
+	the certificate authorities	overitelje
+	Asking {server}…	Poizvedba pri {server} …
+	Signing was cancelled; nothing was saved.	Podpisovanje je preklicano; nič ni shranjeno.
+	Signed and saved to {path}, without some revocation information: {problems}	Podpisano in shranjeno v {path} brez nekaterih podatkov o preklicu: {problems}
+	The document wasn't signed: {e}	Dokument ni bil podpisan: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Uporabi pametno kartico ali žeton
+	Card driver (PKCS #11)	Gonilnik kartice (PKCS #11)
+	Smart card  ·  	Pametna kartica  ·  
+	Card PIN	PIN kartice
+	No signing certificate was found on a card. Is the card in the reader?	Na kartici ni bilo najdenega potrdila za podpisovanje. Je kartica v čitalniku?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN gre samo na kartico; PdfCraft ga ne shrani.
+	The smart card's digital IDs couldn't be listed: {e}	Digitalnih ID-jev pametne kartice ni bilo mogoče izpisati: {e}

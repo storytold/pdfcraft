@@ -4,6 +4,9 @@
 //!   primitives (RSA private-key operations use aws-lc-rs on native targets, ADR-0009).
 //! - [`pdf`]: signature fields in a document — listing and validating them, and signing
 //!   (PAdES B-B, `ETSI.CAdES.detached`) with an incremental save.
+//! - [`ltv`]: timestamps and revocation evidence fetched through a caller-supplied transport
+//!   (PAdES B-T, B-LT, B-LTA).
+//! - [`pkcs11`] (native only): digital IDs on smart cards and tokens through their PKCS #11 module.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -15,7 +18,10 @@ pub mod graphic;
 #[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod keys;
+pub mod ltv;
 pub mod pdf;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pkcs11;
 pub mod pkcs12;
 pub mod revocation;
 mod rsa_pad;

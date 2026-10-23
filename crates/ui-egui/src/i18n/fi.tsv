@@ -2783,3 +2783,20 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	Käytä älykorttia tai tunnistetta
+	Card driver (PKCS #11)	Kortin ohjain (PKCS #11)
+	Smart card  ·  	Älykortti  ·  
+	Card PIN	Kortin PIN-koodi
+	No signing certificate was found on a card. Is the card in the reader?	Yhdeltäkään kortilta ei löytynyt allekirjoitusvarmennetta. Onko kortti lukijassa?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN-koodi menee vain kortille; PdfCraft ei tallenna sitä.
+	The smart card's digital IDs couldn't be listed: {e}	Älykortin digitaalisia tunnuksia ei voitu luetella: {e}
+	Timestamp server	Aikaleimapalvelin
+	Include revocation information when signing (LTV)	Sisällytä sulkutiedot allekirjoitettaessa (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Allekirjoitus käyttää silloin verkkoa: aikaleimapalvelin saa allekirjoituksen tiivisteen, ja varmentajilta kysytään, onko varmenteita suljettu. Molemmilla allekirjoitukset ovat PAdES B-LTA -muotoisia.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Aikaleimat ja sulkutiedot vaativat työpöytäsovelluksen. Poista ne käytöstä kohdassa Asetukset ▸ Allekirjoitukset, jotta voit allekirjoittaa tässä.
+	the certificate authorities	varmentajat
+	Asking {server}…	Kysytään palvelimelta {server}…
+	Signing was cancelled; nothing was saved.	Allekirjoitus peruutettiin; mitään ei tallennettu.
+	Signed and saved to {path}, without some revocation information: {problems}	Allekirjoitettu ja tallennettu kohteeseen {path} ilman osaa sulkutiedoista: {problems}
+	The document wasn't signed: {e}	Asiakirjaa ei allekirjoitettu: {e}

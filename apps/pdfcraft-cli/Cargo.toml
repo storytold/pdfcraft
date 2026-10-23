@@ -22,6 +22,8 @@ pdfcraft-preflight = { workspace = true }
 pdfcraft-automation = { workspace = true }
 pdfcraft-platform = { workspace = true }
 base64 = "0.22"
+# Reads a smart card PIN at the terminal without echoing it (Apache-2.0; already in the tree).
+rpassword = "7"
 
 [dev-dependencies]
 # Decodes `render` output in tests/it/owner_password.rs; already a dependency of the engine.

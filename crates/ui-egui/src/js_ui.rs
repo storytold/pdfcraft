@@ -488,6 +488,22 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );
     ui.add_space(8.0);
+    // Signatures (Acrobat: Preferences ▸ Signatures ▸ Time Stamping and Verification).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.label(egui::RichText::new(tl!("Signatures")).font(theme::semibold(13.0)));
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Timestamp server"));
+            ui.add(crate::widgets::line(&mut app.timestamp_server).desired_width(260.0).hint_text("http://…").char_limit(512)).labelled_by(label.id);
+        });
+        ui.add(widgets::checkbox(&mut app.embed_ltv, tl!("Include revocation information when signing (LTV)")));
+        ui.label(
+            egui::RichText::new(tl!("Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA."))
+                .small()
+                .color(t.text_muted),
+        );
+        ui.add_space(8.0);
+    }
     date_format(ui, app, t);
     ui.add_space(8.0);
     ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));

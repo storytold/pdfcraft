@@ -2800,3 +2800,21 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Usar um cartão inteligente ou token
+	Card driver (PKCS #11)	Driver do cartão (PKCS #11)
+	Smart card  ·  	Cartão inteligente  ·  
+	Card PIN	PIN do cartão
+	No signing certificate was found on a card. Is the card in the reader?	Nenhum certificado de assinatura foi encontrado em um cartão. O cartão está no leitor?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	O PIN vai somente para o cartão; o PdfCraft não o guarda.
+	The smart card's digital IDs couldn't be listed: {e}	Não foi possível listar as IDs digitais do cartão inteligente: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Servidor de carimbo do tempo
+	Include revocation information when signing (LTV)	Incluir informações de revogação ao assinar (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	A assinatura passa a usar a rede: o servidor de carimbo do tempo recebe um hash da assinatura e as autoridades certificadoras são consultadas sobre a revogação dos certificados. Com as duas opções, as assinaturas são PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Carimbos do tempo e informações de revogação precisam do aplicativo para desktop. Desative-os em Preferências ▸ Assinaturas para assinar aqui.
+	the certificate authorities	as autoridades certificadoras
+	Asking {server}…	Consultando {server}…
+	Signing was cancelled; nothing was saved.	A assinatura foi cancelada; nada foi salvo.
+	Signed and saved to {path}, without some revocation information: {problems}	Assinado e salvo em {path}, sem algumas informações de revogação: {problems}
+	The document wasn't signed: {e}	O documento não foi assinado: {e}

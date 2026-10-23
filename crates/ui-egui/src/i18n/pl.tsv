@@ -2611,3 +2611,21 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Serwer znaczników czasu
+	Include revocation information when signing (LTV)	Dołączaj informacje o unieważnieniu podczas podpisywania (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Podpisywanie korzysta wtedy z sieci: serwer znaczników czasu otrzymuje skrót podpisu, a urzędy certyfikacji są pytane, czy certyfikaty nie zostały unieważnione. Z obiema opcjami podpisy są w formacie PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Znaczniki czasu i informacje o unieważnieniu wymagają aplikacji komputerowej. Wyłącz je w Preferencje ▸ Podpisy, aby podpisać tutaj.
+	the certificate authorities	urzędy certyfikacji
+	Asking {server}…	Pytanie {server}…
+	Signing was cancelled; nothing was saved.	Podpisywanie anulowano; nic nie zapisano.
+	Signed and saved to {path}, without some revocation information: {problems}	Podpisano i zapisano w {path} bez części informacji o unieważnieniu: {problems}
+	The document wasn't signed: {e}	Dokument nie został podpisany: {e}
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	Użyj karty inteligentnej lub tokenu
+	Card driver (PKCS #11)	Sterownik karty (PKCS #11)
+	Smart card  ·  	Karta inteligentna  ·  
+	Card PIN	PIN karty
+	No signing certificate was found on a card. Is the card in the reader?	Nie znaleziono certyfikatu do podpisywania na żadnej karcie. Czy karta jest w czytniku?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN trafia tylko do karty; PdfCraft go nie przechowuje.
+	The smart card's digital IDs couldn't be listed: {e}	Nie udało się wyświetlić identyfikatorów cyfrowych karty inteligentnej: {e}

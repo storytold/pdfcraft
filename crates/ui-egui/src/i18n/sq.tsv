@@ -2500,3 +2500,20 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	Përdor një kartë inteligjente ose token
+	Card driver (PKCS #11)	Drejtuesi i kartës (PKCS #11)
+	Smart card  ·  	Kartë inteligjente  ·  
+	Card PIN	PIN-i i kartës
+	No signing certificate was found on a card. Is the card in the reader?	Nuk u gjet asnjë certifikatë nënshkrimi në asnjë kartë. A është karta në lexues?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN-i shkon vetëm te karta; PdfCraft nuk e ruan.
+	The smart card's digital IDs couldn't be listed: {e}	ID-të dixhitale të kartës inteligjente nuk u listuan dot: {e}
+	Timestamp server	Shërbyesi i vulave kohore
+	Include revocation information when signing (LTV)	Përfshi informacionin e revokimit gjatë nënshkrimit (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Atëherë nënshkrimi përdor rrjetin: shërbyesi i vulave kohore merr një hash të nënshkrimit dhe autoritetet e certifikimit pyeten nëse certifikatat janë revokuar. Me të dyja, nënshkrimet janë PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Vulat kohore dhe informacioni i revokimit kërkojnë aplikacionin për desktop. Çaktivizojini te Preferencat ▸ Nënshkrimet për të nënshkruar këtu.
+	the certificate authorities	autoritetet e certifikimit
+	Asking {server}…	Po pyetet {server}…
+	Signing was cancelled; nothing was saved.	Nënshkrimi u anulua; nuk u ruajt asgjë.
+	Signed and saved to {path}, without some revocation information: {problems}	U nënshkrua dhe u ruajt te {path}, pa një pjesë të informacionit të revokimit: {problems}
+	The document wasn't signed: {e}	Dokumenti nuk u nënshkrua: {e}

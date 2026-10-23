@@ -2521,3 +2521,13 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Διακομιστής χρονοσήμανσης
+	Include revocation information when signing (LTV)	Συμπερίληψη πληροφοριών ανάκλησης κατά την υπογραφή (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Η υπογραφή τότε χρησιμοποιεί το δίκτυο: ο διακομιστής χρονοσήμανσης λαμβάνει ένα hash της υπογραφής και οι αρχές πιστοποίησης ερωτώνται αν τα πιστοποιητικά έχουν ανακληθεί. Και με τα δύο, οι υπογραφές είναι PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Οι χρονοσημάνσεις και οι πληροφορίες ανάκλησης χρειάζονται την εφαρμογή υπολογιστή. Απενεργοποιήστε τις στις Προτιμήσεις ▸ Υπογραφές για να υπογράψετε εδώ.
+	the certificate authorities	τις αρχές πιστοποίησης
+	Asking {server}…	Ερώτηση στο {server}…
+	Signing was cancelled; nothing was saved.	Η υπογραφή ακυρώθηκε· δεν αποθηκεύτηκε τίποτα.
+	Signed and saved to {path}, without some revocation information: {problems}	Υπογράφηκε και αποθηκεύτηκε στο {path}, χωρίς ορισμένες πληροφορίες ανάκλησης: {problems}
+	The document wasn't signed: {e}	Το έγγραφο δεν υπογράφηκε: {e}

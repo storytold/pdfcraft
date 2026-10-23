@@ -13,6 +13,20 @@ use crate::fill_sign::SavedSig;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
+pub use pdfcraft_engine::sign::ltv::Fetch;
+
+/// A signing waiting for the network (a timestamp server, revocation services) on its own
+/// thread, behind a modal that keeps the document from changing meanwhile.
+pub(crate) struct OnlineSigning {
+    doc: pdfcraft_engine::DocId,
+    path: PathBuf,
+    choice: SignGraphic,
+    /// What is being asked, for the modal.
+    server: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    rx: std::sync::mpsc::Receiver<Result<sign::ltv::Signed, String>>,
+}
+
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
 /// its password is asked for at each signing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -57,6 +71,9 @@ pub struct NewIdDraft {
     /// Use a Digital ID from a file: its path and password.
     pub file: String,
     pub file_password: String,
+    /// Use a smart card or token (overrides `create`): the card driver's PKCS #11 module.
+    pub card: bool,
+    pub module: String,
 }
 
 impl Default for NewIdDraft {
@@ -73,6 +90,8 @@ impl Default for NewIdDraft {
             confirm: String::new(),
             file: String::new(),
             file_password: String::new(),
+            card: false,
+            module: String::new(),
         }
     }
 }
@@ -241,6 +260,30 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
+/// A smart card or token identity by its `pkcs11:` reference, logged in with `pin` (empty for a
+/// reader with a PIN pad). The PIN moves into a secret that is zeroized when the login is done.
+fn card_id(module: &str, reference: &str, pin: String) -> Result<DigitalId, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return sign::pkcs11::open(std::path::Path::new(module), reference, (!pin.is_empty()).then(|| sign::pkcs11::Pin::from(pin)))
+        .map_err(|e| e.to_string());
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (module, pin);
+        Err(format!("{reference}: smart cards are only available in the desktop app"))
+    }
+}
+
+/// Whether `name` is a bare GUID (8-4-4-4-12 hex), as the Windows store names a certificate with no friendly name.
+fn is_guid(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('-').collect();
+    parts.len() == 5 && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Whether a digital ID entry is read from a key store each time instead of being saved.
+pub(crate) fn from_key_store(path: &str) -> bool {
+    path.starts_with("keychain:") || path.starts_with("windows:") || path.starts_with("pkcs11:")
+}
+
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
@@ -289,7 +332,7 @@ impl PdfCraftApp {
 
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.retain(|e| !from_key_store(&e.path));
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -322,6 +365,20 @@ impl PdfCraftApp {
                 Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
+        // The card in the reader now, through the driver chosen in Configure (no PIN to list).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.os_key_store_ids && !self.pkcs11_module.is_empty() {
+            match sign::pkcs11::identities(std::path::Path::new(&self.pkcs11_module)) {
+                Ok(ids) => {
+                    for c in ids.iter().filter(|c| c.for_signing) {
+                        self.digital_ids.push(entry_for(&sign::pkcs11::reference(&c.certificate), &c.certificate));
+                    }
+                }
+                Err(e) => self.notify_fmt("The smart card's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+            }
+        }
+        // Named IDs first, those named by a bare GUID last (stable, so the rest keep their order).
+        self.digital_ids.sort_by_key(|e| is_guid(&e.name));
     }
 
     /// Add a digital ID file to the list (or select it if it's there).
@@ -338,7 +395,7 @@ impl PdfCraftApp {
     /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
     /// signing, so they can't be removed here. The open dialog's selection follows the list.
     pub fn remove_digital_id(&mut self, index: usize) -> bool {
-        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+        if self.digital_ids.get(index).is_none_or(|e| from_key_store(&e.path)) {
             return false;
         }
         self.digital_ids.remove(index);
@@ -406,6 +463,28 @@ impl PdfCraftApp {
         Ok(self.add_digital_id(&d.file, &id.certificate))
     }
 
+    /// Configure New Digital ID ▸ Use a smart card or token: list the signing certificates on
+    /// the cards the driver sees (no PIN yet) and remember the driver. Returns the first one.
+    fn import_card_ids(&mut self) -> Result<usize, String> {
+        let Some(module) = self.sign_draft.as_ref().map(|d| d.new_id.module.trim().to_string()) else { return Err("nothing to import".into()) };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ids = sign::pkcs11::identities(std::path::Path::new(&module)).map_err(|e| e.to_string())?;
+            self.pkcs11_module = module;
+            let mut first = None;
+            for c in ids.iter().filter(|c| c.for_signing) {
+                let i = self.add_digital_id(&sign::pkcs11::reference(&c.certificate), &c.certificate);
+                first.get_or_insert(i);
+            }
+            first.ok_or_else(|| tl!("No signing certificate was found on a card. Is the card in the reader?").to_string())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = module;
+            Err("smart cards are only available in the desktop app".into())
+        }
+    }
+
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
     fn finish_signing(&mut self) -> Result<(), String> {
         // What's typed in a form field is signed with the document (#166). A rejected value keeps
@@ -414,12 +493,18 @@ impl PdfCraftApp {
             return Err(String::new());
         }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
-        let d = self.sign_draft.clone().ok_or("nothing to sign")?;
+        let mut d = self.sign_draft.clone().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
+        } else if entry.path.starts_with("pkcs11:") {
+            // The PIN is used once and not kept, even in the dialog: a retry types it again.
+            use zeroize::Zeroize;
+            d.password.zeroize();
+            let pin = self.sign_draft.as_mut().map(|d| std::mem::take(&mut d.password)).unwrap_or_default();
+            card_id(&self.pkcs11_module, &entry.path, pin)?
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
@@ -459,21 +544,11 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
-            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
-            crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
-            // Our own write is not a change on disk to reload (#431).
-            #[cfg(not(target_arch = "wasm32"))]
-            app.watch.known_now(doc_id, &path.to_string_lossy());
-            app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
-            #[cfg(target_os = "macos")]
-            crate::macos_association::repair(&path);
-            app.sign_graphic = choice;
-            if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
-                view.invalidate_content();
+            if app.signs_online() {
+                return app.start_online_signing(doc_id, path, id, opts, choice);
             }
-            app.right = Some(crate::RightPanel::Signatures);
-            app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
-            Ok(())
+            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
+            app.save_signed(doc_id, &path, signed, choice, &[])
         };
         match self.save_override.clone() {
             Some(p) => sign_and_save(self, PathBuf::from(p)),
@@ -498,6 +573,106 @@ impl PdfCraftApp {
             None => {
                 let _ = (stem, sign_and_save);
                 Err(String::new())
+            }
+        }
+    }
+
+    /// Whether signing asks a timestamp server or revocation services (Preferences ▸ Signatures).
+    fn signs_online(&self) -> bool {
+        !self.timestamp_server.trim().is_empty() || self.embed_ltv
+    }
+
+    /// Write the signed file to `path` and show it: the end of every signing. `problems` is the
+    /// revocation information that couldn't be fetched, said in the notice.
+    fn save_signed(
+        &mut self,
+        doc_id: pdfcraft_engine::DocId,
+        path: &std::path::Path,
+        signed: std::sync::Arc<Vec<u8>>,
+        choice: SignGraphic,
+        problems: &[String],
+    ) -> Result<(), String> {
+        crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+        // Our own write is not a change on disk to reload (#431).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.watch.known_now(doc_id, &path.to_string_lossy());
+        self.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        crate::macos_association::repair(path);
+        self.sign_graphic = choice;
+        if let Some(view) = self.views.iter_mut().find(|v| v.id == doc_id) {
+            view.invalidate_content();
+        }
+        self.right = Some(crate::RightPanel::Signatures);
+        if problems.is_empty() {
+            self.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
+        } else {
+            self.notify_fmt(
+                "Signed and saved to {path}, without some revocation information: {problems}",
+                &[("path", &path.display().to_string()), ("problems", &problems.join("; "))],
+            );
+        }
+        Ok(())
+    }
+
+    /// Sign on a thread that asks the timestamp server and the revocation services; the
+    /// signed file is saved when it's done ([`PdfCraftApp::poll_online_signing`]).
+    fn start_online_signing(
+        &mut self,
+        doc: pdfcraft_engine::DocId,
+        path: PathBuf,
+        id: DigitalId,
+        opts: SignOptions,
+        choice: SignGraphic,
+    ) -> Result<(), String> {
+        let Some(fetch) = self.http.clone() else {
+            return Err(tl!("Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.")
+                .to_string());
+        };
+        let tsa = Some(self.timestamp_server.trim().to_string()).filter(|s| !s.is_empty());
+        let ltv = self.embed_ltv;
+        let server = tsa.clone().unwrap_or_else(|| tl!("the certificate authorities").to_string());
+        let (cos, opts) = self.session.signing_input(doc, opts).map_err(|e| e.to_string())?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = self.ctx.clone();
+            std::thread::spawn(move || {
+                let online = sign::ltv::Online { tsa: tsa.as_deref(), ltv, fetch: &*fetch };
+                // The receiver may be gone (the app quit): nothing to report to then.
+                let _ = tx.send(sign::ltv::sign_online(&cos, &id, &opts, &online).map_err(|e| e.to_string()));
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            });
+            self.online_signing = Some(OnlineSigning { doc, path, choice, server, rx });
+            Ok(())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (cos, opts, id, tsa, ltv, fetch, path, choice, server);
+            Err("signing online needs the desktop app".into())
+        }
+    }
+
+    /// Save a finished online signing (each frame).
+    pub(crate) fn poll_online_signing(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(job) = &self.online_signing else { return };
+            let result = match job.rx.try_recv() {
+                Ok(r) => r,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("signing stopped unexpectedly".into()),
+            };
+            let Some(job) = self.online_signing.take() else { return };
+            let saved = result.and_then(|signed| {
+                let bytes = std::sync::Arc::new(signed.bytes);
+                self.session.check_save(job.doc, &bytes).map_err(|e| e.to_string())?;
+                self.save_signed(job.doc, &job.path, bytes, job.choice, &signed.problems)
+            });
+            if let Err(e) = saved {
+                self.notify_fmt("The document wasn't signed: {e}", &[("e", &e)]);
             }
         }
     }
@@ -706,6 +881,8 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 tl!("Keychain  ·  ").to_string()
             } else if e.path.starts_with("windows:") {
                 tl!("Windows store  ·  ").to_string()
+            } else if e.path.starts_with("pkcs11:") {
+                tl!("Smart card  ·  ").to_string()
             } else {
                 String::new()
             };
@@ -755,7 +932,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
         ui.add_space(10.0);
     }
-    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !from_key_store(&e.path)));
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
@@ -782,17 +959,50 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 
 fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Configure a Digital ID for Signing");
+    let known_module = app.pkcs11_module.clone();
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
     // Browse… is desktop-only.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
-    widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
-    widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
-    ui.add_space(8.0);
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut browse_module = false;
     let n = &mut d.new_id;
-    if n.create {
+    if ui.add(widgets::radio(!n.create && !n.card, tl!("Use a Digital ID from a file"))).clicked() {
+        (n.create, n.card) = (false, false);
+    }
+    if ui.add(widgets::radio(n.create && !n.card, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"))).clicked() {
+        (n.create, n.card) = (true, false);
+    }
+    // A card's driver is a native library: desktop only.
+    #[cfg(not(target_arch = "wasm32"))]
+    if ui.add(widgets::radio(n.card, tl!("Use a smart card or token"))).clicked() {
+        n.card = true;
+        if n.module.is_empty() {
+            n.module = if known_module.is_empty() {
+                sign::pkcs11::candidate_modules().first().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+            } else {
+                known_module
+            };
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = known_module;
+    ui.add_space(8.0);
+    if n.card {
+        egui::Grid::new("id-card").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            let l = ui.label(tl!("Card driver (PKCS #11)"));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut n.module).desired_width(300.0)).labelled_by(l.id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button(tl!("Browse…")).clicked() {
+                    browse_module = true;
+                }
+            });
+            ui.end_row();
+        });
+    } else if n.create {
         egui::Grid::new("new-id").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             for (label, value) in [
                 (tl!("Name"), &mut n.name),
@@ -850,7 +1060,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, if d.new_id.create { tl!("Save") } else { tl!("Continue") }, true).clicked() {
+            if widgets::pill_button(ui, if d.new_id.create && !d.new_id.card { tl!("Save") } else { tl!("Continue") }, true).clicked() {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -859,8 +1069,14 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
     });
     if go {
-        let create = app.sign_draft.as_ref().is_some_and(|d| d.new_id.create);
-        let result = if create { app.create_digital_id() } else { app.import_digital_id() };
+        let (create, card) = app.sign_draft.as_ref().map_or((false, false), |d| (d.new_id.create, d.new_id.card));
+        let result = if card {
+            app.import_card_ids()
+        } else if create {
+            app.create_digital_id()
+        } else {
+            app.import_digital_id()
+        };
         let Some(d) = app.sign_draft.as_mut() else { return true };
         match result {
             Ok(i) => {
@@ -886,8 +1102,20 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         });
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if browse_module {
+        let dialog = rfd::AsyncFileDialog::new().add_filter("PKCS #11", &["dll", "so", "dylib"]);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            if app.dialog_epoch() == epoch
+                && let Some(d) = app.sign_draft.as_mut()
+            {
+                d.new_id.module = p.to_string_lossy().into_owned();
+            }
+        });
+    }
     #[cfg(target_arch = "wasm32")]
-    let _ = browse;
+    let _ = (browse, browse_module);
     close
 }
 
@@ -1000,6 +1228,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ),
     );
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
+    let on_card = entry.path.starts_with("pkcs11:");
     let mut close = false;
     let mut go = false;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1085,6 +1314,15 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 .small()
                 .color(t.text_muted),
             );
+        } else if on_card {
+            let l = ui.label(tl!("Card PIN"));
+            let r = ui.add(egui::TextEdit::singleline(&mut d.password).password(true).desired_width(160.0)).labelled_by(l.id);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+            ui.end_row();
+            ui.label("");
+            ui.label(egui::RichText::new(tl!("The PIN goes only to the card; PdfCraft doesn't keep it.")).small().color(t.text_muted));
         } else {
             let l = ui.label(tl!("Digital ID password"));
             let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
@@ -1486,8 +1724,39 @@ pub fn certificate_pem(c: &Certificate) -> String {
     sign::x509::to_pem(c)
 }
 
+/// The modal shown while a signing waits for the network. Cancel drops the answer: the signed
+/// file is never written.
+pub(crate) fn online_signing_modal(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(job) = &app.online_signing else { return };
+    let server = job.server.clone();
+    let mut cancel = false;
+    widgets::show_modal(ctx, "online-signing", |ui| {
+        ui.set_width(420.0);
+        title(ui, "Signing");
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(crate::i18n::fmt(tl!("Asking {server}…"), &[("server", &server)]));
+        });
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
+        });
+    });
+    if cancel {
+        app.online_signing = None;
+        app.notify(tl!("Signing was cancelled; nothing was saved."));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn guid_names_are_recognised() {
+        assert!(super::is_guid("fb7b80d3-df34-4c01-8cfe-81ce21440a78"));
+        assert!(!super::is_guid("JANE DOE (SIGNING)"));
+        assert!(!super::is_guid("fb7b80d3-df34-4c01-8cfe-81ce21440a7"));
+    }
+
     use super::*;
 
     /// A fresh folder per call: tests run in parallel.

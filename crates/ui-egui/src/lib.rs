@@ -702,6 +702,17 @@ pub struct PdfCraftApp {
     pub alt_draft: a11y_ui::AltDraft,
     /// List the OS key store's signing identities among the digital IDs (the desktop app).
     pub os_key_store_ids: bool,
+    /// The smart card driver (PKCS #11 module) chosen in Configure a Digital ID; empty: none.
+    pub pkcs11_module: String,
+    /// Preferences ▸ Signatures: the RFC 3161 server that timestamps signatures; empty: none.
+    pub timestamp_server: String,
+    /// Preferences ▸ Signatures: embed the chain's revocation information when signing (LTV).
+    pub embed_ltv: bool,
+    /// How to reach timestamp servers and revocation services (the desktop app supplies it);
+    /// `None`: signing never goes online.
+    pub http: Option<std::sync::Arc<dyn sign_ui::Fetch + Send + Sync>>,
+    /// A signing that is waiting for a timestamp server or revocation services.
+    pub(crate) online_signing: Option<sign_ui::OnlineSigning>,
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
@@ -1055,6 +1066,11 @@ impl PdfCraftApp {
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
             os_key_store_ids: false,
+            pkcs11_module: String::new(),
+            timestamp_server: String::new(),
+            embed_ltv: false,
+            http: None,
+            online_signing: None,
             cert_viewer: None,
             space_audit: Vec::new(),
             combine_draft: Vec::new(),
@@ -2053,6 +2069,8 @@ impl PdfCraftApp {
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
             || self.updates.open
+            // A signing waiting for the network: the document must not change under it.
+            || self.online_signing.is_some()
     }
 
     /// Enable the UI control channel on `ctx` (opt-in; see [`control`]). Returns a client that
@@ -2413,8 +2431,8 @@ impl PdfCraftApp {
             "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
-            // macOS Keychain and Windows store identities are read from their OS key stores each time.
-            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
+            // macOS Keychain, Windows store and smart card identities are read from their key stores each time.
+            "digital_ids": self.digital_ids.iter().filter(|e| !sign_ui::from_key_store(&e.path)).collect::<Vec<_>>(),
             "trusted": trusted,
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
@@ -2428,6 +2446,9 @@ impl PdfCraftApp {
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        v["pkcs11_module"] = serde_json::Value::String(self.pkcs11_module.clone());
+        v["timestamp_server"] = serde_json::Value::String(self.timestamp_server.clone());
+        v["embed_ltv"] = serde_json::Value::Bool(self.embed_ltv);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
@@ -2600,6 +2621,15 @@ impl PdfCraftApp {
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
         if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
             self.digital_ids = ids;
+        }
+        if let Some(m) = v["pkcs11_module"].as_str() {
+            self.pkcs11_module = m.to_string();
+        }
+        if let Some(url) = v["timestamp_server"].as_str() {
+            self.timestamp_server = url.to_string();
+        }
+        if let Some(on) = v["embed_ltv"].as_bool() {
+            self.embed_ltv = on;
         }
         self.custom_stamps = stamps_ui::decode(&v["custom_stamps"]);
         self.custom_actions = actions_ui::decode(&v["actions"]);
@@ -3282,6 +3312,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.poll_updates();
+        self.poll_online_signing();
         self.poll_print();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);

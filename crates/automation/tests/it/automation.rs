@@ -8424,3 +8424,65 @@ fn bookmark_list_reports_colour_and_style() {
     let re = ok(&mut b, "doc_open", json!({ "path": "restyled.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }
+
+/// A timestamp authority behind a fake network, signing with a test digital ID.
+struct FakeTsa(pdfcraft_engine::sign::DigitalId);
+
+impl pdfcraft_engine::sign::ltv::Fetch for FakeTsa {
+    fn get(&self, url: &str) -> Result<Vec<u8>, pdfcraft_engine::sign::SignError> {
+        Err(pdfcraft_engine::sign::SignError::Crypto(format!("{url}: offline")))
+    }
+
+    fn post(&self, url: &str, content_type: &str, body: &[u8]) -> Result<Vec<u8>, pdfcraft_engine::sign::SignError> {
+        use pdfcraft_engine::sign::{DigestAlg, Time, timestamp};
+        assert_eq!((url, content_type), ("http://tsa.test/", "application/timestamp-query"));
+        let q = timestamp::parse_request(body)?;
+        let at = Time { year: 2023, month: 11, day: 14, hour: 22, minute: 13, second: 20 };
+        timestamp::respond(&self.0.key, &self.0.certificate, &[], DigestAlg::Sha256, &q, "1.2.3.4", at, 1)
+    }
+}
+
+#[test]
+fn signing_online_and_with_cards_takes_only_what_the_user_allowed() {
+    let dir = workdir("signing-online");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let args = |extra: Value| {
+        let mut v = json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": "signed.pdf" });
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    // No network unless the host gave it.
+    let r = a.call("sign_document", &args(json!({ "timestamp_server": "http://tsa.test/" })));
+    assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("--network")), "{r:?}");
+    let r = a.call("sign_document", &args(json!({ "ltv": true })));
+    assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("--network")), "{r:?}");
+    // A PIN or a driver path is never a tool argument.
+    for extra in [json!({ "pin": "1234" }), json!({ "module": "/tmp/evil.so" })] {
+        assert!(matches!(a.call("sign_document", &args(extra.clone())), Err(ToolError::InvalidArgs(_))), "{extra}");
+    }
+    // A card reference goes to the driver the user chose, here one that isn't there.
+    let mut card = Automation::new().with_root(&dir).unwrap().with_card(Some(dir.join("no-such-driver.so")), None);
+    let doc2 = ok(&mut card, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = card.call("sign_document", &json!({ "doc": doc2, "id": "pkcs11:00ff", "out": "card.pdf" }));
+    assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("no-such-driver")), "{r:?}");
+    assert!(matches!(card.call("sign_card_ids", &json!({})), Err(ToolError::Failed(_))));
+    // Arguments that need no card are checked before the card is touched (or its PIN asked).
+    let r = card.call("sign_document", &json!({ "doc": doc2, "id": "pkcs11:00ff", "out": "card.pdf", "ltv": true }));
+    assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("--network")), "{r:?}");
+    let r = card.call("sign_document", &json!({ "doc": doc2, "id": "pkcs11:00ff", "out": "card.pdf", "page": 99 }));
+    assert!(matches!(&r, Err(ToolError::InvalidArgs(m)) if m.contains("page 99")), "{r:?}");
+
+    // With the network: a signature timestamp from the server (B-T).
+    let tsa = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(dir.join("ada.p12")).unwrap(), "secret12").unwrap();
+    let mut a = auto(&dir).with_network(std::sync::Arc::new(FakeTsa(tsa)));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(
+        &mut a,
+        "sign_document",
+        json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": "stamped.pdf", "timestamp_server": "http://tsa.test/" }),
+    );
+    assert_eq!(r["level"], "B-T", "{r}");
+    assert_eq!(r["signature"]["timestamp"], true, "{r}");
+}

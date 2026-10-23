@@ -43,6 +43,8 @@ ed25519-dalek = "3.0.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+# Smart cards and tokens through their PKCS #11 module (Apache-2.0).
+cryptoki = "0.12.1"
 getrandom = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -56,3 +58,11 @@ security-framework = "3.7"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # crypto-bigint asks for randomness; in the browser it comes from Web Crypto.
 getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The pkcs11_probe example reads a card PIN without echoing it (Apache-2.0).
+rpassword = "7"
+# The pkcs11_probe example asks a timestamp authority over plain HTTP (MIT OR Apache-2.0)
+# and dates the signature in the computer's timezone (MIT OR Apache-2.0); both already in the tree.
+ureq = { version = "3.4", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

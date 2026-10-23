@@ -2776,3 +2776,21 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Laiko žymų serveris
+	Include revocation information when signing (LTV)	Pasirašant įtraukti atšaukimo informaciją (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Tada pasirašant naudojamas tinklas: laiko žymų serveris gauna parašo maišos reikšmę, o sertifikavimo centrų klausiama, ar sertifikatai nėra atšaukti. Su abiem parinktimis parašai atitinka PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Laiko žymoms ir atšaukimo informacijai reikia darbalaukio programos. Norėdami pasirašyti čia, išjunkite jas skiltyje Nuostatos ▸ Parašai.
+	the certificate authorities	sertifikavimo centrų
+	Asking {server}…	Klausiama {server}…
+	Signing was cancelled; nothing was saved.	Pasirašymas atšauktas; nieko neišsaugota.
+	Signed and saved to {path}, without some revocation information: {problems}	Pasirašyta ir išsaugota {path}, be dalies atšaukimo informacijos: {problems}
+	The document wasn't signed: {e}	Dokumentas nepasirašytas: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Naudoti lustinę kortelę arba žetoną
+	Card driver (PKCS #11)	Kortelės tvarkyklė (PKCS #11)
+	Smart card  ·  	Lustinė kortelė  ·  
+	Card PIN	Kortelės PIN
+	No signing certificate was found on a card. Is the card in the reader?	Kortelėje nerasta pasirašymo sertifikato. Ar kortelė yra skaitytuve?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN siunčiamas tik kortelei; PdfCraft jo nesaugo.
+	The smart card's digital IDs couldn't be listed: {e}	Nepavyko išvardyti lustinės kortelės skaitmeninių ID: {e}

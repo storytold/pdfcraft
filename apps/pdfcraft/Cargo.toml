@@ -16,6 +16,7 @@ rustls-native-certs = "0.8"
 pdfcraft-ui-egui = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
+pdfcraft-platform = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
 # driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links"] }
