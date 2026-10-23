@@ -156,11 +156,16 @@ pub struct SaveOptions {
     /// Full saves: pack non-stream objects into compressed object streams with a cross-reference
     /// stream (PDF 1.5+, §7.5.7–7.5.8). Off writes a classic table that any reader accepts.
     pub object_streams: bool,
+    /// Entropy for the file identifier of a rewrite that asks for a new one (see
+    /// [`Document::require_full_save_with_new_id`]). Given, the identifier depends only on this and
+    /// on the written bytes, so the same save gives the same file; tests use it to pin output.
+    /// Without it, the standard library's random hash keys are mixed in.
+    pub id_entropy: Option<[u8; 16]>,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, id_entropy: None }
     }
 }
 
@@ -365,6 +370,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     }
     if reader.document.output_security().0.is_none() {
         ensure_id(&mut trailer, opts, reader.document.bytes());
+    }
+    if doc.new_id_required() {
+        regenerate_id(&mut trailer, opts, &out, reader.document.output_security().0.is_some());
     }
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
@@ -585,6 +593,74 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
 }
 
+/// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not
+/// claim to be its source. An encrypted file keeps the first string, which its key is derived from,
+/// and gets a new second one. When there is no such string (no `/ID`, one entry, or a first entry
+/// that is not a string) the reader takes the empty string as the key input (`Document::first_id`),
+/// so the empty string is written first and the key stays valid.
+fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypted: bool) {
+    let fresh = Object::String(PdfString { bytes: new_id_bytes(opts, written), hex: true });
+    let pair = if encrypted {
+        let first = match trailer.get(b"ID") {
+            Some(Object::Array(a)) => match a.first() {
+                Some(Object::String(s)) => Object::String(s.clone()),
+                _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+            },
+            _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+        };
+        vec![first, fresh]
+    } else {
+        vec![fresh.clone(), fresh]
+    };
+    trailer.set(b"ID".to_vec(), Object::Array(pair));
+}
+
+/// FNV-1a over 64 bits, with its published offset basis and prime. The identifier is built from it
+/// rather than from `std`'s `DefaultHasher`, whose algorithm the standard library does not specify.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a(state: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(state, |h, b| (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME))
+}
+
+/// Sixteen bytes for a file identifier, one 8-byte half per lane. The bytes are a pure function of
+/// `SaveOptions::id_entropy`, `id_seed` and the written file: the hash is FNV-1a (above) and every
+/// integer is written as a fixed-width big-endian value, so the same input gives the same identifier
+/// on every platform and toolchain. Without entropy only the salt changes (see `id_salt`). FNV is
+/// not collision-resistant against chosen content; the identifier only has to be unique, not secret.
+/// Every written byte is hashed, once, in a single traversal of the output.
+fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
+    let salt = id_salt(opts);
+    let length = u64::try_from(written.len()).unwrap_or(u64::MAX);
+    let mut halves = [0u8, 1].map(|lane| {
+        let mut h = fnv1a(FNV_OFFSET, &salt.to_be_bytes());
+        h = fnv1a(h, &[lane]);
+        h = fnv1a(h, &opts.id_seed.to_be_bytes());
+        fnv1a(h, &length.to_be_bytes())
+    });
+    for chunk in written.chunks(4096) {
+        for h in &mut halves {
+            *h = fnv1a(*h, chunk);
+        }
+    }
+    halves.iter().flat_map(|h| h.to_be_bytes()).collect()
+}
+
+/// The salt of an identifier. With caller entropy it is a fixed hash of that entropy. Without it, the
+/// standard library's random hash keys (seeded by the operating system on native targets) mixed with a
+/// process-wide counter make each call differ; on WebAssembly those keys are fixed, so there the
+/// counter and the written bytes are what differ.
+fn id_salt(opts: &SaveOptions) -> u64 {
+    use std::hash::BuildHasher;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    match &opts.id_entropy {
+        Some(entropy) => fnv1a(FNV_OFFSET, entropy),
+        None => std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed)),
+    }
+}
+
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
 pub fn pdf_date(unix_secs: i64) -> String {
     let (days, secs) = (unix_secs.div_euclid(86_400), unix_secs.rem_euclid(86_400));
@@ -617,6 +693,14 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+
+    #[test]
+    fn fnv1a_is_the_published_64_bit_algorithm() {
+        // Published FNV-1a (64 bit) test vectors, so the identifier can be reproduced outside this crate.
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"foobar"), 0x8594_4171_f739_67e8);
+    }
 
     use super::*;
     use crate::Lexer;

@@ -658,12 +658,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
 
 /// Sanitize Document: remove every category of hidden information.
 pub fn sanitize(doc: &mut Document) -> Result<Vec<(Hidden, usize)>, RedactError> {
-    match remove_hidden(doc, &HIDDEN) {
+    let done = match remove_hidden(doc, &HIDDEN) {
         // Nothing hidden is fine for Sanitize: the full rewrite still drops old revisions.
-        Err(RedactError::NothingToApply) => {
-            doc.require_full_save();
-            Ok(Vec::new())
-        }
-        r => r,
-    }
+        Err(RedactError::NothingToApply) => Vec::new(),
+        r => r?,
+    };
+    // A sanitized copy is a different file from its source, so the rewrite gets a new identifier.
+    doc.require_full_save_with_new_id();
+    Ok(done)
 }

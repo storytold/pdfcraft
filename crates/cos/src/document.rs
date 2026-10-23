@@ -434,6 +434,9 @@ pub struct Document {
     encryption_changed: bool,
     /// Set by edits that must not leave earlier revisions in the file (redaction).
     full_save: bool,
+    /// The next full save also gives the file a new identifier (`/ID`), see
+    /// [`Document::require_full_save_with_new_id`].
+    new_id: bool,
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
     out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,
@@ -563,6 +566,7 @@ impl Document {
             encrypt_num: None,
             encryption_changed: false,
             full_save: false,
+            new_id: false,
             out_security: None,
             out_encrypt_num: None,
         };
@@ -646,6 +650,7 @@ impl Document {
             encrypt_num: None,
             encryption_changed: false,
             full_save: false,
+            new_id: false,
             out_security: None,
             out_encrypt_num: None,
         };
@@ -775,6 +780,19 @@ impl Document {
     /// removed) must not stay in the file. Redaction requires this.
     pub fn require_full_save(&mut self) {
         self.full_save = true;
+    }
+
+    /// Like [`Document::require_full_save`], and the rewritten file also gets a new file identifier
+    /// (`/ID`), so that a redacted or sanitized copy never claims to be its source (ISO 32000-2
+    /// §14.4). An encrypted file keeps the first string of its identifier, which its key depends on.
+    pub fn require_full_save_with_new_id(&mut self) {
+        self.full_save = true;
+        self.new_id = true;
+    }
+
+    /// The next full save gives the file a new identifier (see [`Document::require_full_save_with_new_id`]).
+    pub fn new_id_required(&self) -> bool {
+        self.new_id
     }
 
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
