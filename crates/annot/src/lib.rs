@@ -18,6 +18,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 pub mod appearance;
 pub mod links;
+mod shaped;
 
 #[cfg(test)]
 mod tests;
@@ -1587,7 +1588,14 @@ fn rich_text(d: &mut Dict) {
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let body: String = text
+        .split('\n')
+        .map(|line| {
+            let line = line.trim_end_matches('\r');
+            let dir = if shaped::paragraph_rtl(line) { "rtl" } else { "ltr" };
+            format!("<p dir=\"{dir}\">{}</p>", esc(line))
+        })
+        .collect();
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
         n(size)

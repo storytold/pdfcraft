@@ -10,7 +10,13 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
 - **Appearance streams** (`appearance::build`) generated from the annotation dictionary, so new
   and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
   Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with
-  line breaking by approximate Helvetica proportions (no font program is bundled). Text it can't
+  line breaking by approximate Helvetica proportions (no font program is bundled). Hebrew and
+  Arabic in a text box, callout or Fill & Sign text are laid out right to left (UAX #9) and
+  drawn with the craft-fonts face when the build has it (`shaped`): the glyph outlines go into
+  the appearance stream as filled paths (an appearance is built from the dictionary alone, so no
+  font object is added or embedded), each line in an `/ActualText` span over invisible Helvetica
+  carrier glyphs, so copy, search and extraction return the typed text, flattened or not. A
+  right-to-left paragraph with `/Q 0` starts at the right edge. Text it can't
   draw (in a text box, callout, Fill & Sign text, measurement label or dynamic stamp's by-line;
   `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
   the first such character (`pdfcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and

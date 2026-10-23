@@ -7,12 +7,25 @@
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! Helvetica font with WinAnsi encoding, and Hebrew and Arabic the craft-fonts faces when the
+//! build has them ([`crate::shaped`]); line breaking uses [`text_width`] (no font program is
+//! embedded).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+use pdfcraft_fonts::{first_undrawable, helvetica_width, literal, win_ansi};
+
+/// The width of one line of text at `size` points as a text box, callout or Fill & Sign text
+/// draws it: Hebrew and Arabic measured with their craft-fonts face when this build has it
+/// ([`crate::shaped`]), everything else as Helvetica.
+pub fn text_width(s: &str, size: f64) -> f64 {
+    crate::shaped::width(s, size)
+}
+
+/// Greedy line breaking within `width` points, measuring with [`text_width`] (see
+/// [`pdfcraft_fonts::wrap`]).
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    crate::shaped::wrap(text, size, width)
+}
 
 use crate::{NOTE_SIZE, Rgb, n};
 
@@ -289,7 +302,8 @@ fn text_turn(d: &Dict) -> i64 {
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
+        // Hebrew and Arabic are drawn with their faces when the build has them.
+        b"FreeText" => return Some(("the comment's text", crate::shaped::first_undrawable(&text(b"Contents")?)?)),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
         // Drawn in Helvetica when the redaction is applied: refused when it is marked.
@@ -746,33 +760,31 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let pad = 2.0 + bw;
             let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
             let q = d.int(b"Q").unwrap_or(0);
-            c.push_str(&format!(
-                "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
-                n(rect[0]),
-                n(rect[1]),
-                n(rect[2] - rect[0]),
-                n(rect[3] - rect[1]),
-                n(size),
-                rg(text_color)
-            ));
+            c.push_str(&format!("{} {} {} {} re W n\n", n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
             let mut out = c.into_bytes();
-            let mut y = rect[3] - pad - size * 0.9;
-            for line in wrap(&text, size, width) {
-                if y < rect[1] - size {
-                    break;
+            if crate::shaped::shaped_by_a_face(&text) {
+                // Hebrew or Arabic: laid out right to left and drawn with the craft-fonts face.
+                crate::shaped::draw(&mut out, &text, rect, pad, size, q, text_color);
+            } else {
+                out.extend(format!("BT\n/Helv {} Tf\n{}", n(size), rg(text_color)).bytes());
+                let mut y = rect[3] - pad - size * 0.9;
+                for line in wrap(&text, size, width) {
+                    if y < rect[1] - size {
+                        break;
+                    }
+                    let lw = helvetica_width(&line, size);
+                    let x = match q {
+                        1 => rect[0] + pad + (width - lw) / 2.0,
+                        2 => rect[2] - pad - lw,
+                        _ => rect[0] + pad,
+                    };
+                    out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
+                    out.extend(literal(&win_ansi(&line)));
+                    out.extend_from_slice(b" Tj\n");
+                    y -= size * 1.2;
                 }
-                let lw = text_width(&line, size);
-                let x = match q {
-                    1 => rect[0] + pad + (width - lw) / 2.0,
-                    2 => rect[2] - pad - lw,
-                    _ => rect[0] + pad,
-                };
-                out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-                out.extend(literal(&win_ansi(&line)));
-                out.extend_from_slice(b" Tj\n");
-                y -= size * 1.2;
+                out.extend_from_slice(b"ET\n");
             }
-            out.extend_from_slice(b"ET\n");
             let mut font = Dict::new();
             font.set(b"Type".to_vec(), Object::name("Font"));
             font.set(b"Subtype".to_vec(), Object::name("Type1"));
@@ -796,7 +808,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
         let value = value.to_text();
         if value.chars().count() <= 256 && matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
             let size = 10.0;
-            let x = (rect[0] + rect[2] - text_width(&value, size)) * 0.5;
+            let x = (rect[0] + rect[2] - helvetica_width(&value, size)) * 0.5;
             let y = rect[3] - 12.0;
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
             out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
@@ -897,11 +909,11 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     let (title_h, by_h) = if by.is_some() { (h * 0.5, h * 0.22) } else { (h * 0.52, 0.0) };
     let text_area = if kind.group() == crate::StampGroup::SignHere { (x0 + h * 0.45, x1 - lw * 2.0) } else { (x0 + lw * 2.0, x1 - lw * 2.0) };
     let mut size = title_h;
-    let tw = text_width(label, size) * 1.12;
+    let tw = helvetica_width(label, size) * 1.12;
     if tw > text_area.1 - text_area.0 - 4.0 {
         size *= (text_area.1 - text_area.0 - 4.0) / tw;
     }
-    let tw = text_width(label, size) * 1.12;
+    let tw = helvetica_width(label, size) * 1.12;
     let text_col = if kind.group() == crate::StampGroup::SignHere { [1.0, 1.0, 1.0] } else { col };
     let ty = if by.is_some() { y0 + h * 0.48 } else { y0 + (h - size * 0.72) / 2.0 };
     let mut out = c.into_bytes();
@@ -913,11 +925,11 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     out.extend_from_slice(b" Tj\n");
     if let Some(b) = by {
         let mut s = by_h;
-        let bw = text_width(b, s);
+        let bw = helvetica_width(b, s);
         if bw > text_area.1 - text_area.0 - 4.0 {
             s *= (text_area.1 - text_area.0 - 4.0) / bw;
         }
-        let bw = text_width(b, s);
+        let bw = helvetica_width(b, s);
         out.extend(
             format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
         );
