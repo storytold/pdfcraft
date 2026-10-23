@@ -1,5 +1,7 @@
 //! Signing identities in the Windows Current User Personal ("My") certificate store.
-//! Private keys remain in CNG; Windows may ask permission to use a key.
+//! Private keys remain in CNG or, for providers that only speak the legacy CryptoAPI (a CSP,
+//! such as the Certisign desktopID cloud certificate), in that provider; Windows or the
+//! provider may ask permission to use a key.
 //!
 //! Certificates that can't sign through PdfCraft (no usable private key, a key type it doesn't
 //! sign with, a key usage or extended key usage that doesn't allow signing documents) are reported in [`Listing::unusable`] with the reason rather than left out
@@ -18,11 +20,34 @@ use crate::{Certificate, DigitalId, SignError, x509};
 struct WindowsKey {
     context: CertContext,
     public: PublicKey,
+    /// The key is in a legacy CryptoAPI provider: signed through CryptSignHash.
+    legacy: bool,
 }
 
 impl ExternalKey for WindowsKey {
     fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
         let digest = alg.digest(&[msg]);
+        if self.legacy {
+            let which = match alg {
+                DigestAlg::Sha256 => pdfcraft_wincapi::Digest::Sha256,
+                DigestAlg::Sha384 => pdfcraft_wincapi::Digest::Sha384,
+                DigestAlg::Sha512 => pdfcraft_wincapi::Digest::Sha512,
+                other => return Err(SignError::Unsupported(format!("{other:?} with a CryptoAPI provider key"))),
+            };
+            // Acquired without the silent flag: the provider shows its own authorization (desktopID
+            // asks in the remoteID app). PKCS #1 v1.5 only: CryptoAPI has no PSS.
+            match pdfcraft_wincapi::sign(self.context.inner(), which, &digest) {
+                Ok(pdfcraft_wincapi::Signed::Signature(raw)) => return self.public.store_signature_der(&raw),
+                // The key is a CNG key after all: sign it below.
+                Ok(pdfcraft_wincapi::Signed::Cng) => {}
+                Err(code) => {
+                    return Err(SignError::Crypto(format!(
+                        "the certificate's key provider didn't sign (the authorization may have been cancelled or timed out): {}",
+                        describe(&CngError::WindowsError(code))
+                    )));
+                }
+            }
+        }
         // CNG adds the DigestInfo for PKCS #1 v1.5 when given PKCS1 padding.
         let padding = if matches!(self.public, PublicKey::Rsa { .. }) { SignaturePadding::Pkcs1 } else { SignaturePadding::None };
         // A key handle acquired silently can never prompt: smart cards and tokens then refuse
@@ -138,8 +163,16 @@ fn entries() -> Result<Entries, SignError> {
             skip(certificate.display_name(), format!("its {what} key can't sign through PdfCraft yet (RSA, P-256 and P-384 only)"), false);
             continue;
         };
+        // A key in a legacy CryptoAPI provider isn't opened through CNG: that fails ("Unsupported"),
+        // and a cloud provider such as desktopID would ask for approval on every listing. It signs
+        // RSA PKCS #1 v1.5 through CryptoAPI.
+        let legacy = pdfcraft_wincapi::is_legacy_key(context.inner()) == Some(true);
+        if legacy && want != StoreKey::Rsa {
+            skip(certificate.display_name(), "its key provider (legacy CryptoAPI) signs RSA only".to_string(), false);
+            continue;
+        }
         // Enumeration must not open permission or PIN dialogs. Signing may prompt later.
-        match context.acquire_key(true) {
+        match if legacy { Err(CngError::WindowsError(NTE_UI_REQUIRED)) } else { context.acquire_key(true) } {
             Ok(key) => {
                 if let Err(reason) = matches_key(&key, want) {
                     skip(certificate.display_name(), reason, false);
@@ -169,7 +202,7 @@ fn entries() -> Result<Entries, SignError> {
             continue;
         }
         let public = certificate.public_key.clone();
-        let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context: context.clone(), public }));
+        let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context: context.clone(), public, legacy }));
         let friendly_name = Some(certificate.display_name());
         ids.push((context, DigitalId { key, certificate, chain: Vec::new(), friendly_name }));
     }

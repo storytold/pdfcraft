@@ -4347,6 +4347,7 @@ dependencies = [
  "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-wincapi",
  "rc2",
  "ripemd",
  "rsa",
@@ -4420,6 +4421,13 @@ dependencies = [
  "pdfcraft-ui-egui",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "pdfcraft-wincapi"
+version = "0.13.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

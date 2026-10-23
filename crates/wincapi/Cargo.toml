@@ -1,0 +1,18 @@
+[package]
+name = "pdfcraft-wincapi"
+description = "Signing with keys in legacy Windows CryptoAPI providers (CSPs), behind a safe API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# The workspace forbids `unsafe` (AGENTS.md). Legacy CryptoAPI signing (CryptAcquireCertificatePrivateKey
+# with CSP keys, CryptSignHash) has no maintained safe wrapper crate, so this crate is the one,
+# small exception: every `unsafe` call is in src/lib.rs, each with its SAFETY comment, behind
+# two safe functions. It needs the owner's sign-off.
+[lints.rust]
+unsafe_code = "allow"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
