@@ -2776,3 +2776,27 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+	Window	Langas
+	Quit {app}	Užverti „{app}“
+	About {app}	Apie „{app}“
+	Hide {app}	Slėpti „{app}“
+	Hide Others	Slėpti kitus
+	Show All	Rodyti viską
+	Create PDF	Sukurti PDF
+	Export & Convert	Eksportuoti ir konvertuoti
+	Reduce & Optimize	Mažinti ir optimizuoti
+	Password & Security	Slaptažodis ir sauga
+	Workspace modes	Darbo srities veiksenos
+	Comments & Markup	Komentarai ir žymėjimai
+	Edit Content	Taisyti turinį
+	Sign & Certify	Pasirašyti ir patvirtinti
+	Bookmarks panel	Žymelių skydelis
+	Page thumbnails panel	Puslapių miniatiūrų skydelis
+	Layers panel	Sluoksnių skydelis
+	Attachments panel	Priedų skydelis
+	Accessibility panel	Pritaikymo neįgaliesiems skydelis
+	Search panel	Paieškos skydelis
+	Compare panel	Palyginimo skydelis
+	Edit mode	Redagavimo veiksena
+	Convert mode	Konvertavimo veiksena
+	Fill & sign mode	Pildymo ir pasirašymo veiksena

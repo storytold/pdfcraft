@@ -2511,3 +2511,27 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+	Window	Pencere
+	Quit {app}	{app} Uygulamasından Çık
+	About {app}	{app} Hakkında
+	Hide {app}	{app} Uygulamasını Gizle
+	Hide Others	Diğerlerini Gizle
+	Show All	Tümünü Göster
+	Create PDF	PDF Oluştur
+	Export & Convert	Dışa Aktar ve Dönüştür
+	Reduce & Optimize	Küçült ve En İyileştir
+	Password & Security	Parola ve Güvenlik
+	Workspace modes	Çalışma alanı modları
+	Comments & Markup	Yorumlar ve İşaretlemeler
+	Edit Content	İçeriği Düzenle
+	Sign & Certify	İmzala ve Onayla
+	Bookmarks panel	Yer işaretleri paneli
+	Page thumbnails panel	Sayfa küçük resimleri paneli
+	Layers panel	Katmanlar paneli
+	Attachments panel	Ekler paneli
+	Accessibility panel	Erişilebilirlik paneli
+	Search panel	Arama paneli
+	Compare panel	Karşılaştırma paneli
+	Edit mode	Düzenleme modu
+	Convert mode	Dönüştürme modu
+	Fill & sign mode	Doldur ve imzala modu

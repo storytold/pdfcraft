@@ -2681,3 +2681,27 @@ key	Space	Space
 	Page properties	คุณสมบัติหน้า
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Window	หน้าต่าง
+	Quit {app}	ปิด {app}
+	About {app}	เกี่ยวกับ {app}
+	Hide {app}	ซ่อน {app}
+	Hide Others	ซ่อนอย่างอื่น
+	Show All	แสดงทั้งหมด
+	Create PDF	สร้าง PDF
+	Export & Convert	ส่งออกและแปลง
+	Reduce & Optimize	ลดขนาดและปรับแต่ง
+	Password & Security	รหัสผ่านและความปลอดภัย
+	Workspace modes	โหมดพื้นที่ทำงาน
+	Comments & Markup	ความคิดเห็นและมาร์กอัป
+	Edit Content	แก้ไขเนื้อหา
+	Sign & Certify	ลงชื่อและรับรอง
+	Bookmarks panel	แผงที่คั่นหน้า
+	Page thumbnails panel	แผงรูปขนาดย่อของหน้า
+	Layers panel	แผงเลเยอร์
+	Attachments panel	แผงไฟล์แนบ
+	Accessibility panel	แผงการเข้าถึง
+	Search panel	แผงค้นหา
+	Compare panel	แผงเปรียบเทียบ
+	Edit mode	โหมดแก้ไข
+	Convert mode	โหมดแปลง
+	Fill & sign mode	โหมดกรอกและลงชื่อ

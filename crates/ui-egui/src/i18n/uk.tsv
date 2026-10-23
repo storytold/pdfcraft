@@ -2537,3 +2537,28 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Tools	Інструменти
+	Window	Вікно
+	Quit {app}	Завершити {app}
+	About {app}	Про {app}
+	Hide {app}	Сховати {app}
+	Hide Others	Сховати інші
+	Show All	Показати всі
+	Create PDF	Створити PDF
+	Export & Convert	Експорт і конвертація
+	Reduce & Optimize	Зменшити та оптимізувати
+	Password & Security	Пароль і безпека
+	Workspace modes	Режими робочої області
+	Comments & Markup	Коментарі та розмітка
+	Edit Content	Редагувати вміст
+	Sign & Certify	Підписати та засвідчити
+	Bookmarks panel	Панель закладок
+	Page thumbnails panel	Панель мініатюр сторінок
+	Layers panel	Панель шарів
+	Attachments panel	Панель вкладень
+	Accessibility panel	Панель доступності
+	Search panel	Панель пошуку
+	Compare panel	Панель порівняння
+	Edit mode	Режим редагування
+	Convert mode	Режим конвертування
+	Fill & sign mode	Режим заповнення та підпису

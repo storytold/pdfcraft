@@ -2478,3 +2478,27 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+	Window	Прозорец
+	Quit {app}	Изход от {app}
+	About {app}	Относно {app}
+	Hide {app}	Скриване на {app}
+	Hide Others	Скриване на останалите
+	Show All	Показване на всички
+	Create PDF	Създаване на PDF
+	Export & Convert	Експортиране и конвертиране
+	Reduce & Optimize	Намаляване и оптимизиране
+	Password & Security	Парола и сигурност
+	Workspace modes	Режими на работното пространство
+	Comments & Markup	Коментари и маркиране
+	Edit Content	Редактиране на съдържание
+	Sign & Certify	Подписване и сертифициране
+	Bookmarks panel	Панел с отметки
+	Page thumbnails panel	Панел с миниатюри на страници
+	Layers panel	Панел със слоеве
+	Attachments panel	Панел с прикачени файлове
+	Accessibility panel	Панел за достъпност
+	Search panel	Панел за търсене
+	Compare panel	Панел за сравнение
+	Edit mode	Режим на редактиране
+	Convert mode	Режим на конвертиране
+	Fill & sign mode	Режим на попълване и подписване

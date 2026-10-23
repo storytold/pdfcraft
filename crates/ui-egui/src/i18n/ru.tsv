@@ -2428,3 +2428,27 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Window	Окно
+	Quit {app}	Завершить {app}
+	About {app}	О программе {app}
+	Hide {app}	Скрыть {app}
+	Hide Others	Скрыть остальные
+	Show All	Показать все
+	Create PDF	Создать PDF
+	Export & Convert	Экспорт и преобразование
+	Reduce & Optimize	Уменьшить и оптимизировать
+	Password & Security	Пароль и безопасность
+	Workspace modes	Режимы рабочей области
+	Comments & Markup	Комментарии и разметка
+	Edit Content	Редактировать содержимое
+	Sign & Certify	Подписать и заверить
+	Bookmarks panel	Панель закладок
+	Page thumbnails panel	Панель миниатюр страниц
+	Layers panel	Панель слоев
+	Attachments panel	Панель вложений
+	Accessibility panel	Панель специальных возможностей
+	Search panel	Панель поиска
+	Compare panel	Панель сравнения
+	Edit mode	Режим редактирования
+	Convert mode	Режим конвертирования
+	Fill & sign mode	Режим заполнения и подписи

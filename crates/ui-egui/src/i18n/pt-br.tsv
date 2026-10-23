@@ -2800,3 +2800,27 @@ theme	Appearance	Aparência
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+	Window	Janela
+	Quit {app}	Encerrar {app}
+	About {app}	Sobre o {app}
+	Hide {app}	Ocultar {app}
+	Hide Others	Ocultar outros
+	Show All	Mostrar tudo
+	Create PDF	Criar PDF
+	Export & Convert	Exportar e converter
+	Reduce & Optimize	Reduzir e otimizar
+	Password & Security	Senha e segurança
+	Workspace modes	Modos de espaço de trabalho
+	Comments & Markup	Comentários e marcações
+	Edit Content	Editar conteúdo
+	Sign & Certify	Assinar e certificar
+	Bookmarks panel	Painel de marcadores
+	Page thumbnails panel	Painel de miniaturas de página
+	Layers panel	Painel de camadas
+	Attachments panel	Painel de anexos
+	Accessibility panel	Painel de acessibilidade
+	Search panel	Painel de pesquisa
+	Compare panel	Painel de comparação
+	Edit mode	Modo de edição
+	Convert mode	Modo de conversão
+	Fill & sign mode	Modo preencher e assinar

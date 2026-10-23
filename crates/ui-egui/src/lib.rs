@@ -410,6 +410,8 @@ pub enum OsEvent {
     Open(Vec<String>),
     /// Quit (the Dock's Quit, logging out), asking about unsaved changes first.
     Quit,
+    /// Execute a command by id (e.g. from the native OS menu bar).
+    Command(String),
 }
 
 /// Returns the [`OsEvent`]s that arrived since it was last called (set by the desktop app).
@@ -2045,13 +2047,14 @@ impl PdfCraftApp {
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
-    pub(crate) fn modal_open(&self) -> bool {
+    pub fn modal_open(&self) -> bool {
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
+            || self.pending_full_screen.is_some()
             || self.updates.open
     }
 
@@ -3136,6 +3139,7 @@ impl eframe::App for PdfCraftApp {
         ctx.request_repaint();
     }
 
+    /// Persist application and window state into eframe storage.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // eframe has just stored the window as it is now: not while it is minimized.
         #[cfg(not(target_arch = "wasm32"))]
@@ -3146,6 +3150,7 @@ impl eframe::App for PdfCraftApp {
         storage.set_string("pdfcraft", self.persist());
     }
 
+    /// Core application update logic run on each frame: polls events, updates state, and processes inputs.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -3257,6 +3262,12 @@ impl eframe::App for PdfCraftApp {
                 OsEvent::Open(_) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                OsEvent::Command(cmd) => {
+                    let modal_safe = matches!(cmd.as_str(), "view.theme.system" | "view.theme.light" | "view.theme.dark");
+                    if !self.modal_open() || modal_safe {
+                        self.execute(&cmd);
+                    }
+                }
             }
         }
         if let Some((_, id)) = self.active_ids() {
@@ -3314,6 +3325,7 @@ impl eframe::App for PdfCraftApp {
         self.process_picked();
     }
 
+    /// Render the application user interface.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
@@ -3398,6 +3410,7 @@ impl eframe::App for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Finalize frame rendering for active document views.
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);

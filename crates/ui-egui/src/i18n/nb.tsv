@@ -2694,3 +2694,27 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Window	Vindu
+	Quit {app}	Avslutt {app}
+	About {app}	Om {app}
+	Hide {app}	Skjul {app}
+	Hide Others	Skjul andre
+	Show All	Vis alle
+	Create PDF	Opprett PDF
+	Export & Convert	Eksporter og konverter
+	Reduce & Optimize	Reduser og optimaliser
+	Password & Security	Passord og sikkerhet
+	Workspace modes	Arbeidsområdemoduser
+	Comments & Markup	Kommentarer og markeringer
+	Edit Content	Rediger innhold
+	Sign & Certify	Signer og sertifiser
+	Bookmarks panel	Bokmerkepanel
+	Page thumbnails panel	Sidestørrelsespanel
+	Layers panel	Lagpanel
+	Attachments panel	Vedleggspanel
+	Accessibility panel	Tilgjengelighetspanel
+	Search panel	Søkepanel
+	Compare panel	Sammenligningspanel
+	Edit mode	Redigeringsmodus
+	Convert mode	Konverteringsmodus
+	Fill & sign mode	Fyll ut og signer-modus

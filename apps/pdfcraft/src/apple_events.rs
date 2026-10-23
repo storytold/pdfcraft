@@ -10,6 +10,8 @@
 //! winit's delegate alone, behind a safe main-thread API. This module adapts it to the
 //! [`OsEvent`]s that the UI polls every frame.
 
+use std::sync::{Arc, Mutex};
+
 use fmv_macos_events::{Event, Inbox, Registration};
 use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
 
@@ -17,6 +19,7 @@ use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
 pub struct AppleEvents {
     _registration: Registration,
     inbox: Inbox,
+    menu_inbox: Arc<Mutex<Vec<String>>>,
 }
 
 impl AppleEvents {
@@ -24,7 +27,12 @@ impl AppleEvents {
     /// that launched the app (a Finder double-click) is caught too.
     pub fn install() -> Self {
         let (registration, inbox) = Registration::install();
-        Self { _registration: registration, inbox }
+        Self { _registration: registration, inbox, menu_inbox: Arc::new(Mutex::new(Vec::new())) }
+    }
+
+    /// Access the shared menu inbox for delivering native menu events.
+    pub fn menu_inbox(&self) -> Arc<Mutex<Vec<String>>> {
+        self.menu_inbox.clone()
     }
 
     /// The queue the UI drains (`PdfCraftApp::os_events`); events arriving later wake `ctx`.
@@ -32,15 +40,22 @@ impl AppleEvents {
         let ctx = ctx.clone();
         self.inbox.set_wake(move || ctx.request_repaint());
         let inbox = self.inbox.clone();
+        let menu_inbox = self.menu_inbox.clone();
         Box::new(move || {
-            inbox
+            let mut events: Vec<OsEvent> = inbox
                 .drain()
                 .into_iter()
                 .map(|e| match e {
                     Event::Open(paths) => OsEvent::Open(paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()),
                     Event::Quit => OsEvent::Quit,
                 })
-                .collect()
+                .collect();
+            if let Ok(mut menu) = menu_inbox.lock() {
+                for cmd in menu.drain(..) {
+                    events.push(OsEvent::Command(cmd));
+                }
+            }
+            events
         })
     }
 }

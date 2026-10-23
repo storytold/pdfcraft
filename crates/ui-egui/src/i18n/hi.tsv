@@ -2750,3 +2750,27 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Window	विंडो
+	Quit {app}	{app} बंद करें
+	About {app}	{app} के बारे में
+	Hide {app}	{app} छुपाएं
+	Hide Others	अन्य छुपाएं
+	Show All	सभी दिखाएं
+	Create PDF	PDF बनाएं
+	Export & Convert	निर्यात और कनवर्ट करें
+	Reduce & Optimize	आकार घटाएं और अनुकूलित करें
+	Password & Security	पासवर्ड और सुरक्षा
+	Workspace modes	कार्यक्षेत्र मोड
+	Comments & Markup	टिप्पणियां और मार्कअप
+	Edit Content	सामग्री संपादित करें
+	Sign & Certify	हस्ताक्षर और प्रमाणित करें
+	Bookmarks panel	बुकमार्क पैनल
+	Page thumbnails panel	पृष्ठ थंबनेल पैनल
+	Layers panel	लेयर्स पैनल
+	Attachments panel	संलग्नक पैनल
+	Accessibility panel	सुलभता पैनल
+	Search panel	खोज पैनल
+	Compare panel	तुलना पैनल
+	Edit mode	संपादन मोड
+	Convert mode	रूपांतरण मोड
+	Fill & sign mode	भरें और हस्ताक्षर करें मोड
