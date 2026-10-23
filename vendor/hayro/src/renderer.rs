@@ -30,6 +30,9 @@ const MAX_IMAGE_PIXELS: u64 = 1 << 28;
 /// sources need not fit u16: a 65536-pixel strip can safely shrink to a 16-pixel image.
 /// This resource cap follows the existing CCITT column limit; the filter-work estimate below
 /// additionally bounds tables/scratch before entering the opaque PicScale planner.
+/// PdfCraft patch: below this device-pixels-per-source-pixel scale (shrunk by more than 2:1) an
+/// image that didn't ask for interpolation is still resampled smoothly.
+const MIN_NEAREST_SCALE: f32 = 0.5;
 const MAX_RESAMPLING_SOURCE_SIDE: u32 = 1 << 20;
 const MAX_RESAMPLING_PLAN_BYTES: usize = 128 << 20;
 
@@ -184,6 +187,35 @@ pub fn image_resampling_size(
         interpolate,
     )?;
     Some(target)
+}
+
+/// PdfCraft patch: whether the interpolating resampler can take an image that did not ask for
+/// interpolation, shrunk by `x_scale` × `y_scale` (device pixels per source pixel). A matching soft
+/// mask is expanded to RGBA before the resize, so it is checked against the four-channel budget,
+/// not the image's own one or three. Exported for PdfCraft's metadata-only regression tests.
+#[doc(hidden)]
+pub fn smooth_shrink_fits(
+    source: (u32, u32),
+    channels: usize,
+    with_mask: bool,
+    x_scale: f32,
+    y_scale: f32,
+) -> bool {
+    let channels = if with_mask { 4 } else { channels };
+    let Some(len) = source_byte_len(source.0, source.1, channels, MAX_IMAGE_PIXELS) else {
+        return false;
+    };
+    image_resampling_size(
+        source.0,
+        source.1,
+        channels,
+        len,
+        x_scale,
+        y_scale,
+        MAX_IMAGE_PIXELS,
+        true,
+    )
+    .is_some()
 }
 
 /// PdfCraft patch: allocation failures in image conversion/resampling keep the renderer alive.
@@ -827,13 +859,41 @@ impl Renderer {
             log::warn!("Image has invalid or over-limit source dimensions/data and was skipped");
             return;
         }
-        let interpolate = image_data.interpolate();
+        // PdfCraft patch: `/Interpolate` is only a hint. Picking single source pixels is kept for
+        // an image shrunk by up to 2:1 (#624: screenshots and rasterized text stay crisp), but
+        // beyond that it drops thin strokes, so a scan of text shrunk to the screen came out
+        // broken ("自" read as "白"), where Acrobat, pdfium and poppler average the pixels. Such
+        // an image is resampled and snapped as an interpolated one.
+        let requested_interpolation = image_data.interpolate();
+        let mut interpolate = requested_interpolation || x_scale.min(y_scale) < MIN_NEAREST_SCALE;
+        // The smooth filter has size limits (a source over 2^20 pixels wide, a plan over budget).
+        // An image that only gets it by this rule falls back to picking pixels instead of failing.
+        // A soft mask that matches the image is resized with it as RGBA, so it counts as four
+        // channels here.
+        if interpolate && !requested_interpolation {
+            let with_mask = alpha_data.as_ref().is_some_and(|a| {
+                a.width == source_width
+                    && a.height == source_height
+                    && a.interpolate == requested_interpolation
+            });
+            if !smooth_shrink_fits(
+                (source_width, source_height),
+                channels,
+                with_mask,
+                x_scale,
+                y_scale,
+            ) {
+                interpolate = false;
+            }
+        }
         if let Some(a) = &alpha_data {
             if source_byte_len(a.width, a.height, 1, MAX_IMAGE_PIXELS) != Some(a.data.len()) {
                 log::warn!("Image has invalid or over-limit alpha dimensions/data and was skipped");
                 return;
             }
-            if a.width != source_width || a.height != source_height || a.interpolate != interpolate
+            if a.width != source_width
+                || a.height != source_height
+                || a.interpolate != requested_interpolation
             {
                 if let Some(alpha) = alpha_data {
                     self.draw_image_with_alpha_mask(image_data, alpha);
@@ -962,6 +1022,9 @@ impl Renderer {
         } else {
             (data, source_width, source_height)
         };
+        // A resize that kept the original size (it failed) is not the snapped raster: draw it as
+        // before, scaled to the image's box, not translated to the snapped corner at full size.
+        let snapped = snapped.filter(|s| (img_width, img_height) == (s.0, s.1));
         if image_byte_len(img_width, img_height, 4, MAX_IMAGE_PIXELS).is_none() {
             log::warn!(
                 "Image resampling failed and the original resolution cannot fit the backend; image skipped"

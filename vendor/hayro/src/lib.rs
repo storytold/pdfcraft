@@ -61,7 +61,7 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
-pub use renderer::{image_resampling_size, tiling_cell_scale, usable_cell_scale};
+pub use renderer::{image_resampling_size, smooth_shrink_fits, tiling_cell_scale, usable_cell_scale};
 /// PdfCraft patch: exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;

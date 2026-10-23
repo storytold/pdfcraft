@@ -6024,6 +6024,59 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    /// A scan of text is usually stored without `/Interpolate` and shrunk 3:1 or more on screen.
+    /// Picking single source pixels dropped the thin strokes of such a page ("自" read as "白").
+    /// Beyond 2:1 the pixels are averaged, as Acrobat, pdfium and poppler do; up to 2:1 they are
+    /// still picked (the tests above), so screenshots stay crisp.
+    #[test]
+    fn non_interpolated_images_shrunk_more_than_two_to_one_are_averaged() {
+        // One-pixel black and white stripes, 12 wide, drawn 4 wide: nearest takes columns
+        // 1, 4, 7 and 10, which alternate white and black; averaging gives mid grey throughout.
+        let stripes: Vec<u8> = (0..24).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+        let page = draw_minified_image("DeviceGray", (12, 2), None, &stripes, None, (4, 1));
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert!(grays.iter().all(|g| (64..=192).contains(g)), "averaged, not picked: {grays:?}");
+        // The same stripes drawn 6 wide (2:1) are still picked, so the columns alternate hard.
+        let page = draw_minified_image("DeviceGray", (12, 2), None, &stripes, None, (6, 1));
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert!(grays.iter().all(|&g| g == 0 || g == 255), "2:1 stays nearest: {grays:?}");
+    }
+
+    /// A shrink of the rows alone (columns kept 1:1) is averaged as well: the smaller of the two
+    /// scales decides, not the horizontal one.
+    #[test]
+    fn non_interpolated_images_shrunk_only_vertically_are_averaged() {
+        // One-pixel black and white rows, 12 tall, drawn 4 tall and 2 wide (1:1 across).
+        let rows: Vec<u8> = (0..24).map(|i| if (i / 2) % 2 == 0 { 0 } else { 255 }).collect();
+        let page = draw_minified_image("DeviceGray", (2, 12), None, &rows, None, (2, 4));
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert!(grays.iter().all(|g| (64..=192).contains(g)), "averaged, not picked: {grays:?}");
+    }
+
+    /// The threshold is 2:1 itself: a shrink just past it (12 columns drawn 5 wide, 2.4:1) is
+    /// averaged too, not only shrinks of 3:1 and more.
+    #[test]
+    fn non_interpolated_images_shrunk_just_past_two_to_one_are_averaged() {
+        let stripes: Vec<u8> = (0..24).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+        let page = draw_minified_image("DeviceGray", (12, 2), None, &stripes, None, (5, 1));
+        let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        assert!(grays.iter().any(|g| (32..=224).contains(g)), "averaged, not picked: {grays:?}");
+    }
+
+    /// A soft mask that matches the image is resized with it as RGBA, so the budget that decides
+    /// whether a non-interpolated image may be averaged counts four channels. At 16 000 × 12 000
+    /// shrunk to 0.49 the RGB image alone fits and the same image with a mask does not; it then
+    /// keeps picking pixels instead of failing the resize after the draw was planned.
+    #[test]
+    fn the_smooth_shrink_budget_counts_the_four_channels_of_a_soft_mask() {
+        assert!(hayro::smooth_shrink_fits((16_000, 12_000), 3, false, 0.49, 0.49), "RGB alone fits");
+        assert!(!hayro::smooth_shrink_fits((16_000, 12_000), 3, true, 0.49, 0.49), "RGB with a mask needs four channels");
+        // A small image fits either way, and a degenerate one never does.
+        assert!(hayro::smooth_shrink_fits((40, 30), 3, true, 0.25, 0.25));
+        assert!(!hayro::smooth_shrink_fits((0, 30), 3, false, 0.25, 0.25));
+        assert!(!hayro::smooth_shrink_fits((40, 30), 3, false, f32::NAN, 0.25));
+    }
+
     #[test]
     fn non_interpolated_gray_images_are_not_smoothed_when_minified() {
         let levels = [0u8, 255, 85, 170, 40, 200, 120, 230];
