@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** patch (M14 #4238: rebase Windows VRR preference onto main; translations now supplied by craft-i18n; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -20,6 +22,7 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
+> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M14: opt-in Windows VRR workaround; VRR monitor fix confirmed by the user on 2026-10-23; estimates unchanged)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -223,6 +226,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-04 (M14, #4238):** Rebased the Windows VRR preference onto current main and its app/Preferences module layout. Removed local translation catalogues and their attribution changes; translations are maintained in craft-i18n (#141). English source strings and preference regression coverage remain. Estimates unchanged.
+
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
@@ -293,6 +298,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-22 (M10, #3752 paper):** CUPS jobs ask for the chosen paper in every size. The 13 sizes the Print dialog sent no paper for (A6, A0–A2, ARCH, ANSI C–E) use PWG 5101.1 names, checked against a synthetic PPD with `cupsfilter`, and `doc_print` to a printer sends the paper too. The macOS tray half (Auto Select instead of the PPD's default tray) is a craft-print change that needs a pin bump here. Estimates unchanged.
 
 - **2026-10-23 (M2, #234, continuation of #1567):** Reconciled installed CJK viewer fallback with current rendering changes; Windows preserves installed Song/Hei/Kai families and bounds font reads. GBK-EUC-H CIDFontType2 regression coverage includes text extraction; viewer fallback also survives reload with retained preferences. System fonts remain display-only. No overall readiness estimate changed.
+- **2026-10-23 (M14, Windows VRR):** Ported LightCraft #2421 as a translated opt-in restart-required preference, preserving DirectComposition resizing and OpenGL fallback. Windows restart, modal and resize checks passed; the user confirmed the fix on a VRR monitor on 2026-10-23. Estimates unchanged.
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
 
@@ -754,6 +760,7 @@ Newest first: the date, what moved, and the new overall estimate.
 ## Revision history
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
+**2026-10-23 · minor:** M14: Windows VRR composition opt-in, restart persistence and opaque modal backgrounds; Windows control-channel checks passed. The user confirmed the fix on a VRR monitor on 2026-10-23. Estimates unchanged.
 
 **2026-10-15 · minor:** M14/#2383 candidate: GPU device requests clamp unsupported limits while retaining the adapter texture extent. Synthetic V3D/downlevel regressions and Windows GPU-required tests pass; Raspberry Pi hardware remains unverified. Estimates unchanged.
 

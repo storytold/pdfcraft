@@ -101,6 +101,7 @@ impl PdfCraftApp {
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
+            compose_window: false,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -407,6 +408,12 @@ impl PdfCraftApp {
 }
 
 impl eframe::App for PdfCraftApp {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        // Composition needs a transparency-capable window, but modal dimming must not reveal the desktop.
+        let background = visuals.panel_fill;
+        egui::Color32::from_rgb(background.r(), background.g(), background.b()).to_normalized_gamma_f32()
+    }
+
     /// While files are dragged over the window the system sends no pointer moves, so egui
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
@@ -698,6 +705,46 @@ impl eframe::App for PdfCraftApp {
         if let Some(mut control) = self.control.take() {
             control.finish_frame(&ctx, self);
             self.control = Some(control);
+        }
+    }
+}
+
+#[cfg(test)]
+mod vrr_tests {
+    use super::*;
+
+    #[test]
+    fn vrr_preference_round_trips_and_rejects_invalid_options() {
+        let mut app = PdfCraftApp::new();
+        assert!(!app.compose_window);
+        app.set_option("compose_window", "on").unwrap();
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&app.persist());
+        assert!(restored.compose_window);
+        assert!(restored.set_option("compose_window", "invalid").is_err());
+        assert!(restored.compose_window);
+        restored.set_option("compose_window", "off").unwrap();
+        assert!(!restored.compose_window);
+        for json in ["{}", r#"{"compose_window":"on"}"#, r#"{"compose_window":null}"#] {
+            restored.compose_window = true;
+            restored.restore(json);
+            assert!(!restored.compose_window);
+        }
+    }
+
+    #[test]
+    fn vrr_modal_background_remains_opaque_in_both_themes() {
+        let mut app = PdfCraftApp::new();
+        app.dialog = Some(Dialog::Preferences);
+        for mut visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            let background = visuals.panel_fill;
+            visuals.panel_fill = egui::Color32::from_rgba_unmultiplied(background.r(), background.g(), background.b(), 128);
+            let clear = eframe::App::clear_color(&app, &visuals);
+            assert_eq!(clear[3], 1.0);
+            assert_eq!(
+                clear,
+                egui::Color32::from_rgb(visuals.panel_fill.r(), visuals.panel_fill.g(), visuals.panel_fill.b()).to_normalized_gamma_f32()
+            );
         }
     }
 }

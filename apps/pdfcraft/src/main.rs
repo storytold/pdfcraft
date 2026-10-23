@@ -44,6 +44,7 @@ mod settings;
 mod single_instance;
 mod startup;
 mod text_scale;
+mod vrr;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
@@ -350,6 +351,14 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
         viewport = viewport.with_decorations(false);
     }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
+    let compose = cfg!(target_os = "windows") && persistence_path.as_deref().is_some_and(vrr::load);
+    viewport = viewport.with_transparent(vrr::enabled(
+        cfg!(target_os = "windows"),
+        compose,
+        renderer == eframe::Renderer::Wgpu,
+        std::env::var_os("WGPU_BACKEND").is_some(),
+        std::env::var_os("WGPU_DX12_PRESENTATION_SYSTEM").is_some(),
+    ));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
     // PdfCraft installs its own last-resort system face (`PDFCRAFT_SYSTEM_FONTS`); eframe's

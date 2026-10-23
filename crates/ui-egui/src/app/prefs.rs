@@ -139,6 +139,7 @@ impl PdfCraftApp {
             "right_panel_closed": self.right_panel_closed,
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
+        v["compose_window"] = serde_json::Value::Bool(self.compose_window);
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
         v["recent_limit"] = serde_json::json!(self.recent_limit);
         v["fill_text_color"] = serde_json::json!(self.fill_text_color);
@@ -244,6 +245,7 @@ impl PdfCraftApp {
         if let Some(invert) = v["invert_middle_drag"].as_bool() {
             self.invert_middle_drag = invert;
         }
+        self.compose_window = v.get("compose_window").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
         }
