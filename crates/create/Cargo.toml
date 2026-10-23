@@ -12,6 +12,8 @@ workspace = true
 pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# Exported images are converted to sRGB the way the page renderer draws them.
+pdfcraft-render = { workspace = true }
 png = "0.18"
 tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
@@ -24,3 +26,5 @@ encoding_rs = "0.8"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 hayro-syntax = { workspace = true }
+# Real ICC profiles (Adobe RGB, Display P3) for the colour tests; already in the tree through image.
+moxcms = "0.8"
