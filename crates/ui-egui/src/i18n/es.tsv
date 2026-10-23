@@ -1973,6 +1973,9 @@ action wizard	Start	Iniciar
 	Lock comment	Bloquear comentario
 	Unlock comment	Desbloquear comentario
 	Move comment	Mover comentario
+	Open comment pop-up	Abrir la ventana emergente del comentario
+	Close comment pop-up	Cerrar la ventana emergente del comentario
+	Move comment pop-up	Mover la ventana emergente del comentario
 	Resize comment	Cambiar tamaño del comentario
 	Change comment properties	Cambiar propiedades del comentario
 	Add field	Añadir campo

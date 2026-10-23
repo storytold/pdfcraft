@@ -1889,6 +1889,9 @@
 	Lock comment	Verrouiller le commentaire
 	Unlock comment	Déverrouiller le commentaire
 	Move comment	Déplacer le commentaire
+	Open comment pop-up	Ouvrir la fenêtre du commentaire
+	Close comment pop-up	Fermer la fenêtre du commentaire
+	Move comment pop-up	Déplacer la fenêtre du commentaire
 	Resize comment	Redimensionner le commentaire
 	Change comment properties	Modifier les propriétés du commentaire
 	Add field	Ajouter un champ

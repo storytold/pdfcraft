@@ -1971,6 +1971,9 @@
 	Lock comment	注釈をロック
 	Unlock comment	注釈のロックを解除
 	Move comment	注釈を移動
+	Open comment pop-up	注釈のポップアップを開く
+	Close comment pop-up	注釈のポップアップを閉じる
+	Move comment pop-up	注釈のポップアップを移動
 	Resize comment	注釈のサイズを変更
 	Change comment properties	注釈のプロパティを変更
 	Add field	フィールドを追加

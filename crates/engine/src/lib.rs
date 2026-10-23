@@ -291,6 +291,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::EraseInk { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
@@ -1538,6 +1539,14 @@ pub enum Edit {
         index: usize,
         points: Vec<[f64; 2]>,
     },
+    /// Open, close or move a comment's pop-up window (`rect` in user space; a comment without a
+    /// pop-up gets one).
+    SetAnnotationPopup {
+        page: usize,
+        index: usize,
+        rect: Option<[f64; 4]>,
+        open: Option<bool>,
+    },
     /// Resize a rectangle, oval or text box.
     ResizeAnnotation {
         page: usize,
@@ -1990,6 +1999,9 @@ pub const EDIT_LABELS: &[&str] = &[
     "Unlock comment",
     "Move comment",
     "Reshape comment",
+    "Open comment pop-up",
+    "Close comment pop-up",
+    "Move comment pop-up",
     "Resize comment",
     "Change comment properties",
     "Fill in {name}",
@@ -2121,6 +2133,9 @@ impl Edit {
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
+            Edit::SetAnnotationPopup { rect: Some(_), .. } => Label::of("Move comment pop-up"),
+            Edit::SetAnnotationPopup { open: Some(true), .. } => Label::of("Open comment pop-up"),
+            Edit::SetAnnotationPopup { .. } => Label::of("Close comment pop-up"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
                 Label::of("Change comment properties")
@@ -2281,6 +2296,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::LockAnnotation { .. }
         | Edit::MoveAnnotation { .. }
         | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
@@ -2565,6 +2581,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::LockAnnotation { page, index, locked } => pdfcraft_annot::set_locked(doc, *page, *index, *locked)?,
         Edit::MoveAnnotation { page, index, dx, dy } => pdfcraft_annot::move_annotation(doc, *page, *index, *dx, *dy, &cx.meta())?,
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
+        Edit::SetAnnotationPopup { page, index, rect, open } => pdfcraft_annot::set_popup(doc, *page, *index, *rect, *open, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
             pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, endings.as_deref(), &cx.meta())?;
@@ -2909,6 +2926,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             intent: s.intent,
             fill_sign: s.fill_sign,
             points: s.points,
+            popup: s.popup.map(|p| pdfcraft_render::Popup { rect: p.rect, open: p.open }),
         })
         .collect()
 }

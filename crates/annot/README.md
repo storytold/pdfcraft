@@ -19,7 +19,9 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   comment another program drew with a font that has those characters, whose appearance is kept
   rather than redrawn with `?` (new text for it is taken).
 - **Edits:** reply (`/IRT`), set review status (a `/State` reply, as Acrobat's "Set status"
-  does), change text, move, resize, restyle, delete (with pop-up and replies).
+  does), change text, move, resize, restyle, delete (with pop-up and replies), and open, close
+  or move the pop-up window (`set_popup`: `/Popup` `/Open` and `/Rect`, created beside a comment
+  that has none; a note's own `/Open` follows). `summaries` report each comment's pop-up.
 
 ## API sketch
 

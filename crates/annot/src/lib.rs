@@ -1807,6 +1807,77 @@ fn unlocked(doc: &Document, r: ObjRef) -> Result<(), AnnotError> {
     if flags(doc, r) & FLAG_LOCKED != 0 { Err(AnnotError::Invalid("the comment is locked".into())) } else { Ok(()) }
 }
 
+/// Open, close or move a comment's pop-up window (Acrobat: double-click a comment to open it,
+/// drag its title bar to move it). `rect` is the pop-up's new `/Rect` in user space; `open` its
+/// `/Open`. A comment without a `/Popup` gets one, placed to the right of the comment as new
+/// notes get theirs. A text box, a Fill & Sign mark or a reply has no pop-up of its own (a reply
+/// shows in its parent's). The lock does not apply: the window's place and state are not the
+/// comment. The modification date is left alone: nothing of the comment changed.
+pub fn set_popup(doc: &mut Document, page: usize, index: usize, rect: Option<[f64; 4]>, open: Option<bool>, meta: &Meta) -> Result<(), AnnotError> {
+    let (p, r) = annot_ref(doc, page, index)?;
+    let d = annot_dict(doc, r);
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if !is_comment_subtype(&subtype) || subtype == "FreeText" || is_fill_sign(doc, &d) || d.contains(b"IRT") {
+        return Err(AnnotError::Invalid(format!("{subtype} comments have no pop-up of their own")));
+    }
+    let rect = match rect {
+        Some(rect) => {
+            let rect = normalize(rect);
+            if !finite(&rect) || rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+                return Err(AnnotError::Invalid("invalid pop-up rectangle".into()));
+            }
+            Some(rect)
+        }
+        None => None,
+    };
+    let _ = meta;
+    // Only a pop-up that is this comment's: `/Popup` naming another annotation (or a pop-up
+    // whose `/Parent` is another comment) would move or open that one, so it gets its own.
+    match own_popup(doc, Some(r), &d) {
+        Some(pr) => doc.update_dict(pr, |p| {
+            if let Some(rect) = rect {
+                p.set(b"Rect".to_vec(), num_array(&rect));
+            }
+            if let Some(open) = open {
+                p.set(b"Open".to_vec(), Object::Bool(open));
+            }
+        })?,
+        None => {
+            let own: Vec<f64> = d
+                .get(b"Rect")
+                .map(|o| doc.resolve(o))
+                .and_then(|o| o.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| doc.resolve(v).as_f64())
+                .collect();
+            let beside = match own[..] {
+                [_, _, x1, y1] if finite(&own) => [x1 + 10.0, y1 - 120.0, x1 + 210.0, y1],
+                _ => [0.0, 0.0, 200.0, 120.0],
+            };
+            let mut pd = Dict::new();
+            pd.set(b"Type".to_vec(), Object::name("Annot"));
+            pd.set(b"Subtype".to_vec(), Object::name("Popup"));
+            pd.set(b"Rect".to_vec(), num_array(&rect.unwrap_or(beside)));
+            pd.set(b"Parent".to_vec(), Object::Ref(r));
+            pd.set(b"Open".to_vec(), Object::Bool(open.unwrap_or(false)));
+            pd.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
+            let pref = doc.add(Object::Dict(pd));
+            doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pref)))?;
+            let mut list = annots(doc, p);
+            list.push(Object::Ref(pref));
+            set_annots(doc, p, list)?;
+        }
+    }
+    // A note's own `/Open` says the same thing to viewers that read it there (§12.5.6.4).
+    if let Some(open) = open
+        && (subtype == "Text" || d.contains(b"Open"))
+    {
+        doc.update_dict(r, |d| d.set(b"Open".to_vec(), Object::Bool(open)))?;
+    }
+    Ok(())
+}
+
 /// Lock or unlock a comment (the Locked flag). A locked comment can't be moved, resized,
 /// restyled or deleted; its text and replies stay editable, as in Acrobat.
 pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -> Result<(), AnnotError> {
@@ -2265,6 +2336,44 @@ pub struct Summary {
     /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
     /// (`/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// The comment's pop-up window (`/Popup`), when it has one.
+    pub popup: Option<PopupInfo>,
+}
+
+/// A comment's pop-up window (ISO 32000-2 §12.5.6.14): where it sits on the page and whether it
+/// is shown open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupInfo {
+    /// `/Rect` of the `/Popup` annotation, in user space.
+    pub rect: [f32; 4],
+    /// `/Open` of the `/Popup` annotation.
+    pub open: bool,
+}
+
+/// The pop-up the comment `annot` (the object `own`, when it is one of its own) names in
+/// `/Popup`, when it is the comment's: a pop-up annotation whose `/Parent`, if it has one, is a
+/// reference to the comment. A `/Popup` naming another annotation, or a pop-up of another
+/// comment, isn't. ISO 32000-2:2020 §12.5.6.14, Table 186: `/Parent` is "(Optional; shall be
+/// an indirect reference)".
+fn own_popup(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<ObjRef> {
+    let pr = annot.reference(b"Popup")?;
+    let is_own = doc.get(pr).as_dict().is_some_and(|pd| {
+        pd.name(b"Subtype") == Some(b"Popup") && pd.get(b"Parent").is_none_or(|parent| parent.as_ref().is_some_and(|parent| Some(parent) == own))
+    });
+    is_own.then_some(pr)
+}
+
+/// The comment's own pop-up (see [`own_popup`]), as [`PopupInfo`]: `None` when it has none or it
+/// is unreadable.
+fn popup_info(doc: &Document, own: Option<ObjRef>, annot: &Dict) -> Option<PopupInfo> {
+    // Another annotation's rectangle and open state aren't this comment's (review on #2137).
+    let r = own_popup(doc, own, annot)?;
+    let p = doc.get(r);
+    let p = p.as_dict()?;
+    let rect: Vec<f32> = doc.resolve(p.get(b"Rect")?).as_array()?.iter().filter_map(|v| doc.resolve(v).as_f64().map(|x| x as f32)).collect();
+    let [x0, y0, x1, y1] = rect[..] else { return None };
+    let open = p.get(b"Open").map(|o| doc.resolve(o)).is_some_and(|o| matches!(&*o, Object::Bool(true)));
+    Some(PopupInfo { rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], open })
 }
 
 fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -2345,6 +2454,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 fill_sign: is_fill_sign(doc, d),
                 points,
+                popup: popup_info(doc, entry.as_ref(), d),
             });
         }
     }

@@ -1958,6 +1958,9 @@
 	Lock comment	鎖定註解
 	Unlock comment	解鎖註解
 	Move comment	移動註解
+	Open comment pop-up	開啟註解彈出視窗
+	Close comment pop-up	關閉註解彈出視窗
+	Move comment pop-up	移動註解彈出視窗
 	Resize comment	調整註解大小
 	Change comment properties	變更註解內容
 	Add field	新增欄位

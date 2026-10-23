@@ -2180,6 +2180,9 @@ comment menu	Edit	Redaguoti
 	Mouse Up	Atleidus pelės mygtuką
 	Move bookmark	Perkelti žymelę
 	Move comment	Perkelti komentarą
+	Open comment pop-up	Atidaryti komentaro iškylantįjį langą
+	Close comment pop-up	Uždaryti komentaro iškylantįjį langą
+	Move comment pop-up	Perkelti komentaro iškylantįjį langą
 	Move image	Perkelti paveikslėlį
 	Move page	Perkelti puslapį
 	Move pages	Perkelti puslapius

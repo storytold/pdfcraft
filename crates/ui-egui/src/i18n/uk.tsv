@@ -1956,6 +1956,9 @@
 	Lock comment	Заблокувати коментар
 	Unlock comment	Розблокувати коментар
 	Move comment	Перемістити коментар
+	Open comment pop-up	Відкрити спливаюче вікно коментаря
+	Close comment pop-up	Закрити спливаюче вікно коментаря
+	Move comment pop-up	Перемістити спливаюче вікно коментаря
 	Resize comment	Змінити розмір коментаря
 	Change comment properties	Змінити властивості коментаря
 	Add field	Додати поле

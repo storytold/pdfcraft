@@ -1964,6 +1964,9 @@
 	Lock comment	Blocca commento
 	Unlock comment	Sblocca commento
 	Move comment	Sposta commento
+	Open comment pop-up	Apri il pop-up del commento
+	Close comment pop-up	Chiudi il pop-up del commento
+	Move comment pop-up	Sposta il pop-up del commento
 	Resize comment	Ridimensiona commento
 	Change comment properties	Modifica proprietà commento
 	Add field	Aggiungi campo

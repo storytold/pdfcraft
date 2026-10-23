@@ -2774,3 +2774,8 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# AI-assisted additions for comment pop-up windows (#2137); not reviewed by a native speaker.
+	Open comment pop-up	Deschidere fereastră pop-up a comentariului
+	Close comment pop-up	Închidere fereastră pop-up a comentariului
+	Move comment pop-up	Mutare fereastră pop-up a comentariului
