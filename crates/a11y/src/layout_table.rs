@@ -51,11 +51,19 @@ impl Retag<'_> {
         Some(alt::standard(self.doc, &self.role_map, d.name(b"S")?))
     }
 
-    /// Whether children `k` include structure elements (indirect or direct).
-    fn has_tags(&self, k: &Object) -> bool {
+    /// Whether children `k` include structure elements (indirect or direct, also in an indirect
+    /// array of children).
+    fn has_tags(&self, k: &Object, depth: usize) -> bool {
+        if depth > MAX_DEPTH {
+            return false;
+        }
         match k {
-            Object::Array(items) => items.iter().any(|i| self.has_tags(i)),
-            Object::Ref(r) => self.doc.get(*r).as_dict().is_some_and(|d| d.contains(b"S")),
+            Object::Array(items) => items.iter().any(|i| self.has_tags(i, depth + 1)),
+            Object::Ref(r) => match &*self.doc.get(*r) {
+                Object::Dict(d) => d.contains(b"S"),
+                array @ Object::Array(_) => self.has_tags(array, depth + 1),
+                _ => false,
+            },
             Object::Dict(d) => d.contains(b"S"),
             _ => false,
         }
@@ -68,8 +76,9 @@ impl Retag<'_> {
             return Err(LayoutTableError::TooLarge);
         }
         let Some(ty) = self.standard(d) else { return Ok(None) };
-        let kids = d.get(b"K").map(|k| self.doc.resolve(k));
-        let has_tags = kids.as_deref().is_some_and(|k| self.has_tags(k));
+        // As written: a single child is often a reference to it, which must stay one.
+        let kids = d.get(b"K").cloned();
+        let has_tags = kids.as_ref().is_some_and(|k| self.has_tags(k, 0));
         let Some(block) = block_type(&ty, has_tags, root) else { return Ok(None) };
         let mut out = d.clone();
         out.set(b"S".to_vec(), Object::name(block));
@@ -82,19 +91,26 @@ impl Retag<'_> {
         Ok(Some(out))
     }
 
-    /// Children `k` with direct table parts converted and indirect elements queued.
+    /// Children `k` with direct table parts converted and indirect elements queued (references
+    /// stay references; an indirect array of children is written out only when a direct table
+    /// part in it changed).
     fn convert_kids(&mut self, k: &Object, depth: usize) -> Result<Object, LayoutTableError> {
         if depth > MAX_DEPTH {
             return Err(LayoutTableError::TooLarge);
         }
         Ok(match k {
             Object::Array(items) => Object::Array(items.iter().map(|i| self.convert_kids(i, depth)).collect::<Result<_, _>>()?),
-            Object::Ref(r) => {
-                if self.doc.get(*r).as_dict().is_some_and(|d| d.contains(b"S")) {
+            Object::Ref(r) => match &*self.doc.get(*r) {
+                Object::Dict(d) if d.contains(b"S") => {
                     self.queue.push(*r);
+                    k.clone()
                 }
-                k.clone()
-            }
+                array @ Object::Array(_) => {
+                    let converted = self.convert_kids(array, depth + 1)?;
+                    if converted == *array { k.clone() } else { converted }
+                }
+                _ => k.clone(),
+            },
             Object::Dict(d) if d.contains(b"S") => match self.convert(d, false, depth)? {
                 Some(block) => Object::Dict(block),
                 None => k.clone(),
@@ -299,6 +315,37 @@ mod tests {
         assert_eq!(layout_table_to_blocks(&mut d, r(5)), Err(LayoutTableError::NotATag(r(5))), "not in the structure tree");
         assert_eq!(layout_table_to_blocks(&mut d, ObjRef::new(4, 1)), Err(LayoutTableError::NotATag(ObjRef::new(4, 1))));
         assert_eq!(ty(&d, 5), b"Table");
+    }
+
+    #[test]
+    fn a_single_child_written_as_a_reference_stays_its_own_object() {
+        // /K 5 0 R: the table's one row, the row's one cell; 8: a row whose cells are an indirect
+        // array (object 9) holding a direct cell and a reference.
+        let mut d = doc(
+            "",
+            &[
+                "<< /S /Document /K [4 0 R 7 0 R] >>",
+                "<< /S /Table /K 5 0 R >>",
+                "<< /S /TR /K 6 0 R >>",
+                "<< /S /TD /K 0 >>",
+                "<< /S /Table /K 8 0 R >>",
+                "<< /S /TR /K 9 0 R >>",
+                "[ << /S /TD /K 1 >> 10 0 R ]",
+                "<< /S /TD /K 2 >>",
+            ],
+        );
+        assert_eq!(layout_table_to_blocks(&mut d, r(4)), Ok(3));
+        assert_eq!(dict(&d, 4).get(b"K"), Some(&Object::Ref(r(5))), "the row stays a reference");
+        assert_eq!(dict(&d, 5).get(b"K"), Some(&Object::Ref(r(6))));
+        for (n, want) in [(4, "Div"), (5, "Div"), (6, "P")] {
+            assert_eq!(ty(&d, n), want.as_bytes(), "object {n}");
+        }
+        assert!(crate::tags(&d).iter().any(|t| t.object == r(6)), "the cell is still listed");
+        assert_eq!(layout_table_to_blocks(&mut d, r(7)), Ok(4));
+        let Some(Object::Array(cells)) = dict(&d, 8).get(b"K").cloned() else { panic!("{:?}", dict(&d, 8)) };
+        assert_eq!(cells[0].as_dict().and_then(|c| c.name(b"S")), Some(&b"P"[..]));
+        assert_eq!(cells[1], Object::Ref(r(10)));
+        assert_eq!(ty(&d, 10), b"P");
     }
 
     #[test]
