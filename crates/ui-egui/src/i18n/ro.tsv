@@ -1494,6 +1494,7 @@
 	Output preview	Previzualizare ieșire
 	Oval	Oval
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Page grid	Grilă pagină
 	Page labels	Etichete pagini
 	Page options	Opțiuni pagină
@@ -1543,6 +1544,7 @@
 	Save as PDF/A	Salvare ca PDF/A
 	Save as PDF/UA	Salvare ca PDF/UA
 	Save as PDF/X	Salvare ca PDF/X
+	Verify PDF/X	Verificare PDF/X
 	Scan & OCR	Scanare și OCR
 	Security properties	Proprietăți de securitate
 	Select files to compare	Selectați fișierele de comparat
@@ -1856,6 +1858,44 @@ comment menu	Edit	Editare
 	Alternate text that will never be read	Text alternativ care nu va fi citit niciodată
 	An action is already running	O acțiune rulează deja
 	An embedded file has no AFRelationship	Un fișier încorporat nu are AFRelationship
+	The document information doesn't identify the file as {}	Informațiile documentului nu identifică fișierul ca {}
+	The metadata has no {}	Metadatele nu au {}
+	The document information and the metadata name different PDF/X versions	Informațiile documentului și metadatele indică versiuni PDF/X diferite
+	The file trailer has no document ID	Trailerul fișierului nu are ID de document
+	The document doesn't say whether it is trapped (Trapped)	Documentul nu precizează dacă are trapping (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped este {}, dar trebuie să fie /True sau /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Cheia Trapped și pdf:Trapped din metadate nu concordă
+	There is no PDF/X output intent (GTS_PDFX)	Nu există nicio intenție de ieșire PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Există mai multe intenții de ieșire PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	Intenția de ieșire PDF/X nu are OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	Intenția de ieșire PDF/X nu are profil încorporat (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	Intenția de ieșire PDF/X nu are nici un profil încorporat, nici o caracterizare din registrul ICC
+	The output intent's profile isn't a valid ICC profile	Profilul intenției de ieșire nu este un profil ICC valid
+	The output intent's profile isn't an output (printer) profile	Profilul intenției de ieșire nu este un profil de ieșire (de imprimantă)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Profilul intenției de ieșire descrie culoare {}, dar PDF/X-1a necesită o condiție de imprimare CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Profilul intenției de ieșire descrie culoare {}; trebuie să fie gri, RGB sau CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Profilul intenției de ieșire are /N {}, care nu corespunde spațiului său de culoare
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Profilul intenției de ieșire nu are transformare din dispozitiv în PCS (AToB1 sau grayTRC)
+	The page has no valid MediaBox	Pagina nu are un MediaBox valid
+	The page has neither a TrimBox nor an ArtBox	Pagina nu are nici TrimBox, nici ArtBox
+	The page has both a TrimBox and an ArtBox	Pagina are atât TrimBox, cât și ArtBox
+	The {} extends beyond the BleedBox	{} depășește BleedBox
+	The {} extends beyond the CropBox	{} depășește CropBox
+	The {} extends beyond the MediaBox	{} depășește MediaBox
+	A {} annotation lies within the BleedBox	O adnotare {} se află în BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	O adnotare PrinterMark se suprapune peste TrimBox sau ArtBox
+	A stream uses JBIG2 compression	Un flux folosește compresia JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Un XObject de formular face referire la o pagină din alt fișier (XObject de referință)
+	An image or form has OPI information	O imagine sau un formular are informații OPI
+	A graphics state uses a soft mask	O stare grafică folosește o mască soft
+	A graphics state sets an opacity below 1	O stare grafică setează o opacitate sub 1
+	A graphics state uses the {} blend mode	O stare grafică folosește modul de amestecare {}
+	An image has a soft mask	O imagine are o mască soft
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Spațiul de culoare {} nu este permis: PDF/X-1a permite doar CMYK, gri și culori spot
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Conținutul folosește culoare DeviceRGB: PDF/X-1a permite doar CMYK, gri și culori spot
+	{} colour doesn't match the output intent's colour space	Culoarea {} nu corespunde spațiului de culoare al intenției de ieșire
+	Content uses {} colour, which doesn't match the output intent's colour space	Conținutul folosește culoare {}, care nu corespunde spațiului de culoare al intenției de ieșire
+	Device-independent colour is used, so the output intent needs an embedded profile	Se folosește culoare independentă de dispozitiv, deci intenția de ieșire necesită un profil încorporat
 	An image asks to be interpolated	O imagine cere interpolare
 	An image has alternates or OPI information	O imagine are alternative sau informații OPI
 	Animation that flashes can cause seizures. Check scripts and media for flicker.	Animațiile care clipesc pot provoca crize. Verificați scripturile și conținutul media pentru pâlpâiri.

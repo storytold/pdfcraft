@@ -1260,6 +1260,7 @@
 	PDF version	Versioni i PDF
 	PDF, images and text	PDF, imazhe dhe tekst
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	PRs	PR-të
 	Page	Faqja
 	Page Content	Përmbajtja e faqes
@@ -1551,6 +1552,7 @@
 	Save as PDF/A-3b	Ruaj si PDF/A-3b
 	Save as PDF/UA	Ruaj si PDF/UA
 	Save as PDF/X	Ruaj si PDF/X
+	Verify PDF/X	Verifiko PDF/X
 	Save as…	Ruaj si…
 	Save attachment…	Ruaj bashkëngjitjen…
 	Save changes to “{name}” before closing?	Të ruhen ndryshimet në “{name}” para mbylljes?

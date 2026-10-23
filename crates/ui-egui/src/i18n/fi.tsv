@@ -209,6 +209,7 @@
 	Import form data…	Tuo lomaketietoja…
 	Export form data…	Vie lomaketietoja…
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Action Wizard…	Toimintoavustaja…
 	Prepare for distribution…	Valmistele jakelua varten…
 	Optimize scanned documents…	Optimoi skannatut asiakirjat…
@@ -461,6 +462,7 @@
 	Standards	Standardit
 	Save as PDF/A	Tallenna PDF/A-muodossa
 	Save as PDF/X	Tallenna PDF/X-muodossa
+	Verify PDF/X	Tarkista PDF/X
 	Save as PDF/UA	Tallenna PDF/UA-muodossa
 	Add search index	Lisää hakuhakemisto
 	Index	Hakemisto
@@ -1861,6 +1863,44 @@
 	PostScript XObjects aren't allowed	PostScript-XObjecteja ei sallita
 	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	Upotettujen tiedostojen on oltava itsekin PDF/A-tiedostoja (käytä muille PDF/A-3:a)
 	An embedded file has no AFRelationship	Upotetulla tiedostolla ei ole AFRelationship-arvoa
+	The document information doesn't identify the file as {}	Asiakirjan tiedot eivät tunnista tiedostoa muotoon {}
+	The metadata has no {}	Metatiedoissa ei ole kohdetta {}
+	The document information and the metadata name different PDF/X versions	Asiakirjan tiedot ja metatiedot nimeävät eri PDF/X-versiot
+	The file trailer has no document ID	Tiedoston trailerissa ei ole asiakirjan tunnistetta
+	The document doesn't say whether it is trapped (Trapped)	Asiakirja ei kerro, onko se trapattu (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped on {}, mutta sen on oltava /True tai /False
+	The Trapped key and the metadata's pdf:Trapped disagree	Trapped-avain ja metatietojen pdf:Trapped ovat ristiriidassa
+	There is no PDF/X output intent (GTS_PDFX)	PDF/X-tulostustarkoitusta ei ole (GTS_PDFX)
+	There is more than one PDF/X output intent	PDF/X-tulostustarkoituksia on useampi kuin yksi
+	The PDF/X output intent has no OutputConditionIdentifier	PDF/X-tulostustarkoituksella ei ole OutputConditionIdentifieria
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	PDF/X-tulostustarkoituksella ei ole upotettua profiilia (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	PDF/X-tulostustarkoituksella ei ole upotettua profiilia eikä ICC-rekisterin karakterisointia
+	The output intent's profile isn't a valid ICC profile	Tulostustarkoituksen profiili ei ole kelvollinen ICC-profiili
+	The output intent's profile isn't an output (printer) profile	Tulostustarkoituksen profiili ei ole tulostus- (tulostin)profiili
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	Tulostustarkoituksen profiili kuvaa väriä {}, mutta PDF/X-1a tarvitsee CMYK-painoehdon
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	Tulostustarkoituksen profiili kuvaa väriä {}; sen on oltava harmaa, RGB tai CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	Tulostustarkoituksen profiilin /N on {}, mikä ei vastaa sen väriavaruutta
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	Tulostustarkoituksen profiilissa ei ole laitteesta PCS:ään -muunnosta (AToB1 tai grayTRC)
+	The page has no valid MediaBox	Sivulla ei ole kelvollista MediaBoxia
+	The page has neither a TrimBox nor an ArtBox	Sivulla ei ole TrimBoxia eikä ArtBoxia
+	The page has both a TrimBox and an ArtBox	Sivulla on sekä TrimBox että ArtBox
+	The {} extends beyond the BleedBox	{} ulottuu BleedBoxin ulkopuolelle
+	The {} extends beyond the CropBox	{} ulottuu CropBoxin ulkopuolelle
+	The {} extends beyond the MediaBox	{} ulottuu MediaBoxin ulkopuolelle
+	A {} annotation lies within the BleedBox	{}-merkintä on BleedBoxin sisällä
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	PrinterMark-merkintä menee TrimBoxin tai ArtBoxin päälle
+	A stream uses JBIG2 compression	Virta käyttää JBIG2-pakkausta
+	A form XObject refers to a page of another file (reference XObject)	Lomake-XObject viittaa toisen tiedoston sivuun (viittaus-XObject)
+	An image or form has OPI information	Kuvassa tai lomakkeessa on OPI-tietoja
+	A graphics state uses a soft mask	Grafiikkatila käyttää pehmeää maskia
+	A graphics state sets an opacity below 1	Grafiikkatila asettaa peittävyyden alle 1:n
+	A graphics state uses the {} blend mode	Grafiikkatila käyttää sekoitustilaa {}
+	An image has a soft mask	Kuvalla on pehmeä maski
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Väriavaruus {} ei ole sallittu: PDF/X-1a sallii vain CMYK-, harmaa- ja spottivärit
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Sisältö käyttää DeviceRGB-väriä: PDF/X-1a sallii vain CMYK-, harmaa- ja spottivärit
+	{} colour doesn't match the output intent's colour space	Väri {} ei vastaa tulostustarkoituksen väriavaruutta
+	Content uses {} colour, which doesn't match the output intent's colour space	Sisältö käyttää väriä {}, joka ei vastaa tulostustarkoituksen väriavaruutta
+	Device-independent colour is used, so the output intent needs an embedded profile	Käytössä on laitteesta riippumaton väri, joten tulostustarkoitus tarvitsee upotetun profiilin
 	Select Icon	Valitse kuvake
 	Choose images	Valitse kuvat
 	{dpi} pixels/inch	{dpi} pikseliä/tuuma
