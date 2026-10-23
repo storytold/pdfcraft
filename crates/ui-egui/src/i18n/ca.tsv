@@ -1253,6 +1253,7 @@
 	Adds invisible text over each word; the page image is not changed	Afegeix text invisible sobre cada paraula; la imatge de la pàgina no canvia
 	Downsample to	Redueix la resolució a
 	Also recognize pages that already have text	Reconeix també les pàgines que ja tenen text
+	Deskew pages	Redreça les pàgines
 	Pictures on those pages are recognized too; words already in the page's text are not added again	També es reconeixen les imatges d'aquestes pàgines; les paraules que ja són al text de la pàgina no es tornen a afegir
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	El reconeixement de text no està instal·lat: falten els seus fitxers de model. Reinstal·la PdfCraft o defineix PDFCRAFT_MODELS amb la carpeta que els conté.
 	Settings	Configuració

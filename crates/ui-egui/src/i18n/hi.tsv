@@ -1234,6 +1234,7 @@
 	Adds invisible text over each word; the page image is not changed	हर शब्द के ऊपर अदृश्य टेक्स्ट जोड़ता है; पृष्ठ की छवि नहीं बदलती
 	Downsample to	इस तक डाउनसैंपल करें
 	Also recognize pages that already have text	उन पृष्ठों को भी पहचानें जिन पर पहले से टेक्स्ट है
+	Deskew pages	पृष्ठों का झुकाव ठीक करें
 	Pictures on those pages are recognized too; words already in the page's text are not added again	उन पृष्ठों की तस्वीरें भी पहचानी जाती हैं; पृष्ठ के टेक्स्ट में पहले से मौजूद शब्द दोबारा नहीं जोड़े जाते
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	टेक्स्ट पहचान इंस्टॉल नहीं है: इसकी मॉडल फ़ाइलें मौजूद नहीं हैं। PdfCraft दोबारा इंस्टॉल करें, या PDFCRAFT_MODELS को उस फ़ोल्डर पर सेट करें जिसमें वे रखी हैं।
 	Settings	सेटिंग्स

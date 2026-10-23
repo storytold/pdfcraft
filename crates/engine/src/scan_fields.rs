@@ -122,7 +122,10 @@ impl Session {
         if !ocr::available() {
             return Vec::new();
         }
-        let (Ok(engine), Some(job)) = (ocr::engine(), self.ocr_job(id, &[page], ocr::OcrSettings::default())) else {
+        // Only the words are used and the page is not changed, so they are read where they are:
+        // no turn or level (their boxes would then be off the page as it is).
+        let settings = ocr::OcrSettings { auto_rotate: false, deskew: false, ..Default::default() };
+        let (Ok(engine), Some(job)) = (ocr::engine(), self.ocr_job(id, &[page], settings)) else {
             return Vec::new();
         };
         job.run(&engine, |_, _| true)

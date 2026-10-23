@@ -1234,6 +1234,7 @@
 	Adds invisible text over each word; the page image is not changed	각 단어 위에 보이지 않는 텍스트를 추가하며 페이지 이미지는 변경되지 않습니다
 	Downsample to	다운샘플링
 	Also recognize pages that already have text	이미 텍스트가 있는 페이지도 인식
+	Deskew pages	페이지 기울기 보정
 	Pictures on those pages are recognized too; words already in the page's text are not added again	해당 페이지의 그림도 인식되며 페이지 텍스트에 이미 있는 단어는 다시 추가되지 않습니다
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	텍스트 인식이 설치되어 있지 않습니다: 모델 파일이 없습니다. PdfCraft를 다시 설치하거나 PDFCRAFT_MODELS를 모델 파일이 있는 폴더로 설정하세요.
 	Settings	설정

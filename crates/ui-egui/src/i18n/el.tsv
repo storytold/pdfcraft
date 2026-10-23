@@ -826,6 +826,7 @@
 	Adds invisible text over each word; the page image is not changed	Προσθέτει αόρατο κείμενο πάνω από κάθε λέξη, χωρίς να αλλάζει την εικόνα της σελίδας
 	Downsample to	Μείωση ανάλυσης σε
 	Also recognize pages that already have text	Αναγνώριση και σελίδων που έχουν ήδη κείμενο
+	Deskew pages	Ευθυγράμμιση σελίδων
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Αναγνωρίζονται και οι εικόνες αυτών των σελίδων· οι λέξεις που υπάρχουν ήδη στο κείμενο της σελίδας δεν προστίθενται ξανά
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Η αναγνώριση κειμένου δεν είναι εγκατεστημένη: λείπουν τα αρχεία μοντέλων. Εγκαταστήστε ξανά το PdfCraft ή ορίστε το PDFCRAFT_MODELS στον φάκελο που τα περιέχει.
 	Planned · {m}	Προγραμματισμένο · {m}

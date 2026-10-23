@@ -1268,6 +1268,7 @@
 	Adds invisible text over each word; the page image is not changed	ເພີ່ມຂໍ້ຄວາມທີ່ມອງບໍ່ເຫັນທັບແຕ່ລະຄຳ; ຮູບພາບໜ້າຈະບໍ່ປ່ຽນແປງ
 	Downsample to	ຫຼຸດຄວາມລະອຽດລົງເປັນ
 	Also recognize pages that already have text	ຮັບຮູ້ຂໍ້ຄວາມໃນໜ້າທີ່ມີຂໍ້ຄວາມຢູ່ແລ້ວນຳດ້ວຍ
+	Deskew pages	ແກ້ໄຂຄວາມອຽງຂອງໜ້າ
 	Pictures on those pages are recognized too; words already in the page's text are not added again	ຮູບພາບໃນໜ້າເຫຼົ່ານັ້ນຈະຖືກຮັບຮູ້ນຳດ້ວຍ; ຄຳທີ່ມີຢູ່ແລ້ວໃນຂໍ້ຄວາມຂອງໜ້າຈະບໍ່ຖືກເພີ່ມຄືນອີກ
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	ການຮັບຮູ້ຂໍ້ຄວາມຍັງບໍ່ໄດ້ຮັບການຕິດຕັ້ງ: ໄຟລ໌ໂມເດວສູນຫາຍ. ກະລຸນາຕິດຕັ້ງ PdfCraft ຄືນໃໝ່ ຫຼື ຕັ້ງຄ່າ PDFCRAFT_MODELS ໄປຫາໂຟນເດີທີ່ບັນຈຸໄຟລ໌ດັ່ງກ່າວ.
 	Settings	ການຕັ້ງຄ່າ

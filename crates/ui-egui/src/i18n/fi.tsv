@@ -1251,6 +1251,7 @@
 	Adds invisible text over each word; the page image is not changed	Lisää näkymätöntä tekstiä jokaisen sanan päälle; sivun kuvaa ei muuteta
 	Downsample to	Alinäytteistä tarkkuuteen
 	Also recognize pages that already have text	Tunnista myös sivut, joilla on jo tekstiä
+	Deskew pages	Suorista sivut
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Myös näiden sivujen kuvat tunnistetaan; sivun tekstissä jo olevia sanoja ei lisätä uudelleen
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Tekstintunnistusta ei ole asennettu: sen mallitiedostot puuttuvat. Asenna PdfCraft uudelleen tai aseta PDFCRAFT_MODELS osoittamaan kansioon, jossa ne ovat.
 	Settings	Asetukset

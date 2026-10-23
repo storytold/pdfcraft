@@ -269,6 +269,7 @@
 	Allow Rich Text Formatting	Tillat rik tekstformatering
 	Allow user to enter custom text	Tillat brukeren å skrive inn egen tekst
 	Also recognize pages that already have text	Gjenkjenn også sider som allerede har tekst
+	Deskew pages	Rett opp sider
 	Alternate text	Alternativ tekst
 	An action with this name already exists.	En handling med dette navnet finnes allerede.
 	An open-source PDF workbench — local, private, and scriptable.	En PDF-arbeidsbenk med åpen kildekode – lokal, privat og skriptbar.

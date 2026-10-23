@@ -1297,6 +1297,7 @@
 	Adds invisible text over each word; the page image is not changed	متن نامرئی روی هر واژه می‌افزاید؛ تصویر صفحه تغییر نمی‌کند
 	Downsample to	کاهش نمونهبرداری به
 	Also recognize pages that already have text	همچنین صفحه‌هایی که از قبل متن دارند را تشخیص بده
+	Deskew pages	صاف کردن صفحه‌ها
 	Pictures on those pages are recognized too; words already in the page's text are not added again	تصویر‌های آن صفحه‌ها نیز تشخیص داده می‌شوند؛ واژه‌هایی که از قبل در متن صفحه هستند دوباره افزوده نمی‌شوند
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	تشخیص متن نصب نیست: فایل‌های مدل آن وجود ندارند. PdfCraft را دوباره نصب کنید، یا PDFCRAFT_MODELS را به پوشه ای که آن‌ها را دارد تنظیم کنید.
 	Settings	تنظیمات

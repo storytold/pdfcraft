@@ -931,6 +931,7 @@
 	Adds invisible text over each word; the page image is not changed	Adiciona texto invisível sobre cada palavra; a imagem da página não é alterada
 	Downsample to	Reduzir amostragem para
 	Also recognize pages that already have text	Reconhecer também as páginas que já contêm texto
+	Deskew pages	Endireitar páginas
 	Pictures on those pages are recognized too; words already in the page's text are not added again	As imagens dessas páginas também são reconhecidas; as palavras que já estão no texto da página não são adicionadas novamente
 	Settings	Configurações
 	Protect	Proteger
