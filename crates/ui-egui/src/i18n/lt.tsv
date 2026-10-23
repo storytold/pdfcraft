@@ -2776,3 +2776,11 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+# Fast Web View (linearized saving)
+	Saving	Įrašymas
+	Save As optimizes for Fast Web View	„Įrašyti kaip“ optimizuoja greitam peržiūrėjimui internete
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	„Įrašyti kaip“ įrašo linearizuotą failą, kurio pirmasis puslapis parodomas dar neatsisiuntus likusios dalies. „Įrašyti“ prideda pakeitimus failo gale, todėl greitas peržiūrėjimas internete išjungiamas.
+	Fast Web View	Greitas peržiūrėjimas internete
+	Saved {name}, optimized for Fast Web View	Įrašyta: {name}, optimizuota greitam peržiūrėjimui internete
+	Saved {name} without Fast Web View: {e}	Įrašyta be greito peržiūrėjimo internete: {name} ({e})
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Įrašyta: {name}. Greitas peržiūrėjimas internete išjungtas: „Įrašyti“ prideda pakeitimus failo gale.

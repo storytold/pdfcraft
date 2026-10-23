@@ -2515,3 +2515,11 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+# Fast Web View (linearized saving)
+	Saving	保存の設定
+	Save As optimizes for Fast Web View	「別名で保存」で高速 Web 表示用に最適化する
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	「別名で保存」は、残りのダウンロードが終わる前に最初のページを表示できるリニアライズ済みのファイルを書き出します。「保存」は変更をファイルの末尾に追加するため、高速 Web 表示がオフになります。
+	Fast Web View	高速 Web 表示
+	Saved {name}, optimized for Fast Web View	{name} を高速 Web 表示用に最適化して保存しました
+	Saved {name} without Fast Web View: {e}	{name} を高速 Web 表示なしで保存しました: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} を保存しました。高速 Web 表示はオフです: 「保存」は変更をファイルの末尾に追加します。

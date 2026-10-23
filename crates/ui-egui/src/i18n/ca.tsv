@@ -2774,3 +2774,10 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Saving	Desament
+	Save As optimizes for Fast Web View	Desa com a optimitza per a la visualització ràpida a la web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Desa com a escriu un fitxer linealitzat, la primera pàgina del qual es mostra abans que s'hagi baixat la resta. Desa afegeix els canvis al final del fitxer, cosa que desactiva la visualització ràpida a la web.
+	Fast Web View	Visualització ràpida a la web
+	Saved {name}, optimized for Fast Web View	S'ha desat {name}, optimitzat per a la visualització ràpida a la web
+	Saved {name} without Fast Web View: {e}	S'ha desat {name} sense visualització ràpida a la web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	S'ha desat {name}. La visualització ràpida a la web està desactivada: Desa afegeix els canvis al final del fitxer.

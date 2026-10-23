@@ -338,6 +338,8 @@ struct Editor {
     /// extract, create) or one restored from recovery. It stays unsaved until a save, whatever
     /// undo brings back, or closing it would lose the whole document without asking.
     unsaved_file: bool,
+    /// Whether [`Self::saved`] is linearized (Fast Web View), read when it was opened or saved.
+    saved_linearization: pdfcraft_cos::Linearization,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     keys: Keys,
@@ -673,6 +675,15 @@ impl Document {
     /// Signed: at least one signature field holds a signature.
     pub fn is_signed(&self) -> bool {
         self.signatures.iter().any(|s| s.signed)
+    }
+
+    /// Whether the file as last opened or saved is linearized (Fast Web View, ISO 32000-2
+    /// Annex F), as Document Properties shows it. Edits count once saved: an incremental Save
+    /// of a linearized file leaves it [`pdfcraft_cos::Linearization::Stale`] (the update is
+    /// appended after the first page's data), and only a linearized save makes it fast again.
+    /// `None` when the document could not be read for editing.
+    pub fn linearization(&self) -> Option<pdfcraft_cos::Linearization> {
+        self.editor.as_ref().map(|e| e.saved_linearization)
     }
 
     /// Whether comments are hidden (Comments ▸ Hide all comments).
@@ -3677,12 +3688,14 @@ impl Session {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
                 let saved = cos.bytes().clone();
+                let saved_linearization = cos.linearization();
                 (
                     Some(Editor {
                         cos,
                         saved,
                         saved_keys: keys.clone(),
                         unsaved_file: false,
+                        saved_linearization,
                         undo: Vec::new(),
                         redo: Vec::new(),
                         keys,
@@ -4295,6 +4308,22 @@ impl Session {
         guard(|| write_full(&editor.cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 
+    /// Save As optimized for Fast Web View: the current state as a linearized file (ISO 32000-2
+    /// Annex F), a full rewrite that puts the first page's objects first with hint tables for
+    /// the rest. Refused for signed documents ([`EditError::Signed`]), like any full rewrite, and
+    /// for documents [`pdfcraft_cos::write_linearized`] cannot linearize (no pages, a page listed
+    /// twice), with the reason. The result counts the pages that received attributes they used to
+    /// inherit from the page tree.
+    pub fn save_linearized_bytes(&self, id: DocId) -> Result<pdfcraft_cos::Linearized, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.is_signed() {
+            return Err(EditError::Signed);
+        }
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+        guard(|| pdfcraft_cos::write_linearized(&editor.cos, &opts)).map_err(EditError::Write)?.map_err(|e| EditError::Write(e.to_string()))
+    }
+
     /// Check that `bytes`, from [`Self::save_bytes`] or [`Self::save_full_bytes`], reopen as this
     /// document before they are written (#1698): [`Self::mark_saved`] only finds out after the
     /// file has been replaced. Same error as `mark_saved`.
@@ -4318,6 +4347,7 @@ impl Session {
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
+            editor.saved_linearization = editor.cos.linearization();
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());

@@ -2750,3 +2750,6 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Saving	सहेजना
+	Save As optimizes for Fast Web View	इस रूप में सहेजें तेज़ वेब व्यू के लिए ऑप्टिमाइज़ करता है
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	इस रूप में सहेजें एक लीनियराइज़्ड फ़ाइल लिखता है, जिसका पहला पृष्ठ बाकी के डाउनलोड होने से पहले दिखता है। सहेजें बदलावों को फ़ाइल के अंत में जोड़ता है, जिससे तेज़ वेब व्यू बंद हो जाता है।

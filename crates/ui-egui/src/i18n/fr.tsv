@@ -2781,3 +2781,11 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+# Fast Web View (linearized saving)
+	Saving	Enregistrement
+	Save As optimizes for Fast Web View	Enregistrer sous optimise pour l'affichage web rapide
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Enregistrer sous écrit un fichier linéarisé dont la première page s'affiche avant la fin du téléchargement. Enregistrer ajoute les modifications à la fin du fichier, ce qui désactive l'affichage web rapide.
+	Fast Web View	Affichage web rapide
+	Saved {name}, optimized for Fast Web View	{name} enregistré, optimisé pour l'affichage web rapide
+	Saved {name} without Fast Web View: {e}	{name} enregistré sans affichage web rapide : {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} enregistré. L'affichage web rapide est désactivé : Enregistrer ajoute les modifications à la fin du fichier.

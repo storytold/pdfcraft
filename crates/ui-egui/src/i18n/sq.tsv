@@ -2500,3 +2500,6 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Saving	Ruajtja
+	Save As optimizes for Fast Web View	Ruaj si e optimizon për pamje të shpejtë në ueb
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Ruaj si shkruan një skedar të linearizuar, faqja e parë e të cilit shfaqet para se të shkarkohet pjesa tjetër. Ruaj i shton ndryshimet në fund të skedarit, gjë që e çaktivizon pamjen e shpejtë në ueb.

@@ -2780,3 +2780,11 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+# Fast Web View (linearized saving)
+	Saving	Lưu tệp
+	Save As optimizes for Fast Web View	Lưu thành sẽ tối ưu hóa để xem nhanh trên web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Lưu thành ghi một tệp đã tuyến tính hóa, có trang đầu hiện ra trước khi phần còn lại tải xong. Lưu thêm các thay đổi vào cuối tệp, khiến tính năng xem nhanh trên web bị tắt.
+	Fast Web View	Xem nhanh trên web
+	Saved {name}, optimized for Fast Web View	Đã lưu {name}, đã tối ưu hóa để xem nhanh trên web
+	Saved {name} without Fast Web View: {e}	Đã lưu {name} nhưng không có xem nhanh trên web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Đã lưu {name}. Xem nhanh trên web đã tắt: Lưu thêm các thay đổi vào cuối tệp.

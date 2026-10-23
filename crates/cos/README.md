@@ -31,6 +31,8 @@ doc.free(r);
 
 let bytes = write_incremental(&doc, &SaveOptions::default())?;  // append a revision
 let bytes = write_full(&doc, &SaveOptions::default())?;         // garbage-collected rewrite
+let fast  = write_linearized(&doc, &SaveOptions::default())?;   // Fast Web View (Annex F)
+let yes   = doc.linearization() == Linearization::Yes;          // as opened
 ```
 
 Both writers **return the bytes**; the caller decides where they go, which is what lets the engine
@@ -72,19 +74,28 @@ garbage-collecting path. By default (`SaveOptions::object_streams`) it packs non
 into compressed object streams with a cross-reference stream (PDF 1.5+); turning that off writes a
 classic table any reader accepts.
 
+`write_linearized` is the Fast Web View rewrite (ISO 32000-2 Annex F): the same reachable objects,
+laid out first page first behind a linearization parameter dictionary and a first-page
+cross-reference section, with a primary hint stream (page offset, shared object and outline hint
+tables) saying where every page starts. It uses classic tables and no object streams, copies page
+attributes inherited from the page tree onto the pages, keeps the document's encryption, and
+refuses (`CosError::Linearize`) a document without pages or whose page tree lists a page twice.
+`doc.linearization()` tells, on open, whether a file is linearized and still valid: an incremental
+update after it leaves the dictionary describing a file that no longer exists
+(`Linearization::Stale`).
+
 Dictionaries keep their key order and streams keep their *encoded* bytes, so rewritten objects stay
 recognisable in a diff and byte-stable when re-serialized.
 
 ## Errors
 
 `CosError`: `NotPdf`, `Syntax { offset, detail }`, `MissingObject`, `NotADictionary`, `Filter`,
-`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`.
+`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`, `ReadOnlyLimit`, `Linearize`.
 
 ## Not done here
 
 - Streaming very large files within a memory budget (`ByteSource`, `core.lazy-loading`); files are
   read whole today.
-- Linearized output, Fast Web View (`core.linearization`, M11).
 - Structural validation against the Arlington model (`core.arlington-validation`), which will live
   in the reserved `arlington` crate.
 - Image codecs. `pdfcraft-filters` carries the non-image filters; DCT, JPX, JBIG2 and CCITT are

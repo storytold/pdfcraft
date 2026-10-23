@@ -92,6 +92,27 @@ fn the_documented_options_still_edit_and_save() {
     }
 }
 
+/// `--fast-web-view` writes the edited document linearized (Fast Web View, ISO 32000-2 Annex F),
+/// and `info` tells a linearized file from an ordinary one.
+#[test]
+fn fast_web_view_writes_a_linearized_file_that_info_reports() {
+    let input = tmp("fast-web-view", "in.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    let output = tmp("fast-web-view", "fast.pdf");
+    let args = ["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--rotate", "1:90", "--fast-web-view"];
+    let out = Command::new(BIN).args(args).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(first_page_rotation(&output), 90);
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&output).unwrap())).unwrap();
+    assert_eq!(doc.linearization(), pdfcraft_cos::Linearization::Yes);
+    for (path, fast) in [(&input, false), (&output, true)] {
+        let info = Command::new(BIN).args(["info", path.to_str().unwrap()]).output().unwrap();
+        assert!(info.status.success(), "{}", String::from_utf8_lossy(&info.stderr));
+        let json: serde_json::Value = serde_json::from_slice(&info.stdout).unwrap();
+        assert_eq!(json["fast_web_view"], serde_json::json!(fast), "{}", path.display());
+    }
+}
+
 /// `--out` naming the input replaces it through a staging file (#2166): the result is the
 /// edited, reopenable file, and nothing is left beside it.
 #[test]

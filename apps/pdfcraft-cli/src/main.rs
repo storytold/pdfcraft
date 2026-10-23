@@ -61,8 +61,9 @@ pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JS
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
-                      [--insert-blank 1] [--title T] [--author A] [--full]
-                      (options run in order; page numbers refer to the document after the earlier options)
+                      [--insert-blank 1] [--title T] [--author A] [--full] [--fast-web-view]
+                      (options run in order; page numbers refer to the document after the earlier options;
+                      --fast-web-view writes it linearized: a full rewrite whose first page loads first)
 pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
 pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
@@ -309,6 +310,12 @@ fn info(args: &[String]) -> Result<(), CliError> {
     let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
+    // Linearized (Fast Web View, ISO 32000-2 Annex F); a stale linearization says why it is not.
+    let linearization = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok().map(|d| d.linearization());
+    let stale = match linearization {
+        Some(pdfcraft_cos::Linearization::Stale(why)) => Some(why.to_string()),
+        _ => None,
+    };
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
     let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
         .then(|| {
@@ -336,6 +343,8 @@ fn info(args: &[String]) -> Result<(), CliError> {
         "first_page_pt": info.pages.first().map(|p| [p.width, p.height]),
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
+        "fast_web_view": linearization.map(pdfcraft_cos::Linearization::is_fast_web_view),
+        "linearization_stale": stale,
         "pdfa": declared.pdfa.as_ref().map(|(part, conformance)| format!("PDF/A-{part}{}", conformance.to_lowercase())),
         "pdfua": declared.pdfua,
         "output_intents": declared.output_intents,
@@ -449,9 +458,10 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
 }
 
 /// The options `edit` understands, for its "unknown option" message.
-const EDIT_OPTIONS: &str = "--out, --password, --full, --rotate, --delete, --move, --insert-blank, --title, --author";
+const EDIT_OPTIONS: &str = "--out, --password, --full, --fast-web-view, --rotate, --delete, --move, --insert-blank, --title, --author";
 
-/// Apply page and metadata edits through the engine and save (incrementally unless `--full`).
+/// Apply page and metadata edits through the engine and save (incrementally unless `--full`, or
+/// linearized for Fast Web View with `--fast-web-view`).
 ///
 /// Every argument is parsed before the file is opened: an option this command does not know
 /// (a typo like `--rotat`) is an error, not something to skip — skipping it would write an
@@ -462,6 +472,7 @@ fn edit(args: &[String]) -> Result<(), CliError> {
     let mut out: Option<&str> = None;
     let mut password: Option<&str> = None;
     let mut full = false;
+    let mut fast_web_view = false;
     let mut edits = Vec::new();
     let mut i = 0;
     while let Some(arg) = args.get(i).map(String::as_str) {
@@ -469,6 +480,11 @@ fn edit(args: &[String]) -> Result<(), CliError> {
         match arg {
             "--full" => {
                 full = true;
+                i += 1;
+                continue;
+            }
+            "--fast-web-view" => {
+                fast_web_view = true;
                 i += 1;
                 continue;
             }
@@ -549,7 +565,14 @@ fn edit(args: &[String]) -> Result<(), CliError> {
         }
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
-    let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
+    let bytes = if fast_web_view {
+        session.save_linearized_bytes(id).map(|l| std::sync::Arc::new(l.bytes))
+    } else if full {
+        session.save_full_bytes(id)
+    } else {
+        session.save_bytes(id)
+    }
+    .map_err(|e| e.to_string())?;
     // As the app's Save: the file must reopen with its pages before it replaces anything (#1698).
     session.check_save(id, &bytes).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
@@ -729,11 +752,13 @@ fn check_one(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Open with cos, touch every object, edit the catalog, save incrementally and in full (both
-/// output styles), and reopen each result. Errors are fine; panics, hangs and aborts are bugs.
+/// Open with cos, touch every object, edit the catalog, save incrementally, in full (both
+/// output styles) and linearized, and reopen each result. Errors are fine; panics, hangs and
+/// aborts are bugs.
 fn edit_round_trip(bytes: &[u8]) {
-    use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
+    use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental, write_linearized};
     let Ok(mut doc) = Document::open(Arc::new(bytes.to_vec())) else { return };
+    let _ = doc.linearization();
     for num in doc.object_numbers().into_iter().take(20_000) {
         if let Ok(o) = doc.try_get(num)
             && let Object::Stream(s) = &*o
@@ -745,12 +770,14 @@ fn edit_round_trip(bytes: &[u8]) {
         let _ = doc.update_dict(root, |d| d.set(b"PdfCraftFuzz".to_vec(), Object::Bool(true)));
     }
     let classic = SaveOptions { object_streams: false, ..SaveOptions::default() };
-    for out in [write_incremental(&doc, &SaveOptions::default()), write_full(&doc, &SaveOptions::default()), write_full(&doc, &classic)]
+    let linearized = write_linearized(&doc, &SaveOptions::default()).map(|l| l.bytes);
+    for out in [write_incremental(&doc, &SaveOptions::default()), write_full(&doc, &SaveOptions::default()), write_full(&doc, &classic), linearized]
         .into_iter()
         .flatten()
     {
         if let Ok(again) = Document::open(Arc::new(out)) {
             let _ = again.root().map(|r| again.get(r));
+            let _ = again.linearization();
         }
     }
 }

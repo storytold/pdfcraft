@@ -143,7 +143,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_save",
             "Save a document",
-            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
+            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable. fast_web_view writes the file linearized (Fast Web View, ISO 32000-2 Annex F): a full rewrite with the first page's objects first and hint tables for the rest, so a viewer reading it over a network shows page 1 before the rest arrives. It is refused for signed documents, and a later incremental save turns Fast Web View off again (doc_info reports it).",
         )
         .destructive()
         .cmd("file.save")
@@ -152,7 +152,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "doc": doc(),
                 "path": { "type": "string", "description": "Save as this file. Omit to save in place." },
                 "full": { "type": "boolean", "description": "Force a full rewrite (or, with false, an incremental update)." },
-                "flatten_fill_sign": { "type": "boolean", "description": "Bake Fill & Sign marks into the page before writing. Default false." }
+                "flatten_fill_sign": { "type": "boolean", "description": "Bake Fill & Sign marks into the page before writing. Default false." },
+                "fast_web_view": { "type": "boolean", "description": "Write the file linearized for Fast Web View (a full rewrite; cannot be combined with full: false). Default false." }
             }),
             &["doc"],
         )),
