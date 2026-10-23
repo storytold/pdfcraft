@@ -18,6 +18,7 @@ mod aes_cbc;
 mod rc4;
 
 use md5::{Digest as _, Md5};
+use sha1::Sha1;
 use sha2::{Sha256, Sha384, Sha512};
 
 pub use aes_cbc::{aes_cbc_decrypt, aes_cbc_encrypt};
@@ -25,6 +26,9 @@ pub use rc4::rc4;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum CryptError {
+    /// Public-key security: the file opens with a certificate's private key, not a password.
+    #[error("the document is encrypted for specific people (certificate security)")]
+    NeedsCertificate,
     #[error("the password is incorrect")]
     WrongPassword,
     #[error("unsupported security handler: {0}")]
@@ -73,6 +77,47 @@ pub struct EncryptDict {
     pub stm_f: Vec<u8>,
     pub str_f: Vec<u8>,
     pub ef_f: Vec<u8>,
+    /// Public-key security (`/Filter /Adobe.PubSec`, §7.6.5): `/SubFilter` and the
+    /// `/Recipients` CMS envelopes (from the crypt filter for V 4+, else the top level).
+    pub sub_filter: Vec<u8>,
+    pub recipients: Vec<Vec<u8>>,
+}
+
+/// Public-key security to create (§7.6.5): the document encrypted for the holders of the
+/// certificates whose envelopes `recipients` are. Each envelope wraps `seed` followed by the
+/// 4 permission bytes for that recipient; the file key is derived from the seed and the
+/// envelopes, so the envelopes are made first (pdfcraft-sign's `envelope`) and handed here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublicKeyEncryption {
+    /// AES-128 (`/V 4`, `AESV2`) or AES-256 (`/V 5`, `AESV3`); RC4 is not written.
+    pub algorithm: Algorithm,
+    pub recipients: Vec<Vec<u8>>,
+    pub seed: [u8; 20],
+    /// The permissions of the person opening (the same bytes every envelope carries).
+    pub permissions: i32,
+    pub encrypt_metadata: bool,
+}
+
+/// The public-key handler's name.
+pub const PUBSEC_FILTER: &[u8] = b"Adobe.PubSec";
+/// The sub-filter every reader knows (CMS `EnvelopedData` per recipient, PDF 1.6).
+pub const PUBSEC_SUBFILTER: &[u8] = b"adbe.pkcs7.s5";
+/// The crypt filter name Acrobat uses for public-key security.
+pub const PUBSEC_CF: &[u8] = b"DefaultCryptFilter";
+
+/// The 4 permission bytes an envelope carries after the seed (big-endian `/P`).
+pub fn permission_bytes(permissions: i32) -> [u8; 4] {
+    permissions.to_be_bytes()
+}
+
+/// Read the permissions back from an envelope's content (seed + 4 bytes).
+pub fn permissions_from_envelope(content: &[u8]) -> Option<([u8; 20], i32)> {
+    if content.len() < 24 {
+        return None;
+    }
+    let mut seed = [0u8; 20];
+    seed.copy_from_slice(&content[..20]);
+    Some((seed, i32::from_be_bytes([content[20], content[21], content[22], content[23]])))
 }
 
 /// Which password authenticated the document.
@@ -186,6 +231,9 @@ impl SecurityHandler {
     /// Authenticate with `password` (tried as owner password, then user password). `None`
     /// tries the empty password, which opens documents that only have an owner password.
     pub fn open(dict: EncryptDict, id0: &[u8], password: Option<&str>) -> Result<Self, CryptError> {
+        if dict.filter == PUBSEC_FILTER {
+            return Err(CryptError::NeedsCertificate);
+        }
         if !dict.filter.is_empty() && dict.filter != b"Standard" {
             return Err(CryptError::Unsupported(format!("/Filter /{}", String::from_utf8_lossy(&dict.filter))));
         }
@@ -232,6 +280,25 @@ impl SecurityHandler {
             return Err(CryptError::WrongPassword);
         }
         Ok(owner)
+    }
+
+    /// Public-key security (§7.6.5.3): the file key from the seed one of the envelopes gave up
+    /// and the envelopes themselves. `permissions` are the bytes that came with the seed.
+    pub fn open_public_key(mut dict: EncryptDict, seed: &[u8; 20], permissions: i32) -> Result<Self, CryptError> {
+        if dict.filter != PUBSEC_FILTER {
+            return Err(CryptError::Unsupported(format!("/Filter /{} is not public-key security", String::from_utf8_lossy(&dict.filter))));
+        }
+        if dict.sub_filter != PUBSEC_SUBFILTER && dict.sub_filter != b"adbe.pkcs7.s4" && dict.sub_filter != b"adbe.pkcs7.s3" {
+            return Err(CryptError::Unsupported(format!("/SubFilter /{}", String::from_utf8_lossy(&dict.sub_filter))));
+        }
+        let method = match dict.v {
+            1..=3 => Method::Rc4,
+            _ => dict.crypt_filters.iter().find(|(n, _)| *n == dict.stm_f).map(|(_, m)| *m).unwrap_or(Method::Identity),
+        };
+        let key = public_key_file_key(seed, &dict.recipients, dict.encrypt_metadata, method, dict.length_bits);
+        dict.p = permissions;
+        let auth = if permissions == -1 { Auth::Owner } else { Auth::User };
+        Ok(Self::new(dict, key, auth, None))
     }
 
     pub fn auth(&self) -> Auth {
@@ -641,6 +708,67 @@ fn expand(seed: &[u8; 32], label: &[u8], n: usize) -> Vec<u8> {
 }
 
 /// Build the `/Encrypt` values and an authenticated (owner) handler for a new encryption.
+/// Algorithm 3 of §7.6.5.3: SHA-256 (AESV3) or SHA-1 (everything else) over the seed, the
+/// envelopes in order and, when metadata is left in clear, `FF FF FF FF`; the first bytes of
+/// the digest are the file key.
+fn public_key_file_key(seed: &[u8; 20], recipients: &[Vec<u8>], encrypt_metadata: bool, method: Method, length_bits: i64) -> Vec<u8> {
+    let feed = |h: &mut dyn FnMut(&[u8])| {
+        h(seed);
+        for r in recipients {
+            h(r);
+        }
+        if !encrypt_metadata {
+            h(&[0xFF; 4]);
+        }
+    };
+    match method {
+        Method::Aes256 => {
+            let mut h = Sha256::new();
+            feed(&mut |b| h.update(b));
+            h.finalize().to_vec()
+        }
+        Method::Aes128 => {
+            let mut h = Sha1::new();
+            feed(&mut |b| h.update(b));
+            h.finalize()[..16].to_vec()
+        }
+        _ => {
+            let mut h = Sha1::new();
+            feed(&mut |b| h.update(b));
+            let n = (length_bits.clamp(40, 128) / 8) as usize;
+            h.finalize()[..n].to_vec()
+        }
+    }
+}
+
+/// Public-key security for the recipients (§7.6.5), authenticated as the owner.
+pub fn create_public_key(params: &PublicKeyEncryption) -> Result<SecurityHandler, CryptError> {
+    if params.recipients.is_empty() {
+        return Err(CryptError::Unsupported("public-key security needs at least one recipient".into()));
+    }
+    let (v, length_bits, method) = match params.algorithm {
+        Algorithm::Aes256 => (5, 256, Method::Aes256),
+        Algorithm::Aes128 => (4, 128, Method::Aes128),
+        other => return Err(CryptError::Unsupported(format!("{other:?} with public-key security (use AES)"))),
+    };
+    let dict = EncryptDict {
+        filter: PUBSEC_FILTER.to_vec(),
+        sub_filter: PUBSEC_SUBFILTER.to_vec(),
+        v,
+        r: 0,
+        length_bits,
+        p: params.permissions,
+        encrypt_metadata: params.encrypt_metadata,
+        crypt_filters: vec![(PUBSEC_CF.to_vec(), method)],
+        stm_f: PUBSEC_CF.to_vec(),
+        str_f: PUBSEC_CF.to_vec(),
+        recipients: params.recipients.clone(),
+        ..Default::default()
+    };
+    let key = public_key_file_key(&params.seed, &dict.recipients, dict.encrypt_metadata, method, length_bits);
+    Ok(SecurityHandler::new(dict, key, Auth::Owner, None))
+}
+
 pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
     // Bits 7–8 and 13–32 must be 1; bits 1–2 must be 0 (§7.6.4.2).
     let p = (params.permissions | !0xFFF | 0xC0) & !0x3;

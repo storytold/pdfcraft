@@ -2431,6 +2431,31 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	無法加密：{e}
+	Encrypt with certificate…	使用憑證加密…
+	Encrypt with Certificate	使用憑證加密
+	Only the recipients can open the document, each with the private key of their own certificate.	只有收件者可以開啟此文件，每人使用自己憑證的私密金鑰。
+	Recipients	收件者
+	No recipients yet.	尚無收件者。
+	{name} (you)	{name}（你）
+	Expires {date}	到期 {date}
+	All permissions	所有權限
+	Add certificate file…	新增憑證檔案…
+	Add your digital ID	新增你的數位 ID
+	Certificate	憑證
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	收件者中沒有你的數位 ID：你將無法開啟儲存的文件。
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	限制適用於沒有「所有權限」的收件者。儲存時套用。
+	Digital ID required	需要數位 ID
+	Choose a digital ID file	選擇數位 ID 檔案
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}”已為特定人員加密。請選擇你的數位 ID 並輸入其密碼以開啟。
+	Add at least one recipient.	請至少新增一位收件者。
+	Only certificates with RSA keys can be recipients.	只有具 RSA 金鑰的憑證才能作為收件者。
+	None of your digital IDs can open this document.	你的數位 ID 都無法開啟此文件。
+	Certificate encryption will be applied when you save	憑證加密將在儲存時套用
+	Encrypt for recipient	為收件者加密
+	Encrypt for recipients	為收件者加密
+	The password is incorrect.	密碼不正確。
 	Font	字型
 	Bulleted list	項目符號清單
 	Numbered list	編號清單

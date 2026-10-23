@@ -2487,6 +2487,31 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Δεν ήταν δυνατή η κρυπτογράφηση: {e}
+	Encrypt with certificate…	Κρυπτογράφηση με πιστοποιητικό…
+	Encrypt with Certificate	Κρυπτογράφηση με πιστοποιητικό
+	Only the recipients can open the document, each with the private key of their own certificate.	Μόνο οι παραλήπτες μπορούν να ανοίξουν το έγγραφο, ο καθένας με το ιδιωτικό κλειδί του δικού του πιστοποιητικού.
+	Recipients	Παραλήπτες
+	No recipients yet.	Δεν υπάρχουν ακόμη παραλήπτες.
+	{name} (you)	{name} (εσείς)
+	Expires {date}	Λήγει στις {date}
+	All permissions	Όλα τα δικαιώματα
+	Add certificate file…	Προσθήκη αρχείου πιστοποιητικού…
+	Add your digital ID	Προσθήκη της ψηφιακής σας ταυτότητας
+	Certificate	Πιστοποιητικό
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Κανένας από τους παραλήπτες δεν είναι μία από τις ψηφιακές σας ταυτότητες: δεν θα μπορείτε να ανοίξετε το αποθηκευμένο έγγραφο.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Οι περιορισμοί ισχύουν για παραλήπτες χωρίς «Όλα τα δικαιώματα». Εφαρμόζεται κατά την αποθήκευση.
+	Digital ID required	Απαιτείται ψηφιακή ταυτότητα
+	Choose a digital ID file	Επιλέξτε αρχείο ψηφιακής ταυτότητας
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	Το «{name}» είναι κρυπτογραφημένο για συγκεκριμένα άτομα. Επιλέξτε την ψηφιακή σας ταυτότητα και εισαγάγετε τον κωδικό της για να το ανοίξετε.
+	Add at least one recipient.	Προσθέστε τουλάχιστον έναν παραλήπτη.
+	Only certificates with RSA keys can be recipients.	Μόνο πιστοποιητικά με κλειδιά RSA μπορούν να είναι παραλήπτες.
+	None of your digital IDs can open this document.	Καμία από τις ψηφιακές σας ταυτότητες δεν μπορεί να ανοίξει αυτό το έγγραφο.
+	Certificate encryption will be applied when you save	Η κρυπτογράφηση με πιστοποιητικό θα εφαρμοστεί κατά την αποθήκευση
+	Encrypt for recipient	Κρυπτογράφηση για παραλήπτη
+	Encrypt for recipients	Κρυπτογράφηση για παραλήπτες
+	The password is incorrect.	Ο κωδικός πρόσβασης είναι λανθασμένος.
 	Font	Γραμματοσειρά
 	Bulleted list	Λίστα με κουκκίδες
 	Numbered list	Αριθμημένη λίστα

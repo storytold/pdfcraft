@@ -129,6 +129,25 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
+        t("doc_protect_certificates", "Encrypt with certificates", "Encrypt the document for the holders of certificates (Acrobat: Protect ▸ Encrypt with certificate): `certificates` are files (.cer/.crt/.pem/.der, or the certificates in a .p12 with `password`), RSA ones; every holder gets the same permissions (printing none/low/high, changes none/pages/fill-sign/comment-fill-sign/any-except-extract, copy, accessibility; omit all for everything). `owners` are certificate files whose holders get everything whatever the restrictions (yourself, so you can still open and change the file). Takes effect on the next save (a full rewrite); the open session keeps everything. compatibility aes-256 (default) or aes-128.")
+            .cmd("protect.certificate")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "certificates": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "owners": { "type": "array", "items": { "type": "string" } },
+                    "password": { "type": "string", "description": "For a .p12 among the certificates." },
+                    "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Default high when another restriction is given; omit all four for everything allowed." },
+                    "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Default none when another restriction is given; omit all four for everything allowed." },
+                    "copy": { "type": "boolean", "description": "Allow copying text and images (default false when another restriction is given; omit all four for everything allowed)." },
+                    "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (default true when another restriction is given; omit all four for everything allowed)." },
+                    "compatibility": { "type": "string", "enum": ["aes-256", "aes-128"], "description": "Default aes-256." },
+                    "encrypt_metadata": { "type": "boolean" },
+                }),
+                &["doc", "certificates"],
+            )),
+        t("identity_add", "Add a digital identity", "Add a digital ID (.p12/.pfx with its password) to the session's identities, which open documents encrypted with certificates (doc_open tries them on the file's envelopes). Returns the identities' certificates.")
+            .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string" }, "clear": { "type": "boolean" } }), &[])),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),

@@ -2481,6 +2481,31 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Impossible de chiffrer : {e}
+	Encrypt with certificate…	Chiffrer avec un certificat…
+	Encrypt with Certificate	Chiffrer avec un certificat
+	Only the recipients can open the document, each with the private key of their own certificate.	Seuls les destinataires peuvent ouvrir le document, chacun avec la clé privée de son propre certificat.
+	Recipients	Destinataires
+	No recipients yet.	Aucun destinataire pour l'instant.
+	{name} (you)	{name} (vous)
+	Expires {date}	Expire le {date}
+	All permissions	Toutes les autorisations
+	Add certificate file…	Ajouter un fichier de certificat…
+	Add your digital ID	Ajouter votre ID numérique
+	Certificate	Certificat
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Aucun destinataire n'est l'un de vos ID numériques : vous ne pourrez pas ouvrir le document enregistré.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Les restrictions s'appliquent aux destinataires sans « Toutes les autorisations ». Appliqué à l'enregistrement.
+	Digital ID required	ID numérique requis
+	Choose a digital ID file	Choisir un fichier d'ID numérique
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	«{name}» est chiffré pour des personnes précises. Choisissez votre ID numérique et saisissez son mot de passe pour l'ouvrir.
+	Add at least one recipient.	Ajoutez au moins un destinataire.
+	Only certificates with RSA keys can be recipients.	Seuls les certificats à clé RSA peuvent être destinataires.
+	None of your digital IDs can open this document.	Aucun de vos ID numériques ne peut ouvrir ce document.
+	Certificate encryption will be applied when you save	Le chiffrement par certificat sera appliqué à l'enregistrement
+	Encrypt for recipient	Chiffrer pour un destinataire
+	Encrypt for recipients	Chiffrer pour des destinataires
+	The password is incorrect.	Le mot de passe est incorrect.
 	Font	Police
 	Bulleted list	Liste à puces
 	Numbered list	Liste numérotée
@@ -2636,7 +2661,6 @@ animation effects	Off	Désactivés
 	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Le jeton d'horodatage incorporé est valide et son autorité est approuvée ; l'heure de confiance est {}.
 	The font {} isn't embedded	La police {} n'est pas incorporée
 	The metadata doesn't identify the file as {}	Les métadonnées n'identifient pas le fichier comme {}
-	The password is incorrect.	Le mot de passe est incorrect.
 	The password must have at least 6 characters.	Le mot de passe doit comporter au moins 6 caractères.
 	The passwords do not match.	Les mots de passe ne correspondent pas.
 	The security settings don't allow screen readers to read the text	Les paramètres de protection ne permettent pas aux lecteurs d'écran de lire le texte

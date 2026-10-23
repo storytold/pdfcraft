@@ -564,16 +564,15 @@ impl PdfCraftApp {
     pub fn open_revision(&mut self, n: usize) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        // The revision's byte range, as `Session::open_revision` reads it. An unknown `n`
-        // skips the lookup: the whole file could otherwise match the latest revision's tab
-        // instead of erroring.
+        // The revision, as `Session::open_revision` reads it. An unknown `n` skips the lookup:
+        // the whole file could otherwise match the latest revision's tab instead of erroring.
         let ends = doc.revision_ends();
-        if let Some(&end) = n.checked_sub(1).and_then(|k| ends.get(k)) {
-            let end = end.min(doc.bytes.len());
-            if let Some(index) = self.find_snapshot(SnapshotKind::Revision, &doc.name, &doc.bytes[..end]) {
-                self.active = Some(index);
-                return;
-            }
+        if let Some(&end) = n.checked_sub(1).and_then(|k| ends.get(k))
+            && let Ok(revision) = doc.file_prefix(end)
+            && let Some(index) = self.find_snapshot(SnapshotKind::Revision, &doc.name, &revision)
+        {
+            self.active = Some(index);
+            return;
         }
         let from = doc.name.clone();
         match self.session.open_revision(id, n) {
@@ -603,7 +602,7 @@ impl PdfCraftApp {
         let mut fallback = None;
         for (i, v) in self.views.iter().enumerate() {
             let same_kind = v.snapshot.as_ref().is_some_and(|s| s.kind == kind);
-            let same_bytes = same_kind && self.session.get(v.id).is_some_and(|d| d.bytes.as_slice() == bytes);
+            let same_bytes = same_kind && self.session.get(v.id).is_some_and(|d| d.file_bytes().is_ok_and(|f| f.as_slice() == bytes));
             if !same_bytes {
                 continue;
             }
@@ -620,15 +619,23 @@ impl PdfCraftApp {
     pub fn view_signed_version(&mut self, len: usize, revision: usize) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        let end = len.min(doc.bytes.len());
-        if let Some(index) = self.find_snapshot(SnapshotKind::SignedVersion, &doc.name, &doc.bytes[..end]) {
+        // The file as signed: a certificate-protected document's `bytes` are a decrypted rewrite,
+        // which a signature's byte range does not describe.
+        let bytes = match doc.file_prefix(len) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let e = e.to_string();
+                self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e)]);
+                return;
+            }
+        };
+        if let Some(index) = self.find_snapshot(SnapshotKind::SignedVersion, &doc.name, &bytes) {
             self.active = Some(index);
             return;
         }
         let from = doc.name.clone();
-        let bytes = doc.bytes[..end].to_vec();
         let name = format!("{} (signed version)", Self::file_stem(&from));
-        match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
+        match self.session.open(format!("{name}.pdf"), None, bytes, doc.password.clone().as_deref()) {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);

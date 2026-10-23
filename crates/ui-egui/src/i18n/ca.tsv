@@ -2774,3 +2774,26 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Add at least one recipient.	Afegeix almenys un destinatari.
+	Add certificate file…	Afegeix un fitxer de certificat…
+	Add your digital ID	Afegeix el teu identificador digital
+	All permissions	Tots els permisos
+	Certificate	Certificat
+	Certificate encryption will be applied when you save	El xifratge amb certificat s'aplicarà en desar
+	Choose a digital ID file	Tria un fitxer d'identificador digital
+	Couldn't encrypt: {e}	No s'ha pogut xifrar: {e}
+	Digital ID required	Cal un identificador digital
+	Encrypt for recipient	Xifra per al destinatari
+	Encrypt for recipients	Xifra per als destinataris
+	Encrypt with Certificate	Xifra amb certificat
+	Encrypt with certificate…	Xifra amb certificat…
+	Expires {date}	Caduca el {date}
+	No recipients yet.	Encara no hi ha destinataris.
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Cap dels destinataris és un dels teus identificadors digitals: no podràs obrir el document desat.
+	None of your digital IDs can open this document.	Cap dels teus identificadors digitals pot obrir aquest document.
+	Only certificates with RSA keys can be recipients.	Només els certificats amb claus RSA poden ser destinataris.
+	Only the recipients can open the document, each with the private key of their own certificate.	Només els destinataris poden obrir el document, cadascun amb la clau privada del seu propi certificat.
+	Recipients	Destinataris
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Les restriccions s'apliquen als destinataris sense «Tots els permisos». S'apliquen en desar.
+	{name} (you)	{name} (tu)
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	«{name}» està xifrat per a persones concretes. Tria el teu identificador digital i introdueix-ne la contrasenya per obrir-lo.

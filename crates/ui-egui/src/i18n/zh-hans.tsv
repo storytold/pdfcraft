@@ -2445,6 +2445,31 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	无法加密：{e}
+	Encrypt with certificate…	使用证书加密…
+	Encrypt with Certificate	使用证书加密
+	Only the recipients can open the document, each with the private key of their own certificate.	只有收件人可以打开此文档，每人使用自己证书的私钥。
+	Recipients	收件人
+	No recipients yet.	尚无收件人。
+	{name} (you)	{name}（你）
+	Expires {date}	到期 {date}
+	All permissions	所有权限
+	Add certificate file…	添加证书文件…
+	Add your digital ID	添加你的数字 ID
+	Certificate	证书
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	收件人中没有你的数字 ID：你将无法打开保存的文档。
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	限制适用于没有“所有权限”的收件人。保存时应用。
+	Digital ID required	需要数字 ID
+	Choose a digital ID file	选择数字 ID 文件
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}”已为特定人员加密。请选择你的数字 ID 并输入其密码以打开。
+	Add at least one recipient.	请至少添加一位收件人。
+	Only certificates with RSA keys can be recipients.	只有带 RSA 密钥的证书才能作为收件人。
+	None of your digital IDs can open this document.	你的数字 ID 均无法打开此文档。
+	Certificate encryption will be applied when you save	证书加密将在保存时应用
+	Encrypt for recipient	为收件人加密
+	Encrypt for recipients	为收件人加密
+	The password is incorrect.	密码不正确。
 	Font	字体
 	Bulleted list	项目符号列表
 	Numbered list	编号列表

@@ -2750,3 +2750,26 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Add at least one recipient.	कम से कम एक प्राप्तकर्ता जोड़ें।
+	Add certificate file…	प्रमाणपत्र फ़ाइल जोड़ें…
+	Add your digital ID	अपनी डिजिटल आईडी जोड़ें
+	All permissions	सभी अनुमतियाँ
+	Certificate	प्रमाणपत्र
+	Certificate encryption will be applied when you save	सहेजते समय प्रमाणपत्र एन्क्रिप्शन लागू होगा
+	Choose a digital ID file	डिजिटल आईडी फ़ाइल चुनें
+	Couldn't encrypt: {e}	एन्क्रिप्ट नहीं किया जा सका: {e}
+	Digital ID required	डिजिटल आईडी आवश्यक है
+	Encrypt for recipient	प्राप्तकर्ता के लिए एन्क्रिप्ट करें
+	Encrypt for recipients	प्राप्तकर्ताओं के लिए एन्क्रिप्ट करें
+	Encrypt with Certificate	प्रमाणपत्र से एन्क्रिप्ट करें
+	Encrypt with certificate…	प्रमाणपत्र से एन्क्रिप्ट करें…
+	Expires {date}	{date} को समाप्त
+	No recipients yet.	अभी तक कोई प्राप्तकर्ता नहीं।
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	कोई भी प्राप्तकर्ता आपकी डिजिटल आईडी में से नहीं है: आप सहेजा गया दस्तावेज़ खोल नहीं पाएँगे।
+	None of your digital IDs can open this document.	आपकी कोई भी डिजिटल आईडी इस दस्तावेज़ को नहीं खोल सकती।
+	Only certificates with RSA keys can be recipients.	केवल RSA कुंजियों वाले प्रमाणपत्र ही प्राप्तकर्ता हो सकते हैं।
+	Only the recipients can open the document, each with the private key of their own certificate.	केवल प्राप्तकर्ता ही दस्तावेज़ खोल सकते हैं, हर कोई अपने प्रमाणपत्र की निजी कुंजी से।
+	Recipients	प्राप्तकर्ता
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	प्रतिबंध उन प्राप्तकर्ताओं पर लागू होते हैं जिनके पास “सभी अनुमतियाँ” नहीं हैं। ये सहेजते समय लागू होते हैं।
+	{name} (you)	{name} (आप)
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}” विशिष्ट लोगों के लिए एन्क्रिप्ट किया गया है। इसे खोलने के लिए अपनी डिजिटल आईडी चुनें और उसका पासवर्ड दर्ज करें।

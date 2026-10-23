@@ -2739,6 +2739,30 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Nepavyko užšifruoti: {e}
+	Encrypt with certificate…	Šifruoti sertifikatu…
+	Encrypt with Certificate	Šifruoti sertifikatu
+	Only the recipients can open the document, each with the private key of their own certificate.	Dokumentą gali atverti tik gavėjai, kiekvienas savo sertifikato privačiuoju raktu.
+	Recipients	Gavėjai
+	No recipients yet.	Gavėjų dar nėra.
+	{name} (you)	{name} (jūs)
+	Expires {date}	Galioja iki {date}
+	All permissions	Visi leidimai
+	Add certificate file…	Pridėti sertifikato failą…
+	Add your digital ID	Pridėti savo skaitmeninį ID
+	Certificate	Sertifikatas
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Nė vienas gavėjas nėra jūsų skaitmeninis ID: įrašyto dokumento atverti negalėsite.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Apribojimai taikomi gavėjams be „Visi leidimai“. Pritaikoma įrašant.
+	Digital ID required	Reikia skaitmeninio ID
+	Choose a digital ID file	Pasirinkite skaitmeninio ID failą
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	„{name}“ užšifruotas konkretiems žmonėms. Norėdami jį atverti, pasirinkite savo skaitmeninį ID ir įveskite jo slaptažodį.
+	Add at least one recipient.	Pridėkite bent vieną gavėją.
+	Only certificates with RSA keys can be recipients.	Gavėjais gali būti tik sertifikatai su RSA raktais.
+	None of your digital IDs can open this document.	Nė vienas jūsų skaitmeninis ID negali atverti šio dokumento.
+	Certificate encryption will be applied when you save	Šifravimas sertifikatu bus pritaikytas įrašant
+	Encrypt for recipient	Šifruoti gavėjui
+	Encrypt for recipients	Šifruoti gavėjams
 	Bulleted list	Sąrašas su ženkleliais
 	Numbered list	Numeruotas sąrašas
 	Alignment	Lygiuotė

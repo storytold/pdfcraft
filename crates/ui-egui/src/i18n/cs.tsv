@@ -2555,6 +2555,30 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Nelze zašifrovat: {e}
+	Encrypt with certificate…	Šifrovat certifikátem…
+	Encrypt with Certificate	Šifrovat certifikátem
+	Only the recipients can open the document, each with the private key of their own certificate.	Dokument mohou otevřít jen příjemci, každý soukromým klíčem svého certifikátu.
+	Recipients	Příjemci
+	No recipients yet.	Zatím žádní příjemci.
+	{name} (you)	{name} (vy)
+	Expires {date}	Platnost do {date}
+	All permissions	Všechna oprávnění
+	Add certificate file…	Přidat soubor certifikátu…
+	Add your digital ID	Přidat vaše digitální ID
+	Certificate	Certifikát
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Žádný z příjemců není vaším digitálním ID: uložený dokument nebudete moci otevřít.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Omezení platí pro příjemce bez „Všechna oprávnění“. Použije se při uložení.
+	Digital ID required	Je vyžadováno digitální ID
+	Choose a digital ID file	Vyberte soubor digitálního ID
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	Soubor „{name}“ je šifrovaný pro konkrétní osoby. Vyberte své digitální ID a zadejte jeho heslo pro otevření.
+	Add at least one recipient.	Přidejte alespoň jednoho příjemce.
+	Only certificates with RSA keys can be recipients.	Příjemci mohou být jen certifikáty s klíči RSA.
+	None of your digital IDs can open this document.	Žádné z vašich digitálních ID tento dokument neotevře.
+	Certificate encryption will be applied when you save	Šifrování certifikátem se použije při uložení
+	Encrypt for recipient	Šifrovat pro jednoho příjemce
+	Encrypt for recipients	Šifrovat pro příjemce
 	Font	Písmo
 	Bulleted list	Odrážkový seznam
 	Numbered list	Číslovaný seznam

@@ -421,6 +421,8 @@ impl Automation {
                 out
             }
             "doc_protect" => self.doc_protect(&a)?,
+            "doc_protect_certificates" => self.doc_protect_certificates(&a)?,
+            "identity_add" => self.identity_add(&a)?,
             "page_replace" => {
                 let pages = self.pages(&a, "pages")?;
                 let path = self.resolve(a.str("path")?, false)?;
@@ -1652,6 +1654,133 @@ impl Automation {
         let mut out = self.apply(a, Edit::Protect(p))?;
         out["security"] = security(self.doc(a)?);
         Ok(out)
+    }
+
+    /// The permission bits the restriction arguments mean (a stand-in permissions password
+    /// makes `Protection` compute them; none given = everything).
+    fn permission_bits_of(a: &Args) -> Result<i32> {
+        use pdfcraft_engine::{Changes, Printing, Protection};
+        if ["printing", "changes", "copy", "accessibility"].iter().all(|k| a.get(k).is_none()) {
+            return Ok(-1);
+        }
+        let d = Protection::default();
+        let p = Protection {
+            open_password: None,
+            permissions_password: Some("-".into()),
+            printing: match a.opt_str("printing")? {
+                None => d.printing,
+                Some("none") => Printing::None,
+                Some("low") => Printing::Low,
+                Some("high") => Printing::High,
+                Some(o) => return Err(ToolError::InvalidArgs(format!("unknown printing {o:?}"))),
+            },
+            changes: match a.opt_str("changes")? {
+                None => d.changes,
+                Some("none") => Changes::None,
+                Some("pages") => Changes::Pages,
+                Some("fill-sign") => Changes::FillSign,
+                Some("comment-fill-sign") => Changes::CommentFillSign,
+                Some("any-except-extract") => Changes::AnyExceptExtract,
+                Some(o) => return Err(ToolError::InvalidArgs(format!("unknown changes {o:?}"))),
+            },
+            copy: a.opt_bool("copy")?.unwrap_or(d.copy),
+            accessibility: a.opt_bool("accessibility")?.unwrap_or(d.accessibility),
+            algorithm: d.algorithm,
+            encrypt_metadata: d.encrypt_metadata,
+        };
+        Ok(p.permission_bits())
+    }
+
+    fn doc_protect_certificates(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::{Algorithm, CertificateProtection, CertificateRecipient};
+        let list = |key: &str| -> Result<Vec<String>> {
+            match a.get(key) {
+                None => Ok(Vec::new()),
+                Some(Value::Array(v)) => Ok(v.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()),
+                _ => Err(ToolError::InvalidArgs(format!("{key} must be an array of file paths"))),
+            }
+        };
+        let password = a.opt_str("password")?.unwrap_or("");
+        let load = |paths: &[String]| -> Result<Vec<pdfcraft_engine::sign::Certificate>> {
+            let mut out = Vec::new();
+            for p in paths {
+                let path = self.resolve(p, false)?;
+                let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                let is_p12 =
+                    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("p12") || e.eq_ignore_ascii_case("pfx"));
+                let certs = if is_p12 {
+                    let id = pdfcraft_engine::sign::pkcs12::open(&bytes, password).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                    vec![id.certificate]
+                } else {
+                    pdfcraft_engine::sign::x509::load_certificates(&bytes).map_err(|e| failed(format!("{}: {e}", path.display())))?
+                };
+                if certs.is_empty() {
+                    return Err(ToolError::InvalidArgs(format!("{p} holds no certificate")));
+                }
+                out.extend(certs);
+            }
+            Ok(out)
+        };
+        let certificates = load(&list("certificates")?)?;
+        let owners = load(&list("owners")?)?;
+        if certificates.is_empty() && owners.is_empty() {
+            return Err(ToolError::InvalidArgs("certificates must name at least one file".into()));
+        }
+        let permissions = Self::permission_bits_of(a)?;
+        let algorithm = match a.opt_str("compatibility")? {
+            None | Some("aes-256") => Algorithm::Aes256,
+            Some("aes-128") => Algorithm::Aes128,
+            Some(o) => return Err(ToolError::InvalidArgs(format!("unknown compatibility {o:?}"))),
+        };
+        let mut recipients: Vec<CertificateRecipient> =
+            owners.iter().map(|c| CertificateRecipient { certificate: c.raw.clone(), permissions: -1 }).collect();
+        recipients.extend(
+            certificates
+                .iter()
+                .filter(|c| !owners.iter().any(|o| o.raw == c.raw))
+                .map(|c| CertificateRecipient { certificate: c.raw.clone(), permissions }),
+        );
+        let p = CertificateProtection {
+            recipients,
+            algorithm,
+            encrypt_metadata: a.opt_bool("encrypt_metadata")?.unwrap_or(true),
+            seed: self.session.new_seed().map_err(failed)?,
+        };
+        let mut out = self.apply(a, Edit::ProtectWithCertificates(p))?;
+        out["security"] = security(self.doc(a)?);
+        out["recipients"] = Value::Array(
+            owners
+                .iter()
+                .map(|c| json!({ "name": c.display_name(), "email": c.subject.email(), "owner": true }))
+                .chain(
+                    certificates
+                        .iter()
+                        .filter(|c| !owners.iter().any(|o| o.raw == c.raw))
+                        .map(|c| json!({ "name": c.display_name(), "email": c.subject.email(), "owner": false })),
+                )
+                .collect(),
+        );
+        Ok(out)
+    }
+
+    fn identity_add(&mut self, a: &Args) -> Result<Value> {
+        if a.opt_bool("clear")?.unwrap_or(false) {
+            self.session.clear_identities();
+        }
+        if let Some(p) = a.opt_str("path")? {
+            let path = self.resolve(p, false)?;
+            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let id = pdfcraft_engine::sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or(""))
+                .map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            self.session.add_identity(id);
+        }
+        let listed: Vec<Value> = self
+            .session
+            .identities()
+            .iter()
+            .map(|i| json!({ "name": i.certificate.display_name(), "email": i.certificate.subject.email() }))
+            .collect();
+        Ok(json!({ "identities": listed }))
     }
 
     fn insert_blank(&mut self, a: &Args) -> Result<Value> {

@@ -2444,6 +2444,31 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Шифроването не бе успешно: {e}
+	Encrypt with certificate…	Шифровай със сертификат…
+	Encrypt with Certificate	Шифроване със сертификат
+	Only the recipients can open the document, each with the private key of their own certificate.	Само получателите могат да отворят документа, всеки с частния ключ на собствения си сертификат.
+	Recipients	Получатели
+	No recipients yet.	Все още няма получатели.
+	{name} (you)	{name} (вие)
+	Expires {date}	Изтича на {date}
+	All permissions	Всички разрешения
+	Add certificate file…	Добави файл със сертификат…
+	Add your digital ID	Добави вашия цифров идентификатор
+	Certificate	Сертификат
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Никой от получателите не е ваш цифров идентификатор: няма да можете да отворите записания документ.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Ограниченията важат за получателите без „Всички разрешения“. Прилага се при записване.
+	Digital ID required	Изисква се цифров идентификатор
+	Choose a digital ID file	Изберете файл с цифров идентификатор
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	„{name}“ е шифрован за определени хора. Изберете своя цифров идентификатор и въведете паролата му, за да го отворите.
+	Add at least one recipient.	Добавете поне един получател.
+	Only certificates with RSA keys can be recipients.	Получатели могат да бъдат само сертификати с RSA ключове.
+	None of your digital IDs can open this document.	Никой от вашите цифрови идентификатори не може да отвори този документ.
+	Certificate encryption will be applied when you save	Шифроването със сертификат ще бъде приложено при записване
+	Encrypt for recipient	Шифроване за получател
+	Encrypt for recipients	Шифроване за получатели
+	The password is incorrect.	Паролата е грешна.
 	Font	Шрифт
 	Bulleted list	Списък с водещи символи
 	Numbered list	Номериран списък
