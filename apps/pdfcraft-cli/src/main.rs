@@ -20,6 +20,8 @@
 #[cfg(feature = "mcp")]
 mod automation_args;
 mod batch;
+#[cfg(feature = "network-print")]
+mod print;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -71,6 +73,11 @@ pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
                       [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
+pdfcraft-cli print  --wsd URL FILE --yes [--copies N] [--duplex off|long-edge|short-edge] [--paper NAME]
+                      [--orientation O] [--quality Q] [--dpi N] [--color auto|color|mono] [--strict] [--wait SECS]
+                      [--ticket full|description|job_name|empty [--drop-ticket-settings]]
+                      send FILE to a WSD network printer at a numeric local address (builds with the network-print feature)
+pdfcraft-cli print  --wsd URL --info                      what that printer is and accepts
 pdfcraft-cli tools                                       automation tools and their JSON Schemas
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR] [--report]
@@ -106,6 +113,10 @@ fn main() -> ExitCode {
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),
         Some("batch") => batch::run(&args[1..]),
+        #[cfg(feature = "network-print")]
+        Some("print") => print::run(&args[1..]),
+        #[cfg(not(feature = "network-print"))]
+        Some("print") => Err("print: this build of pdfcraft-cli has no network printing (built without the `network-print` feature)".into()),
         Some("ui") => ui(&args[1..]),
         #[cfg(feature = "mcp")]
         Some("mcp") => mcp(&args[1..]),

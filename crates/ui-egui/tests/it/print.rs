@@ -278,8 +278,8 @@ fn printers_listed_in_the_background_preselect_the_default_unless_one_was_picked
     h.state_mut().printer_source = Some(Arc::new(move || {
         let _open = wait.lock();
         vec![
-            Printer { name: "Office".into(), default: false, two_sided: None },
-            Printer { name: "Front Desk".into(), default: true, two_sided: None },
+            Printer { name: "Office".into(), description: String::new(), default: false, two_sided: None },
+            Printer { name: "Front Desk".into(), description: String::new(), default: true, two_sided: None },
         ]
     }));
     assert!(h.state_mut().execute("print.dialog"));
@@ -335,7 +335,10 @@ fn the_picked_printer_is_kept_for_the_next_print_while_it_is_listed() {
     let source = listed.clone();
     h.state_mut().printer_source = Some(Arc::new(move || {
         let names = source.lock().map(|n| n.clone()).unwrap_or_default();
-        names.into_iter().map(|name| Printer { name: name.into(), default: name == "Front Desk", two_sided: None }).collect()
+        names
+            .into_iter()
+            .map(|name| Printer { name: name.into(), description: String::new(), default: name == "Front Desk", two_sided: None })
+            .collect()
     }));
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
         h.state_mut().dialog = None;
@@ -422,8 +425,8 @@ fn a_printer_without_two_sided_printing_points_to_its_properties() {
     let mut h = harness();
     h.state_mut().printer_source = Some(std::sync::Arc::new(|| {
         vec![
-            Printer { name: "Office PCL".into(), default: true, two_sided: Some(true) },
-            Printer { name: "Office PS".into(), default: false, two_sided: Some(false) },
+            Printer { name: "Office PCL".into(), description: String::new(), default: true, two_sided: Some(true) },
+            Printer { name: "Office PS".into(), description: String::new(), default: false, two_sided: Some(false) },
         ]
     }));
     assert!(h.state_mut().execute("print.dialog"));
