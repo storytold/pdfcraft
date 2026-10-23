@@ -699,3 +699,31 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+/// View ▸ Show line weights (Acrobat's Line Weights, ⌘5 / Ctrl+5) toggles by shortcut, by the
+/// menu's checkbox and by command. A view setting of the document: not an edit.
+#[test]
+fn line_weights_toggle_by_shortcut_menu_and_command() {
+    let shown = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).expect("the document is open").line_weights_shown()
+    };
+    let mut h = view_menu(OperatingSystem::Nix);
+    assert!(shown(&h), "line weights are shown by default");
+    // The View menu scrolls, and the item sits below the part it shows first: click it as a
+    // screen reader does, which reaches items scrolled out of view.
+    h.get_by_label("Show line weights Ctrl+5").click_accesskit();
+    h.run_steps(3);
+    assert!(!shown(&h), "the View menu's checkbox turns line weights off");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num5);
+    h.run_steps(2);
+    assert!(shown(&h), "Ctrl+5 turns them back on");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num5);
+    h.run_steps(2);
+    assert!(!shown(&h), "and off again");
+    h.state_mut().execute("view.line_weights");
+    h.run_steps(2);
+    assert!(shown(&h), "the command toggles too");
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "a view setting is not an edit");
+}

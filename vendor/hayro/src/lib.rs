@@ -157,6 +157,10 @@ pub struct RenderSettings {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped while
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch: with line weights off, every stroke that isn't text is drawn one device
+    /// pixel wide, whatever its line width (Acrobat's View ▸ Show/Hide ▸ Rulers & Grids ▸ Line
+    /// Weights, unticked). `false` renders exactly as without the patch.
+    pub hairline_strokes: bool,
 }
 
 impl Default for RenderSettings {
@@ -170,6 +174,7 @@ impl Default for RenderSettings {
             x_offset: 0.0,
             y_offset: 0.0,
             color_replacement: None,
+            hairline_strokes: false,
         }
     }
 }
@@ -252,6 +257,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        render_settings.hairline_strokes,
     );
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
@@ -820,5 +826,138 @@ mod mesh_extent_tests {
         let p = render_at(fixture("/Sh0 sh", (195, 100, 205, 110)), 1.0);
         assert_eq!(px(&p, 196, 98), [255, 0, 0, 255]);
         assert_eq!(px(&p, 150, 50), [255, 255, 255, 255]);
+    }
+}
+
+/// PdfCraft patch: `RenderSettings::hairline_strokes` (a viewer's Line Weights, unticked).
+#[cfg(test)]
+mod hairline_tests {
+    use super::{InterpreterSettings, Pdf, Pixmap, RenderCache, RenderSettings, render};
+    use vello_cpu::color::palette::css::WHITE;
+
+    /// A 12 pt black line across the middle, and a `Tr 1` (stroked) 40 pt Helvetica "I" with a
+    /// 6 pt pen to its left.
+    const LINE_AND_TEXT: &str = "12 w 20 50 m 90 50 l S\n\
+                                 BT 1 Tr 6 w /F1 40 Tf 4 10 Td (I) Tj ET";
+
+    /// A one-page 100×100 pt PDF whose content stream is `body` (Helvetica as `/F1`).
+    fn fixture(body: &str) -> Vec<u8> {
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 100 100] >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>"
+                .to_vec(),
+            format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    fn render_at(body: &str, scale: f32, hairline_strokes: bool) -> Pixmap {
+        let pdf = Pdf::new(fixture(body)).unwrap();
+        let cache = RenderCache::new();
+        let settings = RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: WHITE,
+            hairline_strokes,
+            ..RenderSettings::default()
+        };
+        render(
+            pdf.pages().get(0).expect("the fixture has one page"),
+            &cache,
+            &InterpreterSettings::default(),
+            &settings,
+        )
+    }
+
+    /// How many pixels of column `x` are visibly darkened (any coverage counts, so an
+    /// antialiased hairline straddling two rows is two).
+    fn inked_rows(pixmap: &Pixmap, x: u16) -> usize {
+        (0..pixmap.height())
+            .filter(|&y| pixmap.sample(x, y).r < 240)
+            .count()
+    }
+
+    #[test]
+    fn hairline_strokes_draw_line_art_one_pixel_wide_at_any_scale() {
+        for scale in [1.0_f32, 4.0] {
+            let column = (55.0 * scale) as u16;
+            let at_width = inked_rows(&render_at(LINE_AND_TEXT, scale, false), column);
+            let expected = (12.0 * scale) as usize;
+            assert!(
+                (expected..=expected + 2).contains(&at_width),
+                "scale {scale}: a 12 pt line covers {expected} rows, drew {at_width}"
+            );
+            let hairline = inked_rows(&render_at(LINE_AND_TEXT, scale, true), column);
+            assert!(
+                (1..=2).contains(&hairline),
+                "scale {scale}: a hairline is one device pixel (two when it straddles rows), drew {hairline}"
+            );
+        }
+    }
+
+    #[test]
+    fn hairline_strokes_leave_stroked_text_alone() {
+        // The glyph's left stem: a 6 pt pen round a 40 pt "I" makes a bar wider than a pixel.
+        let stem = |pixmap: &Pixmap| {
+            (0..pixmap.width())
+                .filter(|&x| pixmap.sample(x, (100 - 25) as u16).r < 240)
+                .count()
+        };
+        let at_width = stem(&render_at(LINE_AND_TEXT, 1.0, false));
+        assert!(at_width >= 4, "the stroked stem is wider than a hairline: {at_width}");
+        assert_eq!(stem(&render_at(LINE_AND_TEXT, 1.0, true)), at_width, "text outlines keep their width");
+    }
+
+    /// One device pixel whichever way the matrix scales. Under `10 0 0 1 0 0 cm` no width in
+    /// user space is a pixel both ways: a horizontal line a tenth of a pixel tall would vanish.
+    /// Dashes keep their user-space lengths.
+    #[test]
+    fn hairline_strokes_are_one_pixel_under_a_non_uniform_matrix() {
+        // 10× across, 1× up: a 12 pt horizontal line dashed 1 on, 1 off from x = 2 (12 px tall
+        // at its width, dashes 10 px long from x = 20), and a 1.2 pt vertical line at x = 3
+        // (12 px wide at its width).
+        let body = "10 0 0 1 0 0 cm [1 1] 0 d 12 w 2 50 m 9 50 l S [] 0 d 1.2 w 3 20 m 3 80 l S";
+        let inked_cols = |pixmap: &Pixmap, y: u16| {
+            (0..pixmap.width())
+                .filter(|&x| pixmap.sample(x, y).r < 240)
+                .count()
+        };
+        let at_width = render_at(body, 1.0, false);
+        let rows = inked_rows(&at_width, 65);
+        assert!((12..=14).contains(&rows), "a 12 pt line at its width: {rows} rows");
+        assert_eq!(inked_rows(&at_width, 55), 0, "a gap between dashes");
+        let cols = inked_cols(&at_width, 100 - 30);
+        assert!((12..=14).contains(&cols), "1.2 pt scaled tenfold: {cols} columns");
+
+        let hairline = render_at(body, 1.0, true);
+        let rows = inked_rows(&hairline, 65);
+        assert!((1..=2).contains(&rows), "a horizontal hairline: {rows} rows");
+        assert_eq!(inked_rows(&hairline, 55), 0, "dashes keep their user-space lengths");
+        let cols = inked_cols(&hairline, 100 - 30);
+        assert!((1..=2).contains(&cols), "a vertical hairline: {cols} columns");
     }
 }

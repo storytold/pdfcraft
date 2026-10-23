@@ -605,6 +605,22 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             app.execute(id);
                         }
                         ui.separator();
+                        // Line weights (Acrobat's View ▸ Show/Hide ▸ Rulers & Grids ▸ Line Weights): off,
+                        // every stroke is one pixel wide, so a plan's thick and thin lines read alike.
+                        let mut line_weights = app.session.get(app.views[i].id).is_some_and(|d| d.line_weights_shown());
+                        let shortcut = crate::commands::command_shortcut_label(&ctx, "view.line_weights");
+                        if ui
+                            .add(widgets::checkbox(
+                                &mut line_weights,
+                                (tl!("Show line weights"), egui::Atom::grow(), egui::RichText::new(shortcut).weak()),
+                            ))
+                            .changed()
+                        {
+                            ui.close();
+                            app.execute("view.line_weights");
+                            return;
+                        }
+                        ui.separator();
                     }
                     crate::commands::registry_menu(app, ui, "View");
                     ui.menu_button(tl!("Display theme"), |ui| theme_menu(app, ui));

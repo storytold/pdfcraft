@@ -34,7 +34,9 @@ impl Document {
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),
-            config: self.config.clone(),
+            // Line weights off is a way of looking at the page, not of printing it: exports
+            // and Print as Image draw every stroke at its own width.
+            config: pdfcraft_render::RenderConfig { hairline_strokes: false, ..self.config.clone() },
             pages: self.info.pages.len(),
             sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
         }

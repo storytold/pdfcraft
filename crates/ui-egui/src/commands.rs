@@ -564,6 +564,15 @@ impl PdfCraftApp {
                     }
                 }
             }
+            "view.line_weights" => {
+                if let Some(i) = active {
+                    let id = self.views[i].id;
+                    let shown = self.session.get(id).is_some_and(|d| d.line_weights_shown());
+                    if self.session.set_line_weights(id, !shown) {
+                        self.views[i].invalidate_content();
+                    }
+                }
+            }
             "form.export_data" => self.export_data_dialog(false, true),
             "form.merge_data" => self.merge_data_dialog(),
             "export.docx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Docx),

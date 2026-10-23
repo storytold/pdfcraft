@@ -71,6 +71,10 @@ pub struct RenderConfig {
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
+    /// View ▸ Show line weights, off: every stroke that isn't text is drawn one device pixel
+    /// wide, whatever its line width, so a plan's thick and thin lines read alike at any zoom
+    /// (Acrobat's Line Weights toggle). Display only; prints and exports keep the widths.
+    pub hairline_strokes: bool,
 }
 
 impl RenderConfig {
@@ -181,6 +185,12 @@ pub const PRINT_TAG: u64 = 1 << 60;
 /// document's setting and render with reading colours off.
 fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors {
     if req.tag & PRINT_TAG != 0 { ReadingColors::default() } else { config.reading_colors }
+}
+
+/// Whether a request draws hairlines (line weights off): print previews ([`PRINT_TAG`]) keep the
+/// document's widths, as the print itself does.
+fn request_hairlines(config: &RenderConfig, req: &RenderRequest) -> bool {
+    req.tag & PRINT_TAG == 0 && config.hairline_strokes
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not
@@ -310,6 +320,7 @@ fn render_page<'a>(
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
     let reading = request_reading(config, &req);
+    let hairline_strokes = request_hairlines(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
             Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
@@ -345,6 +356,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    hairline_strokes,
                 }
             }
             None => {
@@ -366,6 +378,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    hairline_strokes,
                     ..Default::default()
                 }
             }
@@ -3341,6 +3354,35 @@ trailer << /Root 1 0 R >>
         let hidden = render(true);
         assert_eq!(px(&hidden, 75, 25), vec![255, 255, 255, 255], "Hide all comments");
         assert_eq!(px(&hidden, 20, 80), vec![255, 0, 0, 255], "fields stay");
+    }
+
+    /// View ▸ Show line weights, off: a 12 pt line is one device pixel wide at any scale, and
+    /// at its width again when they are shown; a print preview keeps the width regardless.
+    #[test]
+    fn hairline_strokes_draw_line_art_one_pixel_wide_except_for_print() {
+        let body = "12 w 10 50 m 90 50 l S";
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{body}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            body.len()
+        );
+        let render = |hairlines: bool, scale: f32, tag: u64| {
+            let mut r =
+                PageRenderer::new(Arc::new(pdf.clone().into_bytes()), RenderConfig { hairline_strokes: hairlines, ..RenderConfig::default() });
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag, ..Default::default() })
+        };
+        // Rows of column `x` with any ink: an antialiased hairline straddling two rows counts two.
+        let inked_rows =
+            |p: &RenderedPage, x: u32| (0..p.height).filter(|&y| p.rgba.get(((y * p.width + x) * 4) as usize).is_some_and(|&r| r < 240)).count();
+        for scale in [1.0_f32, 3.0] {
+            let x = (50.0 * scale) as u32;
+            let expected = (12.0 * scale) as usize;
+            let at_width = inked_rows(&render(false, scale, 0), x);
+            assert!((expected..=expected + 2).contains(&at_width), "scale {scale}: {at_width} rows at the document's width");
+            let hairline = inked_rows(&render(true, scale, 0), x);
+            assert!((1..=2).contains(&hairline), "scale {scale}: {hairline} rows as a hairline");
+            let printed = inked_rows(&render(true, scale, PRINT_TAG), x);
+            assert_eq!(printed, at_width, "scale {scale}: a print preview keeps the width");
+        }
     }
 
     #[test]

@@ -7438,3 +7438,46 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     assert!(pages[0].images.is_empty(), "the picture is past the budget");
     assert_eq!(truncated, [0]);
 }
+
+/// A one-page 200×300 pt document with a 12 pt black line across its middle.
+fn thick_line_fixture() -> Vec<u8> {
+    let body = "12 w 20 150 m 180 150 l S";
+    format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{body}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// View ▸ Show line weights: off, a 12 pt line renders one pixel wide; on again, at its width. A
+/// view setting: not an edit, and exports keep the document's widths either way.
+#[test]
+fn line_weights_off_draws_hairlines_for_the_view_only() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("lines.pdf", None, Arc::new(thick_line_fixture()), None).expect("opens");
+    // Rows of the middle column with any ink (a hairline straddling two rows counts two), from one
+    // render per state.
+    let inked_rows = |s: &Session| {
+        let doc = s.get(id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        (0..out.height).filter(|&y| out.rgba[((y * out.width + 100) * 4) as usize] < 240).count()
+    };
+    assert!(s.get(id).unwrap().line_weights_shown(), "line weights are shown by default");
+    let at_width = inked_rows(&s);
+    assert!((12..=14).contains(&at_width), "a 12 pt line at 72 dpi: {at_width} rows");
+
+    assert!(s.set_line_weights(id, false));
+    assert!(!s.set_line_weights(id, false), "already off");
+    let doc = s.get(id).unwrap();
+    assert!(!doc.line_weights_shown());
+    assert!(!doc.dirty, "a view setting is not an edit");
+    assert!(!doc.export_source().config.hairline_strokes, "exports keep the document's widths");
+    let hairline = inked_rows(&s);
+    assert!((1..=2).contains(&hairline), "a hairline: {hairline} rows");
+
+    assert!(s.set_line_weights(id, true));
+    assert_eq!(inked_rows(&s), at_width, "shown again, the line is back at its width");
+    assert!(!s.set_line_weights(DocId(u64::MAX), false), "no such document");
+}
