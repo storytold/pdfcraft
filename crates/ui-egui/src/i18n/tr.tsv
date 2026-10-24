@@ -1698,6 +1698,16 @@
 	The document's security settings don't allow this change	Belgenin güvenlik ayarları bu değişikliğe izin vermiyor
 	Open a document first	Önce bir belge açın
 	Security will be removed when you save	Kaydettiğinizde güvenlik kaldırılacaktır
+	The extracted pages aren't protected: the original's security settings don't carry over.	Çıkarılan sayfalar korumalı değil: özgün belgenin güvenlik ayarları aktarılmaz.
+	The split files aren't protected: the original's security settings don't carry over.	Bölünen dosyalar korumalı değil: özgün belgenin güvenlik ayarları aktarılmaz.
+	Change a signed document?	İmzalı belge değiştirilsin mi?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Bu belge imzalı. Bir değişiklik yeni bir sürüm ekler: imzalar imzaladıkları sürüm için geçerli kalır ve görüntüleyiciler belgenin imzadan sonra değiştirildiğini gösterir.
+	It is certified with no changes allowed: any change invalidates the certification.	Değişikliğe izin vermeyen bir sertifikası var: her değişiklik sertifikayı geçersiz kılar.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Sertifikalı: form doldurma ve imzalama serbest; diğer değişiklikler sertifikayı geçersiz kılar.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Sertifikalı: form doldurma, imzalama ve yorum ekleme serbest; diğer değişiklikler sertifikayı geçersiz kılar.
+	Change anyway	Yine de değiştir
+	Remove security?	Güvenlik kaldırılsın mı?
+	The passwords and the restrictions are removed when you save.	Parolalar ve kısıtlamalar kaydedildiğinde kaldırılır.
 	Click text or an image to edit it	Düzenlemek için metne veya resme tıklayın
 	Drag a rectangle to create a link; double-click a link to edit it	Bağlantı oluşturmak için bir dikdörtgen sürükleyin; düzenlemek için bir bağlantıya çift tıklayın
 	There are no redaction marks to apply	Uygulanacak karartma işareti yok

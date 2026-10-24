@@ -73,6 +73,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut revert_now = false;
     let mut overwrite_now = false;
     let mut overwrite_elsewhere = false;
+    let mut signed_edit_now = false;
+    let mut remove_security_now = false;
     let mut summarize_now = false;
     let mut optimize_now = false;
     let mut duplicate_now: Option<Edit> = None;
@@ -844,6 +846,58 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::SignedEdit => {
+                // The strictest certification among the signed signatures, if any.
+                let certify = app
+                    .pending_signed_edit
+                    .as_ref()
+                    .map(|(id, _)| *id)
+                    .or_else(|| app.active_ids().map(|(_, id)| id))
+                    .and_then(|id| app.session.get(id))
+                    .and_then(|d| d.signatures.iter().filter(|s| s.signed).filter_map(|s| s.certify).min());
+                ui.label(egui::RichText::new(tl!("Change a signed document?")).font(theme::semibold(18.0)));
+                ui.add_space(8.0);
+                ui.label(tl!(
+                    "This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing."
+                ));
+                if let Some(p) = certify {
+                    ui.add_space(6.0);
+                    ui.label(match p {
+                        1 => tl!("It is certified with no changes allowed: any change invalidates the certification."),
+                        2 => tl!("It is certified: filling in forms and signing are allowed; other changes invalidate the certification."),
+                        _ => {
+                            tl!("It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.")
+                        }
+                    });
+                }
+                ui.add_space(12.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::pill_button(ui, tl!("Change anyway"), true).clicked() {
+                        signed_edit_now = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                });
+                return;
+            }
+            Dialog::RemoveSecurity => {
+                ui.label(egui::RichText::new(tl!("Remove security?")).font(theme::semibold(18.0)));
+                ui.add_space(8.0);
+                ui.label(tl!("The passwords and the restrictions are removed when you save."));
+                ui.add_space(12.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::pill_button(ui, tl!("Remove security"), true).clicked() {
+                        remove_security_now = true;
+                        close = true;
+                    }
+                    if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                        close = true;
+                    }
+                });
+                return;
+            }
             Dialog::Print => {
                 let Some((i, id)) = app.active_ids() else {
                     close = true;
@@ -1291,6 +1345,27 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if dialog == Dialog::OverwriteChanged && (modal.should_close() || close) {
         app.pending_overwrite = None;
     }
+    // What waited on the signed-document answer runs once this dialog is closed (below), so a
+    // dialog it raises (Save over the changed file?) isn't closed with this one.
+    let mut resume_now: Option<crate::Resume> = None;
+    if signed_edit_now {
+        if let Some((id, e)) = app.pending_signed_edit.take() {
+            app.signed_edits_confirmed.insert(id);
+            // The edit is the asking document's, which may not be the active tab any more.
+            if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                app.active = Some(i);
+                app.apply_edit(e);
+            }
+            resume_now = app.resume_after_signed_edit.take();
+        }
+    } else if dialog == Dialog::SignedEdit && (close || modal.should_close()) {
+        // Cancelled (or closed any other way): the change is not made, nor what waited on it.
+        app.pending_signed_edit = None;
+        app.resume_after_signed_edit = None;
+    }
+    if remove_security_now && app.apply_edit(Edit::RemoveProtection) {
+        app.notify_tr("Security will be removed when you save");
+    }
     if summarize_now {
         app.summarize_comments();
     }
@@ -1421,13 +1496,23 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     // Protect / Remove security replace the Properties dialog.
     let replaces = link_command.is_some_and(|c| c.starts_with("protect.")) || open_revision.is_some();
-    if modal.should_close() || close || replaces {
+    // An action of this dialog was the first change to a signed document: its question takes
+    // the dialog's place, rather than being closed with it.
+    let asked = dialog != Dialog::SignedEdit && app.dialog == Some(Dialog::SignedEdit);
+    if asked {
+        app.props_draft = None;
+        app.view_draft = None;
+        app.bulk_field_props = None;
+    } else if modal.should_close() || close || replaces {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
         app.bulk_field_props = None;
     } else {
         app.dialog = Some(next);
+    }
+    if let Some(resume) = resume_now {
+        resume(app);
     }
     if let Some(cmd) = link_command {
         app.execute(cmd);

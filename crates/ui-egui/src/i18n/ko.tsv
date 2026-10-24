@@ -2750,3 +2750,12 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Change a signed document?	서명된 문서를 변경하시겠습니까?
+	Change anyway	그래도 변경
+	It is certified with no changes allowed: any change invalidates the certification.	변경이 허용되지 않는 인증 문서입니다: 어떤 변경이든 인증을 무효화합니다.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	인증된 문서입니다: 양식 작성과 서명은 허용되며, 그 밖의 변경은 인증을 무효화합니다.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	인증된 문서입니다: 양식 작성, 서명 및 주석 달기는 허용되며, 그 밖의 변경은 인증을 무효화합니다.
+	Remove security?	보안을 제거하시겠습니까?
+	The extracted pages aren't protected: the original's security settings don't carry over.	추출한 페이지는 보호되지 않습니다: 원본의 보안 설정이 적용되지 않습니다.
+	The passwords and the restrictions are removed when you save.	저장할 때 암호와 제한이 제거됩니다.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	이 문서는 서명되었습니다. 변경하면 새 버전이 추가됩니다: 서명은 서명한 버전에 대해 계속 유효하며, 뷰어에는 서명 후 문서가 변경되었다고 표시됩니다.

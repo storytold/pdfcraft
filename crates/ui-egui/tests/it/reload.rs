@@ -326,6 +326,47 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     assert!(h.state_mut().save_active(SaveTarget::InPlace), "written at once");
 }
 
+/// #2187 review: a save that waited on the signed-document question (#2168) and then finds the
+/// file changed on disk (#2166) asks about that too; the second question isn't closed with the
+/// first, so the save isn't dropped.
+#[test]
+fn a_signed_save_that_finds_the_file_changed_asks_about_that_too() {
+    let file = TempPdf::new("signed-overwrite", &fixture(2));
+    let path = file.path.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.reload_changed_files = false;
+        app.open_path(&path);
+        app
+    });
+    h.run_steps(4);
+    {
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        let signed = app.session.sign(id, &digital_id, opts).expect("signs");
+        app.session.mark_signed(id, signed, None).unwrap();
+    }
+    file.rebuild(&fixture(4));
+    h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 });
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "waits for the signed-document answer");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::SignedEdit));
+    h.get_by_label("Change anyway").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::OverwriteChanged), "the changed file is asked about");
+    assert!(h.state().pending_overwrite.is_some());
+    h.get_by_label("Save over the changed file?");
+    h.get_by_label("Save anyway").click();
+    h.run_steps(3);
+    assert!(!dirty(&h), "written");
+    assert_ne!(std::fs::read(&file.path).unwrap(), fixture(4));
+}
+
 /// With the watcher off nothing notices the change until Save looks at the file.
 #[test]
 fn saving_checks_the_file_with_the_watcher_off_too() {

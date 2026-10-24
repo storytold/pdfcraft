@@ -1767,6 +1767,16 @@
 	The document's security settings don't allow printing	Настройките за защита на документа не позволяват печат
 	Open a document first	Първо отворете документ
 	Security will be removed when you save	Защитата ще бъде премахната при записване
+	The extracted pages aren't protected: the original's security settings don't carry over.	Извлечените страници не са защитени: настройките за сигурност на оригинала не се пренасят.
+	The split files aren't protected: the original's security settings don't carry over.	Разделените файлове не са защитени: настройките за сигурност на оригинала не се пренасят.
+	Change a signed document?	Промяна на подписан документ?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Този документ е подписан. Промяната добавя нова версия: подписите остават валидни за версията, която са подписали, а програмите за преглед ще покажат, че документът е променен след подписването.
+	It is certified with no changes allowed: any change invalidates the certification.	Той е сертифициран без разрешени промени: всяка промяна анулира сертификацията.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Той е сертифициран: попълването на формуляри и подписването са разрешени; други промени анулират сертификацията.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Той е сертифициран: попълването на формуляри, подписването и коментирането са разрешени; други промени анулират сертификацията.
+	Change anyway	Промяна въпреки това
+	Remove security?	Премахване на сигурността?
+	The passwords and the restrictions are removed when you save.	Паролите и ограниченията се премахват при запазване.
 	Click text or an image to edit it	Щракнете върху текст или изображение, за да го редактирате
 	Drag a rectangle to create a link; double-click a link to edit it	Очертайте правоъгълник, за да създадете връзка; щракнете двукратно върху връзка, за да я редактирате
 	There are no redaction marks to apply	Няма маркировки за заличаване, които да бъдат приложени

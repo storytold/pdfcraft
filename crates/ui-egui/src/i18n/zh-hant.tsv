@@ -1717,6 +1717,16 @@
 	The document's security settings don't allow printing	文件安全設定不允許列印
 	Open a document first	請先開啟文件
 	Security will be removed when you save	儲存時將刪除安全性設定
+	The extracted pages aren't protected: the original's security settings don't carry over.	擷取的頁面不受保護：原文件的安全性設定不會帶過去。
+	The split files aren't protected: the original's security settings don't carry over.	分割後的檔案不受保護：原文件的安全性設定不會帶過去。
+	Change a signed document?	要變更已簽署的文件嗎？
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	這份文件已簽署。變更會新增一個版本：簽章對其簽署的版本仍然有效，但閱讀器會顯示文件在簽署後被變更過。
+	It is certified with no changes allowed: any change invalidates the certification.	它已認證且不允許任何變更：任何變更都會使認證失效。
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	它已認證：允許填寫表單和簽署；其他變更會使認證失效。
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	它已認證：允許填寫表單、簽署和加註解；其他變更會使認證失效。
+	Change anyway	仍要變更
+	Remove security?	要移除安全性嗎？
+	The passwords and the restrictions are removed when you save.	儲存時會移除密碼和限制。
 	Click text or an image to edit it	按一下文字或圖片進行編輯
 	Drag a rectangle to create a link; double-click a link to edit it	拖動矩形建立連結；按兩下連結進行編輯
 	There are no redaction marks to apply	沒有可套用的遮蔽內容標記

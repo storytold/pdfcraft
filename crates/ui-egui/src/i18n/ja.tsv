@@ -1816,6 +1816,16 @@
 	The document's security settings don't allow printing	文書のセキュリティ設定により、印刷は許可されていません
 	Open a document first	先に文書を開いてください
 	Security will be removed when you save	セキュリティは保存時に解除されます
+	The extracted pages aren't protected: the original's security settings don't carry over.	抽出したページは保護されません。元の文書のセキュリティ設定は引き継がれません。
+	The split files aren't protected: the original's security settings don't carry over.	分割したファイルは保護されません。元の文書のセキュリティ設定は引き継がれません。
+	Change a signed document?	署名済みの文書を変更しますか？
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	この文書は署名されています。変更すると新しい版が追加されます。署名は署名した版に対して有効なままですが、ビューアは署名後に文書が変更されたと表示します。
+	It is certified with no changes allowed: any change invalidates the certification.	変更を許可しない証明が付いています。どんな変更も証明を無効にします。
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	証明が付いています。フォームの入力と署名は許可され、それ以外の変更は証明を無効にします。
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	証明が付いています。フォームの入力、署名、注釈は許可され、それ以外の変更は証明を無効にします。
+	Change anyway	変更する
+	Remove security?	セキュリティを解除しますか？
+	The passwords and the restrictions are removed when you save.	保存時にパスワードと制限が解除されます。
 	Click text or an image to edit it	テキストまたは画像をクリックして編集
 	Drag a rectangle to create a link; double-click a link to edit it	長方形をドラッグしてリンクを作成し、リンクをダブルクリックして編集
 	There are no redaction marks to apply	適用する墨消しマークはありません

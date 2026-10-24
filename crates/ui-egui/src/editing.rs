@@ -42,6 +42,15 @@ impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
+        // The first change to a signed document asks first (#2168): the signatures stay valid
+        // for the version they signed, but viewers show that the document was changed after
+        // signing, and a certified document may allow only some changes. Once confirmed, the
+        // document's later changes are not asked about again. The edit waits for the answer.
+        if !self.signed_edits_confirmed.contains(&id) && self.session.get(id).is_some_and(|d| d.signatures.iter().any(|s| s.signed)) {
+            self.pending_signed_edit = Some((id, edit));
+            self.dialog = Some(crate::Dialog::SignedEdit);
+            return false;
+        }
         let label = edit.label();
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
@@ -459,7 +468,10 @@ impl PdfCraftApp {
         if self.apply_edit(edit) {
             return true;
         }
-        if let Some(view) = self.views.get_mut(i) {
+        // Waiting on the signed-document question isn't a refusal: the edit holds the typing.
+        if !self.signed_edit_waits(id)
+            && let Some(view) = self.views.get_mut(i)
+        {
             let mut draft = draft;
             draft.request_focus = true;
             view.forms.focus = Some(draft);
@@ -467,9 +479,15 @@ impl PdfCraftApp {
         false
     }
 
-    /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
-    /// field's typing and the field refused it (#166): the editor reopens with the text, and the
-    /// user has been told why, so the typing isn't lost and the caller can stop.
+    /// Whether document `id`'s change waits on the signed-document question (`Dialog::SignedEdit`).
+    pub(crate) fn signed_edit_waits(&self, id: pdfcraft_engine::DocId) -> bool {
+        self.dialog == Some(crate::Dialog::SignedEdit) && self.pending_signed_edit.as_ref().is_some_and(|(p, _)| *p == id)
+    }
+
+    /// Apply the edit queued on tab `i` (the active one). Returns false when it was a field's
+    /// typing and the field refused it (#166): the editor reopens with the text, and the user has
+    /// been told why, so the typing isn't lost and the caller can stop. Also false while the edit
+    /// waits on the signed-document question, so a save doesn't go on without it.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
@@ -506,6 +524,9 @@ impl PdfCraftApp {
                 self.quick_tool = crate::QuickTool::Select;
             }
             return true;
+        }
+        if self.views.get(i).is_some_and(|v| self.signed_edit_waits(v.id)) {
+            return false;
         }
         if !typed {
             return true;
@@ -630,6 +651,15 @@ impl PdfCraftApp {
         if let Some(id) = self.views.get(index).map(|v| v.id)
             && !self.commit_typing_in(id)
         {
+            // The typing is the first change to a signed document and waits on its question:
+            // the save (and what follows it, such as closing the tab) goes on once it's answered.
+            if self.signed_edit_waits(id) {
+                self.resume_after_signed_edit = Some(Box::new(move |app: &mut Self| {
+                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                        app.save_then(i, target, after);
+                    }
+                }));
+            }
             return false;
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };

@@ -2750,3 +2750,12 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Change a signed document?	हस्ताक्षरित दस्तावेज़ बदलें?
+	Change anyway	फिर भी बदलें
+	It is certified with no changes allowed: any change invalidates the certification.	यह प्रमाणित है और कोई बदलाव अनुमत नहीं है: कोई भी बदलाव प्रमाणन को अमान्य कर देता है।
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	यह प्रमाणित है: फ़ॉर्म भरने और हस्ताक्षर करने की अनुमति है; अन्य बदलाव प्रमाणन को अमान्य कर देते हैं।
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	यह प्रमाणित है: फ़ॉर्म भरने, हस्ताक्षर करने और टिप्पणी करने की अनुमति है; अन्य बदलाव प्रमाणन को अमान्य कर देते हैं।
+	Remove security?	सुरक्षा हटाएँ?
+	The extracted pages aren't protected: the original's security settings don't carry over.	निकाले गए पृष्ठ सुरक्षित नहीं हैं: मूल की सुरक्षा सेटिंग्स उन पर लागू नहीं होतीं।
+	The passwords and the restrictions are removed when you save.	सहेजने पर पासवर्ड और प्रतिबंध हटा दिए जाते हैं।
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	यह दस्तावेज़ हस्ताक्षरित है। बदलाव एक नया संस्करण जोड़ता है: हस्ताक्षर उस संस्करण के लिए मान्य रहते हैं जिस पर वे किए गए थे, और व्यूअर दिखाएँगे कि हस्ताक्षर के बाद दस्तावेज़ बदला गया था।

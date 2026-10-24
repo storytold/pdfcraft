@@ -2314,6 +2314,16 @@ comment menu	Edit	Redaguoti
 	Security method	Apsaugos būdas
 	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Saugos nuostatos turi leisti pagalbinėms technologijoms skaityti turinį („Leisti ekrano skaitymo programoms pasiekti tekstą“). Pakeiskite dokumento saugos nuostatas, kad tai būtų leidžiama.
 	Security will be removed when you save	Apsauga bus pašalinta įrašant
+	The extracted pages aren't protected: the original's security settings don't carry over.	Išskirti puslapiai neapsaugoti: originalo saugumo nustatymai neperkeliami.
+	The split files aren't protected: the original's security settings don't carry over.	Padalyti failai neapsaugoti: originalo saugumo nustatymai neperkeliami.
+	Change a signed document?	Keisti pasirašytą dokumentą?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Šis dokumentas pasirašytas. Pakeitimas prideda naują versiją: parašai lieka galioti tai versijai, kurią pasirašė, o peržiūros programos rodys, kad dokumentas pakeistas po pasirašymo.
+	It is certified with no changes allowed: any change invalidates the certification.	Jis sertifikuotas neleidžiant jokių pakeitimų: bet koks pakeitimas panaikina sertifikavimą.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Jis sertifikuotas: leidžiama pildyti formas ir pasirašyti; kiti pakeitimai panaikina sertifikavimą.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Jis sertifikuotas: leidžiama pildyti formas, pasirašyti ir komentuoti; kiti pakeitimai panaikina sertifikavimą.
+	Change anyway	Vis tiek keisti
+	Remove security?	Pašalinti saugumą?
+	The passwords and the restrictions are removed when you save.	Slaptažodžiai ir apribojimai pašalinami įrašant.
 	Self-signed	Savarankiškai pasirašytas
 	Serial number	Serijos numeris
 	Set alternate text	Nustatyti alternatyvųjį tekstą

@@ -2774,3 +2774,13 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Change a signed document?	Voleu canviar un document signat?
+	Change anyway	Canvia igualment
+	It is certified with no changes allowed: any change invalidates the certification.	Està certificat sense permetre canvis: qualsevol canvi invalida la certificació.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Està certificat: es permet emplenar formularis i signar; altres canvis invaliden la certificació.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Està certificat: es permet emplenar formularis, signar i comentar; altres canvis invaliden la certificació.
+	Remove security?	Voleu eliminar la seguretat?
+	The extracted pages aren't protected: the original's security settings don't carry over.	Les pàgines extretes no estan protegides: la configuració de seguretat de l'original no s'hi aplica.
+	The passwords and the restrictions are removed when you save.	Les contrasenyes i les restriccions s'eliminen quan deseu.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Aquest document està signat. Un canvi afegeix una versió nova: les signatures continuen sent vàlides per a la versió que van signar, i els visualitzadors mostraran que el document s'ha canviat després de signar-lo.
+	The split files aren't protected: the original's security settings don't carry over.	Els fitxers dividits no estan protegits: la configuració de seguretat de l'original no s'hi aplica.

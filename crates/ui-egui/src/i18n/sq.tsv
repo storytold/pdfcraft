@@ -2500,3 +2500,12 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Change a signed document?	Të ndryshohet një dokument i nënshkruar?
+	Change anyway	Ndrysho gjithsesi
+	It is certified with no changes allowed: any change invalidates the certification.	Është i certifikuar pa lejuar ndryshime: çdo ndryshim e bën certifikimin të pavlefshëm.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Është i certifikuar: plotësimi i formularëve dhe nënshkrimi lejohen; ndryshimet e tjera e bëjnë certifikimin të pavlefshëm.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Është i certifikuar: plotësimi i formularëve, nënshkrimi dhe komentimi lejohen; ndryshimet e tjera e bëjnë certifikimin të pavlefshëm.
+	Remove security?	Të hiqet siguria?
+	The extracted pages aren't protected: the original's security settings don't carry over.	Faqet e nxjerra nuk janë të mbrojtura: cilësimet e sigurisë së origjinalit nuk barten.
+	The passwords and the restrictions are removed when you save.	Fjalëkalimet dhe kufizimet hiqen kur ruani.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Ky dokument është i nënshkruar. Një ndryshim shton një version të ri: nënshkrimet mbeten të vlefshme për versionin që nënshkruan, dhe shikuesit do të tregojnë se dokumenti u ndryshua pas nënshkrimit.

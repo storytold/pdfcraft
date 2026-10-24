@@ -1639,6 +1639,16 @@
 	The document's security settings don't allow printing	As configurações de segurança do documento não permitem imprimir
 	Open a document first	Abra um documento primeiro
 	Security will be removed when you save	A segurança será removida ao salvar
+	The extracted pages aren't protected: the original's security settings don't carry over.	As páginas extraídas não são protegidas: as configurações de segurança do original não são mantidas.
+	The split files aren't protected: the original's security settings don't carry over.	Os arquivos divididos não são protegidos: as configurações de segurança do original não são mantidas.
+	Change a signed document?	Alterar um documento assinado?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Este documento está assinado. Uma alteração adiciona uma nova versão: as assinaturas continuam válidas para a versão que assinaram, e os leitores mostrarão que o documento foi alterado após a assinatura.
+	It is certified with no changes allowed: any change invalidates the certification.	Ele é certificado sem alterações permitidas: qualquer alteração invalida a certificação.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Ele é certificado: preencher formulários e assinar são permitidos; outras alterações invalidam a certificação.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Ele é certificado: preencher formulários, assinar e comentar são permitidos; outras alterações invalidam a certificação.
+	Change anyway	Alterar mesmo assim
+	Remove security?	Remover a segurança?
+	The passwords and the restrictions are removed when you save.	As senhas e as restrições são removidas ao salvar.
 	Click text or an image to edit it	Clique no texto ou em uma imagem para editá-lo
 	Drag a rectangle to create a link; double-click a link to edit it	Arraste um retângulo para criar um link; clique duas vezes em um link para editá-lo
 	There are no redaction marks to apply	Não há marcas de ocultação para aplicar
