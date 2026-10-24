@@ -18,6 +18,8 @@ pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 thiserror = { workspace = true }
+# JPEG decoding and encoding, so scanned pages keep their picture; already in the tree.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
