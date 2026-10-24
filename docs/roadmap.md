@@ -94,6 +94,8 @@ repaint at the existing 60-second autosave deadline, even with no mouse or keybo
 Clean and already-snapshotted documents do not schedule recovery wakeups. Snapshot contents,
 encryption and storage-write retry behavior are unchanged; this does not resolve #1803.
 
+The [PDF workflow research reference](research/pdf-workflows/README.md) collects archived findings and a dated feature mapping. Planning remains in this roadmap and the parity checklist.
+
 ## Alpha gate
 
 The stage standard's gate: Acrobat Pro's everyday core workflows must each work end to end on the
