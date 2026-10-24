@@ -4316,6 +4316,7 @@ dependencies = [
  "kurbo 0.13.1",
  "log",
  "lopdf",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "serde",
