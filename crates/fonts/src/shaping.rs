@@ -1,4 +1,5 @@
-//! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
+//! Arabic, Hebrew, Thai and Japanese text shaping with the matching craft-fonts face and
+//! bounded glyph outlines.
 
 use std::sync::OnceLock;
 
@@ -28,6 +29,7 @@ pub enum ShapedScript {
     Arabic,
     Hebrew,
     Thai,
+    Japanese,
 }
 
 impl ShapedScript {
@@ -36,6 +38,7 @@ impl ShapedScript {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Japanese => crate::document_japanese_font(),
         }
     }
 }
@@ -44,10 +47,12 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static JAPANESE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Japanese => &JAPANESE,
     };
     cache
         .get_or_init(|| {
@@ -91,6 +96,89 @@ pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, false, ShapedScript::Thai)
 }
 
+/// Whether the Japanese document face has a glyph for `c` (false without the face).
+pub fn japanese_has(c: char) -> bool {
+    face(ShapedScript::Japanese).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+/// Whether `face` has a glyph for `c` (false for a face without a readable character map).
+pub fn japanese_has_from(face: &crate::CraftFont, c: char) -> bool {
+    FontRef::new(face.bytes).is_ok_and(|font| font.charmap().map(c).is_some())
+}
+
+/// Shape Japanese text with the explicitly selected craft-fonts face: one cluster per character,
+/// with a combining mark kept in its base character's cluster. Japanese needs no reordering, so the
+/// clusters come in typing order. [`GlyphError::Missing`] when `face` lacks a character.
+pub fn shape_japanese(face: &crate::CraftFont, text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    let font = FontRef::new(face.bytes).map_err(|_| GlyphError::Missing)?;
+    let loc = LocationRef::default();
+    let metrics = font.metrics(Size::unscaled(), loc);
+    let scale = 1.0 / metrics.units_per_em.max(1) as f64;
+    let advances = font.glyph_metrics(Size::unscaled(), loc);
+    let mut out: Vec<ShapedCluster> = Vec::new();
+    for c in text.chars() {
+        // An ideographic variation selector asks for a glyph variant; the face draws the base
+        // character, and the selector stays in the cluster's text so the line keeps its characters.
+        if is_variation_selector(c) {
+            if let Some(cluster) = out.last_mut() {
+                cluster.text.push(c);
+            }
+            continue;
+        }
+        let gid = font.charmap().map(c).ok_or(GlyphError::Missing)?;
+        let width = advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
+        if !width.is_finite() || !(0.0..=8.0).contains(&width) {
+            return Err(GlyphError::Missing);
+        }
+        // A combining mark (U+3099/U+309A and the other mark blocks) hangs on the character before
+        // it: it is drawn at the base character's origin and adds no advance of its own, even when
+        // the face gives its glyph a width.
+        if is_combining_mark(c)
+            && let Some(cluster) = out.last_mut()
+        {
+            cluster.glyphs.push((gid.into(), [0.0, 0.0]));
+            cluster.text.push(c);
+            continue;
+        }
+        out.push(ShapedCluster { script: ShapedScript::Japanese, glyphs: vec![(gid.into(), [0.0, 0.0])], advance: width, text: c.to_string() });
+    }
+    Ok(out)
+}
+
+/// Characters that attach to the character before them: the combining diacritical blocks and the
+/// Japanese voiced sound marks. Ideographic variation selectors are written but not drawn.
+fn is_combining_mark(c: char) -> bool {
+    matches!(u32::from(c),
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05BD | 0x0610..=0x061A
+        | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0x3099..=0x309A | 0xFE20..=0xFE2F)
+}
+
+/// Unicode variation selectors: they pick a variant of the character before them and are not drawn.
+fn is_variation_selector(c: char) -> bool {
+    matches!(u32::from(c), 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+}
+
+/// The bounded outline of glyph `id` of the explicitly selected craft-fonts face, with that face's
+/// own advance. Glyphs without outlines (spaces) come back empty. The companion of
+/// [`shape_japanese`], so the glyph ids and the outlines they are drawn from come from one face.
+pub fn glyph_outline_from(face: &crate::CraftFont, id: u32) -> Result<GlyphOutline, GlyphError> {
+    let font = FontRef::new(face.bytes).map_err(|_| GlyphError::Missing)?;
+    if font.maxp().map_or(true, |m| id >= u32::from(m.num_glyphs())) {
+        return Err(GlyphError::Missing);
+    }
+    let gid = GlyphId::new(id);
+    let loc = LocationRef::default();
+    let scale = 1.0 / font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
+    let width = font.glyph_metrics(Size::unscaled(), loc).advance_width(gid).unwrap_or(0.0) as f64 * scale;
+    if !width.is_finite() || !(0.0..=8.0).contains(&width) {
+        return Err(GlyphError::Missing);
+    }
+    if font.outline_glyphs().get(gid).is_none() {
+        return Ok(GlyphOutline { contours: Vec::new(), width, bbox: [0.0, 0.0, width, 0.0] });
+    }
+    crate::script::bounded_outline(&font, gid, width)
+}
+
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
@@ -102,11 +190,13 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
+        // Japanese has no shaping run through this function (see `shape_japanese`).
+        ShapedScript::Japanese => script::HAN,
     });
     // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Japanese => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
@@ -297,5 +387,49 @@ mod hebrew_tests {
         assert!(hebrew_has('א') && hebrew_has('\u{05B8}') && !hebrew_has('日'));
         assert_eq!(shape_hebrew("日", true), Err(GlyphError::Missing));
         assert!(shape_hebrew("", true).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod japanese_tests {
+    use super::*;
+
+    #[test]
+    fn japanese_clusters_come_from_the_style_face_one_character_at_a_time() {
+        let Some(face) = crate::document_japanese_font_for_style(false, false) else {
+            eprintln!("skipping the Japanese shaping checks: built without a craft-fonts Jpan face (set CRAFT_FONTS_DIR)");
+            let no_face = crate::CraftFont { family: "", style: "", scripts: &[], bytes: &[] };
+            assert_eq!(shape_japanese(&no_face, "日"), Err(GlyphError::Missing));
+            assert!(!japanese_has('日'));
+            return;
+        };
+        assert!(japanese_has('日') && japanese_has_from(face, '日'));
+        assert!(!japanese_has_from(face, '\u{10FFFF}'));
+        let text = "日本語　かなカナ";
+        let clusters = shape_japanese(face, text).unwrap();
+        assert_eq!(clusters.iter().map(|c| c.text.as_str()).collect::<String>(), text);
+        assert_eq!(clusters.len(), text.chars().count());
+        for c in &clusters {
+            assert_eq!(c.script, ShapedScript::Japanese);
+            assert_eq!(c.glyphs.len(), 1);
+            assert!(c.advance.is_finite() && c.advance > 0.0, "{c:?}");
+            glyph_outline_from(face, c.glyphs[0].0).unwrap();
+        }
+        // The ideographic space keeps its own full-width glyph, not an ASCII space.
+        assert_eq!(clusters[3].text, "\u{3000}");
+        // A combining voiced sound mark stays in its base character's cluster.
+        let voiced = shape_japanese(face, "か\u{3099}").unwrap();
+        assert_eq!(voiced.len(), 1, "{voiced:?}");
+        assert_eq!(voiced[0].text, "か\u{3099}");
+        assert_eq!(voiced[0].glyphs.len(), 2);
+        let base = shape_japanese(face, "か").unwrap();
+        assert_eq!(voiced[0].advance, base[0].advance, "the mark adds no width to its base character");
+        // A variation selector picks a variant of the character before it; the face draws the
+        // base and the cluster keeps the selector, so neither is a missing glyph.
+        let ivs = shape_japanese(face, "日\u{E0100}").unwrap();
+        assert_eq!(ivs.len(), 1, "{ivs:?}");
+        assert_eq!(ivs[0].text, "日\u{E0100}");
+        assert_eq!(ivs[0].glyphs.len(), 1);
+        assert!(glyph_outline_from(face, u32::MAX).is_err());
     }
 }

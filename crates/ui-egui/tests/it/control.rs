@@ -1585,15 +1585,15 @@ fn control_quit_retains_blocked_content_typing_after_cancel() {
     h.run_steps(3);
     let point = h.state().views[0].page_screen_rect(0).unwrap().center();
     ok(&mut h, &c, "ui.click", json!({"x":point.x,"y":point.y}));
-    h.event(egui::Event::Text("Keep 世界".into()));
+    h.event(egui::Event::Text("Keep 🙂".into()));
     h.run_steps(3);
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Keep 世界");
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Keep 🙂");
     h.state_mut().active = None;
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert_eq!(ok(&mut h, &c, "ui.quit", json!({})), json!({"quitting":false,"needs_confirmation":true}));
     h.run_steps(3);
     ok(&mut h, &c, "ui.click", json!({"label":"Cancel"}));
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Keep 世界");
+    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Keep 🙂");
     assert_eq!(h.state().views.len(), 1);
     assert!(!close_requested(&h));
 }

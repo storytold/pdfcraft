@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M7, #2918/#3707/#184: Add text draws Japanese through the craft-fonts document faces, with style-matched Mincho/Gothic and bold faces, U+3000 kept and typing order preserved; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
@@ -229,6 +231,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-20 (M3, #3541/#3620):** Comment hover follows the individual marked lines instead of the enclosing multiline rectangle, and overlapping comments follow paint order. Synthetic UI regressions cover all four text-markup kinds, page/view rotations, neighboring highlights, legacy rectangle fallback and unchanged PDF bytes. Estimates unchanged.
 - **2026-10-20 (M10, #3532 partial):** Vector printing retains existing widget artwork when its appearance lacks Subtype. A print-owned copy adds Form dispatch metadata. The source stream and all explicit subtypes stay unchanged. Synthetic source/output raster checks cover resources, selected/shared appearances, placement, flags and content modes. Appearance regeneration and physical printer validation remain outside this fix. Estimates unchanged.
+
+- **2026-10-22 (M7, #2918, #3707, #184):** Edit a PDF ▸ Text / Add content ▸ Text and `page_add_text` now draw Japanese instead of refusing it. Kana, kanji, full-width punctuation, the ideographic space U+3000 and any other character outside WinAnsiEncoding that the item's own standard font lacks take the craft-fonts `Jpan` face that matches the item's style: Mincho for a Times item, BIZ UDPGothic otherwise, and the Bold weight for a bold item. The face is chosen before shaping, so advances and the Type 3 outlines come from one face; each character is a Type 3 glyph with a ToUnicode entry, each line carries its typing order as `/ActualText`, and wrapping breaks Japanese between characters. Extract, copy and search keep the string exactly, including U+3000 (paragraph mode of Edit text keeps it too). The shaped path keeps its Arabic, Hebrew and Thai behaviour. Built without craft-fonts, the text is refused by name as before and nothing is written; moving an item that already holds it follows the existing item rules. #184's fallback-style and reported-face behaviour is covered by the existing Edit text regressions (`japanese_line_fallback_uses_real_source_family_and_weight`, `japanese_paragraph_fallback_honors_requested_family_and_weight`, `japanese_fallback_reports_the_face_after_save_and_reopen`). Editing CJK inside existing lines remains open. Estimates unchanged.
 
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.
 
@@ -636,11 +640,14 @@ Newest first: the date, what moved, and the new overall estimate.
 
 ## Revision history
 
+**2026-10-22 · minor:** M7/#2918/#3707/#184: Add text draws Japanese (kana, kanji, U+3000, full-width punctuation, Cyrillic fallback) through the craft-fonts document faces, style-matched to the item (Mincho/Gothic, bold weight), with Type 3 ToUnicode and per-line ActualText; wrapping breaks between characters. Refusal without craft-fonts names the character. Edit text's fallback style, U+3000 paragraph handling and reported face are regression-covered. Estimates unchanged.
+
 **2026-10-15 · minor:** M14/#2383 candidate: GPU device requests clamp unsupported limits while retaining the adapter texture extent. Synthetic V3D/downlevel regressions and Windows GPU-required tests pass; Raspberry Pi hardware remains unverified. Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-22 | minor | M4, #3916 partial: document edits and Undo/Redo cancel Organize drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
+| 2026-10-22 | minor | M7/#2918/#3707/#184: Add text draws Japanese through the craft-fonts document faces (style-matched Mincho/Gothic and bold), keeping U+3000 and typing order with Type 3 ToUnicode and per-line ActualText; wrapping breaks between characters. Existing Arabic, Hebrew and Thai paths unchanged; estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |
 | 2026-10-20 | minor | M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged. |

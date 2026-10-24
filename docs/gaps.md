@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M7: Add text draws Japanese, including U+3000 and full-width punctuation, through the craft-fonts document faces; #2918, #3707, #184; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -102,13 +103,32 @@ update the numbers.
   removes a distinct neighbour whose glyph box overlaps (#1316); a second drawing on the same
   baseline is still replaced. Estimates are unchanged.
 
+- **Fork progress (2026-10-22):** Add content ▸ Text and `page_add_text` now draw Japanese:
+  kana, kanji, full-width punctuation, the ideographic space U+3000 and Cyrillic letters the
+  item's own font lacks take the craft-fonts `Jpan` face matching the item's style (Mincho for a
+  Times item, BIZ UDPGothic otherwise, bold when the item is bold). Each character becomes a
+  Type 3 glyph with ToUnicode and each line is tagged with its typing order as `/ActualText`, so
+  extraction, copy and search keep the characters (including U+3000) exactly; wrapping breaks
+  Japanese at character boundaries. Without craft-fonts the text is refused as before, naming the
+  character. Regression tests cover the style face choice, the Latin/Japanese mix, wrapping,
+  save/reopen and the refusal; #2918 (Windows-1252), #3707 (macOS kana) and #184 (fallback face
+  style, U+3000, reported face) are referenced there, and the Edit text side of #184 was already
+  covered (`japanese_line_fallback_uses_real_source_family_and_weight`,
+  `japanese_paragraph_fallback_honors_requested_family_and_weight`,
+  `japanese_fallback_reports_the_face_after_save_and_reopen`). Editing CJK inside existing lines
+  stays open.
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
-  needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
-  structure tags, find and replace in edit mode; vector and object editing; arrange and align.
+  needed glyphs, editing CJK and right-to-left text in existing lines, rotated text, lists,
+  superscript/subscript, keeping structure tags, find and replace in edit mode; vector and object
+  editing; arrange and align.
 - **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted);
   `edit.rtl-cjk-editing`, `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
   `edit.vector-edit`, `edit.edit-object-tool` are planned. Users:
   [#766](https://github.com/storytold/pdfcraft/issues/766) (editing Arabic text),
+  [#2918](https://github.com/storytold/pdfcraft/issues/2918) and
+  [#3707](https://github.com/storytold/pdfcraft/issues/3707) (Japanese in Add text, now drawn;
+  referenced by the PR), [#184](https://github.com/storytold/pdfcraft/issues/184) (fallback face
+  style, U+3000 and the reported face, covered by regressions),
   [#844](https://github.com/storytold/pdfcraft/issues/844) (several elements now move together on
   one page, not across pages),
   [#787](https://github.com/storytold/pdfcraft/issues/787) (move images between pages),

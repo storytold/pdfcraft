@@ -12,7 +12,8 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{
-    GlyphError, GlyphOutline, ShapedCluster, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, win_ansi,
+    GlyphError, GlyphOutline, ShapedCluster, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_japanese, shape_thai, shaped_glyph,
+    win_ansi,
 };
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
@@ -252,9 +253,10 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
-        if thai
+        let japanese = japanese_face(t).is_some() && para.chars().any(is_japanese_fallback);
+        if (thai || japanese)
             && !rtl_script
-            && let Ok(lines) = thai_lines(t, para, width)
+            && let Ok(lines) = cluster_lines(t, para, width)
         {
             out.extend(lines.into_iter().map(|line| (line, false)));
             continue;
@@ -264,13 +266,16 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { t.family.width(s, t.size, t.bold, t.italic) };
+        let measure = |s: &str| if rtl_script || thai || japanese { shaped_width(t, s, rtl) } else { t.family.width(s, t.size, t.bold, t.italic) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
             let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let candidate_w =
-                if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
+            let candidate_w = if rtl_script || thai || japanese {
+                if line.is_empty() { measure(word) } else { line_w + space + measure(word) }
+            } else {
+                measure(&candidate)
+            };
             if !line.is_empty() && candidate_w > width {
                 out.push((std::mem::take(&mut line), rtl));
                 line = word.to_string();
@@ -285,9 +290,10 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
     out
 }
 
-/// Thai wrapping at shaped cluster boundaries never detaches a tone/vowel mark from its base.
-/// This is glyph-safe wrapping, not dictionary-based Thai word segmentation.
-fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
+/// Wrapping at shaped cluster boundaries, for Thai and Japanese: never detaches a tone/vowel mark
+/// from its base, and breaks Japanese (which has no spaces) at character boundaries. This is
+/// glyph-safe wrapping, not dictionary-based word segmentation.
+fn cluster_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
     let (pieces, _) = shaped_layout(t, para, false)?;
     let mut atoms = Vec::new();
     for piece in pieces {
@@ -330,10 +336,39 @@ fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
+/// The Japanese document face for this item's style: a Mincho face for a Times item, a Gothic face
+/// otherwise, and the bold weight when the item is bold. The first face that can draw every
+/// character the item would take from it, else the style's first face. `None` without craft-fonts
+/// (or when its revision has no `Jpan` face).
+fn japanese_face(t: &AddedText) -> Option<&'static pdfcraft_fonts::CraftFont> {
+    let faces = pdfcraft_fonts::document_japanese_fonts_for_style(t.family == Family::Times, t.bold);
+    let needed: Vec<char> = t.text.chars().filter(|c| is_japanese_fallback(*c) && !is_variation_selector(*c)).collect();
+    faces.iter().copied().find(|face| needed.iter().all(|c| pdfcraft_fonts::japanese_has_from(face, *c))).or_else(|| faces.first().copied())
+}
+
+/// Characters the Japanese document face draws: every character outside WinAnsiEncoding that no
+/// other face here draws (Arabic, Hebrew and Thai have their own), except the direction controls.
+fn is_japanese_fallback(c: char) -> bool {
+    !pdfcraft_fonts::win_ansi_encodable(c)
+        && !is_thai(c)
+        && !is_arabic(c)
+        && !is_hebrew(c)
+        && !is_bidi_control(c)
+        // Line breaks and tabs lay text out; they are not glyphs (the standard font handles them).
+        && !c.is_control()
+        && !(c.is_whitespace() && c != '\u{3000}')
+}
+
+/// Variation selectors pick a variant of the character before them; the Japanese face draws the
+/// base character, so a face need not have a glyph for the selector itself.
+fn is_variation_selector(c: char) -> bool {
+    matches!(u32::from(c), 0xFE00..=0xFE0F | 0xE0100..=0xE01EF)
+}
+
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
-/// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
-/// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
-/// keeps it open.
+/// with the craft-fonts Arabic (#125), Hebrew (#128) or Japanese (#3707) face, or a character that
+/// face can't draw (or that has no face to draw it). Page-content tools refuse such text; the
+/// Add-text editor keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
@@ -345,6 +380,17 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     // Arabic or Hebrew that nothing can draw: there's no face, or the face lacks it.
     if let Some(c) =
         t.text.chars().find(|c| (shaped_arabic(*c) && !pdfcraft_fonts::arabic_has(*c)) || (is_hebrew(*c) && !pdfcraft_fonts::hebrew_has(*c)))
+    {
+        return Some(c);
+    }
+    // Other text outside WinAnsiEncoding (kana, kanji, full-width punctuation, U+3000, Cyrillic)
+    // is drawn with the Japanese document face. Refuse what it can't draw, and everything when the
+    // build has no such face (as before #3707).
+    let japanese = japanese_face(t);
+    if let Some(c) = t
+        .text
+        .chars()
+        .find(|c| is_japanese_fallback(*c) && !is_variation_selector(*c) && !japanese.is_some_and(|face| pdfcraft_fonts::japanese_has_from(face, *c)))
     {
         return Some(c);
     }
@@ -368,6 +414,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
+        || (japanese_face(t).is_some() && t.text.chars().any(is_japanese_fallback))
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
@@ -411,6 +458,7 @@ fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
         return Ok((Vec::new(), 0.0));
     }
     let base = if rtl { Level::rtl() } else { Level::ltr() };
+    let japanese = japanese_face(t);
     let info = ParagraphBidiInfo::new(line, Some(base));
     let (levels, runs) = info.visual_runs(0..line.len());
     let mut pieces = Vec::new();
@@ -430,6 +478,8 @@ fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
                 Some(ShapedScript::Arabic)
+            } else if is_japanese_fallback(c) {
+                Some(ShapedScript::Japanese)
             } else {
                 None
             };
@@ -447,6 +497,10 @@ fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    ShapedScript::Japanese => {
+                        let face = japanese.ok_or_else(|| japanese_error(GlyphError::NoFont, &s))?;
+                        shape_japanese(face, &s).map_err(|e| japanese_error(e, &s))?
+                    }
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
@@ -502,6 +556,16 @@ fn thai_error(e: GlyphError, text: &str) -> EditError {
     })
 }
 
+fn japanese_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(match e {
+        GlyphError::NoFont => "Japanese text needs PdfCraft's Japanese font, which this build doesn't include \
+                               (official releases do; to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout that has a Jpan face)"
+            .into(),
+        GlyphError::Missing => format!("the Japanese font can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the Japanese font's glyphs for \"{text}\" are too complex; use a shorter text box"),
+    })
+}
+
 /// The box a text item occupies (height from its lines).
 pub fn text_rect(t: &AddedText) -> [f64; 4] {
     let r = norm(t.rect);
@@ -534,7 +598,13 @@ fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict
         .into_iter()
         .map(|(line, rtl)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
-    draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
+    // Japanese outlines come from the same style face the clusters were shaped with, so the glyph
+    // ids and the paths they are drawn from belong to one face.
+    let japanese = japanese_face(t);
+    draw_laid_shaped(doc, t, &laid, taken, fonts, out, |script, id| match script {
+        ShapedScript::Japanese => japanese.ok_or(GlyphError::NoFont).and_then(|face| pdfcraft_fonts::glyph_outline_from(face, id)),
+        other => shaped_glyph(other, id),
+    })
 }
 
 /// [`draw_shaped`] for lines that are already laid out. `outline` is the source of glyph outlines
@@ -549,6 +619,8 @@ fn draw_laid_shaped(
     outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
 ) -> Result<(), EditError> {
     let r = text_rect(t);
+    // The style face the Japanese clusters were shaped with names their Type 3 font too.
+    let japanese = japanese_face(t);
     let latin = font_name(t.family.base_font(t.bold, t.italic));
     // Every distinct cluster (a letter with its dots and the text it stands for) is one glyph of
     // one of the fonts, so copy and search get each character exactly once.
@@ -573,6 +645,7 @@ fn draw_laid_shaped(
                     ShapedScript::Arabic => arabic_error(e, &c.text),
                     ShapedScript::Hebrew => hebrew_error(e, &c.text),
                     ShapedScript::Thai => thai_error(e, &c.text),
+                    ShapedScript::Japanese => japanese_error(e, &c.text),
                 })?);
             }
         }
@@ -581,7 +654,7 @@ fn draw_laid_shaped(
     let mut taken_names: HashSet<Vec<u8>> = taken.iter().chain(fonts.iter()).map(|(name, _)| name.clone()).collect();
     let mut names = Vec::new();
     for chunk in keys.chunks(GLYPHS_PER_FONT) {
-        let font = type3_shaped(doc, chunk, &outlines);
+        let font = type3_shaped(doc, chunk, &outlines, japanese);
         // A name no font on the page has, so items never replace each other's fonts (object
         // numbers alone don't do: a full save renumbers objects but keeps resource names).
         let mut name = format!("PCAr{}", font.num);
@@ -656,7 +729,14 @@ fn cluster_key(c: &ShapedCluster) -> ClusterKey<'_> {
 }
 
 /// A Type 3 font with `clusters` as codes 1…, each drawn from its script face's glyph `outlines`.
-fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> ObjRef {
+/// `japanese` is the style face the Japanese clusters were shaped with (the script's fixed face is
+/// only the fallback for stand-in outlines).
+fn type3_shaped(
+    doc: &mut Document,
+    clusters: &[&ShapedCluster],
+    outlines: &HashMap<(ShapedScript, u32), GlyphOutline>,
+    japanese: Option<&'static pdfcraft_fonts::CraftFont>,
+) -> ObjRef {
     let mut charprocs = Dict::new();
     let mut differences = vec![Object::Int(1)];
     let mut widths = Vec::with_capacity(clusters.len());
@@ -705,14 +785,16 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     }
     cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
     let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
-    // The face's family when every glyph comes from one script; without the face, the script's
-    // name (as Arabic items were always named).
+    // The face's family when every glyph comes from one script (the item's own Japanese face, whose
+    // outlines these are); without the face, the script's name (as Arabic items were always named).
     let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
+        Some(ShapedScript::Japanese) => japanese.or_else(|| ShapedScript::Japanese.font()).map_or("Japanese", |f| f.family),
         Some(script) => script.font().map_or(
             match script {
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::Japanese => "Japanese",
             },
             |f| f.family,
         ),
@@ -778,6 +860,7 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || face_or_new(is_japanese_fallback, japanese_face(t).is_some())
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));

@@ -1095,6 +1095,103 @@ fn added_hebrew_text_is_drawn_right_to_left_and_stays_searchable() {
     assert!(mapped.contains("<05E905"), "{mapped}");
 }
 
+/// The `PCAr` glyph paths of added item `index` on page 0, in its stream's font order.
+fn own_glyph_paths(doc: &Document, index: usize) -> Vec<Vec<u8>> {
+    let names = own(doc, index);
+    let p = &pdfcraft_model::pages(doc)[0];
+    let fonts = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").cloned().unwrap();
+    let fonts = doc.resolve(&fonts).as_dict().unwrap().clone();
+    let mut out = Vec::new();
+    for name in names {
+        let font = fonts.get(name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
+        let procs = doc.resolve(font.get(b"CharProcs").unwrap()).as_dict().unwrap().clone();
+        for (_, glyph) in procs.iter() {
+            out.push(match &*doc.resolve(glyph) {
+                pdfcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
+                other => panic!("expected a glyph stream, got {other:?}"),
+            });
+        }
+    }
+    out
+}
+
+/// The `FontName` of the Type 3 descriptor of the font `own` names for added item `index` on page 0.
+fn own_type3_font_name(doc: &Document, index: usize) -> Option<String> {
+    let name = own(doc, index).into_iter().next()?;
+    let p = &pdfcraft_model::pages(doc)[0];
+    let fonts = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").cloned().unwrap();
+    let fonts = doc.resolve(&fonts).as_dict().unwrap().clone();
+    let font = doc.resolve(fonts.get(name.as_bytes())?).as_dict()?.clone();
+    let descriptor = doc.resolve(font.get(b"FontDescriptor")?).as_dict()?.clone();
+    descriptor.name(b"FontName").map(|n| String::from_utf8_lossy(n).into_owned())
+}
+
+#[test]
+fn added_japanese_text_uses_the_style_face_and_stays_searchable() {
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 420.0, 700.0], text: "日本語　かなカナ Report".into(), size: 14.0, ..AddedText::default() };
+    if pdfcraft_fonts::document_japanese_font_for_style(false, false).is_none() {
+        eprintln!("skipping the Japanese Add-text checks: built without a craft-fonts Jpan face (set CRAFT_FONTS_DIR)");
+        assert_eq!(first_undrawable(&text), Some('日'));
+        let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err();
+        assert!(matches!(&err, EditError::Invalid(m) if m.contains("U+65E5")), "{err:?}");
+        assert!(!doc.is_modified(), "nothing is written when the font is missing");
+        return;
+    }
+    assert_eq!(first_undrawable(&text), None);
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let added = list_added(&doc);
+    let Content::Text(t) = &added[0].content else { panic!() };
+    assert_eq!(t.text, text.text, "the logical text is kept for editing, including the ideographic space");
+    let s = streams(&doc, 0);
+    let item = s.iter().find(|s| s.contains("Report) Tj")).expect("the Latin run is drawn in the item's own font");
+    let logical: String = t.text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(item.contains(&format!("/ActualText <FEFF{logical}>")), "{item}");
+    assert!(item.contains("/PCAr"), "the Japanese run has its own Type 3 font: {item}");
+    assert!(!own_glyph_paths(&doc, 0).is_empty());
+    // The style face is real: bold and serif items draw the same characters from other outlines.
+    let drawn = |style: AddedText| {
+        let mut d = fixture();
+        add_content(&mut d, 0, &Content::Text(style)).unwrap();
+        let d = reopen(&d);
+        (streams(&d, 0), own_glyph_paths(&d, 0), own_type3_font_name(&d, 0))
+    };
+    let regular = drawn(text.clone());
+    let bold = drawn(AddedText { bold: true, ..text.clone() });
+    let serif = drawn(AddedText { family: Family::Times, ..text.clone() });
+    assert_ne!(regular.1, bold.1, "bold must change the fallback glyph outlines");
+    assert_ne!(regular.1, serif.1, "a serif item must change the fallback glyph outlines");
+    // The Type 3 descriptor names the face the item drew with, not the serif document face.
+    // `FontName` is a PDF name, so the family's spaces are gone; `FontFamily` keeps them.
+    let sans_face = pdfcraft_fonts::document_japanese_font_for_style(false, false).unwrap();
+    let serif_face = pdfcraft_fonts::document_japanese_font_for_style(true, false).unwrap();
+    let (sans_name, serif_name) = (sans_face.family.replace(' ', ""), serif_face.family.replace(' ', ""));
+    assert_eq!(regular.2.as_deref(), Some(sans_name.as_str()), "a Gothic item is named after its face");
+    assert_eq!(serif.2.as_deref(), Some(serif_name.as_str()), "a Times item is named after its Mincho face");
+    // A variation selector picks a variant of the character before it; the face draws the base and
+    // the selector stays in the logical text, so it does not make the item undrawable.
+    let mut d = fixture();
+    let ivs = AddedText { text: "日\u{E0100}".into(), ..text.clone() };
+    assert_eq!(first_undrawable(&ivs), None);
+    add_content(&mut d, 0, &Content::Text(ivs.clone())).unwrap();
+    let d = reopen(&d);
+    let Content::Text(t) = &list_added(&d)[0].content else { panic!() };
+    assert_eq!(t.text, ivs.text);
+}
+
+#[test]
+fn long_added_japanese_text_wraps_between_characters() {
+    let text = "日本語のテキストを折り返します。ABC";
+    let item = AddedText { rect: [72.0, 600.0, 172.0, 700.0], text: text.into(), size: 12.0, ..AddedText::default() };
+    if pdfcraft_fonts::document_japanese_font_for_style(false, false).is_none() {
+        return;
+    }
+    let lines = added::lines(&item);
+    assert!(lines.len() > 1, "a 100pt box cannot hold one line: {lines:?}");
+    assert_eq!(lines.concat(), text, "wrapping keeps every character, including U+3000");
+}
+
 #[test]
 fn odd_hebrew_text_never_panics() {
     let mut doc = fixture();
@@ -3371,10 +3468,21 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
 #[test]
 fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let mut doc = fixture();
+    // Japanese is drawn with the craft-fonts fallback face now (#3707). A character no face has is
+    // still refused instead of written as `?`; `probe` is such a character for this build.
+    let japanese_face = pdfcraft_fonts::document_japanese_font_for_style(false, false).is_some();
+    let (probe, probe_code) = if japanese_face { ("🙂", "U+1F642") } else { ("中", "U+4E2D") };
+    let japanese = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "日本語のテキスト".into(), ..AddedText::default() };
+    let text = if japanese_face {
+        add_content(&mut doc, 0, &Content::Text(japanese)).unwrap();
+        AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: probe.into(), ..AddedText::default() }
+    } else {
+        japanese
+    };
     let before: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
-    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "日本語のテキスト".into(), ..AddedText::default() };
     let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
-    assert!(err.contains("\"日\" (U+65E5)"), "{err}");
+    let expected = if japanese_face { probe_code } else { "U+65E5" };
+    assert!(err.contains(expected), "{err}");
     let hf = HeaderFooter {
         text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
@@ -3389,8 +3497,8 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
     // Retyping existing text is refused the same way, and the whole document is left as it was.
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
-    let retyped = AddedText { text: "Café 中".into(), ..text.clone() };
-    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains("U+4E2D"));
+    let retyped = AddedText { text: format!("Café {probe}"), ..text.clone() };
+    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains(probe_code));
     assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), saved, "a refused update changes nothing");
     // A carriage return is checked where it would be drawn: added text splits on LF only, so
     // CRLF would leave a `?`; headers and watermarks split CRLF into lines, but not a lone CR.
@@ -3407,13 +3515,13 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let arabic = |text: &str| AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: text.into(), ..AddedText::default() };
     // U+061C is in the Arabic block but is a direction mark that's dropped, not shaped: it never
     // makes text drawable, nor (with the face) undrawable.
-    assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}中"))).is_err());
+    assert!(add_content(&mut doc, 0, &Content::Text(arabic(&format!("\u{061C}{probe}")))).is_err());
     if pdfcraft_fonts::arabic_has('م') {
         add_content(&mut doc, 0, &Content::Text(arabic("مرحبا Hello"))).unwrap();
         add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}Hello"))).unwrap();
-        for text in ["مرحبا 中", "\u{061C}中"] {
-            let err = add_content(&mut doc, 0, &Content::Text(arabic(text))).unwrap_err().to_string();
-            assert!(err.contains("U+4E2D"), "{text:?}: {err}");
+        for text in [format!("مرحبا {probe}"), format!("\u{061C}{probe}")] {
+            let err = add_content(&mut doc, 0, &Content::Text(arabic(&text))).unwrap_err().to_string();
+            assert!(err.contains(probe_code), "{text:?}: {err}");
         }
     } else {
         // #403's own refusal says what's missing; the Add-text editor still keeps the draft.
@@ -3742,7 +3850,8 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
     update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "แก้ไข น้ำ".into(), ..t.clone() })).unwrap();
     assert!(!own(&doc, 0).is_empty());
-    let bad = Content::Text(AddedText { text: "ไทย 日".into(), ..t });
+    // Thai mixes with Japanese now that Add text draws it; a character no face has is still refused.
+    let bad = Content::Text(AddedText { text: "ไทย 🙂".into(), ..t });
     let before = list_added(&doc);
     assert!(update_content(&mut doc, 0, 0, &bad).is_err());
     assert_eq!(list_added(&doc), before);
