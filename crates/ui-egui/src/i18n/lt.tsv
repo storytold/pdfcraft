@@ -999,6 +999,14 @@
 	Replacement text	Pakaitinis tekstas
 	Replacement: pages of {name}	Pakaitinis dokumentas: {name} puslapiai
 	Replaces the existing one on those pages.	Tuose puslapiuose pakeičia esamą.
+	Checking pages…	Tikrinami puslapiai…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Puslapis su savo baltu užpildu, kuris paslėptų foną: {pages}. Pakeisti
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Puslapiai su savo baltu užpildu, kuris paslėptų foną: {pages}. Pakeisti
+	Removing the background puts the page's own backdrop back.	Pašalinus foną, grąžinamas paties puslapio baltas užpildas.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Paveikslėliu padengtas puslapis (nuskaitytas?): {pages}; fonas ten nesimatys.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Paveikslėliais padengti puslapiai (nuskaityti?): {pages}; fonas ten nesimatys.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Puslapis pasikeitė po fono pridėjimo, todėl jo baltas užpildas lieka išjungtas: {pages}. Ant balto popieriaus jis atrodo taip pat.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Puslapiai pasikeitė po fono pridėjimo, todėl jų balti užpildai lieka išjungti: {pages}. Ant balto popieriaus jie atrodo taip pat.
 	Report	Ataskaita
 	Report…	Ataskaita…
 	Requires user to enter a password for:	Naudotojas turi įvesti slaptažodį, kad galėtų:

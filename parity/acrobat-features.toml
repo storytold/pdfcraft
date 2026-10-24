@@ -2530,9 +2530,9 @@ tier = "P0"
 milestone = "M7"
 status = "shipped"
 commands = ["edit.background"]
-tools = ["doc_background"]
-evidence = ["crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/it/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks"]
-notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page; the dialog previews a colour as a tint of the page's own thumbnail (opaque pictures on the page are tinted there too, not in the result), a file as its frame and name"
+tools = ["doc_background", "doc_backdrops"]
+evidence = ["crates/ui-egui/tests/it/marks.rs::watermark_and_background_dialogs", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/ui-egui/tests/it/marks.rs::backgrounds_and_watermarks_from_a_file", "crates/organize/src/tests.rs::a_page_becomes_a_form_xobject_upright", "crates/automation/tests/it/backdrop.rs::a_background_shows_on_a_page_that_paints_its_own_white_backdrop", "crates/ui-egui/tests/it/marks.rs::the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scans", "crates/edit/src/backdrop_tests.rs::content_that_is_not_a_page_backdrop_is_left_alone", "crates/ui-egui/tests/it/marks.rs::the_preview_shows_the_page_the_range_selects_under_the_marks"]
+notes = "colour, or a picture from a file (an image or a page of a PDF) scaled relative to the page. A page that paints its own opaque white backdrop (browsers' Save as PDF, print drivers) used to hide the background entirely; the dialog now offers to replace that fill (on by default; Remove turns it back on, after edits and redactions too, unless the operators before it changed or it would no longer be painted first, and then says which pages keep it off). The replaced copy's tag holds no page content or reference, so text a redaction or Remove Hidden Information takes off such a page leaves the file. Our own choice: Acrobat's behaviour on such pages has not been observed. Still hidden: scanned pages (warned), backdrops drawn inside a form XObject, by a non-rectangular path, or in a named colour space. The dialog previews a colour as a tint of the page's own thumbnail (opaque pictures on the page are tinted there too, not in the result), a file as its frame and name"
 
 [[feature]]
 id = "edit.background-update-remove"
@@ -2543,8 +2543,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.background.update", "edit.background.remove"]
 tools = ["doc_background", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove"]
-notes = ""
+evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/edit/src/backdrop_tests.rs::a_white_fill_backdrop_is_replaced_and_put_back_when_the_background_goes", "crates/edit/src/backdrop_tests.rs::an_edit_after_the_fill_is_kept_and_the_backdrop_still_comes_back", "crates/edit/src/backdrop_tests.rs::a_copy_written_out_again_with_other_spacing_still_comes_back", "crates/edit/src/backdrop_tests.rs::a_change_before_the_fill_leaves_it_off_and_names_the_page", "crates/edit/src/backdrop_tests.rs::a_fill_that_would_cover_content_painted_before_it_stays_off", "crates/engine/src/tests.rs::remove_background_names_the_pages_whose_own_backdrop_stays_off", "crates/automation/tests/it/backdrop.rs::removed_text_leaves_the_file_when_a_background_replaced_the_pages_backdrop"]
+notes = "Remove also turns back on a page backdrop Add replaced, keeping edits made after it; where that isn't safe it says which pages keep it off"
 
 [[feature]]
 id = "edit.decoration-profiles"

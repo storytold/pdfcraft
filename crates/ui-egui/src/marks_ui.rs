@@ -4,7 +4,7 @@
 //! replace mode.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
@@ -72,6 +72,113 @@ impl PageRange {
     }
 }
 
+/// How many pages a frame the Background dialog checks for a backdrop of their own, so a long
+/// document never stalls the dialog.
+const BACKDROP_PAGES_PER_FRAME: usize = 24;
+
+/// Which pages paint their own backdrop (it hides a background), for the document and edit
+/// generation they were checked in. Filled a few pages a frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BackdropCheck {
+    key: Option<(DocId, u64)>,
+    /// Per page: `None` until checked.
+    pages: Vec<Option<Option<Backdrop>>>,
+}
+
+/// What the check found among the pages a background goes on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BackdropCount {
+    /// Pages (0-based, ascending) with a white backdrop that can be replaced.
+    pub fills: Vec<usize>,
+    /// Pages (0-based, ascending) covered by a picture (scans): the background stays hidden there.
+    pub images: Vec<usize>,
+    /// Pages not checked yet.
+    pub pending: usize,
+}
+
+impl BackdropCheck {
+    /// Check up to [`BACKDROP_PAGES_PER_FRAME`] more of `pages` (0-based) and sort them.
+    pub fn update(&mut self, doc: &pdfcraft_engine::Document, pages: &[usize]) -> BackdropCount {
+        let key = (doc.id, doc.edit_generation());
+        let count = doc.info.pages.len();
+        if self.key != Some(key) || self.pages.len() != count {
+            self.key = Some(key);
+            self.pages = vec![None; count];
+        }
+        // One batch a frame: finding a page walks the page tree, so the batch shares one walk.
+        let mut batch = Vec::with_capacity(BACKDROP_PAGES_PER_FRAME);
+        for &p in pages {
+            if batch.len() >= BACKDROP_PAGES_PER_FRAME {
+                break;
+            }
+            if matches!(self.pages.get(p), Some(None)) && !batch.contains(&p) {
+                batch.push(p);
+            }
+        }
+        if !batch.is_empty() {
+            for (p, found) in batch.iter().zip(doc.page_backdrops(&batch)) {
+                if let Some(slot) = self.pages.get_mut(*p) {
+                    *slot = Some(found);
+                }
+            }
+        }
+        let mut n = BackdropCount::default();
+        for &p in pages {
+            let Some(slot) = self.pages.get(p) else { continue };
+            match slot {
+                None => n.pending += 1,
+                Some(Some(Backdrop::Fill)) => n.fills.push(p),
+                Some(Some(Backdrop::Image)) => n.images.push(p),
+                Some(None) => {}
+            }
+        }
+        for list in [&mut n.fills, &mut n.images] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        n
+    }
+}
+
+impl MarksDraft {
+    /// The dialog for `kind` is opening. Other settings carry over from last time, but replacing
+    /// a page's own backdrop starts on: Update restores backdrops before it re-applies, so a
+    /// page whose backdrop was replaced shows none and the checkbox stays hidden, and a choice
+    /// left off from an earlier dialog would hide the background again unseen.
+    pub fn opened(&mut self, kind: MarkKind) {
+        if kind == MarkKind::Background {
+            self.bg.replace_backdrop = true;
+        }
+    }
+}
+
+/// How many runs of pages a message lists before it stops with "…".
+const LISTED_PAGE_RUNS: usize = 8;
+
+/// After Remove background: the pages (0-based, ascending) whose own white backdrop stays off,
+/// because they changed after the background was added (`pdfcraft_engine::EditNotice`).
+pub(crate) fn backdrops_left_off_message(pages: &[usize]) -> String {
+    pages_phrase(
+        pages,
+        tl!("Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper."),
+        tl!("Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper."),
+    )
+}
+
+/// `one` or `many` with `{pages}` replaced by `pages` (0-based, ascending) as 1-based runs
+/// ("1-3, 6"), so the message says which pages it means.
+fn pages_phrase(pages: &[usize], one: &str, many: &str) -> String {
+    // `count` 0 never matches a list that isn't empty, so the list is always written out.
+    let runs = crate::combine_ui::range_of(pages, 0);
+    let mut parts: Vec<&str> = runs.split(", ").take(LISTED_PAGE_RUNS + 1).collect();
+    if parts.len() > LISTED_PAGE_RUNS {
+        parts.truncate(LISTED_PAGE_RUNS);
+        parts.push("…");
+    }
+    let template = if pages.len() == 1 { one } else { many };
+    crate::i18n::fmt(template, &[("pages", &parts.join(", "))])
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarksDraft {
     pub hf: HeaderFooter,
@@ -90,6 +197,8 @@ pub struct MarksDraft {
     pub use_file: bool,
     pub file: Option<(String, std::sync::Arc<Vec<u8>>)>,
     pub file_page: usize,
+    /// Background: pages that paint their own backdrop.
+    pub backdrops: BackdropCheck,
     /// The page (0-based) the preview was stepped to; `None` previews the current page. Reset
     /// each time the dialog opens.
     pub preview: Option<usize>,
@@ -110,6 +219,7 @@ impl Default for MarksDraft {
             use_file: false,
             file: None,
             file_page: 1,
+            backdrops: BackdropCheck::default(),
             preview: None,
         }
     }
@@ -359,6 +469,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.bg.opacity = pct / 100.0;
                 }
             });
+            if let Some(doc) = app.session.get(id) {
+                backdrop_options(ui, t, d, doc, count);
+            }
         }
     }
     ui.add_space(8.0);
@@ -567,6 +680,35 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) -> bool {
     browse
 }
 
+/// Pages that paint their own backdrop would hide the background: offer to replace a white one,
+/// and say where a picture (a scan) will still hide it.
+fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdfcraft_engine::Document, count: usize) {
+    let n = d.backdrops.update(doc, &d.range.pages(count));
+    if n.pending > 0 {
+        ui.label(egui::RichText::new(tl!("Checking pages…")).small().color(t.text_faint));
+        ui.ctx().request_repaint();
+    }
+    if !n.fills.is_empty() {
+        ui.add_space(4.0);
+        let label = pages_phrase(
+            &n.fills,
+            tl!("Page {pages} paints its own white backdrop, which would hide the background. Replace it"),
+            tl!("Pages {pages} paint their own white backdrop, which would hide the background. Replace it"),
+        );
+        ui.add(widgets::checkbox(&mut d.bg.replace_backdrop, &label));
+        ui.label(egui::RichText::new(tl!("Removing the background puts the page's own backdrop back.")).small().color(t.text_faint));
+    }
+    if !n.images.is_empty() {
+        ui.add_space(4.0);
+        let text = pages_phrase(
+            &n.images,
+            tl!("A picture covers page {pages} (a scan?), so the background won't show there."),
+            tl!("Pictures cover pages {pages} (scans?), so the background won't show there."),
+        );
+        ui.label(egui::RichText::new(text).small().color(crate::content_ui::UNDRAWABLE));
+    }
+}
+
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);
@@ -599,6 +741,18 @@ mod tests {
         d.use_file = true;
         assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
         assert_eq!(undrawable(MarkKind::Background, &d), None);
+    }
+
+    #[test]
+    fn backdrop_messages_name_their_pages() {
+        let phrase = |pages: &[usize]| pages_phrase(pages, "Page {pages}", "Pages {pages}");
+        assert_eq!(phrase(&[2]), "Page 3");
+        assert_eq!(phrase(&[0, 1, 2, 5]), "Pages 1-3, 6");
+        assert_eq!(phrase(&[0, 1]), "Pages 1-2", "a whole document is still listed");
+        let every_other: Vec<usize> = (0..40).step_by(2).collect();
+        assert_eq!(phrase(&every_other), "Pages 1, 3, 5, 7, 9, 11, 13, 15, …", "a long list stops");
+        let runs: Vec<usize> = (0..LISTED_PAGE_RUNS * 2).step_by(2).collect();
+        assert_eq!(phrase(&runs), "Pages 1, 3, 5, 7, 9, 11, 13, 15", "exactly the limit: no …");
     }
 
     #[test]

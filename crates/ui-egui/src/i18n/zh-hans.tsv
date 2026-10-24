@@ -535,6 +535,14 @@
 	Applies to 1 page	应用于 1 页
 	Applies to {n} pages	应用于 {n} 页
 	Replaces the existing one on those pages.	替换这些页面上的现有内容。
+	Checking pages…	正在检查页面…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	第 {pages} 页有自己的白色填充，会遮住背景。替换它
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	第 {pages} 页各有自己的白色填充，会遮住背景。替换它们
+	Removing the background puts the page's own backdrop back.	移除背景后，页面自己的白色填充会恢复。
+	A picture covers page {pages} (a scan?), so the background won't show there.	第 {pages} 页被一张图片覆盖（扫描件？），因此那里不会显示背景。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	第 {pages} 页被图片覆盖（扫描件？），因此那里不会显示背景。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	第 {pages} 页在添加背景后有改动，因此其自身的白色填充保持关闭。在白纸上看起来一样。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	第 {pages} 页在添加背景后有改动，因此它们自身的白色填充保持关闭。在白纸上看起来一样。
 	PDF or image	PDF 或图像
 	No file chosen	未选择文件
 	Page number	页码

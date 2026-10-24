@@ -992,6 +992,14 @@ theme	Appearance	Giao diện
 	Replacement text	Văn bản được thay vào
 	Replacement: pages of {name}	Thay thế: các trang của {name}
 	Replaces the existing one on those pages.	Thay thế cái hiện có trên các trang đó.
+	Checking pages…	Đang kiểm tra các trang…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Trang {pages} có lớp tô trắng riêng, sẽ che mất nền. Thay thế
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Các trang {pages} có lớp tô trắng riêng, sẽ che mất nền. Thay thế
+	Removing the background puts the page's own backdrop back.	Gỡ nền sẽ khôi phục lớp tô trắng riêng của trang.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Một hình ảnh phủ kín trang {pages} (bản quét?), nên nền sẽ không hiện ở đó.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Hình ảnh phủ kín các trang {pages} (bản quét?), nên nền sẽ không hiện ở đó.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Trang {pages} đã thay đổi sau khi thêm nền, nên lớp tô trắng riêng của nó vẫn tắt. Trên giấy trắng trông vẫn như cũ.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Các trang {pages} đã thay đổi sau khi thêm nền, nên lớp tô trắng riêng của chúng vẫn tắt. Trên giấy trắng trông vẫn như cũ.
 	Report	Báo cáo
 	Report…	Báo cáo…
 	Requires user to enter a password for:	Yêu cầu người dùng nhập mật khẩu cho:

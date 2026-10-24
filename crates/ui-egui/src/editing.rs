@@ -173,10 +173,14 @@ impl PdfCraftApp {
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
-                // Text saved as typed but drawn with `?` (its font can't draw it): said, not silent.
-                // Before the scripts' output, so an alert they raise still shows.
+                // Text saved as typed but drawn with `?` (its font can't draw it), or pages whose
+                // own backdrop stays off: said, not silent. Before the scripts' output, so an alert
+                // they raise still shows.
                 if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(crate::content_ui::undrawn_message(&n));
+                    self.notify(match &n {
+                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                    });
                 }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);

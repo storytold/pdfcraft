@@ -71,7 +71,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
-pub use pdfcraft_edit::{BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
+pub use pdfcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
@@ -441,9 +441,51 @@ pub struct Document {
     /// XFA forms: what was approximated, rewritten or could not be written to the XFA data
     /// (also in `info.warnings`, kept there when the document is re-read).
     pub xfa_warnings: Vec<String>,
-    /// What the last successful [`Session::apply`] wrote that its fonts can't draw: kept as typed,
-    /// drawn with `?` in its place (see [`TextNotice`]). The interface shows it; tools return it.
-    pub edit_notices: Vec<TextNotice>,
+    /// What the last successful [`Session::apply`] wants said (see [`EditNotice`]): text its fonts
+    /// can't draw, pages whose own backdrop stays off. The interface shows it; tools return it.
+    pub edit_notices: Vec<EditNotice>,
+}
+
+/// Something the last successful edit did that the user should hear about, never left silent
+/// (AGENTS.md §4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditNotice {
+    /// Text stored as typed but drawn with `?`.
+    Undrawn(TextNotice),
+    /// Remove background couldn't turn back on the white backdrop these pages (0-based,
+    /// ascending) paint themselves: their content changed after the background replaced it, so
+    /// turning it on could paint over something (`pdfcraft_edit::backdrops_left_off`). They look
+    /// the same on white paper.
+    BackdropsLeftOff { pages: Vec<usize> },
+}
+
+impl std::fmt::Display for EditNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditNotice::Undrawn(n) => n.fmt(f),
+            EditNotice::BackdropsLeftOff { pages } => {
+                let (which, own) = if pages.len() == 1 { ("page", "its") } else { ("pages", "their") };
+                write!(
+                    f,
+                    "{which} {} changed after the background was added, so {own} own white backdrop was not turned back on (it looks the same on white paper)",
+                    page_runs(pages)
+                )
+            }
+        }
+    }
+}
+
+/// 0-based pages as 1-based runs: `[0, 1, 2, 5]` is "1-3, 6".
+fn page_runs(pages: &[usize]) -> String {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for &p in pages {
+        match runs.last_mut() {
+            Some((_, end)) if end.checked_add(1) == Some(p) => *end = p,
+            _ => runs.push((p, p)),
+        }
+    }
+    let one = |p: usize| p.saturating_add(1);
+    runs.iter().map(|&(a, b)| if a == b { one(a).to_string() } else { format!("{}-{}", one(a), one(b)) }).collect::<Vec<_>>().join(", ")
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn
@@ -536,6 +578,20 @@ impl Document {
     /// PDF Optimizer ▸ Audit space usage.
     pub fn audit_space(&self) -> Vec<optimize::SpaceUse> {
         self.editor.as_ref().map(|e| optimize::audit_space(&e.cos, self.bytes.len() as u64)).unwrap_or_default()
+    }
+
+    /// The backdrop `page` (0-based) paints itself, which hides a background (Add Background).
+    pub fn page_backdrop(&self, page: usize) -> Option<pdfcraft_edit::Backdrop> {
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::page_backdrop(&e.cos, page).ok().flatten())
+    }
+
+    /// [`Self::page_backdrop`] for each of `pages`, in order, walking the page tree once: the
+    /// way to check many pages. A page out of range has none.
+    pub fn page_backdrops(&self, pages: &[usize]) -> Vec<Option<pdfcraft_edit::Backdrop>> {
+        match &self.editor {
+            Some(e) => pdfcraft_edit::page_backdrops(&e.cos, pages),
+            None => vec![None; pages.len()],
+        }
     }
 
     /// Edit a PDF: the images `page` draws (0-based).
@@ -4089,11 +4145,18 @@ impl Session {
         }
         // What this edit drew with `?` (a value or comment text its font can't draw, stored as
         // typed): reported, never silent (AGENTS.md §4).
-        let notices = if matches!(scope_of(&edit), Scope::Form | Scope::Comments | Scope::Full) {
-            guard(|| undrawn_notices(&editor.cos, &next)).unwrap_or_default()
+        let mut notices: Vec<EditNotice> = if matches!(scope_of(&edit), Scope::Form | Scope::Comments | Scope::Full) {
+            guard(|| undrawn_notices(&editor.cos, &next)).unwrap_or_default().into_iter().map(EditNotice::Undrawn).collect()
         } else {
             Vec::new()
         };
+        // Pages whose own white backdrop Remove background couldn't turn back on: said, not silent.
+        if matches!(edit, Edit::RemoveMarks { kind: MarkKind::Background }) {
+            let pages = guard(|| pdfcraft_edit::backdrops_left_off(&next)).unwrap_or_default();
+            if !pages.is_empty() {
+                notices.push(EditNotice::BackdropsLeftOff { pages });
+            }
+        }
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);

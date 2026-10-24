@@ -851,6 +851,14 @@
 	Applies to 1 page	Применяется к 1 странице
 	Applies to {n} pages	Применяется к {n} страницам
 	Replaces the existing one on those pages.	Заменяет существующий на этих страницах.
+	Checking pages…	Проверка страниц…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Страница с собственной белой заливкой, которая скроет фон: {pages}. Заменить
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Страницы с собственной белой заливкой, которая скроет фон: {pages}. Заменить
+	Removing the background puts the page's own backdrop back.	При удалении фона собственная белая заливка страницы возвращается.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Страница, закрытая изображением (скан?): {pages}; фон там не будет виден.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Страницы, закрытые изображениями (сканы?): {pages}; фон там не будет виден.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Страница изменена после добавления фона, поэтому её собственная белая заливка остаётся выключенной: {pages}. На белой бумаге она выглядит так же.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Страницы изменены после добавления фона, поэтому их собственные белые заливки остаются выключенными: {pages}. На белой бумаге они выглядят так же.
 	PDF or image	PDF или изображение
 	No file chosen	Файл не выбран
 	Page number	Номер страницы

@@ -815,6 +815,14 @@
 	Applies to 1 page	Koskee yhtä sivua
 	Applies to {n} pages	Koskee {n} sivua
 	Replaces the existing one on those pages.	Korvaa näiden sivujen nykyisen.
+	Checking pages…	Tarkistetaan sivuja…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Sivulla {pages} on oma valkoinen täyttö, joka peittäisi taustan. Korvaa se
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Sivuilla {pages} on oma valkoinen täyttö, joka peittäisi taustan. Korvaa ne
+	Removing the background puts the page's own backdrop back.	Taustan poistaminen palauttaa sivun oman valkoisen täytön.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Kuva peittää sivun {pages} (skannaus?), joten tausta ei näy siinä.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Kuvat peittävät sivut {pages} (skannauksia?), joten tausta ei näy niissä.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Sivu {pages} muuttui taustan lisäämisen jälkeen, joten sen oma valkoinen täyttö pysyy pois päältä. Valkoisella paperilla se näyttää samalta.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Sivut {pages} muuttuivat taustan lisäämisen jälkeen, joten niiden omat valkoiset täytöt pysyvät pois päältä. Valkoisella paperilla ne näyttävät samalta.
 	PDF or image	PDF tai kuva
 	No file chosen	Tiedostoa ei ole valittu
 	Page number	Sivunumero

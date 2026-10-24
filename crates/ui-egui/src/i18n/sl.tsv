@@ -1527,6 +1527,14 @@
 	Replacement text	Nadomestno besedilo
 	Replacement: pages of {name}	Zamenjava: strani datoteke {name}
 	Replaces the existing one on those pages.	Nadomesti obstoječe na teh straneh.
+	Checking pages…	Preverjanje strani…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Stran z lastnim belim polnilom, ki bi skrilo ozadje: {pages}. Zamenjaj
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Strani z lastnim belim polnilom, ki bi skrilo ozadje: {pages}. Zamenjaj
+	Removing the background puts the page's own backdrop back.	Odstranitev ozadja povrne lastno belo polnilo strani.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Stran, ki jo prekriva slika (skeniranje?): {pages}; ozadje tam ne bo vidno.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Strani, ki jih prekrivajo slike (skeniranja?): {pages}; ozadje tam ne bo vidno.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Stran se je spremenila po dodajanju ozadja, zato njeno lastno belo polnilo ostane izklopljeno: {pages}. Na belem papirju je videti enako.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Strani so se spremenile po dodajanju ozadja, zato njihova lastna bela polnila ostanejo izklopljena: {pages}. Na belem papirju so videti enako.
 	Replacing images arrives on the web with image file pickers	Zamenjava slik bo v spletni različici na voljo z izbirniki slikovnih datotek
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Zamenjava slik na strani {p} bo v spletni različici na voljo z izbirniki slik ({i})
 	Reply	Odgovori

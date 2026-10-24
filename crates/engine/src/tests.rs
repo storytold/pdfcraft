@@ -2296,10 +2296,10 @@ fn a_value_its_font_cannot_draw_is_reported_by_the_edit_that_drew_it() {
     fill(&mut s, "name", FieldValue::Text("张三".into())).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.form[0].value, ["张三"]);
-    let n = &d.edit_notices;
-    assert_eq!(n.len(), 1, "{n:?}");
-    assert_eq!((n[0].field.as_deref(), n[0].page, n[0].ch, n[0].redrawn_elsewhere), (Some("name"), 0, '张', true));
-    assert!(n[0].to_string().contains("\"张\" (U+5F20)") && n[0].to_string().contains("other PDF viewers redraw"), "{}", n[0]);
+    let [EditNotice::Undrawn(n)] = d.edit_notices.as_slice() else { panic!("{:?}", d.edit_notices) };
+    assert_eq!((n.field.as_deref(), n.page, n.ch, n.redrawn_elsewhere), (Some("name"), 0, '张', true));
+    let said = d.edit_notices[0].to_string();
+    assert!(said.contains("\"张\" (U+5F20)") && said.contains("other PDF viewers redraw"), "{said}");
     fill(&mut s, "ok", FieldValue::Check(true)).unwrap();
     assert!(s.get(id).unwrap().edit_notices.is_empty(), "an unrelated edit reports nothing");
     fill(&mut s, "name", FieldValue::Text("李四".into())).unwrap();
@@ -2843,6 +2843,59 @@ fn headers_footers_watermarks_and_backgrounds_show_update_and_remove() {
     assert!(s.get(id).unwrap().marks().is_empty());
     assert!(matches!(s.apply(id, Edit::RemoveMarks { kind: MarkKind::Watermark }), Err(EditError::Edit(_))));
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Remove background"));
+}
+
+/// One 100 × 100 page under a background (`/PCMark /Background`), its own content painting a
+/// white backdrop first. With `copy`, that content is a backdrop copy whose tag is `copy`.
+fn backdrop_pdf(copy: Option<&str>) -> Vec<u8> {
+    let bg = "q 1 0 0 rg 0 0 100 100 re f Q";
+    let (tag, fill) = match copy {
+        Some(tag) => (format!("/PCBackdrop {tag} "), "n"),
+        None => (String::new(), "f"),
+    };
+    let content = format!("1 g 0 0 100 100 re {fill} 0 g BT /F1 12 Tf 10 50 Td (Hi) Tj ET");
+    format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >> endobj\n\
+         4 0 obj << /PCMark /Background /Length {} >> stream\n{bg}\nendstream endobj\n\
+         5 0 obj << {tag}/Length {} >> stream\n{content}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        bg.len(),
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// Remove background says which pages keep their own white backdrop off (it couldn't be turned
+/// back on safely), and says nothing when every backdrop comes back.
+#[test]
+fn remove_background_names_the_pages_whose_own_backdrop_stays_off() {
+    let mut s = Session::new();
+    // A tag whose hash doesn't match the bytes before the fill: something changed them since.
+    let tag = format!("<< /Index 2 /Op (f) /Before <{}> >>", "00".repeat(32));
+    let id = s.open("a.pdf", None, Arc::new(backdrop_pdf(Some(&tag))), None).unwrap();
+    s.apply(id, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.edit_notices, [EditNotice::BackdropsLeftOff { pages: vec![0] }]);
+    let said = d.edit_notices[0].to_string();
+    assert!(said.starts_with("page 1 changed after the background was added"), "{said}");
+    // An unrelated edit after it says nothing.
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(s.get(id).unwrap().edit_notices.is_empty());
+
+    // Added and removed here: the backdrop comes back, and nothing is said.
+    let id = s.open("b.pdf", None, Arc::new(backdrop_pdf(None)), None).unwrap();
+    s.apply(id, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
+    let background = Background { color: [1.0, 0.0, 0.0], ..Background::default() };
+    s.apply(id, Edit::AddBackground { pages: vec![0], settings: background, replace: false, file: None }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_backdrops(&[0]), [None], "replaced");
+    s.apply(id, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
+    assert!(s.get(id).unwrap().edit_notices.is_empty());
+    assert_eq!(s.get(id).unwrap().page_backdrops(&[0]), [Some(Backdrop::Fill)], "turned back on");
+    assert_eq!(page_runs(&[0, 1, 2, 5, 7, 8]), "1-3, 6, 8-9");
+    assert_eq!(page_runs(&[]), "");
 }
 
 #[test]
@@ -7715,11 +7768,11 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
     // 5. Metadata scope: a panic after `doc.info.title` was written rolls back `info.title` and keeps `edit_notices`.
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Draft".into() }).unwrap();
     let notice = TextNotice { field: None, page: 0, ch: '☺', redrawn_elsewhere: false };
-    s.doc_mut(id).unwrap().edit_notices.push(notice.clone());
+    s.doc_mut(id).unwrap().edit_notices.push(EditNotice::Undrawn(notice.clone()));
     panic_on_refresh(1);
     assert_eq!(s.undo(id), Err(EditError::Reopen("injected refresh panic".into())));
     assert_eq!(s.get(id).unwrap().info.title.as_deref(), Some("Draft"));
-    assert_eq!(s.get(id).unwrap().edit_notices, [notice]);
+    assert_eq!(s.get(id).unwrap().edit_notices, [EditNotice::Undrawn(notice)]);
     assert_eq!(s.undo(id).unwrap().as_str(), "Change Title");
     assert_eq!(s.get(id).unwrap().info.title, None);
     assert!(s.get(id).unwrap().edit_notices.is_empty());

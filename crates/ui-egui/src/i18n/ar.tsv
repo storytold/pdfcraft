@@ -857,6 +857,14 @@
 	Applies to 1 page	يُطبَّق على صفحة واحدة
 	Applies to {n} pages	يُطبَّق على {n} صفحات
 	Replaces the existing one on those pages.	يستبدل الموجود على تلك الصفحات.
+	Checking pages…	جارٍ فحص الصفحات…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	الصفحة {pages} ترسم تعبئة بيضاء خاصة بها ستُخفي الخلفية. استبدالها
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	الصفحات {pages} ترسم تعبئة بيضاء خاصة بها ستُخفي الخلفية. استبدالها
+	Removing the background puts the page's own backdrop back.	إزالة الخلفية تعيد التعبئة البيضاء الخاصة بالصفحة.
+	A picture covers page {pages} (a scan?), so the background won't show there.	تغطي صورة الصفحة {pages} (مسح ضوئي؟)، لذا لن تظهر الخلفية فيها.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	تغطي صور الصفحات {pages} (مسح ضوئي؟)، لذا لن تظهر الخلفية فيها.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	تغيّرت الصفحة {pages} بعد إضافة الخلفية، لذا تبقى تعبئتها البيضاء الخاصة متوقفة. تبدو كما هي على الورق الأبيض.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	تغيّرت الصفحات {pages} بعد إضافة الخلفية، لذا تبقى تعبئتها البيضاء الخاصة متوقفة. تبدو كما هي على الورق الأبيض.
 	PDF or image	PDF أو صورة
 	No file chosen	لم يُختر ملف
 	Page number	رقم الصفحة
