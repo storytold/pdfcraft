@@ -3448,8 +3448,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.properties"]
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/editing.rs::document_properties_edit_is_one_undoable_step", "crates/ui-egui/tests/it/editing.rs::cancelling_properties_discards_the_draft", "crates/ui-egui/tests/it/dialog_chrome.rs::document_properties_values_line_up_and_long_fields_wrap", "crates/ui-egui/tests/it/dialog_chrome.rs::space_audit_tab_measures_the_file_and_stays_in_the_card"]
+notes = "Description, Initial View, Security, Fonts and Advanced, plus a Space Audit tab Acrobat does not have (its audit is only in the PDF Optimizer); the audit runs when the tab opens and again after an edit. No Custom tab (organize.custom-properties)"
 
 [[feature]]
 id = "organize.edit-metadata"
@@ -7626,7 +7626,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_audit_space"]
 evidence = ["crates/optimize/tests/optimize.rs::space_audit_shares_the_file_out_by_kind", "crates/optimize/tests/optimize.rs::space_audit_counts_what_fields_and_comments_draw_with_by_kind", "crates/optimize/tests/optimize.rs::space_audit_survives_deeply_nested_forms", "crates/automation/tests/it/automation.rs::auditing_space_through_tools", "crates/ui-egui/tests/it/viewer.rs::optimizer_audits_space_usage", "crates/ui-egui/tests/it/viewer.rs::space_audit_numbers_line_up_under_their_headers"]
-notes = "PDF Optimizer ▸ Audit space usage: what the file's bytes are spent on now (not what optimizing would save), in 16 categories (images, content streams, fonts, X Object forms, structure, bookmarks, thumbnails, comments, forms, named destinations, colour spaces, shadings, patterns, graphics states, embedded files, overhead) with bytes and percentages. Resources are counted by kind wherever they are used, so the fonts and images form fields and comments draw with count as fonts and images. Still missing: sizes are each object as it would be written uncompressed, so objects packed in compressed object streams count larger than they take on disk (overhead, the rest of the file, shrinks to match)"
+notes = "PDF Optimizer ▸ Audit space usage, and Document Properties ▸ Space Audit: what the file's bytes are spent on now (not what optimizing would save), in 16 categories (images, content streams, fonts, X Object forms, structure, bookmarks, thumbnails, comments, forms, named destinations, colour spaces, shadings, patterns, graphics states, embedded files, overhead) with bytes and percentages. Resources are counted by kind wherever they are used, so the fonts and images form fields and comments draw with count as fonts and images. Still missing: sizes are each object as it would be written uncompressed, so objects packed in compressed object streams count larger than they take on disk (overhead, the rest of the file, shrinks to match)"
 
 [[feature]]
 id = "optimize.optimizer-presets"

@@ -374,6 +374,7 @@ pub enum PropsTab {
     Security,
     Fonts,
     Advanced,
+    SpaceAudit,
 }
 
 /// Duplicate Field: the field and the pages (all, or a range, 1-based).
@@ -705,6 +706,8 @@ pub struct PdfCraftApp {
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
+    /// The document and edit generation `space_audit` was measured from.
+    pub(crate) space_audit_of: Option<(DocId, u64)>,
     /// Combine files: the files staged so far.
     pub combine_draft: Vec<combine_ui::CombineFile>,
     /// The combine list's field-name conflict preview (computed once per list, never saved).
@@ -1057,6 +1060,7 @@ impl PdfCraftApp {
             os_key_store_ids: false,
             cert_viewer: None,
             space_audit: Vec::new(),
+            space_audit_of: None,
             combine_draft: Vec::new(),
             combine_conflicts: Default::default(),
             combine_tab: Default::default(),
@@ -2684,6 +2688,7 @@ impl PdfCraftApp {
                     "security" => Some(Dialog::Properties(PropsTab::Security)),
                     "fonts" => Some(Dialog::Properties(PropsTab::Fonts)),
                     "advanced" => Some(Dialog::Properties(PropsTab::Advanced)),
+                    "space-audit" => Some(Dialog::Properties(PropsTab::SpaceAudit)),
                     "shortcuts" => Some(Dialog::Shortcuts),
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
