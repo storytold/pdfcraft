@@ -190,11 +190,21 @@ impl TrueTypeFont {
         }
 
         match &self.kind {
-            // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
-            // specification's full mapping (`f_i`, `hyphen.case`).
-            Kind::Embedded(e) => e.code_to_unicode_name(code as u8).and_then(|name| {
-                glyph_name_to_unicode(name).map(BfString::Char).or_else(|| glyph_name_to_text(name))
-            }),
+            Kind::Embedded(e) => {
+                // PdfCraft patch (53): see `EmbeddedKind::symbolic_text`.
+                if let Some(text) = e.symbolic_text(code as u8) {
+                    let mut chars = text.chars();
+                    return Some(match (chars.next(), chars.next()) {
+                        (Some(c), None) => BfString::Char(c),
+                        _ => BfString::String(text.to_string()),
+                    });
+                }
+                // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
+                // specification's full mapping (`f_i`, `hyphen.case`).
+                e.code_to_unicode_name(code as u8).and_then(|name| {
+                    glyph_name_to_unicode(name).map(BfString::Char).or_else(|| glyph_name_to_text(name))
+                })
+            }
             Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
         }
 
@@ -220,6 +230,9 @@ struct EmbeddedKind {
     cached_mappings: RefCell<HashMap<u8, GlyphId>>,
     /// PostScript name from the PDF.
     postscript_name: Option<String>,
+    /// PdfCraft patch: (see vendor/README.md hayro-interpret (53)) the text each glyph's `post`
+    /// table name stands for, for the names that stand for any (`glyph_name_text`).
+    text_names: HashMap<GlyphId, String>,
 }
 
 impl EmbeddedKind {
@@ -236,6 +249,10 @@ impl EmbeddedKind {
             .and_then(|d| OpenTypeFontBlob::new(Arc::new(d.to_vec()), 0))?;
 
         let glyph_names = base_font.glyph_names();
+        let text_names = glyph_names
+            .iter()
+            .filter_map(|(name, glyph)| Some((*glyph, glyph_name_text(name)?)))
+            .collect();
 
         let cff_font_blob = base_font
             .font_ref()
@@ -258,6 +275,7 @@ impl EmbeddedKind {
             encoding,
             cached_mappings: RefCell::new(HashMap::new()),
             postscript_name,
+            text_names,
         })
     }
 
@@ -295,6 +313,29 @@ impl EmbeddedKind {
             // same aliasing.
             .or_else(|| Encoding::WinAnsi.text_alias(code))
             .or_else(|| win_ansi::get(code))
+    }
+
+    /// PdfCraft patch (53): a symbolic font without an encoding selects its glyphs through its
+    /// own `cmap`, so its codes need not mean anything in WinAnsi. FrameMaker files distilled
+    /// with Distiller 3 number them in the Macintosh glyph order, 29 below ASCII, and read as
+    /// WinAnsi `Solid` came out as `6ROLG` (#3962). The name the `post` table gives the glyph the
+    /// code selects says what it is, as MuPDF reads it, and as pdfcraft-fonts reads it for the
+    /// editor. `None` when the font is non-symbolic, has an encoding or a `/Differences` entry
+    /// for the code, selects no glyph for it, or names it with no text: the code is then read as
+    /// before.
+    fn symbolic_text(&self, code: u8) -> Option<&str> {
+        if self.is_non_symbolic()
+            || !matches!(self.encoding, Encoding::BuiltIn)
+            || self.differences.contains_key(&code)
+            || self.cff_blob.is_some()
+        {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        if glyph == GlyphId::NOTDEF {
+            return None;
+        }
+        self.text_names.get(&glyph).map(String::as_str)
     }
 
     fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
@@ -410,6 +451,36 @@ pub(crate) enum Width {
     Missing,
 }
 
+/// PdfCraft patch (53): the text a glyph name stands for, by the rules of the Adobe Glyph List
+/// specification, as pdfcraft-fonts' `glyph_text` reads them for the editor: drop any suffix
+/// from the first `.` (`a.ss01` is `a`), then each `_`-separated component is a list name,
+/// `uni` and groups of four hex digits, or `u` and four to six. `None` when any component is
+/// none of these. Each component gives at least one character, so the text is never empty.
+fn glyph_name_text(name: &str) -> Option<String> {
+    // An empty stem (`.notdef`) is no list name and no number, so it gives `None` below.
+    let stem = name.split('.').next()?;
+    // `from_str_radix` alone would also take a sign, as in `uni+041`.
+    let hex = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
+    let mut out = String::new();
+    for part in stem.split('_') {
+        if let Some(text) = glyph_names::get(part) {
+            out.push_str(text);
+        } else if let Some(digits) = part.strip_prefix("uni").filter(|h| hex(h)) {
+            // A group short of four digits isn't there to take, so `uni041` gives `None`.
+            for i in (0..digits.len()).step_by(4) {
+                let unit = digits.get(i..i.saturating_add(4))?;
+                out.push(char::from_u32(u32::from_str_radix(unit, 16).ok()?)?);
+            }
+        } else {
+            let digits = part
+                .strip_prefix('u')
+                .filter(|h| (4..=6).contains(&h.len()) && hex(h))?;
+            out.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
+        }
+    }
+    Some(out)
+}
+
 pub(crate) fn read_widths(dict: &Dict<'_>, descriptor: &Dict<'_>) -> Option<(Vec<Width>, f32)> {
     let mut widths = Vec::new();
 
@@ -499,5 +570,44 @@ pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) 
             get_encoding_base(dict, Name::new_unescaped(ENCODING)),
             HashMap::new(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glyph_name_text;
+
+    /// PdfCraft patch (53): glyph names read as pdfcraft-fonts' `glyph_text` reads them.
+    #[test]
+    fn glyph_names_read_by_the_adobe_glyph_list_rules() {
+        for (name, expected) in [
+            ("a", "a"),
+            ("a.ss01", "a"),
+            ("less_equal.liga", "<="),
+            ("uni0041", "A"),
+            ("uni00410042", "AB"),
+            ("u0041", "A"),
+            ("u1F600", "\u{1F600}"),
+        ] {
+            assert_eq!(glyph_name_text(name).as_deref(), Some(expected), "{name}");
+        }
+        for name in [
+            "",
+            ".notdef",
+            ".alt",
+            "EMquad",
+            "uni041",
+            "uni00410",
+            "uni004G",
+            "uni+041",
+            "u+041",
+            "uniD800",
+            "u041",
+            "u0000041",
+            "u004G",
+            "a_EMquad",
+        ] {
+            assert_eq!(glyph_name_text(name), None, "{name}");
+        }
     }
 }

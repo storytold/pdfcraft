@@ -1227,6 +1227,85 @@ pub fn glyph_unicode(name: &str) -> Option<char> {
     chars.next().filter(|_| chars.len() == 0)
 }
 
+/// What each code of an embedded TrueType font that isn't flagged non-symbolic and names no base
+/// encoding shows, by the `post` table name of the glyph its `cmap` selects (the way the renderer
+/// selects it: the code, then at 0xF000, 0xF100 and 0xF200). Such a font's codes need not be
+/// Standard or WinAnsi: FrameMaker files distilled with Distiller 3 number them in the Macintosh
+/// glyph order, 29 below ASCII, so `Solid` read as `6ROLG` and typing set the wrong glyphs (#3962).
+/// Codes without a glyph, or whose glyph has no name with a Unicode value, are left out.
+fn symbolic_glyph_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
+    use skrifa::GlyphId;
+    use skrifa::raw::{FontData, FontRead as _, TableProvider as _, tables::cmap::PlatformId, tables::post::Post, types::Tag};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
+    // Flag bit 6, Nonsymbolic (ISO 32000-2 Table 121).
+    let flags = descriptor.get(b"Flags").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(0.0) as i64;
+    if flags & 32 != 0 {
+        return Vec::new();
+    }
+    let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
+    let object = doc.resolve(object);
+    let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
+    let Ok(bytes) = stream.decoded_within(16 << 20) else { return Vec::new() };
+    let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
+    let Ok(cmap) = face.cmap() else { return Vec::new() };
+    // A `post` version written with its 16-bit halves swapped (`00 00 00 02` for 2.0, as ScanSoft
+    // PDF Create! writes it) is read as the version it means, as the renderer reads it (#2946,
+    // vendored hayro-interpret patch (49)); otherwise its names would be lost here alone.
+    let repaired = face.table_data(Tag::new(b"post")).and_then(|data| match data.as_bytes() {
+        [0, 0, 0, n @ 1..=3, rest @ ..] => Some([&[0, *n, 0, 0], rest].concat()),
+        _ => None,
+    });
+    let post = match &repaired {
+        Some(bytes) => Post::read(FontData::new(bytes)),
+        None => face.post(),
+    };
+    let Ok(post) = post else { return Vec::new() };
+    let custom = post_custom_names(&post);
+    (0..=255u32)
+        .filter_map(|code| {
+            // The records in order, as the renderer's `map_code` reads a symbolic font: a Windows
+            // symbol or Unicode cmap with the code and the code at 0xF000, 0xF100 and 0xF200, a
+            // Macintosh or Unicode-platform one with the code alone; the first glyph found wins.
+            let glyph = cmap.encoding_records().iter().find_map(|record| {
+                let offsets: &[u32] = match (record.platform_id(), record.encoding_id()) {
+                    (PlatformId::Windows, 0 | 1) => &[0, 0xF000, 0xF100, 0xF200],
+                    (PlatformId::Macintosh | PlatformId::Unicode, 0) => &[0],
+                    _ => return None,
+                };
+                let subtable = record.subtable(cmap.offset_data()).ok()?;
+                offsets.iter().find_map(|o| subtable.map_codepoint(code + o).filter(|g| *g != GlyphId::NOTDEF))
+            })?;
+            let glyph = u16::try_from(glyph.to_u32()).ok()?;
+            Some((code, glyph_text(post_name(&post, &custom, glyph)?)?))
+        })
+        .collect()
+}
+
+/// The names a version 2.0 `post` table spells out, in order, read once. `Post::glyph_name` walks
+/// this data from its start for each glyph it is asked about, which over a font program of up to
+/// 16 MiB, asked about 256 codes, is work an untrusted file can make large. Reading stops at the
+/// first name that can't be read, as each lookup would.
+fn post_custom_names<'a>(post: &skrifa::raw::tables::post::Post<'a>) -> Vec<&'a str> {
+    post.string_data().map(|names| names.iter().map_while(|name| name.ok().map(|n| n.as_str())).collect()).unwrap_or_default()
+}
+
+/// `glyph`'s name in `post`, as `Post::glyph_name` gives it, with the table's own names from
+/// [`post_custom_names`].
+fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str], glyph: u16) -> Option<&'a str> {
+    use skrifa::raw::{tables::post::DEFAULT_GLYPH_NAMES, types::Version16Dot16};
+    match post.version() {
+        Version16Dot16::VERSION_1_0 => DEFAULT_GLYPH_NAMES.get(usize::from(glyph)).copied(),
+        Version16Dot16::VERSION_2_0 => {
+            let index = usize::from(post.glyph_name_index()?.get(usize::from(glyph))?.get());
+            match index.checked_sub(DEFAULT_GLYPH_NAMES.len()) {
+                None => DEFAULT_GLYPH_NAMES.get(index).copied(),
+                Some(i) => custom.get(i).copied(),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
 /// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
 fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
@@ -1268,6 +1347,11 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
             if let Some(c) = char::from_u32(*u).filter(|_| *u != 0) {
                 out.encoding.insert(code as u32, c.to_string());
             }
+        }
+        // A font named as Symbol or ZapfDingbats keeps reporting nothing: its names may be as
+        // un-Latin as its codes (WordPerfect's WPTypographicSymbols calls its apostrophe `equal`).
+        if base_name.is_none() && !symbolic_builtin {
+            out.encoding.extend(symbolic_glyph_texts(doc, font));
         }
         if let Some(Object::Dict(d)) = enc.as_deref()
             && let Some(diffs) = d.get(b"Differences").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
@@ -1526,6 +1610,157 @@ mod tests {
         assert_eq!(source.decoded().unwrap(), subset, "only an in-memory editor copy is adapted");
         let mut broken = vec![0; 16];
         assert!(append_editor_cmap(&mut broken, &std::collections::BTreeMap::from([(65, 1)])).is_none());
+    }
+
+    /// The names read once give what `Post::glyph_name` gives, for every glyph of a font with its
+    /// own names (Inter's version 2.0 table), and none past the last glyph.
+    #[test]
+    fn post_names_read_once_match_the_table() {
+        use skrifa::raw::TableProvider as _;
+        let face = skrifa::FontRef::new(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+        let post = face.post().unwrap();
+        let custom = post_custom_names(&post);
+        assert!(custom.len() > 100, "Inter names glyphs of its own: {}", custom.len());
+        let glyphs = face.maxp().unwrap().num_glyphs();
+        for g in 0..glyphs {
+            assert_eq!(post_name(&post, &custom, g), post.glyph_name(skrifa::raw::types::GlyphId16::new(g)), "glyph {g}");
+        }
+        assert_eq!(post_name(&post, &custom, glyphs), None);
+    }
+
+    /// #3962: a symbolic TrueType subset with no `/Encoding` whose codes are glyph positions in
+    /// the Macintosh order, 29 below ASCII, mapped by a Mac (1,0) cmap. Its text is what the
+    /// `post` table names the glyphs its codes select, and typing encodes back to those codes.
+    /// A (3,0) symbol cmap at 0xF000 + code is read too: code 0x20, `.notdef` in the Mac table,
+    /// shows `k` there, code 0xC0 `é`, and code 0xC1 the variant `a.1`, whose suffix is dropped.
+    /// Records are read in order, each with its offsets, as the renderer reads them: 0xC2 is the
+    /// symbol cmap's `x`, not a later (3,1) cmap's `z`.
+    #[test]
+    fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
+        use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+        const TEXT: &str = "Solid state";
+        let original = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let face = skrifa::FontRef::new(original).unwrap();
+        let charmap = face.charmap();
+        let post = face.post().unwrap();
+        let variant = (1..face.maxp().unwrap().num_glyphs())
+            .find(|&g| post.glyph_name(skrifa::raw::types::GlyphId16::new(g)) == Some("a.1"))
+            .expect("Inter has a.1");
+        // A format 6 Mac cmap over codes 3..=0x57: each letter at its code minus 29.
+        let (first, last) = (3u16, 0x57u16);
+        let mut glyphs = vec![0u16; usize::from(last - first + 1)];
+        for c in TEXT.chars() {
+            glyphs[usize::from(c as u16 - 29 - first)] = u16::try_from(charmap.map(c).unwrap().to_u32()).unwrap();
+        }
+        let mac_len = 10 + 2 * glyphs.len() as u16;
+        let gid = |c: char| u16::try_from(charmap.map(c).unwrap().to_u32()).unwrap();
+        let mut mac = vec![0, 6];
+        mac.extend_from_slice(&mac_len.to_be_bytes());
+        mac.extend_from_slice(&[0, 0]);
+        mac.extend_from_slice(&first.to_be_bytes());
+        mac.extend_from_slice(&(glyphs.len() as u16).to_be_bytes());
+        glyphs.iter().for_each(|g| mac.extend_from_slice(&g.to_be_bytes()));
+        // A format 4 subtable: one segment per code, then the closing 0xFFFF segment.
+        let format4 = |map: &[(u16, u16)]| {
+            let segments: Vec<(u16, u16)> = map.iter().copied().chain([(0xFFFF, 0)]).collect();
+            let n = segments.len() as u16;
+            let words: Vec<u16> = [4, 16 + 8 * n, 0, 2 * n, 2, 0, 2 * n - 2]
+                .into_iter()
+                .chain(segments.iter().map(|s| s.0))
+                .chain([0])
+                .chain(segments.iter().map(|s| s.0))
+                .chain(segments.iter().map(|&(code, glyph)| if code == 0xFFFF { 1 } else { glyph.wrapping_sub(code) }))
+                .chain(segments.iter().map(|_| 0))
+                .collect();
+            words.iter().flat_map(|w| w.to_be_bytes()).collect::<Vec<u8>>()
+        };
+        // Symbol (3,0): 0xF020 → k, 0xF0C0 → é, 0xF0C1 → a.1, 0xF0C2 → x.
+        let symbol = format4(&[(0xF020, gid('k')), (0xF0C0, gid('é')), (0xF0C1, variant), (0xF0C2, gid('x')), (0xF0C3, gid('w'))]);
+        // Unicode (3,1), after it: 0xC2 → z. The renderer reads the (3,0) record, offsets and
+        // all, before this one, so code 0xC2 is `x`.
+        let unicode = format4(&[(0xC2, gid('z'))]);
+        // A Unicode-platform (0,3) record, first, which the renderer doesn't read: 0xC3 → q there,
+        // so code 0xC3 is the symbol cmap's `w`.
+        let platform0 = format4(&[(0xC3, gid('q'))]);
+        // Four records, in platform order as the cmap table requires.
+        let at = |n: usize| (36 + n) as u32;
+        let mut cmap = vec![0, 0, 0, 4];
+        for (platform, encoding, offset) in [
+            (0u16, 3u16, at(0)),
+            (1, 0, at(platform0.len())),
+            (3, 0, at(platform0.len() + mac.len())),
+            (3, 1, at(platform0.len() + mac.len() + symbol.len())),
+        ] {
+            cmap.extend_from_slice(&platform.to_be_bytes());
+            cmap.extend_from_slice(&encoding.to_be_bytes());
+            cmap.extend_from_slice(&offset.to_be_bytes());
+        }
+        cmap.extend(platform0);
+        cmap.extend(mac);
+        cmap.extend(symbol);
+        cmap.extend(unicode);
+        let mut subset = original.to_vec();
+        let count = u16::from_be_bytes(subset[4..6].try_into().unwrap()) as usize;
+        let entry = (0..count).map(|i| 12 + i * 16).find(|i| &subset[*i..*i + 4] == b"cmap").unwrap();
+        let offset = subset.len() as u32;
+        subset[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
+        subset[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+        subset.extend_from_slice(&cmap);
+        let codes: Vec<u8> = TEXT.bytes().map(|b| b - 29).collect();
+        let metrics = |flags: i64, encoding: Option<Object>| {
+            let mut doc = Document::new_empty();
+            let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &subset)));
+            let mut descriptor = Dict::new();
+            descriptor.set(b"Flags".to_vec(), Object::Int(flags));
+            descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+            let mut entries = vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))];
+            if let Some(encoding) = encoding {
+                entries.push(("Encoding", encoding));
+            }
+            let f = font(&mut doc, entries);
+            Metrics::from_dict(&doc, &f)
+        };
+        let symbolic = metrics(4, None);
+        assert_eq!(symbolic.decode(&codes), TEXT);
+        // The same font with its `post` version halves swapped (`00 00 00 02`) reads the same,
+        // as the renderer reads it (#2946).
+        let post = (0..count).map(|i| 12 + i * 16).find(|i| &subset[*i..*i + 4] == b"post").unwrap();
+        let at = u32::from_be_bytes(subset[post + 8..post + 12].try_into().unwrap()) as usize;
+        assert_eq!(subset[at..at + 4], [0, 2, 0, 0], "Inter's post is version 2.0");
+        let mut swapped = subset.clone();
+        swapped[at..at + 4].copy_from_slice(&[0, 0, 0, 2]);
+        let mut doc = Document::new_empty();
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &swapped)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Flags".to_vec(), Object::Int(4));
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+        assert_eq!(Metrics::from_dict(&doc, &f).decode(&codes), TEXT, "a swapped post version");
+        assert_eq!(symbolic.decode(&[0x20, 0xC0, 0xC1, 0xC2, 0xC3]), "kéaxw");
+        assert_eq!(symbolic.encode("Solid").as_deref(), Some(&codes[..5]), "typing sets the same glyphs");
+        // A named encoding, or the Nonsymbolic flag, says what the codes are: they read through it.
+        assert_eq!(metrics(4, Some(Object::name("WinAnsiEncoding"))).decode(&codes), "6ROLGVWDWH");
+        // `/Differences` still names its codes: 0x36 shows `A` there, not the glyph's `S`.
+        let mut differences = Dict::new();
+        differences.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x36), Object::name("A")]));
+        assert_eq!(metrics(4, Some(Object::Dict(differences))).decode(&codes), "Aolid state");
+        assert_eq!(metrics(32, None).decode(&codes), "6ROLGVWDWH");
+        // A font named as a symbol font reports nothing, as before: its glyph names can't be
+        // trusted to be Latin either.
+        let mut doc = Document::new_empty();
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &subset)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"Flags".to_vec(), Object::Int(4));
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("KNMDCP+WPTypographicSymbols")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+            ],
+        );
+        assert_eq!(Metrics::from_dict(&doc, &f).decode(&codes), "");
     }
 
     fn metrics_with_flags(flags: Option<Object>) -> Metrics {
