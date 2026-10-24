@@ -98,6 +98,19 @@ its other colours, fonts, values and unknown PDF dictionary keys. `"none"` remov
 or fill colour. Names, rectangles, rotations and captions require the single-field form. Results keep
 `field` for single edits and return `fields` for batches. CLI and MCP use the same tool.
 
+## System print dialog jobs
+
+Linux Flatpak printing uses `doc_print` with `printer: "system-dialog"` (or `"default"`).
+CLI/direct automation keeps its synchronous `accepted`/`cancelled` result. MCP returns
+`{"job": 1, "status": "pending", "sheets": 1, "pages": 1}` without waiting for the host dialog.
+Use `doc_print_job` with `{"job": 1}` to poll or `{"job": 1, "cancel": true}` to request
+cancellation. Other tool calls and pings remain available. A cancellation request can remain
+pending until acknowledged; terminal states are `accepted`, `cancelled`, and `failed` (with
+`error`). Acceptance is a host-service receipt, not physical completion. The latest sixteen
+receipts are retained, only one request may be pending, and session shutdown cancels it.
+PDF saving and native printer submission keep their existing behavior. The full contract and
+host settings are in [the print crate README](../print/README.md#flatpak-system-printing).
+
 ## MCP server
 
 **Opt-in only.** Nothing starts it automatically, and it opens no port. It runs while `pdfcraft-cli mcp [--root DIR]` runs, normally launched by an agent from its MCP configuration. It stops when stdin closes. The CLI's `mcp` Cargo feature (on by default) compiles it out entirely when disabled.

@@ -8435,6 +8435,46 @@ fn a_root_less_write_output_is_atomic_too() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn flatpak_printing_through_tools_keeps_pdf_save() {
+    if std::env::var_os("PDFCRAFT_FLATPAK_AUTOMATION_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "automation::flatpak_printing_through_tools_keeps_pdf_save", "--nocapture"])
+            .env("PDFCRAFT_FLATPAK_AUTOMATION_CHILD", "1")
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/pdfcraft-review-bus")
+            .env("FLATPAK_ID", "ai.storyteller.pdfcraft")
+            .env("PATH", "/nonexistent")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "the child must run the Flatpak regression");
+        return;
+    }
+    let dir = workdir("flatpak-print");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let destinations = ok(&mut a, "printers", json!({}));
+    assert_eq!(destinations["system_dialog"], true);
+    assert_eq!(destinations["count"], 0);
+    assert_eq!(ok(&mut a, "printer_options", json!({ "printer": "system-dialog" }))["count"], 0);
+    let saved = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "path": "saved.pdf" }));
+    assert_eq!(saved["sheets"], 1);
+    assert!(dir.join("saved.pdf").is_file());
+    // Main adds a media option to native spool jobs. It must not be mistaken for a
+    // caller-supplied portal option: valid requests should reach the (absent) transport.
+    for args in [json!({ "doc": doc, "printer": "system-dialog" }), json!({ "doc": doc, "printer": "system-dialog", "options": {} })] {
+        assert!(matches!(a.call("doc_print", &args), Err(ToolError::Failed(_))), "valid portal arguments must reach transport: {args}");
+    }
+    for args in [
+        json!({ "doc": doc, "printer": "system-dialog", "copies": 2 }),
+        json!({ "doc": doc, "printer": "A CUPS queue" }),
+        json!({ "doc": doc, "printer": "system-dialog", "copies": 2, "pages": "999" }),
+    ] {
+        assert!(matches!(a.call("doc_print", &args), Err(ToolError::InvalidArgs(m)) if m.contains("system dialog")));
+    }
+}
+
+#[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");
     std::fs::write(dir.join("notes.txt"), b"keep this with the PDF").unwrap();

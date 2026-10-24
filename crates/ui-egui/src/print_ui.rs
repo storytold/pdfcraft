@@ -40,6 +40,9 @@ pub enum Handling {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,
+    /// System dialog is a destination separate from the actual CUPS printers.
+    pub portal_available: bool,
+    pub portal_selected: bool,
     /// The unit the sheet size is shown in (Preferences).
     pub units: crate::units::Unit,
     /// The printers are still being listed in the background (see [`PrinterSource`]).
@@ -107,6 +110,8 @@ impl Default for PrintDraft {
     fn default() -> Self {
         PrintDraft {
             printers: Vec::new(),
+            portal_available: false,
+            portal_selected: false,
             units: Default::default(),
             printers_loading: false,
             printer_picked: false,
@@ -176,7 +181,7 @@ impl PrintDraft {
 
     /// The engine settings for this draft (page count and labels from the document).
     pub fn settings(&self, count: usize, labels: &[String]) -> Result<print::Settings, String> {
-        if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
+        if self.cut_and_stack() && !self.portal_selected && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
@@ -214,7 +219,7 @@ impl PrintDraft {
             orientation: self.orientation,
             layout,
             content: self.content,
-            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+            raster: (self.as_image || (self.portal_selected && self.grayscale)).then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
             crops: self.crops.clone(),
         })
     }
@@ -312,7 +317,7 @@ fn listed_printers() -> Vec<spool::Printer> {
 /// selected only because none is known yet, so the dialog says it is looking rather than
 /// offering Save as PDF, and its button waits. Printing then would have saved a PDF.
 fn still_looking(d: &PrintDraft) -> bool {
-    d.printers_loading && d.printer.is_none() && !d.printer_picked
+    !d.portal_selected && d.printers_loading && d.printer.is_none() && !d.printer_picked
 }
 
 /// A printer's name as the dialog shows it.
@@ -326,6 +331,8 @@ struct PrintJob {
     printer: String,
     sheets: Option<(usize, usize)>,
     news: std::sync::mpsc::Receiver<JobNews>,
+    #[cfg(target_os = "linux")]
+    cancel: Option<print::portal::Cancellation>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -334,11 +341,22 @@ enum JobNews {
     Sent(usize, usize),
     /// The spooler's answer.
     Done(Result<String, String>),
+    #[cfg(target_os = "linux")]
+    Portal(Result<print::portal::Outcome, String>),
 }
 
 /// The printer the dialog preselects: the system default, else the first.
 fn default_printer(printers: &[spool::Printer]) -> Option<String> {
     printers.iter().find(|p| p.default).or(printers.first()).map(|p| p.name.clone())
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+impl Drop for PrintJob {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
+    }
 }
 
 /// Whether `printer` can still be chosen from `printers`: Save as PDF (`None`) always can.
@@ -375,6 +393,7 @@ impl PdfCraftApp {
             _ => (listed_printers(), false),
         };
         let default = default_printer(&printers);
+        let portal_available = spool::backend() == spool::Backend::Portal;
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let keep = std::mem::take(&mut self.print_draft);
@@ -392,6 +411,8 @@ impl PdfCraftApp {
             crops: Vec::new(),
             crop_pages: None,
             printers,
+            portal_available,
+            portal_selected: portal_available && (!picked || keep.portal_selected),
             printers_loading,
             printer_picked: picked,
             units: self.units,
@@ -554,6 +575,18 @@ impl PdfCraftApp {
                 loop {
                     match job.news.try_recv() {
                         Ok(JobNews::Sent(sent, sheets)) => job.sheets = Some((sent, sheets)),
+                        #[cfg(target_os = "linux")]
+                        Ok(JobNews::Portal(r)) => {
+                            match r {
+                                Ok(print::portal::Outcome::Accepted) => finished.push((
+                                    String::new(),
+                                    Ok(tl!("Accepted by the system print service; physical completion is not reported").to_string()),
+                                )),
+                                Ok(print::portal::Outcome::Cancelled) => {}
+                                Err(e) => finished.push((String::new(), Err(e))),
+                            }
+                            break false;
+                        }
                         Ok(JobNews::Done(r)) => {
                             finished.push((job.printer.clone(), r));
                             break false;
@@ -599,7 +632,24 @@ impl PdfCraftApp {
             }
             _ => (crate::i18n::fmt(tl!("Sending to {printer}…"), &[("printer", printer)]), 0.0),
         };
-        self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction, cancellable: false });
+        #[cfg(target_os = "linux")]
+        let (label, fraction, cancellable) = if let Some(cancel) = &job.cancel {
+            (
+                if cancel.is_cancelled() {
+                    tl!("Cancelling system printing…")
+                } else {
+                    tl!("Preparing PDF / waiting for the system print dialog…")
+                }
+                .to_string(),
+                0.0,
+                !cancel.is_cancelled(),
+            )
+        } else {
+            (label, fraction, false)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let cancellable = false;
+        self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction, cancellable });
         self.print_tasks.showing_progress = true;
         // The bar's sweep keeps moving between sheets.
         if let Some(ctx) = &self.ctx {
@@ -607,8 +657,23 @@ impl PdfCraftApp {
         }
     }
 
+    /// Cancel only the print job owning the shared progress card; other jobs keep their card.
+    pub(crate) fn cancel_print(&mut self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.print_tasks.showing_progress
+            && let Some(job) = self.print_tasks.jobs.first()
+            && let Some(cancel) = &job.cancel
+        {
+            cancel.cancel();
+            self.show_print_progress();
+            return true;
+        }
+        false
+    }
+
     fn report_print_job(&mut self, printer: &str, result: Result<String, String>) {
         match result {
+            Ok(msg) if printer.is_empty() => self.notify(msg),
             Ok(msg) if msg.is_empty() => self.notify(crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])),
             Ok(msg) => self.notify(crate::i18n::fmt(tl!("Sent to {printer}: {msg}"), &[("printer", printer), ("msg", &msg)])),
             Err(e) => self.notify_error(e),
@@ -633,6 +698,22 @@ impl PdfCraftApp {
                 return false;
             }
         };
+        #[cfg(target_os = "linux")]
+        if self.print_draft.portal_selected {
+            if self.print_tasks.jobs.iter().any(|j| j.cancel.is_some()) {
+                self.notify_error(tl!("Finish or cancel the current system print dialog before printing again"));
+                return false;
+            }
+            let title = doc.name.clone();
+            let task = match self.session.print_task(id, &settings) {
+                Ok(task) => task,
+                Err(e) => {
+                    self.notify_error(e);
+                    return false;
+                }
+            };
+            return self.send_to_portal(title, task);
+        }
         let name = doc.name.clone();
         let bytes = match self.session.print_pdf(id, &settings) {
             Ok(b) => b,
@@ -680,7 +761,40 @@ impl PdfCraftApp {
             let _ = tx.send(JobNews::Done(result.map_err(|e| e.to_string())));
             repaint();
         });
-        self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });
+        self.print_tasks.jobs.push(PrintJob {
+            printer,
+            sheets: None,
+            news: rx,
+            #[cfg(target_os = "linux")]
+            cancel: None,
+        });
+        self.show_print_progress();
+        true
+    }
+
+    #[cfg(target_os = "linux")]
+    fn send_to_portal(&mut self, title: String, task: pdfcraft_engine::PrintTask) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = print::portal::Cancellation::default();
+        let worker_cancel = cancel.clone();
+        let ctx = self.ctx.clone();
+        let parent = self.print_parent_window.clone();
+        let worker = std::thread::Builder::new().name("print-portal".into()).spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let pdf = task().map_err(|e| e.to_string())?;
+                print::portal::submit(&pdf, &title, &parent, &worker_cancel).map_err(|e| e.to_string())
+            }))
+            .unwrap_or_else(|_| Err("Could not prepare the document for system printing".into()));
+            let _ = tx.send(JobNews::Portal(result));
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        if let Err(e) = worker {
+            self.notify_error(format!("Could not start system printing: {e}"));
+            return false;
+        }
+        self.print_tasks.jobs.push(PrintJob { printer: "System print dialog…".into(), sheets: None, news: rx, cancel: Some(cancel) });
         self.show_print_progress();
         true
     }
@@ -952,8 +1066,10 @@ pub(crate) fn body(
                 let before = d.printer.clone();
                 // The browser's print dialog sets copies, two-sided printing and colour itself.
                 let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
+                let system = d.portal_selected;
                 ui.horizontal(|ui| {
                     let shown = match d.printer.as_deref() {
+                        _ if d.portal_selected => tl!("System print dialog…").to_string(),
                         Some(p) => printer_label(p),
                         None if still_looking(d) => tl!("Looking for printers…").to_string(),
                         None => tl!("Save as PDF").to_string(),
@@ -962,6 +1078,11 @@ pub(crate) fn body(
                         if d.printers_loading {
                             ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
                         }
+                        if d.portal_available && ui.selectable_label(d.portal_selected, tl!("System print dialog…")).clicked() {
+                            d.portal_selected = true;
+                            d.show_driver_options = false;
+                            d.printer_picked = true;
+                        }
                         for p in &d.printers {
                             let name = printer_label(&p.name);
                             let label = if p.default && p.name != crate::web_print::BROWSER_PRINTER {
@@ -969,12 +1090,16 @@ pub(crate) fn body(
                             } else {
                                 name
                             };
-                            ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
+                            if ui.selectable_value(&mut d.printer, Some(p.name.clone()), label).clicked() {
+                                d.portal_selected = false;
+                            }
                         }
                         // Chosen even when it was already the selection, so the list arriving
                         // later doesn't replace it with the default printer.
-                        if ui.selectable_value(&mut d.printer, None, tl!("Save as PDF")).clicked() {
+                        if ui.selectable_label(d.printer.is_none() && !d.portal_selected, tl!("Save as PDF")).clicked() {
+                            d.printer = None;
                             d.printer_picked = true;
+                            d.portal_selected = false;
                         }
                     });
                     let tip = if spool::HAS_PRINTER_PREFERENCES {
@@ -982,7 +1107,7 @@ pub(crate) fn body(
                     } else {
                         tl!("The printer driver's own settings for this print: paper tray, paper type, finishing and more.")
                     };
-                    let properties = ui.add_enabled(d.printer.is_some() && !browser, egui::Button::new(tl!("Properties…"))).on_hover_text(tip);
+                    let properties = ui.add_enabled(d.printer.is_some() && !browser && !system, egui::Button::new(tl!("Properties…"))).on_hover_text(tip);
                     if properties.clicked()
                         && let Some(p) = d.printer.clone()
                     {
@@ -1008,7 +1133,7 @@ pub(crate) fn body(
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
                 // leaving Save as PDF looking like the only thing PdfCraft can do.
-                if !d.printers_loading && d.printers.is_empty() {
+                if !d.portal_available && !d.printers_loading && d.printers.is_empty() {
                     ui.label("");
                     ui.label(
                         egui::RichText::new(tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again."))
@@ -1018,11 +1143,11 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 ui.label(tl!("Copies:"));
-                ui.add_enabled_ui(!browser, |ui| {
+                ui.add_enabled_ui(!browser && !system, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut d.copies).range(1..=999));
                         ui.add(widgets::checkbox(&mut d.collate, tl!("Collate")));
-                        ui.add(widgets::checkbox(&mut d.grayscale, tl!("Print in grayscale")));
+                        if !system { ui.add(widgets::checkbox(&mut d.grayscale, tl!("Print in grayscale"))); }
                     });
                 });
                 ui.end_row();
@@ -1030,7 +1155,7 @@ pub(crate) fn body(
                 // in Acrobat's Print dialog; it is kept for the other layouts.
                 if d.handling != Handling::Booklet {
                     ui.label(tl!("Two-sided:"));
-                    ui.add_enabled_ui(!browser, |ui| {
+                    ui.add_enabled_ui(!browser && !system, |ui| {
                         combo(
                             ui,
                             "duplex",
@@ -1046,7 +1171,7 @@ pub(crate) fn body(
                     });
                     ui.end_row();
                 }
-                ui.label(tl!("Paper:"));
+                ui.label(if d.portal_selected { tl!("PDF sheet:") } else { tl!("Paper:") });
                 let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
                 let before = d.paper;
                 egui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
@@ -1062,6 +1187,11 @@ pub(crate) fn body(
                 }
                 ui.end_row();
             });
+            if d.portal_selected {
+                ui.label(tl!("Printer, copies, collate, two-sided printing and output paper are chosen in the system dialog. Paper here sets the PDF sheet size. Keep All pages, one page per sheet and 100% scale there to preserve this preview."));
+                ui.add(widgets::checkbox(&mut d.grayscale, tl!("Print in grayscale")));
+                ui.label(tl!("Grayscale uses Print as image. For booklets choose short-edge duplex in the system dialog; cut and stack requires single-sided output. Physical size depends on the host driver."));
+            }
             // Windows says which drivers can't print two-sided as they're asked; they keep their
             // own setting, even when Two-sided is Off.
             if let Some(p) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name))
@@ -1254,7 +1384,7 @@ pub(crate) fn body(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(widgets::checkbox(&mut d.as_image, tl!("Print as image")));
-                        ui.add_enabled_ui(d.as_image, |ui| {
+                        ui.add_enabled_ui(d.as_image || (d.portal_selected && d.grayscale), |ui| {
                             ui.label(tl!("Resolution:"));
                             let mut dpi = d.dpi.round() as u32;
                             combo(ui, "print-dpi", &mut dpi, &[(150, "150 dpi"), (300, "300 dpi"), (600, "600 dpi")], 100.0);
@@ -1374,7 +1504,7 @@ pub(crate) fn body(
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
-        let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
+        let label = if d.printer.is_some() || d.portal_selected || looking { tl!("Print") } else { tl!("Save as PDF") };
         if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
             go = true;
         }
@@ -1388,6 +1518,32 @@ pub(crate) fn body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn portal_progress_cancels_without_a_success_notice_and_allows_the_next_job() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let cancel = print::portal::Cancellation::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.print_tasks.jobs.push(PrintJob { printer: "System print dialog…".into(), sheets: None, news: rx, cancel: Some(cancel.clone()) });
+        app.poll_print();
+        assert!(app.progress_notice.as_ref().unwrap().cancellable);
+        assert!(app.cancel_print());
+        assert!(cancel.is_cancelled());
+        assert!(!app.progress_notice.as_ref().unwrap().cancellable);
+        tx.send(JobNews::Portal(Ok(print::portal::Outcome::Cancelled))).unwrap();
+        app.poll_print();
+        assert!(app.progress_notice.is_none() && app.print_tasks.jobs.is_empty());
+        assert!(app.toast.is_none(), "cancellation is not a successful submission");
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.print_tasks.jobs.push(PrintJob { printer: "System print dialog…".into(), sheets: None, news: rx, cancel: Some(Default::default()) });
+        app.poll_print();
+        tx.send(JobNews::Portal(Ok(print::portal::Outcome::Accepted))).unwrap();
+        app.poll_print();
+        assert!(app.print_tasks.jobs.is_empty());
+        assert!(app.toast.as_ref().unwrap().0.contains("Accepted") && app.toast.as_ref().unwrap().0.contains("physical completion is not reported"));
+    }
 
     #[test]
     fn current_page_preview_uses_positions_and_selection_guards() {
@@ -1449,7 +1605,13 @@ mod tests {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
-        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });
+        app.print_tasks.jobs.push(PrintJob {
+            printer: "Office".into(),
+            sheets: None,
+            news: rx,
+            #[cfg(target_os = "linux")]
+            cancel: None,
+        });
         app.poll_print();
         assert_eq!(app.progress_notice.as_ref().map(|p| p.label.as_str()), Some("Sending to Office…"));
 
@@ -1470,7 +1632,13 @@ mod tests {
         let other = crate::widgets::ProgressNotice { label: "Optimizing…".into(), fraction: 0.5, cancellable: true };
         app.progress_notice = Some(other.clone());
         let (tx, rx) = std::sync::mpsc::channel();
-        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });
+        app.print_tasks.jobs.push(PrintJob {
+            printer: "Office".into(),
+            sheets: None,
+            news: rx,
+            #[cfg(target_os = "linux")]
+            cancel: None,
+        });
         tx.send(JobNews::Sent(1, 2)).unwrap();
         app.poll_print();
         assert_eq!(app.progress_notice, Some(other));

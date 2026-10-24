@@ -70,7 +70,9 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub fn new(automation: Automation) -> Self {
+    /// Create an opt-in server whose portal dialogs cannot hold up tool calls or pings.
+    pub fn new(mut automation: Automation) -> Self {
+        automation.nonblocking_system_printing();
         Self { automation, compact: false }
     }
 

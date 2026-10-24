@@ -2768,3 +2768,4 @@ theme	Appearance	모양
 	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
+# Flatpak system print portal (#1905).

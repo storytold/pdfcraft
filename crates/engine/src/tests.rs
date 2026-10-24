@@ -7547,6 +7547,22 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }
 
+#[test]
+fn print_task_keeps_a_permission_checked_snapshot_after_document_closes() {
+    let (mut session, id) = session_with(4);
+    let settings = print::Settings { pages: vec![3, 1], layout: print::Layout::multiple(2), ..Default::default() };
+    let expected = session.print_pdf(id, &settings).unwrap();
+    let task = session.print_task(id, &settings).unwrap();
+    session.close(id);
+    let actual = std::thread::spawn(task).join().unwrap().unwrap();
+    assert_eq!(actual, expected);
+    let mut printed = Session::new();
+    let printed_id = printed.open("snapshot.pdf", None, Arc::new(actual), None).unwrap();
+    assert_eq!(printed.get(printed_id).unwrap().info.pages.len(), 1);
+    let texts = page_texts(&printed, printed_id);
+    assert!(texts[0].contains("Page 4") && texts[0].contains("Page 2"));
+}
+
 /// A 60 x 20 JPEG at 144 x 72 dpi, tagged with EXIF Orientation 6 (shown turned 90 degrees clockwise).
 fn phone_jpeg() -> Vec<u8> {
     use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
@@ -8264,7 +8280,7 @@ fn buttons_and_combs_left_to_the_viewer_are_displayed() {
     assert_eq!(count(&shown, (95, 84, 97, 106), &blue), 0, "no line inside a cell");
     // Print as Image: the page as a picture, at 72 dpi so it is the size of the page here.
     let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
-    let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
+    let pictures = crate::print_raster::rasterize(&s.get(id).unwrap().export_source(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     assert!(count(&printed, (24, 154, 56, 186), &red) > 60, "the check box prints");
     assert!(count(&printed, (104, 154, 216, 186), &grey) > 1000, "and the push button");

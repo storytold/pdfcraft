@@ -116,6 +116,8 @@ const FIND_MAX_WARNING_BYTES: usize = 1024;
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
     session: Session,
+    #[cfg(target_os = "linux")]
+    print_jobs: printing::PortalJobs,
     root: Option<PathBuf>,
     /// The read and write folders of `--automation-read-root` / `--automation-write-root`.
     roots: Option<Arc<file_access::AutomationRoots>>,
@@ -141,6 +143,8 @@ impl Automation {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            #[cfg(target_os = "linux")]
+            print_jobs: printing::PortalJobs::default(),
             root: None,
             roots: None,
             renderers: HashMap::new(),
@@ -838,6 +842,7 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "content_copy" => self.content_copy(&a)?,
             "doc_print" => self.doc_print(&a)?,
+            "doc_print_job" => self.doc_print_job(&a)?,
             "attachment_add" => {
                 let path = self.resolve(a.str("path")?, false)?;
                 let bytes = read_input(&path)?;

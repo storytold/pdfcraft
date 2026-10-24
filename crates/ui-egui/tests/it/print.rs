@@ -874,6 +874,40 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     std::fs::remove_file(out).unwrap();
 }
 
+/// Isolate Flatpak's environment from the other native UI tests.
+#[test]
+#[cfg(target_os = "linux")]
+fn flatpak_offers_system_printing_without_cups() {
+    if std::env::var_os("PDFCRAFT_PORTAL_TEST_CHILD").is_some() {
+        let mut h = harness();
+        h.state_mut().printer_source = Some(std::sync::Arc::new(Vec::new));
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(8);
+        h.get_by_value("System print dialog…").click();
+        h.run_steps(2);
+        h.get_by_label("Save as PDF").click();
+        h.run_steps(2);
+        let out = std::env::temp_dir().join(format!("pdfcraft-flatpak-save-{}.pdf", std::process::id()));
+        h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+        h.get_by_label("Save as PDF").click();
+        h.run_steps(4);
+        assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
+        std::fs::remove_file(out).unwrap();
+        assert!(h.state_mut().execute("print.dialog"));
+        assert!(!h.state().print_draft.portal_selected, "retain the explicitly chosen Save as PDF destination");
+        return;
+    }
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "print::flatpak_offers_system_printing_without_cups", "--nocapture"])
+        .env("PDFCRAFT_PORTAL_TEST_CHILD", "1")
+        .env("FLATPAK_ID", "ai.storyteller.pdfcraft")
+        .env("PATH", "/nonexistent")
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"), "the child must run the Flatpak regression");
+}
+
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
 /// while Booklet is chosen): the job flips on the short edge for both sides and prints
 /// one-sided for the front or back only, and the Two-sided choice is kept for other layouts.

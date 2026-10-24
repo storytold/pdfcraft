@@ -33,9 +33,9 @@ finish-args:
   - --filesystem=xdg-download
   # Deliberately not granted: network (Flatpak installs update through flatpak, so Help ▸ Check
   # for updates reports that GitHub is unreachable; the optional --control channel listens on
-  # 127.0.0.1 inside the sandbox) and home/host filesystem access. No CUPS socket either: printing
-  # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
-  # reports that the spooler is unavailable until it goes through the print portal.
+  # 127.0.0.1 inside the sandbox) and home/host filesystem access. No CUPS socket either: Flatpak printing
+  # hands a finished PDF to org.freedesktop.portal.Print using a read-only descriptor.
+  # The portal opens the host print dialog; no CUPS tools or extra permissions are needed.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
