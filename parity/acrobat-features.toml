@@ -1334,8 +1334,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_info", "layer_set"]
-evidence = ["crates/render/src/raster.rs::layer_override_hides_content", "crates/engine/src/tests.rs::layer_choices_survive_edits", "crates/automation/tests/it/automation.rs::layers_and_hidden_comments_change_what_page_render_draws"]
-notes = "layer_set shows or hides a layer by name (every group with that name, as CAD exporters repeat names) or by position, and page_render draws with the document's layer visibility. Still missing: Reset to initial visibility (view.layers-reset), layer properties, and /OC on annotations (#2176)."
+evidence = ["crates/render/src/raster.rs::layer_override_hides_content", "crates/engine/src/tests.rs::layer_choices_survive_edits", "crates/automation/tests/it/automation.rs::layers_and_hidden_comments_change_what_page_render_draws", "crates/render/src/raster.rs::the_view_auto_state_sets_a_groups_state_on_screen", "crates/render/src/raster.rs::layer_toggles_and_print_renders_are_not_the_view_auto_state", "crates/render/src/raster.rs::malformed_view_auto_state_is_ignored"]
+notes = "layer_set shows or hides a layer by name (every group with that name, as CAD exporters repeat names) or by position, and page_render draws with the document's layer visibility. Still missing: Reset to initial visibility (view.layers-reset), layer properties, and /OC on annotations (#2176). The default configuration's auto state for the View event (/AS, ISO 32000-2 8.11.4.4) sets the groups it manages from their /Usage /View /ViewState as the document opens, on screen and in the panel, and toggles still override it; renders for printing don't apply it. Not yet: the /Zoom, /User and /Language categories, and the Print event's auto state when printing."
 
 [[feature]]
 id = "view.layers-reset"
@@ -1346,7 +1346,7 @@ milestone = "M12"
 status = "partial"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/engine/src/tests.rs::reset_layers_returns_to_the_files_visibility", "crates/render/src/inspect.rs::initial_layer_visibility_is_the_default_configuration"]
+evidence = ["crates/engine/src/tests.rs::reset_layers_returns_to_the_files_visibility", "crates/render/src/inspect.rs::initial_layer_visibility_is_the_default_configuration", "crates/render/src/inspect.rs::initial_layer_visibility_applies_the_view_auto_state"]
 notes = "Layers panel ▸ Layer options ▸ Reset to Initial Visibility shows each layer as the default configuration (/OCProperties /D) has it; doc_info reports it as `initial`. Not yet: listing the layers of all pages or the current page only."
 
 [[feature]]

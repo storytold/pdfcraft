@@ -71,6 +71,9 @@ pub struct RenderConfig {
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
+    /// The render is output for printing (print as image): the configuration's auto state for
+    /// the View event (ISO 32000-2 §8.11.4.4) is not applied, since printing is not viewing.
+    pub for_print: bool,
 }
 
 impl RenderConfig {
@@ -78,6 +81,7 @@ impl RenderConfig {
         let standard = InterpreterSettings::default().font_resolver;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
+            view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
             font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
             ..InterpreterSettings::default()
@@ -3579,6 +3583,112 @@ trailer << /Root 1 0 R >>
         assert_eq!(px(RenderConfig::default()), vec![255, 0, 0, 255], "layer is on by default");
         let off = RenderConfig { layers: Arc::new(vec![(5, 0, false)]), ..Default::default() };
         assert_eq!(px(off), vec![255, 255, 255, 255], "toggled-off layer must not draw");
+    }
+
+    /// A page whose red square is in group 5 0 R (`ocg` its dictionary), under the default
+    /// configuration `config`; `extra` adds objects from number 8.
+    fn auto_state_pdf(ocg: &str, config: &str, extra: &str) -> Vec<u8> {
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D {config} >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> >> endobj
+4 0 obj << /Length 44 >> stream
+/OC /L1 BDC 1 0 0 rg 0 0 100 100 re f EMC
+endstream endobj
+5 0 obj {ocg} endobj
+{extra}
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    }
+
+    /// Whether the red square in group 5 0 R draws.
+    fn auto_state_red(pdf: Vec<u8>, config: RenderConfig) -> bool {
+        let mut r = PageRenderer::new(Arc::new(pdf), config);
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 0.5, tag: 0, ..Default::default() });
+        p.rgba.get(..4) == Some(&[255, 0, 0, 255][..])
+    }
+
+    const VIEW_OFF: &str = "<< /Type /OCG /Name (A) /Usage << /View << /ViewState /OFF >> >> >>";
+    const VIEW_ON: &str = "<< /Type /OCG /Name (A) /Usage << /View << /ViewState /ON >> >> >>";
+    const AS_VIEW: &str = "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R] >>]";
+
+    /// ISO 32000-2 §8.11.4.4: the configuration's auto state (`/AS`) sets a group's state for
+    /// the View event from its usage, over `/BaseState`, `/ON` and `/OFF`. It was ignored, so a
+    /// group whose `/ViewState` is OFF still drew on screen.
+    #[test]
+    fn the_view_auto_state_sets_a_groups_state_on_screen() {
+        let shown = |ocg: &str, config: &str| auto_state_red(auto_state_pdf(ocg, config, ""), RenderConfig::default());
+        assert!(!shown(VIEW_OFF, &format!("<< {AS_VIEW} >>")), "ViewState OFF, managed: hidden");
+        assert!(shown(VIEW_OFF, "<< >>"), "no /AS: the usage alone changes nothing");
+        assert!(shown(VIEW_OFF, "<< /AS [<< /Event /View /Category [/View] /OCGs [] >>] >>"), "not listed in /OCGs");
+        assert!(shown(VIEW_ON, &format!("<< /OFF [5 0 R] {AS_VIEW} >>")), "ViewState ON wins over /OFF");
+        assert!(shown(VIEW_ON, &format!("<< /BaseState /OFF {AS_VIEW} >>")), "and over /BaseState /OFF");
+        assert!(!shown(VIEW_ON, "<< /OFF [5 0 R] >>"), "without /AS, /OFF decides");
+        // The View event only, and the View category only.
+        assert!(shown(VIEW_OFF, "<< /AS [<< /Event /Print /Category [/View] /OCGs [5 0 R] >>] >>"), "Print event: not on screen");
+        assert!(shown(VIEW_OFF, "<< /AS [<< /Event /Export /Category [/View] /OCGs [5 0 R] >>] >>"), "Export event: not on screen");
+        assert!(shown(VIEW_OFF, "<< /AS [<< /Event /View /Category [/Print] /OCGs [5 0 R] >>] >>"), "a category without a View entry");
+        // A category it cannot evaluate gives no recommendation; the View one still applies.
+        assert!(!shown(VIEW_OFF, "<< /AS [<< /Event /View /Category [/Zoom /View] /OCGs [5 0 R] >>] >>"), "Zoom alongside View");
+        let zoomed = "<< /Type /OCG /Name (A) /Usage << /Zoom << /min 4 >> >> >>";
+        assert!(shown(zoomed, "<< /AS [<< /Event /View /Category [/Zoom] /OCGs [5 0 R] >>] >>"), "Zoom alone: unchanged");
+        // Indirect applications, arrays and usage dictionaries are followed.
+        let indirect = "<< /Type /OCG /Name (A) /Usage 10 0 R >>";
+        let extra = "8 0 obj [9 0 R] endobj\n9 0 obj << /Event /View /Category [/View] /OCGs 11 0 R >> endobj\n10 0 obj << /View << /ViewState /OFF >> >> endobj\n11 0 obj [5 0 R] endobj";
+        assert!(!auto_state_red(auto_state_pdf(indirect, "<< /AS 8 0 R >>", extra), RenderConfig::default()), "indirect");
+    }
+
+    /// The Layers panel's toggles still decide over the auto state, and a render for printing
+    /// does not apply it (printing is not the View event).
+    #[test]
+    fn layer_toggles_and_print_renders_are_not_the_view_auto_state() {
+        let pdf = auto_state_pdf(VIEW_OFF, &format!("<< {AS_VIEW} >>"), "");
+        let on = RenderConfig { layers: Arc::new(vec![(5, 0, true)]), ..Default::default() };
+        assert!(auto_state_red(pdf.clone(), on), "toggled on in the Layers panel");
+        assert!(auto_state_red(pdf.clone(), RenderConfig { for_print: true, ..Default::default() }), "printed: its configured state");
+        assert!(!auto_state_red(pdf, RenderConfig::default()), "on screen: hidden");
+    }
+
+    /// Malformed auto state is ignored without a panic, and the walk is bounded.
+    #[test]
+    fn malformed_view_auto_state_is_ignored() {
+        let shown = |config: &str, extra: &str| auto_state_red(auto_state_pdf(VIEW_OFF, config, extra), RenderConfig::default());
+        for config in [
+            "<< /AS 5 >>",
+            "<< /AS << /Event /View /Category [/View] /OCGs [5 0 R] >> >>",
+            "<< /AS [1 null /x (s) [5 0 R]] >>",
+            "<< /AS [<< /Event /View /Category [/View] >>] >>",
+            "<< /AS [<< /Event /View /OCGs [5 0 R] >>] >>",
+            "<< /AS [<< /Category [/View] /OCGs [5 0 R] >>] >>",
+            "<< /AS [<< /Event (View) /Category [/View] /OCGs [5 0 R] >>] >>",
+            "<< /AS [<< /Event /View /Category /View /OCGs [5 0 R] >>] >>",
+            "<< /AS [<< /Event /View /Category [/View] /OCGs 5 0 R >>] >>",
+            "<< /AS [<< /Event /View /Category [/View] /OCGs [(5) 5 /OCG] >>] >>",
+        ] {
+            assert!(shown(config, ""), "{config}: ignored");
+        }
+        let bad_state = |s: &str| {
+            let ocg = format!("<< /Type /OCG /Name (A) /Usage << /View << /ViewState {s} >> >> >>");
+            auto_state_red(auto_state_pdf(&ocg, &format!("<< {AS_VIEW} >>"), ""), RenderConfig::default())
+        };
+        for s in ["/Off", "(OFF)", "0", "null", "[/OFF]"] {
+            assert!(bad_state(s), "ViewState {s}: no recommendation");
+        }
+        // Cyclic references: an /AS, an application and a usage that refer to themselves.
+        assert!(shown("<< /AS 8 0 R >>", "8 0 obj 8 0 R endobj"), "self-referencing /AS");
+        assert!(shown("<< /AS [8 0 R] >>", "8 0 obj 8 0 R endobj"), "self-referencing application");
+        let cyclic = "<< /Type /OCG /Name (A) /Usage 8 0 R >>";
+        assert!(auto_state_red(auto_state_pdf(cyclic, &format!("<< {AS_VIEW} >>"), "8 0 obj 8 0 R endobj"), RenderConfig::default()));
+        // Huge arrays: the group listed after 4096 other entries is past the cap.
+        let many = format!("<< /AS [<< /Event /View /Category [/View] /OCGs [{}5 0 R] >>] >>", "9 0 R ".repeat(4096));
+        assert!(shown(&many, "9 0 obj << /Type /OCG /Name (B) >> endobj"), "past the cap: unchanged");
+        let within = format!("<< /AS [<< /Event /View /Category [/View] /OCGs [{}5 0 R] >>] >>", "9 0 R ".repeat(4095));
+        assert!(!shown(&within, "9 0 obj << /Type /OCG /Name (B) >> endobj"), "within the cap: applied");
+        let apps = format!("<< /AS [{}<< /Event /View /Category [/View] /OCGs [5 0 R] >>] >>", "<< /Event /Print >> ".repeat(256));
+        assert!(shown(&apps, ""), "past the application cap: unchanged");
     }
 
     /// #2986: an optional content membership dictionary with a visibility expression (`/VE`,

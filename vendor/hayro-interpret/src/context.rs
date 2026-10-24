@@ -228,7 +228,7 @@ impl<'a> Context<'a> {
         let mut ocg_state = {
             let root_ref = xref.root_id();
             xref.get::<Dict<'_>>(root_ref)
-                .map(|catalog| OcgState::from_catalog(&catalog))
+                .map(|catalog| OcgState::from_catalog(&catalog, xref, settings.view_auto_state))
                 .unwrap_or_default()
         };
         // PdfCraft patch: apply viewer layer toggles.

@@ -66,6 +66,13 @@ fn retained(a: &Annotation) -> usize {
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
 
+/// The configuration's auto state (`/AS`): at most this many usage application dictionaries,
+/// `/OCGs` entries across them, and `/Category` names in each are read. The renderer's
+/// (vendored hayro-interpret patch (67)) have the same values.
+const MAX_AUTO_STATE_APPLICATIONS: usize = 256;
+const MAX_AUTO_STATE_GROUPS: usize = 4096;
+const MAX_AUTO_STATE_CATEGORIES: usize = 16;
+
 /// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
 /// reads only this window; the rest are listed by page through `pdfcraft_organize`.
 const OUTLINE_WINDOW: usize = 10_000;
@@ -1701,11 +1708,14 @@ impl<'a> Inspector<'a> {
             .and_then(|o| self.resolve(o).as_array().ok())
             .map(|a| a.iter().filter_map(|x| x.as_reference().ok()).collect())
             .unwrap_or_default();
+        let auto = config.map(|c| self.view_auto_state(c)).unwrap_or_default();
         let Ok(Object::Array(ocgs)) = props.get(b"OCGs").map(|o| self.resolve(o)) else { return };
         for g in ocgs {
             let Some(d) = self.dict(g) else { continue };
             let id = g.as_reference().ok();
+            // The View auto state, when it manages the group, then the configuration.
             let visible = match id {
+                Some(id) if let Some(&state) = auto.get(&id) => state,
                 Some(id) if off.contains(&id) => false,
                 Some(id) if on.contains(&id) => true,
                 _ => !base_off,
@@ -1713,6 +1723,54 @@ impl<'a> Inspector<'a> {
             let Some(id) = id else { continue };
             out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
         }
+    }
+
+    /// The state the configuration's auto state (`/AS`) gives each group it manages for the View
+    /// event (ISO 32000-2 §8.11.4.4, Table 101), which overrides `/BaseState`, `/ON` and `/OFF`
+    /// as the document opens. Keep in step with the renderer's (vendored hayro-interpret patch
+    /// (67), `apply_view_auto_state`): each usage application with `/Event /View` and `/View` in
+    /// its `/Category` recommends the `/ViewState` of each group in its `/OCGs` whose `/Usage`
+    /// gives one; a group is on only if all its recommendations are. Groups with none are absent.
+    /// Other categories (`/Zoom`, `/User`, `/Language`) give no recommendation here.
+    fn view_auto_state(&self, config: &Dictionary) -> HashMap<ObjectId, bool> {
+        let mut out: HashMap<ObjectId, bool> = HashMap::new();
+        let Some(applications) = config.get(b"AS").ok().and_then(|o| self.resolve(o).as_array().ok()) else { return out };
+        let mut groups_left = MAX_AUTO_STATE_GROUPS;
+        for application in applications.iter().take(MAX_AUTO_STATE_APPLICATIONS) {
+            let Some(application) = self.dict(application) else { continue };
+            if self.name(application, b"Event").as_deref() != Some("View") {
+                continue;
+            }
+            let views = application.get(b"Category").ok().and_then(|o| self.resolve(o).as_array().ok()).is_some_and(|categories| {
+                categories.iter().take(MAX_AUTO_STATE_CATEGORIES).any(|c| matches!(c, Object::Name(n) if n.as_slice() == b"View"))
+            });
+            if !views {
+                continue;
+            }
+            let Some(groups) = application.get(b"OCGs").ok().and_then(|o| self.resolve(o).as_array().ok()) else { continue };
+            for g in groups {
+                if groups_left == 0 {
+                    return out;
+                }
+                groups_left -= 1;
+                let Ok(id) = g.as_reference() else { continue };
+                let state = self
+                    .dict(g)
+                    .and_then(|d| d.get(b"Usage").ok())
+                    .and_then(|o| self.dict(o))
+                    .and_then(|u| u.get(b"View").ok())
+                    .and_then(|o| self.dict(o))
+                    .and_then(|v| self.name(v, b"ViewState"));
+                let on = match state.as_deref() {
+                    Some("ON") => true,
+                    Some("OFF") => false,
+                    _ => continue,
+                };
+                let entry = out.entry(id).or_insert(true);
+                *entry &= on;
+            }
+        }
+        out
     }
 
     /// The default configuration's radio-button groups (`/RBGroups`) of two or more layers.
@@ -2883,6 +2941,41 @@ trailer << /Root 1 0 R >>
         let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
         let layers: Vec<_> = info.layers.iter().map(|l| (l.name.as_str(), l.initial)).collect();
         assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
+    }
+
+    /// ISO 32000-2 §8.11.4.4: the View auto state (`/AS`) decides the initial state of the groups
+    /// it manages, over `/ON` and `/OFF`; the others keep the configuration's. Malformed entries
+    /// are ignored.
+    #[test]
+    fn initial_layer_visibility_applies_the_view_auto_state() {
+        let initial = |config: &str| {
+            let pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D {config} >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (ViewOff) /Usage << /View << /ViewState /OFF >> >> >> endobj
+6 0 obj << /Type /OCG /Name (ViewOn) /Usage 8 0 R >> endobj
+7 0 obj << /Type /OCG /Name (Plain) >> endobj
+8 0 obj << /View << /ViewState /ON >> >> endobj
+9 0 obj 9 0 R endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            );
+            let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+            // Opened, so each is shown as it starts.
+            info.layers.iter().inspect(|l| assert_eq!(l.initial, l.visible, "{}", l.name)).map(|l| l.initial).collect::<Vec<_>>()
+        };
+        let managed = "/AS [<< /Event /View /Category [/View] /OCGs [5 0 R 6 0 R 7 0 R] >>]";
+        assert_eq!(initial(&format!("<< /OFF [6 0 R 7 0 R] {managed} >>")), [false, true, false]);
+        assert_eq!(initial("<< /OFF [6 0 R 7 0 R] >>"), [true, false, false], "without /AS");
+        assert_eq!(initial("<< /OFF [6 0 R] /AS [<< /Event /Print /Category [/View] /OCGs [5 0 R 6 0 R] >>] >>"), [true, false, true], "Print event");
+        assert_eq!(initial("<< /AS [<< /Event /View /Category [/Zoom] /OCGs [5 0 R] >>] >>"), [true, true, true], "Zoom only");
+        for bad in
+            ["/AS 9 0 R", "/AS [9 0 R 1 null]", "/AS [<< /Event /View /OCGs [5 0 R] >>]", "/AS [<< /Event /View /Category [/View] /OCGs 9 0 R >>]"]
+        {
+            assert_eq!(initial(&format!("<< {bad} >>")), [true, true, true], "{bad}");
+        }
     }
 
     const ORPHAN_FIELDS: &[u8] = b"%PDF-1.7
