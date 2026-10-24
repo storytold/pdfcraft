@@ -1948,7 +1948,7 @@ fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
 }
 
 /// Number of days in month `m` (1-12) of year `y`, leap years included.
-fn days_in(y: i64, m: u32) -> u32 {
+pub(crate) fn days_in(y: i64, m: u32) -> u32 {
     // The length of the month from chrono (the first of the next month, less the first of this
     // one). An invalid month keeps the old 31-day default.
     // Month lengths repeat every 400 years, so the year within its cycle is enough (and always
@@ -2325,10 +2325,11 @@ impl Interp<'_> {
                     }
                     text = if frac.is_empty() { g } else { format!("{g}.{frac}") };
                 }
+                let nonzero = text.chars().any(|c| ('1'..='9').contains(&c));
                 if pic.contains('$') {
                     text = format!("${text}");
                 }
-                if num < 0.0 {
+                if num < 0.0 && nonzero {
                     text = format!("-{text}");
                 }
                 Val::Str(text)

@@ -607,6 +607,7 @@
 	Discard private data of other applications	Descartar datos privados de otras aplicaciones
 	Discard hidden text	Descartar texto oculto
 	Use Flate to encode streams that are not encoded	Usar Flate para codificar las secuencias sin codificar
+	In streams that use LZW encoding, use Flate instead	En las secuencias con codificación LZW, usar Flate en su lugar
 	Remove invalid links and bookmarks	Quitar enlaces y marcadores no válidos
 	Remove unreferenced named destinations	Quitar destinos con nombre sin referencias
 	Compress document structure (object streams)	Comprimir la estructura del documento (secuencias de objetos)
@@ -2056,6 +2057,10 @@ action wizard	Start	Iniciar
 	Perimeter	Perímetro
 	Area	Área
 	Drawing scale	Escala del dibujo
+	Scale	Escala
+	Common scales	Escalas habituales
+	Enter a scale such as 1:50.	Introduzca una escala como 1:50.
+	Applying a scale switches units to m / mm.	Al aplicar una escala, las unidades cambian a m / mm.
 	Snapping	Ajuste
 	Export measurements	Exportar mediciones
 	Open a PDF to measure it.	Abre un PDF para medirlo.
@@ -2160,6 +2165,7 @@ action wizard	Start	Iniciar
 	Lines +/−	Líneas +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commits, +{added} / −{deleted} líneas (Δ {delta}), +{bin_added} / −{bin_deleted} recursos binarios, {first} – {last}
 	Reopen the files that were open when PdfCraft last closed	Volver a abrir los archivos que estaban abiertos al cerrar PdfCraft por última vez
+	Restore the last view (page, zoom and page display) when a document is opened again	Restaurar la última vista (página, zoom y presentación de páginas) al volver a abrir un documento
 	Add {what}	Añadir {what}
 	Use {what}	Usar {what}
 	Place saved {what}	Colocar {what} desde lo guardado
@@ -2193,6 +2199,8 @@ action wizard	Start	Iniciar
 	Home / End	Inicio / Fin
 	H / Space (hold)	H / Espacio (mantener)
 	Reload documents when their files change on disk	Recargar los documentos cuando sus archivos cambien en el disco
+	Don't show again	No volver a mostrar
+	Show a notice when a document is secured	Mostrar un aviso cuando un documento está protegido
 	Always use my default zoom and page layout	Usar siempre mi zoom y presentación de página predeterminados
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Este archivo cambió en el disco. Recargar muestra la versión nueva y descarta los cambios sin guardar; Guardar la reemplaza por esta versión.
 	Reload	Recargar
@@ -2637,6 +2645,11 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+	Attach a file…	Adjuntar un archivo…
+	Delete attachment	Eliminar adjunto
+	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web
+	Attach {name}	Adjuntar {name}
+	Delete attachment {key}	Eliminar adjunto {key}
 	Thumbnail size	Tamaño de las miniaturas
 	Smaller thumbnails	Miniaturas más pequeñas
 	Larger thumbnails	Miniaturas más grandes
@@ -2838,3 +2851,6 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Hoy

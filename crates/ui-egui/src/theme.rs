@@ -13,11 +13,12 @@ pub enum ThemeKind {
     Dark,
 }
 
-/// The saved user choice, independent of the light/dark colours currently displayed.
+/// The saved user choice, independent of the light/dark colours currently displayed. A fresh
+/// install follows the system (#1248); a desktop that says nothing gets Light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ThemePreference {
-    System,
     #[default]
+    System,
     Light,
     Dark,
 }

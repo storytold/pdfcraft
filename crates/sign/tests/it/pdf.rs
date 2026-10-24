@@ -144,6 +144,71 @@ fn signing_an_existing_field_and_counter_signing() {
     ));
 }
 
+/// A page whose /Annots is an object of its own: signing and commenting update that array in
+/// place, not the page. A second signature is a signature change for the first, as with an
+/// inline /Annots, and a comment is still a comment (refused under a form-fill certification).
+#[test]
+fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
+    let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
+    let unsigned = edit_after(&fixture(), |doc| {
+        let annots = doc.add(Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef { num: 6, generation: 0 })]));
+        doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Ref(annots))).unwrap();
+    });
+    let annots_ref = |bytes: &[u8]| open(bytes).get(page).as_dict().and_then(|d| d.get(b"Annots").and_then(Object::as_ref));
+    let annots = annots_ref(&unsigned).unwrap();
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let first = pdfcraft_sign::sign(&open(&unsigned), &id, &opts()).unwrap();
+    let second = pdfcraft_sign::sign(&open(&first), &id, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() }).unwrap();
+    assert_eq!(annots_ref(&second), Some(annots), "the signer kept the page's array indirect");
+    let doc = open(&second);
+    let sigs = signatures(&doc, &second, &trust);
+    let s = sigs.iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(s.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{:?}", s.details);
+    assert_eq!(s.status, Status::Valid);
+    // A comment appended to the indirect array.
+    let comment = |doc: &mut Document| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Text"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(10), Object::Int(10), Object::Int(30), Object::Int(30)]));
+        let r = doc.add(Object::Dict(d));
+        let mut a = doc.get(annots).as_array().cloned().unwrap();
+        a.push(Object::Ref(r));
+        doc.set(annots, Object::Array(a));
+    };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let s = check(&edit_after(&first, comment));
+    assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])));
+    let certified = pdfcraft_sign::sign(&open(&unsigned), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let s = check(&edit_after(&certified, comment));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+    // Under that certification, a signed comment swapped for a new signature widget is still a
+    // deleted comment, and a form field taken off the page is permitted by no level.
+    let commented = pdfcraft_sign::sign(&open(&edit_after(&unsigned, comment)), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let swap = |drop: &dyn Fn(&Document, &Object) -> bool| {
+        edit_after(&commented, |doc| {
+            let mut w = pdfcraft_cos::Dict::new();
+            w.set(b"Type".to_vec(), Object::name("Annot"));
+            w.set(b"Subtype".to_vec(), Object::name("Widget"));
+            w.set(b"FT".to_vec(), Object::name("Sig"));
+            w.set(b"T".to_vec(), PdfString::text("Later"));
+            w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+            let w = doc.add(Object::Dict(w));
+            let mut a = doc.get(annots).as_array().cloned().unwrap();
+            a.retain(|o| !drop(doc, o));
+            a.push(Object::Ref(w));
+            doc.set(annots, Object::Array(a));
+        })
+    };
+    let subtype =
+        |doc: &Document, o: &Object, t: &[u8]| o.as_ref().is_some_and(|r| doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(t)));
+    let s = check(&swap(&|doc, o| subtype(doc, o, b"Text")));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+    let s = check(&swap(&|doc, o| subtype(doc, o, b"Widget") && o.as_ref().is_some_and(|r| r.num == 6)));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+}
+
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
 /// it is listed as unsigned and can be signed by name.
 #[test]
@@ -664,6 +729,35 @@ fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
     tampered[gap_start + 1] = b'F';
     tampered[gap_start + 2] = b'F';
     assert_eq!(check(&doc, &tampered, &trusted).status, Status::Invalid);
+}
+
+#[test]
+fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let ext = |base: &[u8], level: i64| {
+        let mut esic = pdfcraft_cos::Dict::new();
+        esic.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+        esic.set(b"ExtensionLevel".to_vec(), Object::Int(level));
+        let mut e = pdfcraft_cos::Dict::new();
+        e.set(b"ESIC".to_vec(), Object::Dict(esic));
+        edit_after(base, |doc| {
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(e))).unwrap();
+        })
+    };
+    // As PAdES LTV writers save it: the store and the ESIC declaration in one revision.
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let evidence = pdfcraft_sign::dss::Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let ltv = pdfcraft_sign::dss::embed(&open(&ext(&signed, 2)), &evidence).unwrap();
+    let s = check(&ltv);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if !k.contains(&kind::STRUCTURE)), "{:?}", s.modification);
+    // A declaration that was signed may not change afterwards.
+    let signed_with = pdfcraft_sign::sign(&open(&ext(&fixture(), 2)), &id, &opts()).unwrap();
+    let s = check(&ext(&signed_with, 3));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::STRUCTURE])));
 }
 
 #[test]

@@ -28,6 +28,22 @@ pub type ColorComponents = SmallVec<[f32; 4]>;
 std::thread_local! {
     // PdfCraft patch (34): see `tint_transform_runs`.
     static TINT_TRANSFORM_RUNS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    // PdfCraft patch (55): see `note_color_fallback`.
+    static COLOR_FALLBACK: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch (55): record that a colour could not be computed and was painted in a
+/// fallback colour, reported as `InterpreterWarning::ColorFallback` when the content stream
+/// being interpreted ends. Per thread, like the page's other budgets: one page is interpreted
+/// on one thread.
+pub(crate) fn note_color_fallback() {
+    COLOR_FALLBACK.with(|fell_back| fell_back.set(true));
+}
+
+/// PdfCraft patch (55): whether a colour fell back since the last call (or since the page
+/// started), clearing it, so each fallback is reported once.
+pub(crate) fn take_color_fallback() -> bool {
+    COLOR_FALLBACK.with(|fell_back| fell_back.replace(false))
 }
 
 /// PdfCraft patch (34): how many colours this thread has run through a Separation or DeviceN
@@ -1030,8 +1046,28 @@ impl ToRgb for Indexed {
 #[derive(Debug, Clone)]
 pub(crate) struct Separation {
     alternate_space: ColorSpace,
-    tint_transform: Function,
+    /// PdfCraft patch (55): `None` when the tint transform cannot be read (see
+    /// `eval_tint_transform`).
+    tint_transform: Option<Function>,
     is_none_separation: bool,
+}
+
+/// PdfCraft patch (55): `tint_transform` run on the tints of one colour, or, when it cannot be
+/// read or evaluated, the initial colour of `alternate_space` (black in every device space), with
+/// the fallback recorded. hayro already fell back this way when evaluation failed, silently; a
+/// transform it could not read made the whole colour space unreadable, and the space's
+/// paints were drawn in DeviceGray from their first tint instead (white for a full tint).
+fn eval_tint_transform(
+    tint_transform: Option<&Function>,
+    alternate_space: &ColorSpace,
+    tints: &[f32],
+) -> ColorComponents {
+    tint_transform
+        .and_then(|f| f.eval(tints.to_smallvec()))
+        .unwrap_or_else(|| {
+            note_color_fallback();
+            alternate_space.initial_color()
+        })
 }
 
 impl Separation {
@@ -1041,7 +1077,9 @@ impl Separation {
         let _ = iter.next::<Name<'_>>()?;
         let name = iter.next::<Name<'_>>()?;
         let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
-        let tint_transform = Function::new(&iter.next::<Object<'_>>()?)?;
+        // PdfCraft patch (55): an unreadable tint transform keeps the space (see
+        // `eval_tint_transform`).
+        let tint_transform = iter.next::<Object<'_>>().and_then(|f| Function::new(&f));
         // Either I did something wrong, or no other viewers properly handles
         // `All`, so let's just ignore it as well.
         let is_none_separation = name.as_str() == "None";
@@ -1057,12 +1095,15 @@ impl Separation {
 impl ToRgb for Separation {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
         count_tint_transform_runs(input.len());
+        // PdfCraft patch (55): see `eval_tint_transform`.
         let evaluated = input
             .iter()
             .flat_map(|n| {
-                self.tint_transform
-                    .eval(smallvec![*n])
-                    .unwrap_or(self.alternate_space.initial_color())
+                eval_tint_transform(
+                    self.tint_transform.as_ref(),
+                    &self.alternate_space,
+                    &[*n],
+                )
             })
             .collect::<Vec<_>>();
         self.alternate_space.convert_f32(&evaluated, output, false)
@@ -1077,7 +1118,9 @@ impl ToRgb for Separation {
 pub(crate) struct DeviceN {
     alternate_space: ColorSpace,
     num_components: u8,
-    tint_transform: Function,
+    /// PdfCraft patch (55): `None` when the tint transform cannot be read (see
+    /// `eval_tint_transform`).
+    tint_transform: Option<Function>,
     is_none: bool,
 }
 
@@ -1094,7 +1137,9 @@ impl DeviceN {
         let num_components = u8::try_from(names.len()).ok()?;
         let all_none = names.iter().all(|n| n.as_str() == "None");
         let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
-        let tint_transform = Function::new(&iter.next::<Object<'_>>()?)?;
+        // PdfCraft patch (55): an unreadable tint transform keeps the space (see
+        // `eval_tint_transform`).
+        let tint_transform = iter.next::<Object<'_>>().and_then(|f| Function::new(&f));
 
         if num_components == 0 {
             return None;
@@ -1113,12 +1158,11 @@ impl ToRgb for DeviceN {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
         let colours = input.len().checked_div(usize::from(self.num_components));
         count_tint_transform_runs(colours.unwrap_or(0));
+        // PdfCraft patch (55): see `eval_tint_transform`.
         let evaluated = input
             .chunks_exact(self.num_components as usize)
             .flat_map(|n| {
-                self.tint_transform
-                    .eval(n.to_smallvec())
-                    .unwrap_or(self.alternate_space.initial_color())
+                eval_tint_transform(self.tint_transform.as_ref(), &self.alternate_space, n)
             })
             .collect::<Vec<_>>();
         self.alternate_space.convert_f32(&evaluated, output, false)

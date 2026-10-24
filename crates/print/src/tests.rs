@@ -674,6 +674,8 @@ fn architectural_sheets_preserve_full_scale() {
     assert!(fit[0].placed[0].matrix.0[0] < 1.0, "Fit adds margins and must not masquerade as full scale");
 }
 
+/// A sheet matches a preset either way round and rounded to whole points, but not half a point off;
+/// empty, negative, infinite, NaN and custom sizes match none.
 #[test]
 fn paper_matching_accepts_rounded_metric_sizes_but_not_custom_or_invalid_sizes() {
     for (i, (_, (w, h))) in PAPERS.iter().enumerate() {
@@ -687,9 +689,69 @@ fn paper_matching_accepts_rounded_metric_sizes_but_not_custom_or_invalid_sizes()
     }
 }
 
+/// #3752: 13 of the 21 sizes had no media name, so their jobs went out on the queue's default
+/// paper (A4 on the report's queue) whatever the sheets were laid out on.
+#[test]
+fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
+    let ppd_keywords = ["Letter", "Legal", "Tabloid", "A3", "A4", "A5", "w288h432", "Env10"];
+    for (i, (name, (w, h))) in PAPERS.iter().enumerate() {
+        let media = cups_media(i).unwrap_or_else(|| panic!("{name} has no media name"));
+        assert_eq!(media_option(i), Some(("media".to_string(), media.to_string())));
+        let args = lp_args(&Job { options: media_option(i).into_iter().collect(), ..Job::default() });
+        assert!(args.contains(&format!("media={media}")), "{name}: lp is given it: {args:?}");
+        if ppd_keywords.contains(&media) {
+            continue;
+        }
+        // The rest are PWG 5101.1 names, which end in their dimensions: CUPS feeds the driver's
+        // size of those dimensions, so they must be the paper's.
+        let dims = media.rsplit('_').next().unwrap_or_default();
+        let (dims, points_per_unit) = match (dims.strip_suffix("mm"), dims.strip_suffix("in")) {
+            (Some(mm), _) => (mm, 72.0 / 25.4),
+            (_, Some(inches)) => (inches, 72.0),
+            _ => panic!("{name}: {media} is not a PWG name"),
+        };
+        let (pw, ph) = dims.split_once('x').unwrap_or_else(|| panic!("{name}: {media} has no dimensions"));
+        let (pw, ph) = (pw.parse::<f64>().unwrap() * points_per_unit, ph.parse::<f64>().unwrap() * points_per_unit);
+        assert!((pw - w).abs() < 0.5 && (ph - h).abs() < 0.5, "{name}: {media} is {pw:.2} x {ph:.2} pt, not {w} x {h}");
+    }
+    assert_eq!((cups_media(PAPERS.len()), media_option(PAPERS.len())), (None, None));
+    // The names themselves, spelled as PWG 5101.1 has them: a driverless printer may take only the
+    // names it advertises, so one CUPS can merely parse (ARCH A was `arch_a_9x12in`) is not enough.
+    // ARCH E1 is 5101.1's `wide-format` size: `na_arch-e1_30x42in` was asked for once and never
+    // registered.
+    let names: Vec<(&str, &str)> = PAPERS.iter().enumerate().map(|(i, (name, _))| (*name, cups_media(i).unwrap_or_default())).collect();
+    assert_eq!(
+        names,
+        [
+            ("US Letter", "Letter"),
+            ("US Legal", "Legal"),
+            ("Tabloid", "Tabloid"),
+            ("A3", "A3"),
+            ("A4", "A4"),
+            ("A5", "A5"),
+            ("A6", "iso_a6_105x148mm"),
+            ("ARCH A (9 x 12 in)", "na_arch-a_9x12in"),
+            ("ARCH B (12 x 18 in)", "na_arch-b_12x18in"),
+            ("ARCH C (18 x 24 in)", "na_arch-c_18x24in"),
+            ("ARCH D (24 x 36 in)", "na_arch-d_24x36in"),
+            ("ARCH E1 (30 x 42 in)", "na_wide-format_30x42in"),
+            ("ARCH E (36 x 48 in)", "na_arch-e_36x48in"),
+            ("ANSI C (17 x 22 in)", "na_c_17x22in"),
+            ("ANSI D (22 x 34 in)", "na_d_22x34in"),
+            ("ANSI E (34 x 44 in)", "na_e_34x44in"),
+            ("A2", "iso_a2_420x594mm"),
+            ("A1", "iso_a1_594x841mm"),
+            ("A0", "iso_a0_841x1189mm"),
+            ("4 x 6 in label (101.6 x 152.4 mm)", "w288h432"),
+            ("US #10 Envelope (4.125 x 9.5 in)", "Env10"),
+        ]
+    );
+}
+
+/// #2734: the US #10 envelope (4.125 × 9.5 in) is offered, fed by its PPD name and laid out at
+/// its own size.
 #[test]
 fn us_number_10_envelope_is_offered_and_fed_by_name() {
-    // 4.125 × 9.5 in (#2734).
     let index = matching_paper((684.0, 297.0)).unwrap();
     assert_eq!(PAPERS[index].0, "US #10 Envelope (4.125 x 9.5 in)");
     assert_eq!(PAPERS[index].1, (297.0, 684.0));
@@ -960,4 +1022,40 @@ fn odd_and_even_pages_are_page_numbers_not_places_in_the_range() {
     assert_eq!(select_pages(12, Some("10, 3, 4"), &[], Subset::Even, true).unwrap(), [3, 9]);
     // A range with no page of the kind prints nothing.
     assert_eq!(select_pages(12, Some("3, 5"), &[], Subset::Even, false), Err(PrintError::NoPages));
+}
+
+/// ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard does not print,
+/// even with its Print flag; Invisible means nothing for a standard type.
+#[test]
+fn invisible_annotations_of_unknown_types_do_not_print() {
+    let doc = fixture(1);
+    let annot = |subtype: Option<&str>, flags: i64| {
+        let mut d = Dict::new();
+        if let Some(s) = subtype {
+            d.set(b"Subtype".to_vec(), Object::name(s));
+        }
+        d.set(b"F".to_vec(), Object::Int(flags));
+        d
+    };
+    let all = Content::DocumentAndMarkups;
+    assert!(prints(&doc, &annot(Some("MyCustomType"), 4), all), "an unknown type prints without Invisible");
+    assert!(!prints(&doc, &annot(Some("MyCustomType"), 5), all), "Invisible + Print on an unknown type");
+    assert!(!prints(&doc, &annot(None, 5), all), "no Subtype is no standard type");
+    assert!(prints(&doc, &annot(Some("Square"), 5), all), "Invisible doesn't apply to a standard type");
+    assert!(prints(&doc, &annot(Some("Widget"), 5), Content::FormFieldsOnly), "nor to a field");
+
+    // An indirect `/Subtype` (§7.3.10) is resolved: a standard type stays standard.
+    let mut doc = doc;
+    let square = doc.add(Object::name("Square"));
+    let mut indirect = annot(None, 5);
+    indirect.set(b"Subtype".to_vec(), Object::Ref(square));
+    assert!(prints(&doc, &indirect, all), "an indirect standard Subtype");
+}
+
+/// #2707: a booklet's two-sided setting follows its subset.
+#[test]
+fn a_booklet_prints_both_sides_on_the_short_edge() {
+    assert_eq!(booklet_duplex(BookletSubset::BothSides), spool::Duplex::ShortEdge);
+    assert_eq!(booklet_duplex(BookletSubset::FrontOnly), spool::Duplex::Off);
+    assert_eq!(booklet_duplex(BookletSubset::BackOnly), spool::Duplex::Off);
 }
