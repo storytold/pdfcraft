@@ -1640,12 +1640,22 @@ fn touch(d: &mut Dict, meta: &Meta) {
 }
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
+/// A comment in a group (`/RT /Group`) takes the whole group with it: deleting a subordinate
+/// deletes its primary, and with it every member (ISO 32000-2 §12.5.6.2).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
-    let target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let mut target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let mut index = index;
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
+        let primary = group_primary(doc, &list, r);
+        if let Some(i) = list.iter().position(|e| e.as_ref() == Some(primary))
+            && primary != r
+        {
+            unlocked(doc, primary)?;
+            (target, index) = (Object::Ref(primary), i);
+        }
     }
     let mut doomed: Vec<ObjRef> = target.as_ref().into_iter().collect();
     // Replies (`/IRT`) and pop-ups (`/Parent`) of anything doomed, to a fixpoint.
@@ -2254,6 +2264,8 @@ pub struct Summary {
     pub modified: Option<String>,
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// A group subordinate ([`is_group_subordinate`]) whose `/IRT` annotation has a `/NM`.
+    pub group: bool,
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
     pub state: Option<String>,
@@ -2283,6 +2295,36 @@ fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
 /// 3D, PrinterMark, TrapNet, Watermark) are not.
 pub fn is_comment_subtype(subtype: &str) -> bool {
     !matches!(subtype, "Link" | "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+}
+
+/// Whether an annotation is a subordinate of a group rather than a reply: `/RT /Group` with an
+/// `/IRT` reference (ISO 32000-2 §12.5.6.2, Table 172). The group's primary is the `/IRT`
+/// annotation, and the subordinate's own text, author, colour, dates and pop-up are ignored.
+/// `/RT` is `R` by default, and a value other than `Group` reads as `R` too. Keep in step with
+/// `pdfcraft_render::inspect`.
+pub fn is_group_subordinate(d: &Dict) -> bool {
+    d.name(b"RT") == Some(b"Group") && d.reference(b"IRT").is_some()
+}
+
+/// How far a group subordinate's `/IRT` chain is followed to its primary.
+const MAX_GROUP_DEPTH: usize = 64;
+
+/// The primary of the group `r` belongs to: up the `/IRT` chain while it leads to another
+/// subordinate in `list` (one page's `/Annots`). `r` itself when it is not a subordinate, or
+/// when its primary is not on the page; the chain stops at a loop or after [`MAX_GROUP_DEPTH`].
+fn group_primary(doc: &Document, list: &[Object], r: ObjRef) -> ObjRef {
+    let mut seen = vec![r];
+    let mut at = r;
+    for _ in 0..MAX_GROUP_DEPTH {
+        let obj = doc.get(at);
+        let Some(next) = obj.as_dict().filter(|d| is_group_subordinate(d)).and_then(|d| d.reference(b"IRT")) else { return at };
+        if seen.contains(&next) || !list.iter().any(|e| e.as_ref() == Some(next)) {
+            return at;
+        }
+        seen.push(next);
+        at = next;
+    }
+    at
 }
 
 /// Every comment (see [`is_comment_subtype`]), ordered by page and then top edge.
@@ -2326,6 +2368,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 _ => Vec::new(),
             };
             let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            let group = in_reply_to.is_some() && is_group_subordinate(d);
             out.push(Summary {
                 page,
                 index,
@@ -2337,6 +2380,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 modified: text_value(doc, d, b"M"),
                 name: text_value(doc, d, b"NM"),
                 in_reply_to,
+                group,
                 rect,
                 color,
                 state: text_value(doc, d, b"State"),
@@ -2476,11 +2520,17 @@ fn line_endings_of(d: &Dict) -> Option<Vec<LineEnding>> {
 }
 
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
-/// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
-/// move, list and delete as one. Returns the strikeout's index.
+/// struck text holding `replacement`, grouped (ISO 32000-2 §12.5.6.2) so they list, select and
+/// delete as one. Returns the caret's index, the group's comment.
+///
+/// The caret is the group's primary: it holds `replacement` in `/Contents` and has `/IT
+/// /Replace`. The strikeout is its subordinate (`/IRT` to the caret, `/RT /Group`, `/IT
+/// /StrikeOutTextEdit`) with no `/Contents`, since a reader ignores a subordinate's text.
+/// Groups written before this the other way round (the strikeout primary, the text only on
+/// the caret) still list their text: see `pdfcraft_render::fill_group_text`.
 ///
 /// The two annotations need their own `/NM`: XFDF names a reply by the `/NM` of what it replies
-/// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
+/// to, so one id for both writes `inreplyto` equal to the strikeout's own `name`, and a reader that
 /// resolves names (Acrobat, and our own importer) loses the pair. `caret_meta` is a second id
 /// from the caller, so the edit stays deterministic.
 #[allow(clippy::too_many_arguments)]
@@ -2508,7 +2558,6 @@ pub fn add_text_replacement(
         meta,
     )?;
     let (_, sr) = annot_ref(doc, page, s)?;
-    doc.update_dict(sr, |d| d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit")))?;
     // The caret sits on the baseline at the end of the last line, its point at the text.
     let xs = [last[0], last[2], last[4], last[6]];
     let ys = [last[1], last[3], last[5], last[7]];
@@ -2523,11 +2572,16 @@ pub fn add_text_replacement(
     )?;
     let (_, cr) = annot_ref(doc, page, c)?;
     doc.update_dict(cr, |d| {
-        d.set(b"IRT".to_vec(), Object::Ref(sr));
-        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.set(b"IT".to_vec(), Object::name("Replace"));
         d.set(b"Subj".to_vec(), PdfString::text("Replace Text"));
     })?;
-    Ok(s)
+    doc.update_dict(sr, |d| {
+        d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit"));
+        d.set(b"IRT".to_vec(), Object::Ref(cr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.remove(b"Contents");
+    })?;
+    Ok(c)
 }
 
 /// The Eraser (Draw tools): remove the parts of drawing `(page, index)` within `radius` points

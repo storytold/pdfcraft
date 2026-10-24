@@ -3560,8 +3560,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_list"]
-evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand"]
-notes = "cards grouped by page with replies, status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet"
+evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand", "crates/ui-egui/tests/it/comments.rs::a_group_is_one_comment_in_the_panel_and_on_the_page", "crates/automation/tests/it/automation.rs::a_group_lists_as_its_primary", "crates/automation/tests/it/automation.rs::looping_groups_end_and_chained_groups_reach_their_primary", "crates/render/src/inspect.rs::group_primaries_follow_irt_to_the_first_non_subordinate"]
+notes = "cards grouped by page with replies, status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet. Annotation groups (`/RT /Group`, ISO 32000-2 §12.5.6.2) list as one comment with the primary's author, text and colour (the subordinate's own are ignored), a reply to a subordinate joins the primary's thread, `comment_list` names the members in `group`, clicking a subordinate on the page selects the group and deleting any member deletes the group (one undo step). Missing: moving or restyling a member does not move or restyle the group, a subordinate has no hover tooltip, and a subordinate whose primary is on another page is selected on neither"
 
 [[feature]]
 id = "comment.appearance-generation"
@@ -3644,8 +3644,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.replace"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::replace_text_groups_a_strikeout_and_a_caret", "crates/ui-egui/tests/it/comments.rs::replacing_text_strikes_it_and_adds_a_caret", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "strikeout (/IT StrikeOutTextEdit) and a grouped caret (/RT /Group) with the replacement"
+evidence = ["crates/annot/src/tests.rs::replace_text_groups_a_strikeout_and_a_caret", "crates/ui-egui/tests/it/comments.rs::replacing_text_strikes_it_and_adds_a_caret", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools", "crates/automation/tests/it/automation.rs::replace_text_lists_its_replacement"]
+notes = "a caret holding the replacement (/IT /Replace) is the group's primary and a strikeout (/IT /StrikeOutTextEdit) its /RT /Group subordinate (ISO 32000-2 §12.5.6.2), so the pair lists, selects and deletes as one comment with the replacement text. Groups saved by earlier builds the other way round (strikeout primary with no text) still list the caret's text, without rewriting the file. Missing: moving the caret does not move the strikeout"
 
 [[feature]]
 id = "comment.insert-text"

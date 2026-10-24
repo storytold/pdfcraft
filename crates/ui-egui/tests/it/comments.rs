@@ -1661,7 +1661,9 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     let strike = c.iter().find(|a| a.subtype == "StrikeOut").expect("a strikeout");
     let caret = c.iter().find(|a| a.subtype == "Caret").expect("a caret");
     assert_eq!(caret.contents.as_deref(), Some("slow red"));
-    assert_eq!(caret.in_reply_to, strike.name, "grouped with the strikeout");
+    // The caret is the group's primary, the strikeout its `/RT /Group` subordinate (ISO 32000-2 §12.5.6.2).
+    assert_eq!(strike.in_reply_to, caret.name, "the strikeout is grouped with the caret");
+    assert!(strike.group && !caret.group);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Replace text"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     // The strikeout is the Replace text tool's, not Strikethrough's (#3947): the panel names it
@@ -1669,7 +1671,13 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(strike), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
     h.state_mut().set_option("panel", "comments").unwrap();
     h.run_steps(3);
+    // One card, the caret's, showing the replacement text; sorted by type, its group is named
+    // Replace text (not Insert text, and no Strikethrough).
+    assert_eq!(h.query_all_by_label("slow red").count(), 1, "one comment with the replacement text");
+    h.state_mut().views[0].comments.sort = pdfcraft_ui_egui::comments::SortBy::Type;
+    h.run_steps(3);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Insert text").is_none(), "not Insert text");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
 }
 
@@ -2303,4 +2311,37 @@ fn text_comments_can_save_a_zero_width_default() {
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
+}
+
+// Contributor-original PDF: a Square, a Circle grouped with it (`/RT /Group`) that keeps its own
+// author, text and colour, an ordinary reply and a reply to the Circle.
+const GROUP_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /Rect [20 20 100 80] /NM (sq-primary) /T (Alice) /Contents (Primary) /C [1 0 0] >> endobj
+6 0 obj << /Type /Annot /Subtype /Circle /Rect [180 120 260 180] /NM (circ-sub) /T (Bob) /Contents (Subordinate) /C [0 0 1] /IRT 5 0 R /RT /Group >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [120 20 140 40] /NM (reply) /T (Carol) /Contents (Plain reply) /IRT 5 0 R >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [120 50 140 70] /NM (sub-reply) /T (Dan) /Contents (Reply to the subordinate) /IRT 6 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.6.2: a group is one comment, its primary's. The panel lists the Square
+/// with both replies (the one to the Circle joins its thread) and not the Circle's own author
+/// or text; clicking the Circle on the page selects the group, which is the Square's card.
+#[test]
+fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    h.get_by_label("Primary");
+    h.get_by_label("Plain reply");
+    h.get_by_label("Reply to the subordinate");
+    assert_eq!(h.query_all_by_label("Subordinate").count(), 0, "the subordinate's own text is ignored");
+    assert_eq!(h.query_all_by_label("Bob").count(), 0, "the subordinate's own author is ignored");
+    let p = at(&h, 220.0, 150.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "clicking the Circle selects its group");
+    h.state_mut().views[0].comments.selected = None;
+    let p = at(&h, 60.0, 50.0);
+    click(&mut h, p);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
 }

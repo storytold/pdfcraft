@@ -174,7 +174,23 @@ impl Automation {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
-        let view = |c: &Annotation| -> Value {
+        // A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) lists as its primary, with the primary's
+        // attributes: the subordinates are neither comments nor replies, only its `group`.
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); all.len()];
+        for (j, p) in pdfcraft_render::group_primaries(&all).into_iter().enumerate() {
+            if let Some(list) = p.and_then(|p| members.get_mut(p)) {
+                list.push(j);
+            }
+        }
+        let view = |i: usize| -> Value {
+            let Some(c) = all.get(i) else { return Value::Null };
+            let group: Vec<Value> = members
+                .get(i)
+                .into_iter()
+                .flatten()
+                .filter_map(|&j| all.get(j))
+                .map(|m| json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype }))
+                .collect();
             let mut v = json!({
                 "id": c.name,
                 "page": c.page + 1,
@@ -186,6 +202,7 @@ impl Automation {
                 // Unchanged on a page the viewer could not read (#2660), as `doc_info` reports it.
                 "rect": crate::view_rect(&doc.info, c.page, c.rect),
                 "color": c.color.map(hex),
+                "group": group,
             });
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.
@@ -200,9 +217,10 @@ impl Automation {
         };
         let roots: Vec<Value> = all
             .iter()
-            .filter(|c| c.in_reply_to.is_none() && only.is_none_or(|p| c.page == p))
-            .map(|c| {
-                let mut v = view(c);
+            .enumerate()
+            .filter(|(_, c)| c.in_reply_to.is_none() && only.is_none_or(|p| c.page == p))
+            .map(|(i, c)| {
+                let mut v = view(i);
                 // Every reply under this comment, at any depth, in document order. A reply to a
                 // reply keeps its `/IRT` on the direct parent, so following one level would drop it.
                 let descends_from = |r: &Annotation, root: &str| -> bool {
@@ -216,15 +234,17 @@ impl Automation {
                     }
                     false
                 };
-                let thread: Vec<&Annotation> = match c.name.as_deref() {
-                    Some(nm) => all.iter().filter(|r| r.in_reply_to.is_some() && descends_from(r, nm)).collect(),
+                // A reply to a group subordinate is in the thread (its `/IRT` chain runs through
+                // the subordinate to the primary); the subordinate itself is not.
+                let thread: Vec<(usize, &Annotation)> = match c.name.as_deref() {
+                    Some(nm) => all.iter().enumerate().filter(|(_, r)| r.in_reply_to.is_some() && !r.group && descends_from(r, nm)).collect(),
                     None => Vec::new(),
                 };
-                let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone());
+                let status = thread.iter().rev().filter(|(_, r)| !r.is_mark()).find_map(|(_, r)| r.state.clone());
                 v["status"] = json!(status);
-                v["marked"] = json!(thread.iter().rev().find(|r| r.is_mark()).is_some_and(|r| r.state.as_deref() == Some("Marked")));
+                v["marked"] = json!(thread.iter().rev().find(|(_, r)| r.is_mark()).is_some_and(|(_, r)| r.state.as_deref() == Some("Marked")));
                 v["locked"] = json!(c.locked);
-                v["replies"] = thread.iter().filter(|r| r.state.is_none()).map(|r| view(r)).collect();
+                v["replies"] = thread.iter().filter(|(_, r)| r.state.is_none()).map(|&(j, _)| view(j)).collect();
                 v
             })
             .collect();

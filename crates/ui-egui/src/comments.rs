@@ -669,6 +669,29 @@ impl PageCx<'_> {
         self.comments().find(|a| a.index == index)
     }
 
+    /// The group subordinates (`/RT /Group`, ISO 32000-2 §12.5.6.2) on this page, each with the
+    /// comment on this page that is its group's primary.
+    fn group_members(&self) -> Vec<(&Annotation, &Annotation)> {
+        let all = &self.info.annotations;
+        // Painted every frame a comment is selected: most documents have no group to look up.
+        if self.hidden || !all.iter().any(|a| a.group && a.page == self.page) {
+            return Vec::new();
+        }
+        let primaries = pdfcraft_render::group_primaries(all);
+        all.iter()
+            .zip(primaries)
+            .filter(|(a, _)| !self.hidden && a.group && a.page == self.page)
+            .filter_map(|(a, p)| Some((a, all.get(p?).filter(|p| p.page == self.page && p.in_reply_to.is_none())?)))
+            .collect()
+    }
+
+    /// The comment a click at `p` selects: the topmost one under it or, on a group subordinate,
+    /// the group's primary, which stands for the group.
+    fn click_hit(&self, p: Pos2) -> Option<&Annotation> {
+        self.hit(p)
+            .or_else(|| self.group_members().into_iter().rev().find(|(m, _)| self.screen_rects(m).any(|r| r.expand(3.0).contains(p))).map(|(_, p)| p))
+    }
+
     pub(crate) fn rect_to_user(&self, r: Rect) -> [f64; 4] {
         let (a, b) = (self.to_user(r.left_top()), self.to_user(r.right_bottom()));
         [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
@@ -1256,7 +1279,7 @@ fn select_input(
             && !resp.double_clicked()
             && pointer
                 .is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p)));
-        match pointer.and_then(|p| cx.hit(p)) {
+        match pointer.and_then(|p| cx.click_hit(p)) {
             Some(a) if a.subtype == "Highlight" && follow_link => {
                 // A plain click follows the link beneath text highlighting. Keep other
                 // annotations and active gestures in control of their own input.
@@ -1343,6 +1366,12 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         && page == cx.page
         && let Some(a) = cx.get(index)
     {
+        // The rest of the group is selected with its primary.
+        for (m, _) in cx.group_members().into_iter().filter(|(_, p)| p.index == index) {
+            for r in cx.screen_rects(m) {
+                painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+            }
+        }
         if is_markup(&a.subtype) && !a.quads.is_empty() {
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
@@ -2397,6 +2426,7 @@ mod tests {
                 modified: None,
                 name: None,
                 in_reply_to: None,
+                group: false,
                 rect: [10.0, 10.0, 50.0, 50.0],
                 color: None,
                 index: 0,

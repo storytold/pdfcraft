@@ -806,26 +806,76 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let i = add_text_replacement(&mut doc, 0, &quads, "new words", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).unwrap();
     let doc = reopen(&doc);
     let a = list(&doc, 0);
-    let strike = &a[i];
-    assert_eq!((strike.name(b"Subtype"), strike.name(b"IT")), (Some(&b"StrikeOut"[..]), Some(&b"StrikeOutTextEdit"[..])));
-    let caret = a.iter().find(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
-    assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"RT")), ("new words", Some(&b"Group"[..])));
-    assert!(caret.reference(b"IRT").is_some());
+    // The caret is the group's primary (ISO 32000-2 §12.5.6.2): it holds the text, has no
+    // `/IRT`, and is what the call returns.
+    let caret = &a[i];
+    assert_eq!((caret.name(b"Subtype"), caret.name(b"IT")), (Some(&b"Caret"[..]), Some(&b"Replace"[..])));
+    assert_eq!(text(caret, b"Contents").as_str(), "new words");
+    assert!(caret.get(b"IRT").is_none() && caret.get(b"RT").is_none());
+    // The strikeout is its subordinate, with no text of its own.
+    let strike = a.iter().find(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
+    assert_eq!((strike.name(b"IT"), strike.name(b"RT")), (Some(&b"StrikeOutTextEdit"[..]), Some(&b"Group"[..])));
+    assert!(strike.get(b"Contents").is_none());
+    assert!(is_group_subordinate(strike));
     // #2666: the pair needs its own `/NM` each. XFDF names a reply by the `/NM` of what it
-    // replies to, so sharing one id writes `inreplyto` equal to the caret's own `name` and the
-    // pair does not survive an export and import.
+    // replies to, so sharing one id writes `inreplyto` equal to the subordinate's own `name`
+    // and the pair does not survive an export and import.
     assert_eq!(text(caret, b"NM").as_str(), "r-caret");
     assert_eq!(text(strike, b"NM").as_str(), "r");
-    assert_ne!(text(caret, b"NM"), text(strike, b"NM"), "the caret must not carry the strikeout's name");
-    let irt = caret.reference(b"IRT").unwrap();
-    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r", "the caret replies to the strikeout");
+    let irt = strike.reference(b"IRT").unwrap();
+    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r-caret", "the strikeout is grouped with the caret");
     let r = rect(caret);
     assert!(r[0] < 200.0 && r[2] > 200.0 && r[1] < 706.0, "at the end of the line, below its baseline: {r:?}");
-    // Deleting the strikeout takes the caret with it (the group).
+    let summary = summaries(&doc);
+    assert_eq!(summary.iter().filter(|s| s.page == 0 && !s.group).count(), 2, "the fixture's Square and the caret: {summary:?}");
+    // Deleting either member deletes the group.
+    for member in [i, a.iter().position(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap()] {
+        let mut doc = doc.clone();
+        delete_annotation(&mut doc, 0, member).unwrap();
+        assert!(!list(&doc, 0).iter().any(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))), "{member}");
+    }
     let mut doc = doc;
-    delete_annotation(&mut doc, 0, i).unwrap();
-    assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
     assert!(add_text_replacement(&mut doc, 0, &[], "x", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).is_err());
+}
+
+/// ISO 32000-2 §12.5.6.2: `/RT /Group` makes an annotation a subordinate of the group its
+/// `/IRT` annotation is primary of. Another `/RT` reads as a reply, and so does a bare `/IRT`.
+/// Deleting a subordinate deletes the whole group, with the primary's replies.
+#[test]
+fn a_group_reads_as_one_and_deletes_as_one() {
+    let mut doc = fixture();
+    let square = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] }), &meta("sq")).unwrap();
+    let (_, sr) = annot_ref(&mut doc, 0, square).unwrap();
+    let irt = |doc: &mut Document, id: &str, rt: Option<&str>| {
+        let i = add_annotation(doc, &new(0, Shape::Oval { rect: [300.0, 300.0, 350.0, 350.0] }), &meta(id)).unwrap();
+        let (_, r) = annot_ref(doc, 0, i).unwrap();
+        doc.update_dict(r, |d| {
+            d.set(b"IRT".to_vec(), Object::Ref(sr));
+            if let Some(rt) = rt {
+                d.set(b"RT".to_vec(), Object::name(rt));
+            }
+        })
+        .unwrap();
+        i
+    };
+    let member = irt(&mut doc, "member", Some("Group"));
+    irt(&mut doc, "reply", None);
+    irt(&mut doc, "explicit", Some("R"));
+    irt(&mut doc, "odd", Some("Bogus"));
+    let doc = reopen(&doc);
+    let grouped: Vec<(String, bool)> =
+        summaries(&doc).into_iter().filter(|s| s.in_reply_to.is_some()).map(|s| (s.name.unwrap_or_default(), s.group)).collect();
+    assert_eq!(
+        grouped,
+        [("member".into(), true), ("reply".into(), false), ("explicit".into(), false), ("odd".into(), false)],
+        "only /RT /Group groups"
+    );
+    let mut doc = doc;
+    delete_annotation(&mut doc, 0, member).unwrap();
+    let left = list(&doc, 0);
+    assert_eq!(left.len(), 1, "the group, its primary and the primary's replies are gone; the unrelated Square stays");
+    assert_eq!(left[0].name(b"Subtype"), Some(&b"Square"[..]));
+    assert!(left[0].get(b"NM").is_none());
 }
 
 #[test]

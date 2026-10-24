@@ -2554,8 +2554,8 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
         }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
-            // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
-            // the strikeout's `/NM` (#2666).
+            // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
+            // the caret's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
             pdfcraft_annot::add_text_replacement(doc, *page, quads, text, author, strike, caret, &strike_meta, &caret_meta)?;
         }
@@ -2890,7 +2890,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
 
 /// The comment list, read from the object graph (as `inspect` lists comments).
 fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation> {
-    pdfcraft_annot::summaries(doc)
+    let mut all: Vec<pdfcraft_render::Annotation> = pdfcraft_annot::summaries(doc)
         .into_iter()
         .map(|s| pdfcraft_render::Annotation {
             page: s.page,
@@ -2900,6 +2900,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             modified: s.modified.map(|m| pdfcraft_render::pretty_date(&m)),
             name: s.name,
             in_reply_to: s.in_reply_to,
+            group: s.group,
             rect: s.rect,
             color: s.color,
             index: s.index,
@@ -2910,7 +2911,9 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             fill_sign: s.fill_sign,
             points: s.points,
         })
-        .collect()
+        .collect();
+    pdfcraft_render::fill_group_text(&mut all);
+    all
 }
 
 /// Seconds to add to UTC for local time (0 where unknown).
@@ -5312,9 +5315,10 @@ pub fn comment_type_name(subtype: &str) -> &str {
     }
 }
 
-/// [`comment_type_name`], telling callouts, clouds and typewriter text apart by `/IT`.
+/// [`comment_type_name`], telling replaced text, callouts, clouds and typewriter text apart by `/IT`.
 pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
     match a.intent.as_deref() {
+        Some("StrikeOutTextEdit" | "Replace") => "Replace Text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -5330,20 +5334,29 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
     let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
     // direct parent, so following one level would leave the deeper replies out of the summary.
-    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {
+    // A group subordinate (`/RT /Group`, ISO 32000-2 §12.5.6.2) is part of the comment, not a
+    // reply: it is not written, and replies to it are written at its level, as the comment's.
+    // `depth` bounds the walk; `level` is the indent.
+    fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize, level: usize) {
         use std::fmt::Write;
         if depth > 64 {
             return;
         }
         for r in all.iter().filter(|r| r.state.is_none() && r.in_reply_to.as_deref() == Some(parent)) {
-            let indent = "    ".repeat(depth + 1);
+            if r.group {
+                if let Some(nm) = r.name.as_deref() {
+                    write_replies(out, all, nm, depth + 1, level);
+                }
+                continue;
+            }
+            let indent = "    ".repeat(level + 1);
             let _ =
                 writeln!(out, "{indent}Author: {}  Subject: Reply  Date: {}", r.author.as_deref().unwrap_or(""), r.modified.as_deref().unwrap_or(""));
             for line in r.contents.as_deref().unwrap_or("").lines() {
                 let _ = writeln!(out, "{indent}{line}");
             }
             if let Some(nm) = r.name.as_deref() {
-                write_replies(out, all, nm, depth + 1);
+                write_replies(out, all, nm, depth + 1, level + 1);
             }
         }
     }
@@ -5384,7 +5397,7 @@ pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: Su
             let _ = writeln!(out, "{c}");
         }
         if let Some(nm) = a.name.as_deref() {
-            write_replies(&mut out, all, nm, 0);
+            write_replies(&mut out, all, nm, 0, 0);
         }
         out.push('\n');
     }

@@ -420,6 +420,10 @@ pub struct Annotation {
     /// `/NM` of this annotation, and of the one it replies to (`/IRT`), for threading.
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// `/RT /Group` (ISO 32000-2 §12.5.6.2, Table 172) on an annotation whose `/IRT` names
+    /// another: a subordinate of the group that annotation is primary of, not a reply. Its own
+    /// text, author, colour and dates are ignored; see [`group_primaries`].
+    pub group: bool,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -439,6 +443,70 @@ pub struct Annotation {
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+}
+
+/// How far [`group_primaries`] follows `/IRT` from a group subordinate to its primary.
+pub const MAX_GROUP_DEPTH: usize = 64;
+
+/// For each annotation of `all`, the position in `all` of the primary of the group it is a
+/// subordinate of (`/RT /Group`, ISO 32000-2 §12.5.6.2), or `None` when it is not one. The
+/// group's attributes, its comment and its replies are the primary's. A subordinate of a
+/// subordinate leads to the first non-subordinate up the `/IRT` chain. One whose chain loops,
+/// runs past [`MAX_GROUP_DEPTH`] or names nothing listed has no primary (`None`) and, like a
+/// reply whose parent is not found, is listed under no comment.
+pub fn group_primaries(all: &[Annotation]) -> Vec<Option<usize>> {
+    let mut by_name: HashMap<&str, usize> = HashMap::new();
+    for (i, a) in all.iter().enumerate() {
+        if let Some(n) = a.name.as_deref() {
+            by_name.entry(n).or_insert(i);
+        }
+    }
+    let primary = |start: usize| -> Option<usize> {
+        let mut at = start;
+        for _ in 0..MAX_GROUP_DEPTH {
+            let a = all.get(at)?;
+            if !a.group {
+                return Some(at);
+            }
+            let next = *by_name.get(a.in_reply_to.as_deref()?)?;
+            if next == start {
+                return None;
+            }
+            at = next;
+        }
+        None
+    };
+    all.iter().enumerate().map(|(i, a)| if a.group { primary(i) } else { None }).collect()
+}
+
+/// Give a group's StrikeOut primary with no text of its own (`/Contents` missing or empty) the
+/// text of its first Caret subordinate that has some. A reader ignores a subordinate's
+/// `/Contents` (ISO 32000-2 §12.5.6.2), but Replace Text groups written by earlier PdfCraft builds
+/// made the strikeout the primary, with no text, and kept the replacement only on the caret:
+/// without this they would list as a comment with no text. A primary's own text always wins, no
+/// other subordinate lends its text, and no other kind of primary borrows one. Only the listing
+/// changes, not the file.
+pub fn fill_group_text(all: &mut [Annotation]) {
+    if !all.iter().any(|a| a.group) {
+        return;
+    }
+    let primaries = group_primaries(all);
+    let lacks_text = |p: usize| all.get(p).is_some_and(|a| a.subtype == "StrikeOut" && a.contents.as_deref().is_none_or(str::is_empty));
+    // Keyed by the primary's position: the first caret per primary wins, and each primary is
+    // written once, so the order of the map does not matter.
+    let mut texts: HashMap<usize, String> = HashMap::new();
+    for (a, p) in all.iter().zip(&primaries) {
+        if let (Some(p), Some(text), "Caret") = (*p, a.contents.as_ref(), a.subtype.as_str())
+            && lacks_text(p)
+        {
+            texts.entry(p).or_insert_with(|| text.clone());
+        }
+    }
+    for (p, text) in texts {
+        if let Some(primary) = all.get_mut(p) {
+            primary.contents = Some(text);
+        }
+    }
 }
 
 impl Annotation {
@@ -1327,6 +1395,9 @@ impl<'a> Inspector<'a> {
                     _ => Vec::new(),
                 };
                 let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+                // `/RT` is `R` (a reply, the default) or `Group`; another value reads as a reply.
+                // Keep in step with `pdfcraft_annot::is_group_subordinate`.
+                let group = in_reply_to.is_some() && self.name(d, b"RT").as_deref() == Some("Group");
                 let fill_sign = self.is_fill_sign(d, &subtype);
                 // Keep in step with `pdfcraft_annot::summaries`.
                 let key: &[u8] = if subtype == "Line" { b"L" } else { b"Vertices" };
@@ -1348,6 +1419,7 @@ impl<'a> Inspector<'a> {
                     modified: self.text(d, b"M").map(|m| pretty_date(&m)),
                     name: self.text(d, b"NM"),
                     in_reply_to,
+                    group,
                     rect,
                     color,
                     index,
@@ -1367,6 +1439,7 @@ impl<'a> Inspector<'a> {
             }
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
+        fill_group_text(&mut info.annotations);
     }
 
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
@@ -3996,5 +4069,118 @@ mod open_action_javascript_tests {
         let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
         let info = inspect(Arc::new(bytes), None).expect("inspects");
         assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::{Annotation, MAX_GROUP_DEPTH, group_primaries};
+
+    fn annot(name: &str, in_reply_to: Option<&str>, group: bool) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: "Circle".into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: Some(name.into()),
+            in_reply_to: in_reply_to.map(Into::into),
+            group,
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            points: Vec::new(),
+        }
+    }
+
+    /// ISO 32000-2 §12.5.6.2: a subordinate's primary is the annotation its `/IRT` names, past
+    /// any other subordinate; a reply is no subordinate, loops and over-long chains end.
+    #[test]
+    fn group_primaries_follow_irt_to_the_first_non_subordinate() {
+        let all = [
+            annot("top", None, false),
+            annot("mid", Some("top"), true),
+            annot("low", Some("mid"), true),
+            annot("reply", Some("top"), false),
+            annot("a", Some("b"), true),
+            annot("b", Some("a"), true),
+            annot("self", Some("self"), true),
+            annot("lost", Some("nowhere"), true),
+            annot("of-reply", Some("reply"), true),
+        ];
+        assert_eq!(group_primaries(&all), [None, Some(0), Some(0), None, None, None, None, None, Some(3)]);
+        // A chain longer than the cap has no primary; one within it does.
+        for (len, found) in [(MAX_GROUP_DEPTH - 1, true), (MAX_GROUP_DEPTH + 1, false)] {
+            let mut chain = vec![annot("0", None, false)];
+            chain.extend((1..=len).map(|i| annot(&i.to_string(), Some(&(i - 1).to_string()), true)));
+            assert_eq!(group_primaries(&chain).last().copied().flatten().is_some(), found, "{len}");
+        }
+    }
+
+    fn with(mut a: Annotation, subtype: &str, t: Option<&str>) -> Annotation {
+        a.subtype = subtype.into();
+        a.contents = t.map(Into::into);
+        a
+    }
+
+    /// A StrikeOut primary with no text lists its first Caret subordinate's (earlier Replace
+    /// Text groups kept the replacement on the caret only); a primary's own text always wins, a
+    /// subordinate of another type lends nothing, and a primary of another type borrows nothing
+    /// (ISO 32000-2 §12.5.6.2: the group's text is the primary's).
+    #[test]
+    fn a_primary_without_text_lists_its_carets() {
+        let mut all = [
+            with(annot("strike", None, false), "StrikeOut", None),
+            with(annot("caret", Some("strike"), true), "Caret", Some("red")),
+            with(annot("caret2", Some("strike"), true), "Caret", Some("second")),
+            with(annot("own", None, false), "Caret", Some("kept")),
+            with(annot("member", Some("own"), true), "Caret", Some("ignored")),
+            with(annot("reply", Some("strike"), false), "Text", Some("a reply")),
+            with(annot("bare", None, false), "StrikeOut", None),
+            with(annot("oval", Some("bare"), true), "Circle", Some("not lent")),
+            with(annot("box", None, false), "Square", None),
+            with(annot("boxcaret", Some("box"), true), "Caret", Some("not borrowed")),
+        ];
+        super::fill_group_text(&mut all);
+        let shown: Vec<Option<&str>> = all.iter().map(|a| a.contents.as_deref()).collect();
+        assert_eq!(
+            shown,
+            [
+                Some("red"),
+                Some("red"),
+                Some("second"),
+                Some("kept"),
+                Some("ignored"),
+                Some("a reply"),
+                None,
+                Some("not lent"),
+                None,
+                Some("not borrowed"),
+            ]
+        );
+    }
+
+    /// Many groups each get their own caret's text (one map lookup per caret, not a scan of the
+    /// groups seen so far).
+    #[test]
+    fn many_groups_each_list_their_own_caret() {
+        const N: usize = 20_000;
+        let mut all = Vec::with_capacity(2 * N);
+        for i in 0..N {
+            all.push(with(annot(&format!("s{i}"), None, false), "StrikeOut", None));
+        }
+        // Carets in reverse order, so a primary's caret is far from it in the list.
+        for i in (0..N).rev() {
+            all.push(with(annot(&format!("c{i}"), Some(&format!("s{i}")), true), "Caret", Some(&format!("t{i}"))));
+        }
+        super::fill_group_text(&mut all);
+        for (i, a) in all.iter().take(N).enumerate() {
+            assert_eq!(a.contents.as_deref(), Some(format!("t{i}").as_str()), "{i}");
+        }
     }
 }

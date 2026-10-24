@@ -38,7 +38,9 @@ pub fn subtype_label(s: &str) -> &str {
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
-        Some("StrikeOutTextEdit") => "Replace text",
+        // Replace Text: the caret (`/IT /Replace`) is the group's primary; earlier builds made
+        // the strikeout primary.
+        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -159,10 +161,22 @@ pub(crate) fn show(
     let query = view.comments.search.clone().filter(|q| !q.trim().is_empty());
     let mut replies: HashMap<&str, Vec<&Annotation>> = HashMap::new();
     let mut page_counts: HashMap<usize, usize> = HashMap::new();
+    // A group (`/RT /Group`, ISO 32000-2 §12.5.6.2) is one comment, its primary's: a subordinate
+    // is no reply, and a reply to one joins the primary's thread.
+    let primaries = pdfcraft_render::group_primaries(&info.annotations);
+    let primary_name: HashMap<&str, &str> = info
+        .annotations
+        .iter()
+        .zip(&primaries)
+        .filter_map(|(a, p)| Some((a.name.as_deref()?, info.annotations.get((*p)?)?.name.as_deref()?)))
+        .collect();
     // Keep global name matching and source reply order. Page badges count roots before filtering.
     for a in &info.annotations {
+        if a.group {
+            continue;
+        }
         if let Some(parent) = a.in_reply_to.as_deref() {
-            replies.entry(parent).or_default().push(a);
+            replies.entry(primary_name.get(parent).copied().unwrap_or(parent)).or_default().push(a);
         } else {
             let count = page_counts.entry(a.page).or_default();
             *count = count.saturating_add(1);
