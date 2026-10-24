@@ -932,7 +932,7 @@ fn a_text_box_being_typed_has_the_keyboard_again_when_its_page_scrolls_back() {
     h.run_steps(2);
     h.state_mut().set_option("zoom", "400").unwrap();
     h.state_mut().set_option("page", "2").unwrap();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // On down into page 2, until page 1 isn't drawn at all.
     let centre = h.state().views[0].viewport_rect().center();
     h.hover_at(centre);
@@ -947,11 +947,11 @@ fn a_text_box_being_typed_has_the_keyboard_again_when_its_page_scrolls_back() {
         });
         h.run_steps(2);
     }
-    settle(&mut h);
+    crate::support::settle(&mut h);
     assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 scrolled away");
     h.state_mut().set_option("zoom", "100").unwrap();
     h.state_mut().set_option("page", "1").unwrap();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h.event(egui::Event::Text(" ok".into()));
     h.run_steps(2);
     assert_eq!(h.state().views[0].comments.inline.as_ref().map(|t| t.text.as_str()), Some("Abnahme ok"), "typing goes on");
