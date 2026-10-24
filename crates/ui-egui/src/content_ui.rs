@@ -117,6 +117,10 @@ pub(crate) struct MoveBackground {
     key: Option<(u64, usize, usize)>,
     renderer: Option<pdfcraft_render::RenderPool>,
     texture: Option<egui::TextureHandle>,
+    /// The item alone on a transparent page: the pixels that follow the pointer. The page's own
+    /// raster has whatever the item covers in its box too, which must stay where it is (#4464).
+    item_renderer: Option<pdfcraft_render::RenderPool>,
+    item: Option<egui::TextureHandle>,
     tag: Option<u64>,
     /// The item's display-space box when the gesture started.
     from: Option<[f64; 4]>,
@@ -129,7 +133,12 @@ pub(crate) struct MoveBackground {
 
 impl MoveBackground {
     pub fn pending(&self) -> bool {
-        self.renderer.is_some() && self.texture.is_none()
+        self.renderer.is_some() && self.item_renderer.is_some() && (self.texture.is_none() || self.item.is_none())
+    }
+
+    /// Both rasters are in: the page without the item, and the item alone.
+    fn ready(&self) -> bool {
+        self.texture.is_some() && self.item.is_some()
     }
 
     pub fn prepare(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, cv: &ContentView, scale: f32) {
@@ -144,6 +153,7 @@ impl MoveBackground {
             *self = Self { key, ..Default::default() };
             if let Some((_, page, index)) = key {
                 self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
+                self.item_renderer = doc.added_content_alone(page, index).ok().map(|p| p.renderer());
                 self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
                 self.picture = picture(page, index);
             }
@@ -151,28 +161,39 @@ impl MoveBackground {
         if self.settling.is_some() {
             return;
         }
-        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let (Some((_, page, _)), Some(renderer), Some(item_renderer)) = (self.key, self.renderer.as_ref(), self.item_renderer.as_ref()) else {
+            return;
+        };
         let Some(p) = doc.info.pages.get(page) else { return };
         let max_side = ctx.input(|i| i.max_texture_side) as f32;
         let scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
         let tag = (scale * 1000.0) as u64;
         if self.tag != Some(tag) {
-            renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            for r in [renderer, item_renderer] {
+                r.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            }
             self.tag = Some(tag);
         }
-        if let Some(out) = renderer.try_recv() {
+        let mut failed = false;
+        for (r, slot, name) in
+            [(renderer, &mut self.texture, "added-content-move-background"), (item_renderer, &mut self.item, "added-content-move-item")]
+        {
+            let Some(out) = r.try_recv() else { continue };
             if out.error.is_some() {
-                // Without a background the item stays put while dragged, as before.
-                self.renderer = None;
-                return;
-            }
-            if out.request.tag == tag {
-                self.texture = Some(ctx.load_texture(
-                    "added-content-move-background",
+                failed = true;
+            } else if out.request.tag == tag {
+                *slot = Some(ctx.load_texture(
+                    name,
                     crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
                     egui::TextureOptions::LINEAR,
                 ));
             }
+        }
+        if failed {
+            // Without both rasters the item stays put while dragged, as before.
+            self.renderer = None;
+            self.item_renderer = None;
+            return;
         }
         if self.pending() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -183,7 +204,7 @@ impl MoveBackground {
     /// rendered again. Any other edit ends it.
     pub fn committed(&mut self, edit: &Edit, generation: u64) {
         match edit {
-            Edit::UpdateContent { page, index, content } if self.texture.is_some() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
+            Edit::UpdateContent { page, index, content } if self.ready() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
                 self.key = Some((generation, *page, *index));
                 self.settling = Some(content.rect());
             }
@@ -197,20 +218,10 @@ impl MoveBackground {
         }
     }
 
-    /// The page without the moving item, then the item's pixels taken from `page_tex` (the page
-    /// as rendered, item included where it was) at the dragged or applied position.
-    #[allow(clippy::too_many_arguments)]
-    pub fn paint(
-        &self,
-        ui: &egui::Ui,
-        painter: &egui::Painter,
-        xf: &PageXform,
-        page: usize,
-        info: &DocInfo,
-        cv: &ContentView,
-        page_tex: Option<egui::TextureId>,
-    ) {
-        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
+    /// The page without the moving item, then the item's own pixels (from its raster alone, so
+    /// nothing it covered comes along) at the dragged or applied position.
+    pub fn paint(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, cv: &ContentView) {
+        let (Some((_, kp, _)), Some(background), Some(item), Some(from)) = (self.key, &self.texture, &self.item, self.from) else { return };
         if kp != page {
             return;
         }
@@ -229,7 +240,7 @@ impl MoveBackground {
         xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
         // A pixel around the box, so its edges come along.
         let (r, to) = (r.expand(1.0), to.expand(1.0));
-        let mut mesh = egui::Mesh::with_texture(page_tex);
+        let mut mesh = egui::Mesh::with_texture(item.id());
         for (a, b) in [
             (r.left_top(), to.left_top()),
             (r.right_top(), to.right_top()),

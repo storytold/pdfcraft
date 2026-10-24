@@ -1225,6 +1225,21 @@ pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(
     Ok(())
 }
 
+/// Leave only item `index` on `page`: its contents become the item's own stream and its
+/// annotations go, so a render of the page (on a transparent backdrop) is the item's pixels
+/// alone. For previews on a copy of the document; the page's resources stay as they are.
+pub fn isolate_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
+    let a = find(doc, page, index)?;
+    let p = page_list(doc).swap_remove(page);
+    // An item's stream starts from the page's initial graphics state: `place_tagged` closes
+    // everything drawn before it, so it draws the same on its own.
+    doc.update_dict(p.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(a.obj)]));
+        d.remove(b"Annots");
+    })?;
+    Ok(())
+}
+
 /// The Type 3 fonts an Arabic item's stream shows text with. Each item has its own (`draw_shaped`
 /// names them so), so they go when the item is replaced or deleted.
 fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
