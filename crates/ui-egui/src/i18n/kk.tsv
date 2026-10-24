@@ -2487,6 +2487,21 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	By the standard device formulas; profiles are not applied.	Құрылғылардың стандартты формулаларымен; профильдер қолданылмайды.
+	CMYK	CMYK
+	Comments and form fields	Түсініктемелер мен пішін өрістері
+	Convert colours	Түстерді түрлендіру
+	Convert colours…	Түстерді түрлендіру…
+	Convert to	Мынаған түрлендіру
+	Converted {c} colours and {i} pictures on {p} pages	{p} бетте {c} түс және {i} сурет түрлендірілді
+	Grayscale	Сұр реңктер
+	Nothing on those pages needed converting	Бұл беттерде түрлендіретін ештеңе болмады
+	Pictures too	Суреттер де
+	Preserve black	Қараны сақтау
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	таза қара қоспа емес, 100% K немесе 0 сұр болып қалады
+	re-encoded in the target space; JPEGs stay JPEG	мақсатты кеңістікте қайта кодталады; JPEG JPEG болып қалады
+	their appearances as well as the page	олардың көрінісі және бет
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз

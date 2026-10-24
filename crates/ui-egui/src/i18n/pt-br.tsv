@@ -2503,6 +2503,21 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	By the standard device formulas; profiles are not applied.	Pelas fórmulas padrão de dispositivo; perfis não são aplicados.
+	CMYK	CMYK
+	Comments and form fields	Comentários e campos de formulário
+	Convert colours	Converter cores
+	Convert colours…	Converter cores…
+	Convert to	Converter para
+	Converted {c} colours and {i} pictures on {p} pages	{c} cores e {i} imagens convertidas em {p} páginas
+	Grayscale	Tons de cinza
+	Nothing on those pages needed converting	Nada nessas páginas precisava de conversão
+	Pictures too	Imagens também
+	Preserve black	Preservar o preto
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	o preto puro fica em 100% K ou cinza 0 em vez de uma mistura
+	re-encoded in the target space; JPEGs stay JPEG	recodificadas no espaço de destino; JPEGs continuam JPEG
+	their appearances as well as the page	suas aparências além da página
 	Attach a file…	Anexar um arquivo…
 	Delete attachment	Excluir anexo
 	Attaching files is not available on the web yet	Anexar arquivos ainda não está disponível na web

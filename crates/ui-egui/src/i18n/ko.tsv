@@ -2757,6 +2757,21 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	By the standard device formulas; profiles are not applied.	표준 장치 공식을 사용하며, 프로파일은 적용되지 않습니다.
+	CMYK	CMYK
+	Comments and form fields	주석 및 양식 필드
+	Convert colours	색상 변환
+	Convert colours…	색상 변환…
+	Convert to	변환 대상
+	Converted {c} colours and {i} pictures on {p} pages	{p}페이지의 색상 {c}개와 이미지 {i}개를 변환했습니다
+	Grayscale	회색조
+	Nothing on those pages needed converting	해당 페이지에는 변환할 항목이 없습니다
+	Pictures too	이미지도 포함
+	Preserve black	검정 유지
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	순수한 검정은 혼합색 대신 100% K 또는 회색 0으로 유지됩니다
+	re-encoded in the target space; JPEGs stay JPEG	대상 공간에서 다시 인코딩되며, JPEG는 JPEG로 유지됩니다
+	their appearances as well as the page	페이지뿐 아니라 모양도 포함
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

@@ -857,6 +857,7 @@ impl Automation {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
                 self.apply(&a, edit)?
             }
+            "doc_convert_colours" => self.convert_colours(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
@@ -988,6 +989,34 @@ impl Automation {
             .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
         let pages = &self.doc(a)?.info.pages;
         Ok(json!({ "bookmarks": nest_rows(&page.rows, pages), "next": page.next, "truncated": page.truncated }))
+    }
+
+    /// Print production ▸ Convert colours: every colour on the pages in gray, rgb or cmyk.
+    fn convert_colours(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let target = match a.opt_str("to")?.unwrap_or("gray") {
+            "gray" | "grayscale" => pdfcraft_engine::ColourTarget::Gray,
+            "rgb" => pdfcraft_engine::ColourTarget::Rgb,
+            "cmyk" => pdfcraft_engine::ColourTarget::Cmyk,
+            other => return Err(ToolError::InvalidArgs(format!("unknown target {other:?} (gray, rgb, cmyk)"))),
+        };
+        let settings = pdfcraft_engine::ConvertColours {
+            target,
+            preserve_black: a.opt_bool("preserve_black")?.unwrap_or(true),
+            images: a.opt_bool("images")?.unwrap_or(true),
+            annotations: a.opt_bool("annotations")?.unwrap_or(false),
+        };
+        let id = self.doc(a)?.id;
+        let found = self.session.count_colours(id, &pages, &settings);
+        if found.colours == 0 && found.images == 0 {
+            return Ok(json!({ "colours": 0, "images": 0, "pages": 0 }));
+        }
+        let r = self.apply(a, Edit::ConvertColours { pages, settings })?;
+        Ok(json!({ "colours": found.colours, "images": found.images, "pages": found.pages, "undo": r["undo"] }))
     }
 
     fn doc(&self, a: &Args) -> Result<&Document> {

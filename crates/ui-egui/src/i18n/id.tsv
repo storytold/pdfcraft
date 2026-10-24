@@ -2758,6 +2758,21 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	By the standard device formulas; profiles are not applied.	Menurut rumus perangkat standar; profil tidak diterapkan.
+	CMYK	CMYK
+	Comments and form fields	Komentar dan kolom formulir
+	Convert colours	Konversi warna
+	Convert colours…	Konversi warna…
+	Convert to	Konversi ke
+	Converted {c} colours and {i} pictures on {p} pages	Mengonversi {c} warna dan {i} gambar pada {p} halaman
+	Grayscale	Skala abu-abu
+	Nothing on those pages needed converting	Tidak ada yang perlu dikonversi di halaman-halaman itu
+	Pictures too	Gambar juga
+	Preserve black	Pertahankan hitam
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	hitam murni tetap 100% K atau abu-abu 0, bukan campuran
+	re-encoded in the target space; JPEGs stay JPEG	dienkode ulang di ruang target; JPEG tetap JPEG
+	their appearances as well as the page	tampilannya serta halamannya
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

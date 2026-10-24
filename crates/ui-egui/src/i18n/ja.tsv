@@ -2489,6 +2489,21 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	By the standard device formulas; profiles are not applied.	標準のデバイス式で変換します。プロファイルは適用しません。
+	CMYK	CMYK
+	Comments and form fields	注釈とフォームフィールド
+	Convert colours	カラーを変換
+	Convert colours…	カラーを変換…
+	Convert to	変換先
+	Converted {c} colours and {i} pictures on {p} pages	{p} ページで {c} 色と {i} 個の画像を変換しました
+	Grayscale	グレースケール
+	Nothing on those pages needed converting	これらのページには変換が必要なものはありません
+	Pictures too	画像も
+	Preserve black	黒を保持
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	純粋な黒は混色にせず K 100% またはグレー 0 のままにします
+	re-encoded in the target space; JPEGs stay JPEG	変換先の色空間で再エンコード。JPEG は JPEG のまま
+	their appearances as well as the page	ページに加えてその表示
 	Attach a file…	ファイルを添付…
 	Delete attachment	添付ファイルを削除
 	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません

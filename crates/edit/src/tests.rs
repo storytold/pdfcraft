@@ -6073,6 +6073,67 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// Convert colours: device, ICC-based and separation colours in page content
+/// and forms become the target's operators; black is preserved; patterns stay; a second run
+/// finds nothing.
+#[test]
+fn colours_are_converted_to_gray_rgb_and_cmyk() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    // An ICCBased RGB space and a spot colour (Separation to CMYK, Type 2 tint).
+    let mut icc = Dict::new();
+    icc.set(b"N".to_vec(), Object::Int(3));
+    let icc_ref = doc.add(Object::Stream(Stream::flate(icc, b"not a real profile")));
+    let mut fun = Dict::new();
+    fun.set(b"FunctionType".to_vec(), Object::Int(2));
+    fun.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    fun.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+    fun.set(b"C1".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(1), Object::Int(0)]));
+    fun.set(b"N".to_vec(), Object::Int(1));
+    let mut cs = Dict::new();
+    cs.set(b"CS0".to_vec(), Object::Array(vec![Object::name("ICCBased"), Object::Ref(icc_ref)]));
+    cs.set(b"Spot".to_vec(), Object::Array(vec![Object::name("Separation"), Object::name("Red"), Object::name("DeviceCMYK"), Object::Dict(fun)]));
+    let mut res = Dict::new();
+    res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+    let content = b"1 0 0 rg 10 10 50 50 re f 0 0 1 RG 0 0 m 100 100 l S /CS0 cs 0 1 0 scn 0 0 20 20 re f /Spot cs 1 scn 30 30 20 20 re f 0 g 60 60 10 10 re f 0.5 g 70 70 5 5 re f";
+    let c = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(c));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    // Grayscale.
+    let mut gray = doc.clone();
+    let done = convert_colours(&mut gray, &[0], &ConvertColours::default(), &mut no_images).unwrap();
+    assert_eq!((done.colours, done.pages), (6, 1), "{done:?}");
+    let t = flat(&page_content_bytes(&gray, 0));
+    assert!(t.contains("0.299 g 10 10 50 50 re f"), "red → its luma: {t}");
+    assert!(t.contains("0.114 G 0 0 m 100 100 l S"), "blue stroke: {t}");
+    assert!(t.contains("0 g 0 1 0 scn") || t.contains("0.587 g 0 0 20 20 re f"), "ICC green through its space: {t}");
+    assert!(t.contains("0.587 g 0 0 20 20 re f"), "{t}");
+    assert!(t.contains("0.299 g 30 30 20 20 re f"), "the spot's tint through its CMYK alternate (0 1 1 0 = red): {t}");
+    assert!(t.contains("0 g 60 60 10 10 re f") && t.contains("0.5 g 70 70 5 5 re f"), "gray stays gray: {t}");
+    assert!(!t.contains("/CS0 cs") && !t.contains("/Spot cs"), "named spaces are gone: {t}");
+    assert_eq!(convert_colours(&mut gray, &[0], &ConvertColours::default(), &mut no_images).unwrap().colours, 0, "nothing left");
+    // CMYK with black preserved; without, black is still 100% K by the formula.
+    let mut cmyk = doc.clone();
+    let s = ConvertColours { target: ColourTarget::Cmyk, ..ConvertColours::default() };
+    convert_colours(&mut cmyk, &[0], &s, &mut no_images).unwrap();
+    let t = flat(&page_content_bytes(&cmyk, 0));
+    assert!(t.contains("0 1 1 0 k 10 10 50 50 re f"), "red: {t}");
+    assert!(t.contains("0 0 0 1 k 60 60 10 10 re f"), "black preserved: {t}");
+    assert!(t.contains("0 0 0 0.5 k 70 70 5 5 re f"), "gray 0.5 → 50% K: {t}");
+    // RGB: the spot becomes its red.
+    let mut rgbd = doc.clone();
+    convert_colours(&mut rgbd, &[0], &ConvertColours { target: ColourTarget::Rgb, ..ConvertColours::default() }, &mut no_images).unwrap();
+    let t = flat(&page_content_bytes(&rgbd, 0));
+    assert!(t.contains("1 0 0 rg 30 30 20 20 re f"), "{t}");
+    assert!(t.contains("1 0 0 rg 10 10 50 50 re f"), "already RGB, kept: {t}");
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.

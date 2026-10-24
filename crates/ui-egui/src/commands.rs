@@ -198,6 +198,7 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::Protect);
             }
             "edit.attach" => self.attach_file_dialog(),
+            "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColours),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");

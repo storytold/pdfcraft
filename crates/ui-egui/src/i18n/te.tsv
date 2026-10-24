@@ -2398,6 +2398,21 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	By the standard device formulas; profiles are not applied.	ప్రామాణిక పరికర సూత్రాలతో; ప్రొఫైల్‌లు వర్తించవు.
+	CMYK	CMYK
+	Comments and form fields	వ్యాఖ్యలు మరియు ఫారమ్ ఫీల్డ్‌లు
+	Convert colours	రంగులను మార్చు
+	Convert colours…	రంగులను మార్చు…
+	Convert to	దీనికి మార్చు
+	Converted {c} colours and {i} pictures on {p} pages	{p} పేజీలలో {c} రంగులు మరియు {i} చిత్రాలు మార్చబడ్డాయి
+	Grayscale	గ్రేస్కేల్
+	Nothing on those pages needed converting	ఆ పేజీలలో మార్చవలసినది ఏదీ లేదు
+	Pictures too	చిత్రాలు కూడా
+	Preserve black	నలుపును ఉంచు
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	స్వచ్ఛమైన నలుపు మిశ్రమం కాకుండా 100% K లేదా బూడిద 0గా ఉంటుంది
+	re-encoded in the target space; JPEGs stay JPEG	లక్ష్య స్థలంలో మళ్లీ ఎన్‌కోడ్ చేయబడతాయి; JPEGలు JPEGగానే ఉంటాయి
+	their appearances as well as the page	వాటి రూపం మరియు పేజీ
 	Attach a file…	ఫైల్‌ను జోడించు…
 	Delete attachment	జోడింపును తొలగించు
 	Attaching files is not available on the web yet	వెబ్‌లో ఫైల్‌లను జోడించడం ఇంకా అందుబాటులో లేదు

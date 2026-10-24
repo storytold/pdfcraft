@@ -2701,6 +2701,21 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	By the standard device formulas; profiles are not applied.	Con le formule standard dei dispositivi; i profili non vengono applicati.
+	CMYK	CMYK
+	Comments and form fields	Commenti e campi modulo
+	Convert colours	Converti colori
+	Convert colours…	Converti colori…
+	Convert to	Converti in
+	Converted {c} colours and {i} pictures on {p} pages	Convertiti {c} colori e {i} immagini in {p} pagine
+	Grayscale	Scala di grigi
+	Nothing on those pages needed converting	Niente in queste pagine richiedeva conversione
+	Pictures too	Anche le immagini
+	Preserve black	Mantieni il nero
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	il nero puro resta al 100% K o grigio 0 invece di una miscela
+	re-encoded in the target space; JPEGs stay JPEG	ricodificate nello spazio di destinazione; i JPEG restano JPEG
+	their appearances as well as the page	i loro aspetti oltre alla pagina
 	Attach a file…	Allega un file…
 	Delete attachment	Elimina allegato
 	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web

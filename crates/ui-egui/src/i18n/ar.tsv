@@ -2766,6 +2766,21 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	By the standard device formulas; profiles are not applied.	بالمعادلات القياسية للأجهزة؛ لا تُطبَّق ملفات التعريف.
+	CMYK	CMYK
+	Comments and form fields	التعليقات وحقول النماذج
+	Convert colours	تحويل الألوان
+	Convert colours…	تحويل الألوان…
+	Convert to	التحويل إلى
+	Converted {c} colours and {i} pictures on {p} pages	تم تحويل {c} لونًا و{i} صورة في {p} صفحة
+	Grayscale	تدرج الرمادي
+	Nothing on those pages needed converting	لا شيء في تلك الصفحات يحتاج إلى تحويل
+	Pictures too	الصور أيضًا
+	Preserve black	الحفاظ على الأسود
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	يبقى الأسود الخالص 100% K أو رمادي 0 بدلًا من مزيج
+	re-encoded in the target space; JPEGs stay JPEG	يُعاد ترميزها في الفضاء الهدف؛ تبقى صور JPEG بصيغة JPEG
+	their appearances as well as the page	مظاهرها إلى جانب الصفحة
 	Attach a file…	إرفاق ملف…
 	Delete attachment	حذف المرفق
 	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد

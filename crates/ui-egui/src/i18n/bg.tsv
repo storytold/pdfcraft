@@ -2452,6 +2452,21 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	By the standard device formulas; profiles are not applied.	По стандартните формули за устройства; профили не се прилагат.
+	CMYK	CMYK
+	Comments and form fields	Коментари и полета на формуляри
+	Convert colours	Преобразуване на цветовете
+	Convert colours…	Преобразуване на цветовете…
+	Convert to	Преобразуване в
+	Converted {c} colours and {i} pictures on {p} pages	Преобразувани {c} цвята и {i} изображения на {p} страници
+	Grayscale	Нюанси на сивото
+	Nothing on those pages needed converting	Нищо на тези страници не се нуждаеше от преобразуване
+	Pictures too	И изображенията
+	Preserve black	Запазване на черното
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	чистото черно остава 100% K или сиво 0 вместо смес
+	re-encoded in the target space; JPEGs stay JPEG	прекодирани в целевото пространство; JPEG остават JPEG
+	their appearances as well as the page	техният вид, както и страницата
 	Attach a file…	Прикачване на файл…
 	Delete attachment	Изтриване на прикачения файл
 	Attaching files is not available on the web yet	Прикачването на файлове още не е налично в уеб версията

@@ -2645,6 +2645,21 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+	By the standard device formulas; profiles are not applied.	Con las fórmulas estándar de dispositivo; no se aplican perfiles.
+	CMYK	CMYK
+	Comments and form fields	Comentarios y campos de formulario
+	Convert colours	Convertir colores
+	Convert colours…	Convertir colores…
+	Convert to	Convertir a
+	Converted {c} colours and {i} pictures on {p} pages	Se convirtieron {c} colores y {i} imágenes en {p} páginas
+	Grayscale	Escala de grises
+	Nothing on those pages needed converting	Nada en esas páginas necesitaba conversión
+	Pictures too	Las imágenes también
+	Preserve black	Conservar el negro
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	el negro puro se queda en K 100 % o gris 0 en vez de una mezcla
+	re-encoded in the target space; JPEGs stay JPEG	recodificadas en el espacio de destino; los JPEG siguen siendo JPEG
+	their appearances as well as the page	sus apariencias además de la página
 	Attach a file…	Adjuntar un archivo…
 	Delete attachment	Eliminar adjunto
 	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web

@@ -2755,6 +2755,21 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	By the standard device formulas; profiles are not applied.	Theo các công thức thiết bị tiêu chuẩn; không áp dụng cấu hình màu.
+	CMYK	CMYK
+	Comments and form fields	Bình luận và các trường biểu mẫu
+	Convert colours	Chuyển đổi màu
+	Convert colours…	Chuyển đổi màu…
+	Convert to	Chuyển sang
+	Converted {c} colours and {i} pictures on {p} pages	Đã chuyển đổi {c} màu và {i} hình ảnh trên {p} trang
+	Grayscale	Thang độ xám
+	Nothing on those pages needed converting	Không có gì trên các trang đó cần chuyển đổi
+	Pictures too	Cả hình ảnh
+	Preserve black	Giữ nguyên màu đen
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	màu đen thuần giữ ở 100% K hoặc xám 0 thay vì màu pha trộn
+	re-encoded in the target space; JPEGs stay JPEG	được mã hóa lại trong không gian đích; ảnh JPEG vẫn là JPEG
+	their appearances as well as the page	cả giao diện hiển thị của chúng lẫn trang
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

@@ -2488,6 +2488,21 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	By the standard device formulas; profiles are not applied.	A szabványos eszközképletek szerint; profilok nincsenek alkalmazva.
+	CMYK	CMYK
+	Comments and form fields	Megjegyzések és űrlapmezők
+	Convert colours	Színek átalakítása
+	Convert colours…	Színek átalakítása…
+	Convert to	Átalakítás erre
+	Converted {c} colours and {i} pictures on {p} pages	{c} szín és {i} kép átalakítva {p} oldalon
+	Grayscale	Szürkeárnyalat
+	Nothing on those pages needed converting	Ezeken az oldalakon nem kellett semmit átalakítani
+	Pictures too	A képek is
+	Preserve black	Fekete megtartása
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	a tiszta fekete 100% K vagy 0 szürke marad keverék helyett
+	re-encoded in the target space; JPEGs stay JPEG	újrakódolva a célszíntérben; a JPEG JPEG marad
+	their appearances as well as the page	a megjelenésük és az oldal is
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el

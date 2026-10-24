@@ -1036,6 +1036,10 @@ pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
     clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
 };
+mod colour;
+pub mod convert_colours;
+mod page_streams;
+pub use convert_colours::{ColourTarget, ConvertColours, Converted as ColoursConverted, ImageRecolour, convert_colours};
 pub mod added;
 pub use added::{
     Added, AddedImage, AddedText, Align, Content, Family, MarkerScan, add_content, delete_content, first_undrawable, list_added, scan_markers,

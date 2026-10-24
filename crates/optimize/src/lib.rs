@@ -34,7 +34,7 @@ pub use audit::{SpaceCategory, SpaceUse, audit_space};
 use pdfcraft_cos::{Dict, Document, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};
 
-pub use images::effective_resolutions;
+pub use images::{ImageTarget, effective_resolutions, recolour_image};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
