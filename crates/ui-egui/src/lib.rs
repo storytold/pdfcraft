@@ -533,6 +533,9 @@ pub type FailedInbox = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
 pub enum OsEvent {
     /// Open these files.
     Open(Vec<String>),
+    /// Add these files to Combine files and show it (`pdfcraft --combine`, File Explorer's
+    /// "Combine files in PdfCraft", #585).
+    Combine(Vec<String>),
     /// Quit (the Dock's Quit, logging out), asking about unsaved changes first.
     Quit,
 }
@@ -3519,8 +3522,16 @@ impl eframe::App for PdfCraftApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
+                // Combine from File Explorer's PDF menu, also handed to the running app: the dialog
+                // it opens has to be seen, so the window comes to the front as for Open.
+                #[cfg(not(target_arch = "wasm32"))]
+                OsEvent::Combine(paths) => {
+                    self.combine_paths(&paths);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
                 #[cfg(target_arch = "wasm32")]
-                OsEvent::Open(_) => {}
+                OsEvent::Open(_) | OsEvent::Combine(_) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }

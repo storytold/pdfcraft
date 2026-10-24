@@ -2544,6 +2544,22 @@ impl PdfCraftApp {
         let _ = recursive;
     }
 
+    /// Add the files at `paths` to the Combine files list and show it: `pdfcraft --combine` and
+    /// File Explorer's "Combine files in PdfCraft" (#585), where each selected file arrives as a
+    /// launch of its own and the running PdfCraft collects them here. Nothing to add shows the
+    /// tab all the same.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn combine_paths(&mut self, paths: &[String]) {
+        // A file still opening from before (another launch's Open) opens in the background, so
+        // finishing doesn't hide the tab shown here; a later Open still comes to the front.
+        for pending in &mut self.pending_opens {
+            pending.activate = false;
+        }
+        self.open_combine_tab();
+        let paths: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+        self.use_paths(crate::files::FilePurpose::Combine, &paths);
+    }
+
     /// Add the PDFs, images and text files in `dir` to the Combine files list, as one undo step.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn add_folder_to_combine(&mut self, dir: &std::path::Path, recursive: bool) {

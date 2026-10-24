@@ -234,10 +234,26 @@ if (($secure[0] -split ';') -notcontains 'INSTALLPDFCONTEXTMENU') { throw "INSTA
 $pdfCheckbox = Read-Row 'SELECT `Type`, `Property`, `Text` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''PdfContextMenu''' 3
 Assert-Equal $pdfCheckbox[0] 'CheckBox' 'Welcome PDF context-menu control'
 Assert-Equal $pdfCheckbox[1] 'INSTALLPDFCONTEXTMENU' 'Welcome PDF context-menu property'
-if ($pdfCheckbox[2] -notmatch 'Edit with PdfCraft') { throw "Welcome PDF context-menu label: '$($pdfCheckbox[2])'" }
+if ($pdfCheckbox[2] -notmatch '&Edit' -or $pdfCheckbox[2] -notmatch 'Combine files') { throw "Welcome PDF context-menu label: '$($pdfCheckbox[2])'" }
 $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
+# "Combine files in PdfCraft" (#585): in the PDF menu's component, so the one switch covers both
+# verbs. Each selected file starts `pdfcraft --combine "<file>"` (Document), and the running
+# PdfCraft collects them into its Combine files tab.
+$combineKey = 'Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine'
+$combineMenu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $combineKey + ''' AND `Name` IS NULL') 3
+Assert-Equal $combineMenu[0] 'Combine files in PdfCraft' 'Combine verb label'
+Assert-Equal $combineMenu[1] 'PdfcraftPdfContextMenu' 'Combine verb component'
+Assert-Equal $combineMenu[2] '2' 'Combine verb HKLM root'
+foreach ($value in @(@('Icon', '"[#PdfcraftExe]",0'), @('MultiSelectModel', 'Document'))) {
+  $row = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $combineKey + ''' AND `Name` = ''' + $value[0] + '''') 2
+  Assert-Equal $row[0] $value[1] "Combine verb $($value[0])"
+  Assert-Equal $row[1] 'PdfcraftPdfContextMenu' "Combine verb $($value[0]) component"
+}
+$combineCommand = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $combineKey + '\command''') 2
+Assert-Equal $combineCommand[0] '"[#PdfcraftExe]" --combine "%1"' 'Combine verb command'
+Assert-Equal $combineCommand[1] 'PdfcraftPdfContextMenu' 'Combine verb command component'
 
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.
@@ -269,4 +285,4 @@ $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF (Edit, Combine files) and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

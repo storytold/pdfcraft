@@ -119,8 +119,8 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   this.
 - `installer-ui.wxs` supplies native welcome, maintenance, progress, files-in-use and outcome
   dialogs. Full UI confirms success with Finish; failures and cancellations have distinct messages.
-  The welcome dialog has a "Create a desktop shortcut" checkbox and an "Edit with PdfCraft"
-  right-click menu checkbox, both ticked by default. `/qn` and `/qb` stay unattended and create
+  The welcome dialog has a "Create a desktop shortcut" checkbox and an "Add Edit and Combine
+  files to the right-click menu of PDF files" checkbox, both ticked by default. `/qn` and `/qb` stay unattended and create
   both unless `INSTALLDESKTOPSHORTCUT=0` or `INSTALLPDFCONTEXTMENU=0` is passed;
   `INSTALLIMAGECONTEXTMENU=0` (no checkbox) leaves out the image menu. An update (the launcher runs
   `msiexec /passive` with no properties) keeps the desktop shortcut only if `PdfCraft.lnk` is still
@@ -135,7 +135,10 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   limit for a `Document` verb) start one `pdfcraft.exe "<file>"` each, and the single-instance
   hand-off opens them as tabs. On Windows 11 it is under "Show more options"; a first-level entry
   needs an `IExplorerCommand` handler and package identity (a sparse MSIX package), which the MSI
-  doesn't have.
+  doesn't have. "Combine files in PdfCraft" (#585) is a second verb in the same component,
+  `PdfCraft.Combine`, running `pdfcraft --combine "<file>"` once per selected file; the
+  single-instance hand-off sends them with `"combine": true`, and the running app adds them to
+  its Combine files tab (`OsEvent::Combine`). Both verbs come and go with `INSTALLPDFCONTEXTMENU`.
 - The image right-click entry (#190) is the same kind of verb, `PdfCraft.CreatePdf`, for ten image
   types, in its own component (`PdfcraftImageContextMenu`) since it became optional. Its rows moved
   out of `PdfcraftApp`; that's safe because `MajorUpgrade` removes the old version before installing

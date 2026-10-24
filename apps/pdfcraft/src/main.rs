@@ -10,6 +10,8 @@
 //!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
 //!  --page-gaps on|off  --default-page-gaps on|off
 //!  --combine-view grid|list  --combine-zoom 60..200`
+//! `--combine files…` adds the files to the Combine files tab (File Explorer's "Combine files in
+//! PdfCraft", #585), of the PdfCraft already running when there is one.
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
@@ -218,6 +220,7 @@ fn main() -> eframe::Result {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
     let mut create_images = false;
+    let mut combine = false;
     let mut new_window = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -227,6 +230,9 @@ fn main() -> eframe::Result {
             "-h" | "--help" => return print_and_exit(USAGE),
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
+            // File Explorer's "Combine files in PdfCraft" (#585): the files go to the Combine
+            // files tab, of the running PdfCraft when there is one.
+            "--combine" => combine = true,
             "--new-window" => new_window = true,
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
@@ -260,13 +266,13 @@ fn main() -> eframe::Result {
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
     let files = single_instance::absolute(&files);
-    let instance = match single_instance::claim(&files, may_hand_off) {
+    let instance = match single_instance::claim(&files, may_hand_off, combine) {
         single_instance::Claim::HandedOff => return Ok(()),
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
     };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, integrated, window_controls };
+    let launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -370,6 +376,8 @@ struct Launch {
     options: Vec<(String, String)>,
     control_file: Option<String>,
     create_images: bool,
+    /// `--combine`: the files go to the Combine files tab.
+    combine: bool,
     integrated: bool,
     /// The window buttons the app draws, when the desktop leaves the frame to it.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
@@ -393,7 +401,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, integrated, window_controls } = launch;
+    let Launch { files, options, control_file, create_images, combine, integrated, window_controls } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
@@ -463,6 +471,9 @@ fn app_creator<'a>(
             if let Err(e) = app.begin_image_import_paths(&files) {
                 app.notify(e);
             }
+        } else if combine {
+            app.reopen_last_files(&[]);
+            app.combine_paths(&files);
         } else {
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).

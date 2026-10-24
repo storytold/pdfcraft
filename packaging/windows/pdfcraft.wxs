@@ -6,10 +6,10 @@
 
   Per-machine install into Program Files, a Start Menu shortcut, a desktop shortcut (on by default,
   optional, and an update keeps it only if it is still there), an App Paths entry, PdfCraft registered as a PDF handler (offered under "Open with"
-  and in Default apps, never forced as the default), "Edit with PdfCraft" on PDF files'
-  right-click menu and "Create PDF with PdfCraft…" on image files' right-click menu (both on by
-  default, optional, and an update keeps the installed version's choice). Files opened with
-  PdfCraft arrive on its command line.
+  and in Default apps, never forced as the default), "Edit with PdfCraft" and "Combine files in
+  PdfCraft" on PDF files' right-click menu and "Create PDF with PdfCraft…" on image files'
+  right-click menu (both menus on by default, optional, and an update keeps the installed
+  version's choice). Files opened with PdfCraft arrive on its command line.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
@@ -159,6 +159,13 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="Icon" Value="&quot;[#PdfcraftExe]&quot;,0" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <!-- "Combine files in PdfCraft" (#585), on the same switch: each selected file starts one
+             launch of pdfcraft.exe with the combine option, and the running PdfCraft collects them into its Combine
+             files tab (single_instance). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine" Value="Combine files in PdfCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine" Name="Icon" Value="&quot;[#PdfcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine" Name="MultiSelectModel" Value="Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine\command" Value="&quot;[#PdfcraftExe]&quot; --combine &quot;%1&quot;" Type="string" />
       </Component>
 
       <!-- Image context menu (#190): "Create PDF with PdfCraft…" opens the DPI chooser, without
