@@ -262,13 +262,16 @@ pub struct LineEditor {
 pub struct Extras {
     pub underline: bool,
     pub line_spacing: f64,
+    /// Space between paragraphs in points (a line break in the box starts one); 0 = the
+    /// default, half the size.
+    pub paragraph_spacing: f64,
     pub char_spacing: f64,
     pub scale: f64,
 }
 
 impl Default for Extras {
     fn default() -> Self {
-        Extras { underline: false, line_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
+        Extras { underline: false, line_spacing: 0.0, paragraph_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
     }
 }
 
@@ -337,6 +340,7 @@ impl LineEditor {
             underline: (self.extras.underline != self.extras0.underline).then_some(self.extras.underline),
             line_spacing: (self.extras.line_spacing != self.extras0.line_spacing && self.extras.line_spacing > 0.0)
                 .then_some(self.extras.line_spacing),
+            paragraph_spacing: (self.extras.paragraph_spacing != self.extras0.paragraph_spacing).then_some(self.extras.paragraph_spacing),
             char_spacing: (self.extras.char_spacing != self.extras0.char_spacing).then_some(self.extras.char_spacing),
             scale: (self.extras.scale != self.extras0.scale).then_some(self.extras.scale),
             ..Default::default()

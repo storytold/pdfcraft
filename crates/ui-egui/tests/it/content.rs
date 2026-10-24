@@ -667,9 +667,13 @@ fn format_text_rows_line_up_and_fit_the_panel() {
         assert!((middle(size) - middle(other)).abs() < 0.5, "the size list ({size:?}) is centred with {label} ({other:?})");
     }
     assert_eq!(size.height(), font.height(), "the font and size lists are the same height");
-    // Line and paragraph spacing; scale and character spacing with their lists.
-    let line = [combo(&h, "Auto"), combo(&h, "0")];
-    assert!((middle(line[0]) - middle(line[1])).abs() < 0.5, "{line:?}");
+    // Line spacing, and paragraph spacing, scale and character spacing with their lists.
+    let line = combo(&h, "Auto");
+    let paragraph: Vec<egui::Rect> = h.query_all_by_label("Paragraph spacing").map(|n| n.rect()).collect();
+    assert_eq!(paragraph.len(), 2, "the paragraph spacing field and its arrow: {paragraph:?}");
+    for r in &paragraph {
+        assert!((middle(line) - middle(*r)).abs() < 0.5, "{line:?} {paragraph:?}");
+    }
     // Each: its number field and the arrow that lists common values.
     let scale_row: Vec<egui::Rect> =
         ["Horizontal scale", "Character spacing"].iter().flat_map(|l| h.query_all_by_label(l).map(|n| n.rect())).collect();
@@ -677,7 +681,7 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     for r in &scale_row {
         assert!((middle(*r) - middle(scale_row[0])).abs() < 0.5, "{scale_row:?}");
     }
-    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row) {
+    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row).chain(paragraph) {
         assert!(r.right() <= font.right() + 0.5, "{r:?} reaches past the panel ({font:?})");
     }
 }

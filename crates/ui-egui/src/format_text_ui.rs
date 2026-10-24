@@ -3,7 +3,7 @@
 //! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
 //! fonts already on its page and the spacing controls) and added text (the standard families,
 //! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
-//! superscript and subscript, paragraph spacing, or line spacing and scale for added text) is shown
+//! superscript and subscript, or line and paragraph spacing and scale for added text) is shown
 //! disabled and says so.
 //!
 //! The icons are Lucide's (AGENTS.md §1); only the arrangement follows Acrobat.
@@ -51,6 +51,7 @@ const SIZES: [f64; 14] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24
 const LINE_SPACINGS: [f64; 7] = [1.0, 1.15, 1.2, 1.5, 2.0, 2.5, 3.0];
 const SCALES: [f64; 8] = [50.0, 75.0, 90.0, 100.0, 110.0, 125.0, 150.0, 200.0];
 const CHAR_SPACINGS: [f64; 8] = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0];
+const PARAGRAPH_SPACINGS: [f64; 5] = [0.0, 6.0, 12.0, 18.0, 24.0];
 /// A row's height: the tallest control in it (the 30 pt icon buttons). Every control is centred
 /// on the row, whatever its own height, so lists, swatches and buttons line up (#3037).
 const ROW: f32 = 30.0;
@@ -64,6 +65,7 @@ const PRESET_LIST: f32 = 22.0;
 /// What can be typed: horizontal scale in percent, character spacing in points.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
 const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
+const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=72.0;
 
 /// A number as the lists show it: no trailing zeros ("1.2", "100", "-0.5").
 fn number(v: f64) -> String {
@@ -213,16 +215,10 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                 }
             });
             ui.add_space(8.0);
-            ui.add_enabled_ui(false, |ui| {
-                labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
-                let tip = format!("{} — {}", tl!("Paragraph spacing"), tl!("Planned"));
-                let _ = egui::ComboBox::from_id_salt("format-paragraph-spacing")
-                    .selected_text("0")
-                    .width(half)
-                    .show_ui(ui, |_| {})
-                    .response
-                    .on_disabled_hover_text(tip);
-            });
+            let label = labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
+            let spacing = Number { value: &mut e.paragraph_spacing, range: PARAGRAPH_SPACING_RANGE, speed: 0.5, suffix: " pt" };
+            number_with_presets(ui, spacing, &PARAGRAPH_SPACINGS, half, (label.id, tl!("Paragraph spacing")))
+                .on_hover_text(tl!("Between paragraphs: press Enter in the box to start one"));
         });
     });
     // Any value the engine takes can be typed; the lists hold the common ones. Added text has
@@ -296,12 +292,13 @@ struct Number<'a> {
 
 /// A number field with an arrow beside it that lists common values, in `width` all told: type any
 /// value in its range, or pick one. Both are named by `label`: the icon before them and its text.
-fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width: f32, label: (egui::Id, &str)) {
+/// Returns the field.
+fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width: f32, label: (egui::Id, &str)) -> egui::Response {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let field = egui::DragValue::new(&mut *n.value).range(n.range).speed(n.speed).max_decimals(2).suffix(n.suffix);
         let height = ui.spacing().interact_size.y;
-        ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), height], field).labelled_by(label.0);
+        let field = ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), height], field).labelled_by(label.0);
         let list = icons::button(ui, "chevron-down", PRESET_LIST, false, label.1);
         egui::Popup::menu(&list).show(|ui| {
             for &v in presets {
@@ -311,7 +308,9 @@ fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width:
                 }
             }
         });
-    });
+        field
+    })
+    .inner
 }
 
 /// The text colour as a square swatch that opens the palette.

@@ -6073,6 +6073,41 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// A line break in the edited text keeps a row of its own (the editor's rows); with a paragraph
+/// spacing set, that much more space goes before it. A row the page already had
+/// stays where it was, shifted by the spacing added above it.
+#[test]
+fn paragraph_breaks_get_their_own_spacing() {
+    let baselines = |doc: &Document| -> Vec<f64> { text::text_lines(&reopen(doc), 0).unwrap().iter().map(|l| l.rect[1]).collect() };
+    let gap_after_first = |b: &[f64]| b[0] - b[1];
+    // A one-line source has no row step of its own: 1.5 × the size stands in.
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle::default()).unwrap();
+    let b = baselines(&doc);
+    assert_eq!(b.len(), 2, "{b:?}");
+    assert!((gap_after_first(&b) - 15.0).abs() < 0.5, "the row step alone: {b:?}");
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle { paragraph_spacing: Some(20.0), ..Default::default() })
+        .unwrap();
+    assert!((gap_after_first(&baselines(&doc)) - 35.0).abs() < 0.5, "{:?}", baselines(&doc));
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("First one\nSecond one"), &text::BlockStyle { paragraph_spacing: Some(0.0), ..Default::default() })
+        .unwrap();
+    assert!((gap_after_first(&baselines(&doc)) - 15.0).abs() < 0.5);
+    // Without a break, nothing changes: one paragraph, the ordinary line step.
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td (The quick brown fox) Tj ET");
+    text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some("First one Second one and then some more words to wrap"),
+        &text::BlockStyle { width: Some(90.0), ..Default::default() },
+    )
+    .unwrap();
+    let b = baselines(&doc);
+    assert!(b.len() >= 2 && (gap_after_first(&b) - 12.0).abs() < 0.5, "{b:?}");
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.
@@ -7235,6 +7270,10 @@ fn spaces_after_a_rows_last_word_do_not_move_its_alignment() {
 /// the spaces between its words: the spaces before its first word and after its last are left
 /// out of a stretched row (as before #4199), so the reopened rows stay inside the paragraph and
 /// can be edited again in place.
+///
+/// A line break starts a paragraph, and a paragraph's last row is not stretched, so a row ended
+/// by `\n` is shown as typed, indent and all. The stretched row here ends where the row wraps
+/// instead: the long word after "jugs" doesn't fit on it.
 #[test]
 fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
     let style = text::BlockStyle {
@@ -7246,11 +7285,22 @@ fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
     for typed in ["    Pack my box with five dozen jugs\nof liquor", "    Pack my box with five dozen jugs   \nof liquor"] {
         let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
         text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        let first = lines.iter().find(|l| l.text.contains("Pack")).unwrap();
+        assert!(first.text.starts_with("    Pack my box with five dozen jugs"), "{typed:?}: {:?}", first.text);
+    }
+    for typed in [
+        "    Pack my box with five dozen jugs antidisestablishmentarianism\nof liquor",
+        "    Pack my box with five dozen jugs   antidisestablishmentarianism\nof liquor",
+    ] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
         let mut doc = reopen(&doc);
         let lines = text::text_lines(&doc, 0).unwrap();
         let first = lines.iter().find(|l| l.text.contains("Pack")).unwrap();
         assert_eq!(first.text, "Pack my box with five dozen jugs", "{typed:?}");
         assert!((first.rect[0] - 72.0).abs() < 0.5, "{typed:?}: {:?}", first.rect);
+        assert!((first.rect[2] - 372.0).abs() < 1.0, "a stretched row ends at the margin: {typed:?}: {:?}", first.rect);
         assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{typed:?}: {lines:?}");
         let blocks = text::text_blocks(&doc, 0).unwrap();
         assert_eq!(blocks.len(), 1, "{typed:?}: {blocks:?}");
