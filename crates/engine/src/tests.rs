@@ -9901,6 +9901,11 @@ fn line_weights_off_draws_hairlines_for_the_view_only() {
     assert!(!doc.export_source().config.hairline_strokes, "exports keep the document's widths");
     let hairline = inked_rows(&s);
     assert!((1..=2).contains(&hairline), "a hairline: {hairline} rows");
+    // Read again after the file changed on disk, the view keeps them hidden.
+    let bytes = s.get(id).unwrap().bytes.clone();
+    s.reload(id, bytes).unwrap();
+    assert!(!s.get(id).unwrap().line_weights_shown(), "still off after a reload");
+    assert_eq!(inked_rows(&s), hairline, "still hairlines after a reload");
 
     assert!(s.set_line_weights(id, true));
     assert_eq!(inked_rows(&s), at_width, "shown again, the line is back at its width");
