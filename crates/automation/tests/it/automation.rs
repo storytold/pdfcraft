@@ -1969,10 +1969,11 @@ fn numbering_pages_through_tools() {
     assert!(matches!(a.call("page_number", &json!({ "doc": doc, "from": 1, "to": 1, "style": "klingon" })), Err(ToolError::InvalidArgs(_))));
 }
 
-/// Checked in Acrobat Pro: it shows one status per reviewer (their latest) and a checkmark only
-/// for the reviewer who set it, and ignores a state reply that isn't hidden. `comment_list`
-/// reports each reviewer's status and who has a checkmark on; the replies written are hidden and
-/// a reviewer's later change replies to their earlier one.
+/// ISO 32000-2 §12.5.6.3: a state is "for the specified user" (`/T`), so there is one status per
+/// reviewer (their latest), and a checkmark ("marked by the user", Table 174) belongs only to the
+/// reviewer who set it. `comment_list` reports each reviewer's status and who has a checkmark on;
+/// the replies written are hidden (a state reply records a state, not a note) and a reviewer's
+/// later change replies to their earlier one.
 #[test]
 fn review_statuses_are_per_reviewer_through_tools() {
     let dir = workdir("statuses");

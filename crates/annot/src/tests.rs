@@ -212,10 +212,11 @@ fn replies_and_status_thread_onto_the_parent() {
     assert_eq!(text(&all[2], b"Contents"), "Accepted set by Bob");
 }
 
-/// Checked in Acrobat Pro: it ignores a state reply that isn't Hidden (no status, no reply, no
-/// review history), and it writes a reviewer's next change in reply to their previous state
-/// reply (ISO 32000-2 §12.5.6.3). Another reviewer's state, and another state model, start their
-/// own chain on the comment.
+/// A state reply records a state, not a note (ISO 32000-2 §12.5.6.3: the state is kept "in a
+/// separate text annotation"), so it is written Hidden; a reviewer's next change replies to their
+/// previous state reply ("Additional state changes shall be made by adding text annotations in
+/// reply to the previous reply for a given user"). Another reviewer's state, and another state
+/// model, start their own chain on the comment.
 #[test]
 fn status_and_checkmark_replies_are_hidden_and_chain_per_reviewer() {
     let mut doc = fixture();

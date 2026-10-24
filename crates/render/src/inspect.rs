@@ -509,8 +509,9 @@ fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
 /// A state is the author's own (ISO 32000-2 §12.5.6.3: a state reply updates "the state of the
 /// original annotation for the specified user", `/T`), and a later change replies to that
 /// author's previous state reply rather than to the comment, so a reply whose `/IRT` is another
-/// state reply belongs to the comment that chain starts from. Acrobat writes such chains and
-/// shows one status per reviewer, and a checkmark only for the reviewer who set it.
+/// state reply belongs to the comment that chain starts from ("Additional state changes shall be
+/// made by adding text annotations in reply to the previous reply for a given user"). So there is
+/// one status per reviewer, and a checkmark only for the reviewer who set it.
 pub struct ReviewStates<'a> {
     by_target: HashMap<&'a str, Vec<&'a Annotation>>,
 }
@@ -558,13 +559,14 @@ impl<'a> ReviewStates<'a> {
     }
 
     /// Each reviewer's review status on `target`: their latest, in the order they first set one.
-    /// Empty when nobody set one; a status set back to "None" stays listed, as in Acrobat.
+    /// Empty when nobody set one; a status set back to "None" stays listed, since None is a state
+    /// (ISO 32000-2 Table 174: "The user has indicated nothing about the change").
     pub fn statuses(&self, target: &Annotation) -> Vec<(&'a str, &'a str)> {
         self.by_reviewer(target, false).into_iter().filter_map(|(who, mine)| Some((who, latest(&mine)?.state.as_deref()?))).collect()
     }
 
     /// Whether `author`'s latest checkmark on `target` is "Marked". Checkmarks are each
-    /// reviewer's own: Acrobat shows only the current reviewer's.
+    /// reviewer's own (ISO 32000-2 Table 174: "The annotation has been marked by the user").
     pub fn marked_by(&self, target: &Annotation, author: &str) -> bool {
         let mine: Vec<&Annotation> = self.history(target).iter().copied().filter(|r| r.is_mark() && reviewer(r) == author.trim()).collect();
         latest(&mine).is_some_and(|r| r.state.as_deref() == Some("Marked"))
@@ -2239,7 +2241,7 @@ mod tests {
         }
     }
 
-    /// The states Acrobat showed for the same replies (checked in Acrobat Pro): one status per
+    /// The states these replies set (ISO 32000-2 §12.5.6.3, with synthetic files): one status per
     /// reviewer, their latest, whether or not their changes chain; "None" stays listed; a
     /// checkmark only for the reviewer who set it.
     #[test]
@@ -2248,7 +2250,7 @@ mod tests {
             note("c", None, "Alice", None),
             note("b1", Some("c"), "Bob", Some("Accepted")),
             note("k1", Some("c"), "Carol", Some("Completed")),
-            note("b2", Some("b1"), "Bob", Some("Rejected")), // chained, as Acrobat writes it
+            note("b2", Some("b1"), "Bob", Some("Rejected")), // chained, per §12.5.6.3
             note("r", Some("c"), "Dan", None),               // a reply, not a state
             note("rs", Some("r"), "Dan", Some("Cancelled")), // a state on the reply, not on c
             note("m1", Some("c"), "Bob", Some("Marked")),

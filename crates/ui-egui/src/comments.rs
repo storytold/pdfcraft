@@ -1979,8 +1979,8 @@ pub(crate) fn context_menu(
                     }
                 });
             });
-            // The checkmark of the reviewer using this copy: as in Acrobat, checkmarks are each
-            // reviewer's own.
+            // The checkmark of the reviewer using this copy: checkmarks are each reviewer's own
+            // (ISO 32000-2 Table 174: "The annotation has been marked by the user").
             let marked = pdfcraft_render::ReviewStates::new(&info.annotations).marked_by(a, &prefs.author);
             if ui.add_enabled(allowed, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
@@ -2268,7 +2268,7 @@ pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)
         "Rejected" => Some(("thumbs-down", "Rejected", Color32::from_rgb(0xD3, 0x2F, 0x2F))),
         "Cancelled" => Some(("circle-x", "Cancelled", Color32::from_rgb(0x8E, 0x8E, 0x8E))),
         "Completed" => Some(("check", "Completed", Color32::from_rgb(0x2D, 0x9D, 0x5B))),
-        // A status set back to None stays shown, as in Acrobat.
+        // A status set back to None stays shown: None is a state (ISO 32000-2 Table 174).
         "None" => Some(("minus", "None", Color32::from_rgb(0x8E, 0x8E, 0x8E))),
         _ => None,
     }

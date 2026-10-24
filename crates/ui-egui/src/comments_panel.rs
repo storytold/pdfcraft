@@ -304,7 +304,7 @@ fn card(
     let selected = view.comments.selected == Some(key);
     let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
     // Each reviewer's status, and the checkmark of the reviewer using this copy (prefs.author):
-    // as in Acrobat, checkmarks are each reviewer's own.
+    // checkmarks are each reviewer's own (ISO 32000-2 Table 174, "marked by the user").
     let statuses = states.statuses(a);
     let marked = states.marked_by(a, &prefs.author);
     let replies: Vec<&&Annotation> = thread.iter().collect();
@@ -383,7 +383,8 @@ fn card(
                         widgets::wrapped_text(ui, body, theme::regular(13.0), t.text, !selected);
                     }
                 }
-                // One badge per reviewer, with their name, as Acrobat's list shows them.
+                // One badge per reviewer, with their name: a state is "for the specified user"
+                // (ISO 32000-2 §12.5.6.3).
                 for (who, state) in &statuses {
                     let Some((icon, label, c)) = status_badge(state) else { continue };
                     ui.add_space(4.0);

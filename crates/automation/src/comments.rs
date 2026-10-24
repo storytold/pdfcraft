@@ -218,8 +218,8 @@ impl Automation {
                 };
                 // States are each reviewer's own, and a reviewer's later change replies to their
                 // earlier one (ISO 32000-2 §12.5.6.3). `status` is the latest set by anyone;
-                // `statuses` has each reviewer's latest, as Acrobat lists them. Checkmarks are
-                // each reviewer's own too: `marked_by` names who has one on.
+                // `statuses` has each reviewer's latest (a state is "for the specified user").
+                // Checkmarks are each reviewer's own too: `marked_by` names who has one on.
                 let history = states.history(c);
                 v["status"] = json!(history.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()));
                 v["statuses"] = json!(states.statuses(c).iter().map(|(who, state)| json!({ "author": who, "status": state })).collect::<Vec<_>>());

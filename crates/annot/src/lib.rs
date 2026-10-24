@@ -1799,8 +1799,9 @@ fn reply(
         d.set(b"State".to_vec(), PdfString::text(s.name()));
         d.set(b"StateModel".to_vec(), PdfString::text("Review"));
         d.set(b"Subj".to_vec(), PdfString::text("Status"));
-        // Hidden, as Acrobat writes it: Acrobat ignores a state reply without the Hidden flag,
-        // showing neither the status nor the reply (checked in Acrobat Pro).
+        // Hidden (Table 167, bit 2): the state "is not specified in the annotation itself but in a
+        // separate text annotation" (ISO 32000-2 §12.5.6.3), so this reply is a state record, not
+        // a note, and is neither drawn nor listed as one.
         d.set(b"F".to_vec(), Object::Int(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
         d.set(b"IRT".to_vec(), Object::Ref(last_state_reply(doc, p, parent, author, "Review").unwrap_or(parent)));
     }
@@ -1866,7 +1867,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
 
 /// `author`'s latest `model` state reply about `target` on page `p`, for the next change to reply
 /// to: ISO 32000-2 §12.5.6.3, "Additional state changes shall be made by adding text annotations
-/// in reply to the previous reply for a given user", as Acrobat does. A state reply is about the
+/// in reply to the previous reply for a given user". A state reply is about the
 /// annotation its `/IRT` chain reaches past other state replies; a loop reaches nothing. Each
 /// reply's answer is kept, so a long history is walked once.
 fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, model: &str) -> Option<ObjRef> {
