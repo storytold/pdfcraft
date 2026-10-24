@@ -4,6 +4,9 @@
 //! were and as Chrome draws them. 8-bit data was cut to the rows present, so a short image was
 //! drawn short with its `/SMask` squeezed into those rows: a scanned page's colour layer no
 //! longer met its full-height text mask, and the text came out as a faint ghost.
+//!
+//! 16-bit data with an odd byte count, cut short mid-sample or followed by a stray byte, is
+//! drawn too (patch 68): the odd byte was read as half a sample, and the page failed to render.
 
 use super::{image_cache_pdf, render_first_page, rgb_at};
 
@@ -104,6 +107,26 @@ fn a_short_soft_mask_masks_only_the_rows_it_has() {
     let (image, mask) = (gray("/SMask 6 0 R ", 4), gray("", 2));
     let objects: [(&str, &[u8]); 2] = [(&image, &[0x00; 4]), (&mask, &[0xff, 0x00])];
     assert_eq!(rows(&objects), ["black", "white", "white", "white"]);
+}
+
+/// A 16-bit image whose data stops halfway through a sample is drawn, the incomplete sample
+/// missing like the rows after it, as an incomplete 1-, 2- or 4-bit sample is (patch 68).
+/// Reading the sample's second byte past the end of the data panicked, and the page failed.
+#[test]
+fn a_16_bit_image_whose_data_ends_mid_sample_is_drawn() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 16 /Length 5 >>";
+    // Black, white, and the first byte of another white sample.
+    let objects: [(&str, &[u8]); 1] = [(image, &[0x00, 0x00, 0xff, 0xff, 0xff])];
+    assert_eq!(rows(&objects), ["black", "white", "black", "black"]);
+}
+
+/// A whole 16-bit image followed by one stray byte (a line end counted in `/Length`) is drawn
+/// whole. The stray byte was read as half a sample, and the page failed the same way.
+#[test]
+fn a_16_bit_image_with_a_stray_byte_after_its_data_is_drawn() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 16 /Length 9 >>";
+    let objects: [(&str, &[u8]); 1] = [(image, &[0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0xff, 0xff, b'\n'])];
+    assert_eq!(rows(&objects), ["black", "white", "black", "white"]);
 }
 
 /// An image with no data at all is still left out, not drawn as a block of padding.
