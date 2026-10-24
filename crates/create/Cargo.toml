@@ -12,6 +12,8 @@ workspace = true
 pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# Already in the graph through hayro: decodes JBIG2 images for Export ▸ Images.
+hayro-jbig2.workspace = true
 png = "0.18"
 tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
@@ -24,3 +26,4 @@ encoding_rs = "0.8"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 hayro-syntax = { workspace = true }
+pdfcraft-filters = { workspace = true }

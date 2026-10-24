@@ -551,6 +551,9 @@
 	Clean Up	Neteja
 	Color Images	Imatges en color
 	Grayscale Images	Imatges en escala de grisos
+	Monochrome Images	Imatges monocromes
+	CCITT Group 4	CCITT grup 4
+	JBIG2 (lossless)	JBIG2 (sense pèrdua)
 	Bicubic downsampling to	Reducció bicúbica de resolució a
 	for images above	per a imatges de més de
 	Compression	Compressió

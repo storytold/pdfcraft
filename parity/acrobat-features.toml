@@ -7105,8 +7105,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.all_images"]
 tools = ["doc_export_all_images"]
-evidence = ["crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/automation/tests/it/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps"]
-notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2/CCITT masks are left out (image exported opaque); JPX/JBIG2/CCITT/separations reported as skipped; minimum size filter. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Still limited: 16-bit samples use high bytes; general JPEG and mask Decode, ICC transforms, and calibrated colors remain unsupported."
+evidence = ["crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/automation/tests/it/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps", "crates/create/src/tests.rs::jbig2_images_export_as_their_picture", "crates/automation/tests/it/automation.rs::doc_optimize_stores_black_and_white_images_as_jbig2"]
+notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JBIG2 images and masks decode (JBIG2 as the only filter, with /JBIG2Globals; a JBIG2 page of another width is skipped); JPX/CCITT masks are left out (image exported opaque); JPX/CCITT/separations, and JBIG2 inside other filters, reported as skipped; minimum size filter. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Still limited: 16-bit samples use high bytes; general JPEG and mask Decode, ICC transforms, and calibrated colors remain unsupported."
 
 [[feature]]
 id = "create.export-html"
@@ -7266,7 +7266,7 @@ status = "shipped"
 commands = ["optimize.reduce"]
 tools = ["doc_reduce"]
 evidence = ["crates/ui-egui/tests/it/create.rs::reduce_file_size_writes_a_compact_copy", "crates/ui-egui/tests/it/create.rs::reduce_file_size_saves_nothing_when_the_file_is_already_small", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::an_identity_decode_array_does_not_stop_reduce"]
-notes = "images above 225 ppi to 150 ppi JPEG medium (after merging page pictures printed as one-pixel strips into one image), thumbnails dropped, resources merged, object streams; scanner images with the default decode array are included; a copy that isn't smaller is not saved (\"already as small as it can be made\"); runs in the background with a progress bar and Cancel"
+notes = "images above 225 ppi to 150 ppi JPEG medium (after merging page pictures printed as one-pixel strips into one image), black-and-white images to CCITT Group 4 when that is smaller, thumbnails dropped, resources merged, object streams; scanner images with the default decode array are included; a copy that isn't smaller is not saved (\"already as small as it can be made\"); runs in the background with a progress bar and Cancel"
 
 [[feature]]
 id = "optimize.compatibility-level"
@@ -7322,11 +7322,11 @@ title = "Monochrome compression (JBIG2, CCITT G4)"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["optimize.advanced", "optimize.reduce"]
+tools = ["doc_optimize", "doc_reduce"]
+evidence = ["crates/filters/src/ccitt.rs::bitmaps_round_trip", "crates/filters/src/ccitt.rs::a_page_of_text_like_marks_round_trips_and_shrinks", "crates/filters/src/ccitt.rs::what_it_cannot_encode_is_an_error", "crates/filters/src/mq.rs::the_annex_h_test_sequence_encodes_to_its_bytes", "crates/filters/src/jbig2.rs::bitmaps_round_trip", "crates/filters/src/jbig2.rs::a_page_of_text_like_marks_round_trips_and_shrinks", "crates/optimize/tests/optimize.rs::black_and_white_images_become_jbig2", "crates/automation/tests/it/automation.rs::doc_optimize_stores_black_and_white_images_as_jbig2", "crates/optimize/tests/optimize.rs::black_and_white_images_become_ccitt_group_4", "crates/automation/tests/it/automation.rs::doc_optimize_stores_black_and_white_images_as_ccitt_group_4", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy"]
+notes = "CCITT Group 4 (the default, so Reduce File Size does it too) or JBIG2, both lossless: PDF Optimizer ▸ Images ▸ Monochrome Images (doc_optimize mono) stores a 1-bit image of one colour component (grey, indexed, a separation) or an image mask, kept with no filter or general-purpose ones, as Group 4 when that is smaller as stored; the samples decode to the same bits, so colour space, decode array and masks stay. Group 4 wins on scans; on clean computer-drawn 1-bit art Flate can be smaller, and the image then stays. JBIG2 is a generic region (template 0, typical prediction), about a third smaller than Group 4 on 300 dpi text; a document below PDF 1.4 gets /Version 1.4. Not yet: JBIG2 symbol coding (text regions with symbol dictionaries, where JBIG2's larger gains on text come from, and its lossy mode), JBIG2Globals, monochrome downsampling, inline images, soft masks and /Mask images, rows wider than 32,767 samples."
 
 [[feature]]
 id = "optimize.only-if-smaller"

@@ -1,6 +1,6 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (§12.4.4: page transitions and display times read) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (§7.4: CCITT Group 4 and lossless JBIG2 encoding in the Optimizer; JBIG2 images export) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -21,7 +21,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 |---|---|---|---|---|
 | §7.2–7.5 | Syntax, objects, file structure, xref tables and streams, object streams, hybrid files, incremental updates | full | **own**, tolerant, repairs damaged files | `crates/cos`; corpus 958 files; fuzzed nightly |
 | §7.4 | Stream filters: Flate, LZW, ASCII85, ASCIIHex, RunLength, predictors | full | **own** | `crates/filters` |
-| §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode only) | `core.image-filters` partial; own codecs M1.1/M1.2; no JBIG2/CCITT encoding (Optimizer) |
+| §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode); **own** CCITT G4 and JBIG2 encoding | `core.image-filters` partial; own codecs M1.1/M1.2; the Optimizer encodes CCITT Group 4 and lossless JBIG2 (a generic region; no symbol coding), `optimize.mono-compression` |
 | §7.5.8 | Linearization | R W | R only | `core.linearization` planned |
 | §7.6.4 | Standard security handler R2–R6 (RC4 40/128, AES-128, AES-256), crypt filters, `/EncryptMetadata`, SASLprep | full | **own**, read and write | `crates/crypt`; written files open in Acrobat DC since #836 (#774: Acrobat needs the catalog outside object streams) |
 | §7.6.5 | Public-key security handler | full | none | `core.open-public-key`, `protect.certificate-encryption` planned |
@@ -130,6 +130,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | §7.4: CCITT Group 4 encoding (`fax`) and lossless JBIG2 generic-region encoding (own, from the JBIG2 draft standard) in the Optimizer; Export ▸ Images decodes JBIG2 |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

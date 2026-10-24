@@ -551,6 +551,9 @@
 	Clean Up	Siivoa
 	Color Images	Värikuvat
 	Grayscale Images	Harmaasävykuvat
+	Monochrome Images	Mustavalkokuvat
+	CCITT Group 4	CCITT ryhmä 4
+	JBIG2 (lossless)	JBIG2 (häviötön)
 	Bicubic downsampling to	Bikuubinen alinäytteistys tarkkuuteen
 	for images above	kuville, joiden tarkkuus yli
 	Compression	Pakkaus

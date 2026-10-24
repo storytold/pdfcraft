@@ -559,6 +559,9 @@
 	Clean Up	Tisztítás
 	Color Images	Színes képek
 	Grayscale Images	Szürkeárnyalatos képek
+	Monochrome Images	Monokróm képek
+	CCITT Group 4	CCITT 4. csoport
+	JBIG2 (lossless)	JBIG2 (veszteségmentes)
 	Bicubic downsampling to	Kettős köbös újramintázás erre
 	for images above	az ennél nagyobb képeknél
 	Compression	Tömörítés

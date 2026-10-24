@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
-use pdfcraft_optimize::{Compression, ImageSettings, Settings, SpaceCategory, audit_space, effective_resolutions, optimize};
+use pdfcraft_optimize::{Compression, ImageSettings, MonoCompression, Settings, SpaceCategory, audit_space, effective_resolutions, optimize};
 
 fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
     // A smooth gradient with a little texture (photo-like).
@@ -162,6 +162,310 @@ fn an_identity_decode_array_does_not_stop_reduce() {
     assert!(!stream(&doc, scan).dict.contains(b"Decode"), "the default decode array isn't carried over");
     assert_eq!(stream(&doc, inverted).dict.int(b"Width"), Some(900));
     assert_eq!(stream(&doc, odd).dict.int(b"Width"), Some(900));
+}
+
+/// Rows of `w` 1-bit samples (1 white, 0 black), each starting on a byte: lines of text-like
+/// glyphs; or, with `noise`, random bits.
+fn bilevel(w: u32, h: u32, noise: bool) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut black = |x: usize, y: usize| {
+        if x < w as usize && y < h as usize {
+            data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+        }
+    };
+    if noise {
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                if next() & 1 == 0 {
+                    black(x, y);
+                }
+            }
+        }
+        return data;
+    }
+    // Lines 24 rows apart, of glyphs drawn from a few shapes (a stem, a bowl, an arch, a dotted
+    // stem) at any column, 1–3 columns apart with a wider gap between words: text as a scanner
+    // sees it. Clean, identical rows would favour Flate; a scan's ragged edges favour Group 4.
+    for line in (4..h as usize).step_by(24) {
+        let mut x = 8;
+        while x + 16 < w as usize {
+            let wide = 5 + (next() % 4) as usize;
+            let shape = next() % 4;
+            // Now and then a row of a stroke is a column wider or narrower at an edge, as a scan's
+            // edges are.
+            let mut ragged = || match next() % 8 {
+                0 => 0,
+                1 => 2,
+                _ => 1,
+            };
+            let mut fill = |x0: usize, x1: usize, y0: usize, y1: usize| {
+                for y in line + y0..line + y1 {
+                    let (left, right) = ((x + x0 + 1).saturating_sub(ragged()), x + x1 + ragged());
+                    for xx in left..right.saturating_sub(1) {
+                        black(xx, y);
+                    }
+                }
+            };
+            match shape {
+                0 => fill(0, 2, 0, 14),
+                1 => {
+                    fill(0, wide, 4, 6);
+                    fill(0, wide, 12, 14);
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 4, 14);
+                }
+                2 => {
+                    fill(0, 2, 4, 14);
+                    fill(wide - 2, wide, 6, 14);
+                    fill(0, wide - 1, 4, 6);
+                }
+                _ => {
+                    fill(0, 2, 7, 14);
+                    fill(0, 2, 2, 4);
+                }
+            }
+            x += wide + 2 + (next() % 2) as usize + if next() % 6 == 0 { 7 } else { 0 };
+        }
+    }
+    data
+}
+
+/// A 1-bit image of `data`, Flate-compressed (with `predictor`, a PNG predictor, if any), with
+/// `entries` added to its dictionary.
+fn mono_image(doc: &mut Document, w: u32, h: u32, data: &[u8], predictor: Option<i64>, entries: &[(&str, Object)]) -> ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    for (k, v) in entries {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    let s = match predictor {
+        None => Stream::flate(d, data),
+        Some(predictor) => {
+            let params = pdfcraft_filters::Params { predictor, colors: 1, bits_per_component: 1, columns: w as i64, early_change: 1 };
+            let mut parms = Dict::new();
+            parms.set(b"Predictor".to_vec(), Object::Int(predictor));
+            parms.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+            parms.set(b"Columns".to_vec(), Object::Int(w as i64));
+            d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            Stream::from_raw(d, pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, data).unwrap())
+        }
+    };
+    doc.add(Object::Stream(s))
+}
+
+fn render(doc: &Document) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    out.rgba.to_vec()
+}
+
+/// Black-and-white images become CCITT Group 4, losslessly: the page looks the same to the pixel.
+/// Grey, an image mask (with a decode array that inverts it), an indexed image of two colours and
+/// one stored with a PNG predictor qualify; noise (bigger as G4), a 1-bit RGB image, one whose
+/// colour space is a resource name, one wider than Group 4 encodes and a tiny one (bigger as
+/// stored) are left alone, as is everything with `mono: Retain`.
+#[test]
+fn black_and_white_images_become_ccitt_group_4() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let gray = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let indexed_cs = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        1.into(),
+        Object::String(pdfcraft_cos::PdfString::literal(vec![0xC0, 0x10, 0x10, 0xF8, 0xF0, 0xE0])),
+    ]);
+    let indexed = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", indexed_cs.clone())]);
+    let predicted = mono_image(&mut doc, w, h, &text, Some(15), &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let noise =
+        mono_image(&mut doc, 400, 200, &bilevel(400, 200, true), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let rgb = mono_image(
+        &mut doc,
+        400,
+        160,
+        &bilevel(1200, 160, false),
+        None,
+        &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceRGB"))],
+    );
+    let wide = mono_image(
+        &mut doc,
+        40_000,
+        2,
+        &bilevel(40_000, 2, false),
+        None,
+        &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))],
+    );
+    // A bare /Indexed is no colour space on its own: it names the page's resource, here RGB, so
+    // these samples are three to a pixel.
+    let named =
+        mono_image(&mut doc, 400, 160, &bilevel(1200, 160, false), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("Indexed"))]);
+    // 64 × 8 white: its Group 4 data is smaller than its Flate data, but not by the longer
+    // dictionary Group 4 needs.
+    let tiny = mono_image(&mut doc, 64, 8, &[0xFF; 64], None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let tiny_g4 = pdfcraft_filters::encode_g4(&[0xFF; 64], 64, 8).unwrap();
+    assert!(tiny_g4.len() < stream(&doc, tiny).raw.len(), "{} against {}", tiny_g4.len(), stream(&doc, tiny).raw.len());
+    let p = page(
+        &mut doc,
+        &[("G", gray), ("M", mask), ("I", indexed), ("P", predicted), ("N", noise), ("R", rgb), ("W", wide), ("T", tiny), ("X", named)],
+        "q 300 0 0 120 20 660 cm /G Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q q 300 0 0 120 20 520 cm /I Do Q \
+         q 300 0 0 120 320 520 cm /P Do Q q 200 0 0 100 20 400 cm /N Do Q q 200 0 0 80 240 400 cm /R Do Q q 560 0 0 4 20 380 cm /W Do Q q 64 0 0 8 460 400 cm /T Do Q q 200 0 0 80 240 300 cm /X Do Q",
+    );
+    doc.update_dict(p, |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources") {
+            let mut cs = Dict::new();
+            cs.set(b"Indexed".to_vec(), Object::name("DeviceRGB"));
+            res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+        }
+    })
+    .unwrap();
+    let before = render(&doc);
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw;
+    let untouched = [noise, rgb, wide, tiny, named].map(|r| raw(&doc, r));
+
+    let mut kept = doc.clone();
+    let r = optimize(&mut kept, &Settings { mono: MonoCompression::Retain, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_recompressed, 0, "Retain keeps every image as it is");
+    assert!([gray, mask, indexed, predicted].iter().all(|i| raw(&kept, *i) == raw(&doc, *i)));
+
+    let r = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(r.images_recompressed, 4);
+    assert!(r.image_bytes_after < r.image_bytes_before, "{} → {}", r.image_bytes_before, r.image_bytes_after);
+    for i in [gray, mask, indexed, predicted] {
+        let s = stream(&doc, i);
+        assert_eq!(s.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+        let parms = s.dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
+        assert_eq!((parms.int(b"K"), parms.int(b"Columns"), parms.int(b"Rows")), (Some(-1), Some(w as i64), Some(h as i64)));
+    }
+    assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
+    assert_eq!(stream(&doc, indexed).dict.get(b"ColorSpace"), Some(&indexed_cs), "the colour space stays");
+    assert_eq!([noise, rgb, wide, tiny, named].map(|r| raw(&doc, r)), untouched);
+    assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// An image whose /DecodeParms are a reference is read through them, as one with them direct: a
+/// predictor's tag bytes would otherwise shift every row, and the image would be stored again
+/// wrong. Here a 1-bit image with a PNG predictor (stored again as Group 4) and an eight-bit grey
+/// one with a PNG predictor at 600 ppi (resampled) come out byte for byte as with direct parameters.
+#[test]
+fn images_whose_decode_parms_are_references_come_out_as_with_them_direct() {
+    let build = |by_reference: bool| {
+        let mut doc = Document::new_empty();
+        let (w, h) = (1200u32, 480u32);
+        let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+        let one_bit = mono_image(&mut doc, w, h, &bilevel(w, h, false), Some(15), &grey);
+        let shades: Vec<u8> = (0..w * h).map(|i| ((i % w) * 255 / w) as u8 ^ ((i / w) as u8 & 0x0F)).collect();
+        let params = pdfcraft_filters::Params { predictor: 15, colors: 1, bits_per_component: 8, columns: w as i64, early_change: 1 };
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(15));
+        parms.set(b"Columns".to_vec(), Object::Int(w as i64));
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let coded = pdfcraft_filters::encode(&pdfcraft_filters::Filter::Flate, &params, &shades).unwrap();
+        let eight_bit = doc.add(Object::Stream(Stream::from_raw(d, coded)));
+        if by_reference {
+            for r in [one_bit, eight_bit] {
+                let mut s = stream(&doc, r);
+                let parms = s.dict.get(b"DecodeParms").cloned().unwrap();
+                s.dict.set(b"DecodeParms".to_vec(), Object::Ref(doc.add(parms)));
+                doc.set(r, Object::Stream(s));
+            }
+        }
+        // 300 × 120 pt is 288 ppi; 144 × 57.6 pt is 600 ppi.
+        page(&mut doc, &[("A", one_bit), ("B", eight_bit)], "q 300 0 0 120 20 600 cm /A Do Q q 144 0 0 57.6 20 400 cm /B Do Q");
+        let before = [one_bit, eight_bit].map(|r| stream(&doc, r).raw);
+        let r = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!((r.images_resampled, r.images_recompressed), (1, 1), "{r:?}");
+        let after = [one_bit, eight_bit].map(|r| stream(&doc, r));
+        assert!(before.iter().zip(&after).all(|(b, a)| *b != a.raw), "both stored again");
+        assert_eq!(after[0].dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]));
+        after.map(|s| s.raw)
+    };
+    assert_eq!(build(true), build(false));
+}
+
+/// The images of a document that are images, by object number.
+fn image_refs(doc: &Document) -> Vec<ObjRef> {
+    doc.object_numbers()
+        .into_iter()
+        .map(|num| ObjRef { num, generation: doc.generation(num) })
+        .filter(|r| matches!(&*doc.get(*r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")))
+        .collect()
+}
+
+/// Black-and-white images as lossless JBIG2: the page looks the same to the pixel (so
+/// JBIG2Decode gives black as 0, as the encoder assumes), and scan-like text comes out smaller
+/// than as Group 4. JBIG2Decode is PDF 1.4, so a PDF 1.3 document gets `/Version /1.4` in its
+/// catalog.
+#[test]
+fn black_and_white_images_become_jbig2() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let gray = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let decode = Object::Array(vec![1.into(), 0.into()]);
+    let mask = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true)), ("Decode", decode.clone())]);
+    let indexed_cs = Object::Array(vec![
+        Object::name("Indexed"),
+        Object::name("DeviceRGB"),
+        1.into(),
+        Object::String(pdfcraft_cos::PdfString::literal(vec![0xC0, 0x10, 0x10, 0xF8, 0xF0, 0xE0])),
+    ]);
+    let indexed = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", indexed_cs.clone())]);
+    page(
+        &mut doc,
+        &[("G", gray), ("M", mask), ("I", indexed)],
+        "q 300 0 0 120 20 660 cm /G Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q q 300 0 0 120 20 520 cm /I Do Q",
+    );
+    // The same document, as PDF 1.3.
+    let mut bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    bytes[..8].copy_from_slice(b"%PDF-1.3");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(doc.version(), "1.3");
+    let before = render(&doc);
+
+    let mut g4 = doc.clone();
+    let as_g4 = optimize(&mut g4, &Settings::default()).unwrap();
+    let mut jbig2 = doc.clone();
+    let r = optimize(&mut jbig2, &Settings { mono: MonoCompression::Jbig2, ..Settings::default() }).unwrap();
+    assert_eq!(r.images_recompressed, 3);
+    assert!(r.image_bytes_after < as_g4.image_bytes_after, "JBIG2 {} bytes, Group 4 {}", r.image_bytes_after, as_g4.image_bytes_after);
+    let images: Vec<Stream> = image_refs(&jbig2).into_iter().map(|i| stream(&jbig2, i)).collect();
+    assert_eq!(images.len(), 3);
+    for s in &images {
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+    assert!(images.iter().any(|s| s.dict.get(b"Decode") == Some(&decode)), "the decode array stays");
+    let indexed_kept =
+        |s: &Stream| s.dict.get(b"ColorSpace").and_then(Object::as_array).and_then(|a| a.first()).and_then(Object::as_name) == Some(b"Indexed");
+    assert!(images.iter().any(indexed_kept), "the colour space stays");
+    let catalog = jbig2.root().and_then(|r| jbig2.get(r).as_dict().cloned()).unwrap();
+    assert_eq!(catalog.name(b"Version"), Some(&b"1.4"[..]));
+    assert!(g4.root().and_then(|r| g4.get(r).as_dict().cloned()).is_some_and(|c| !c.contains(b"Version")), "Group 4 is PDF 1.0");
+    assert!(render(&jbig2) == before, "the page looks the same");
 }
 
 #[test]

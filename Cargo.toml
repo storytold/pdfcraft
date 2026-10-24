@@ -61,6 +61,12 @@ hayro-syntax = "0.7.2"
 lopdf = "0.45"
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 weezl = "0.2"
+# CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
+fax = "0.2.7"
+# CCITT and JBIG2 decoders, already in the tree through hayro: independent decoders for round-trip
+# tests, and JBIG2 for Export ▸ Images.
+hayro-ccitt = "0.3"
+hayro-jbig2 = "0.3"
 
 # foundation
 thiserror = "2"

@@ -2577,6 +2577,7 @@ version = "0.3.0"
 dependencies = [
  "fearless_simd",
  "hayro-ccitt",
+ "image",
 ]
 
 [[package]]
@@ -4066,9 +4067,11 @@ name = "pdfcraft-create"
 version = "0.13.0"
 dependencies = [
  "encoding_rs",
+ "hayro-jbig2",
  "hayro-syntax",
  "image",
  "pdfcraft-cos",
+ "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-model",
  "png 0.18.1",
@@ -4156,7 +4159,10 @@ dependencies = [
 name = "pdfcraft-filters"
 version = "0.13.0"
 dependencies = [
+ "fax",
  "flate2",
+ "hayro-ccitt",
+ "hayro-jbig2",
  "proptest",
  "thiserror 2.0.21",
  "weezl 0.2.1",
@@ -4235,6 +4241,7 @@ dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-filters",
  "pdfcraft-model",
  "pdfcraft-render",
  "thiserror 2.0.21",

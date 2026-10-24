@@ -5725,6 +5725,129 @@ fn optimizing_through_tools() {
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "discard": ["everything"] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A one-page PDF drawing a 1-bit scan of text (glyph strokes with ragged edges, as a scanner
+/// leaves them) of 1000 × 400 samples, stored with Flate.
+fn scanned_page() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let (w, h) = (1000usize, 400usize);
+    let stride = w.div_ceil(8);
+    let mut data = vec![0xFFu8; stride * h];
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for line in (4..h - 20).step_by(24) {
+        let mut x = 8;
+        while x + 12 < w {
+            let wide = 3 + (next() % 5) as usize;
+            let (top, bottom) = (line + (next() % 4) as usize, line + 14);
+            for y in top..bottom {
+                let left = x + usize::from(next() % 8 == 0);
+                let right = x + wide - usize::from(next() % 8 == 0);
+                for xx in left..right {
+                    data[y * stride + xx / 8] &= !(0x80 >> (xx % 8));
+                }
+            }
+            x += wide + 2 + (next() % 4) as usize;
+        }
+    }
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let image = doc.add(Object::Stream(Stream::flate(d, &data)));
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let mut x = Dict::new();
+    x.set(b"Scan".to_vec(), Object::Ref(image));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(x));
+    let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 500 0 0 200 50 500 cm /Scan Do Q".to_vec())));
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Page"));
+    p.set(b"Parent".to_vec(), Object::Ref(pages));
+    p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+    p.set(b"Resources".to_vec(), Object::Dict(res));
+    p.set(b"Contents".to_vec(), Object::Ref(content));
+    let page = doc.add(Object::Dict(p));
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+/// With `mono: { compression: jbig2 }` a scan's black-and-white image is stored as lossless JBIG2,
+/// smaller than as Group 4, and exports as the same picture.
+#[test]
+fn doc_optimize_stores_black_and_white_images_as_jbig2() {
+    let dir = workdir("optimize-jbig2");
+    std::fs::write(dir.join("scan.pdf"), scanned_page()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let g4 = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "g4.pdf" }));
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jbig2.pdf", "mono": { "compression": "jbig2" } }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(1), Some(1)), "{r}");
+    assert!(r["image_bytes_after"].as_u64() < g4["image_bytes_after"].as_u64(), "JBIG2 {r}, Group 4 {g4}");
+    let written = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("jbig2.pdf")).unwrap())).unwrap();
+    let filters: Vec<Vec<u8>> = written
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*written.get(pdfcraft_cos::ObjRef { num, generation: written.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => s.dict.name(b"Filter").map(<[u8]>::to_vec),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filters, [b"JBIG2Decode".to_vec()]);
+    // Export ▸ Images gives the copy's picture back as it gives the scan's.
+    let copy = ok(&mut a, "doc_open", json!({ "path": "jbig2.pdf" }))["doc"].as_u64().unwrap();
+    let mut exported = |doc: u64, folder: &str| {
+        let r = ok(&mut a, "doc_export_all_images", json!({ "doc": doc, "folder": folder }));
+        let files = r["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1, "{r}");
+        std::fs::read(files[0]["path"].as_str().unwrap()).unwrap()
+    };
+    assert_eq!(exported(copy, "from-jbig2"), exported(doc, "from-scan"));
+}
+
+/// A scan's black-and-white image is stored as CCITT Group 4 by default, and kept as it is with
+/// `mono: { compression: retain }`.
+#[test]
+fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
+    let dir = workdir("optimize-mono");
+    std::fs::write(dir.join("scan.pdf"), scanned_page()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "compression": "retain" } }));
+    assert_eq!((kept["images"].as_u64(), kept["images_recompressed"].as_u64()), (Some(1), Some(0)), "{kept}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(1), Some(1)), "{r}");
+    assert!(r["image_bytes_after"].as_u64() < r["image_bytes_before"].as_u64(), "{r}");
+    // The copy written stores the image as Group 4.
+    let small = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("small.pdf")).unwrap())).unwrap();
+    let filters: Vec<Vec<u8>> = small
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*small.get(pdfcraft_cos::ObjRef { num, generation: small.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => s.dict.name(b"Filter").map(<[u8]>::to_vec),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filters, [b"CCITTFaxDecode".to_vec()]);
+    // An unknown compression, one that isn't a name, a misspelled key, or a mono that isn't an
+    // object is refused, not read as the default.
+    for mono in [json!({ "compression": "jpeg" }), json!({ "compression": false }), json!({ "compresson": "retain" }), json!("retain")] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
+}
+
 /// A one-page PDF whose page picture is drawn as `rows` grey images one pixel row high, 600 px
 /// wide on a 72 pt square (600 ppi), as some PDF printers write it.
 fn printed_in_strips(rows: usize) -> Vec<u8> {

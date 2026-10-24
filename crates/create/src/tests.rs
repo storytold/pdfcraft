@@ -1250,3 +1250,82 @@ fn a_tiny_gif_on_a_huge_screen_is_refused() {
     let doc = reopen(&from_images(&[("small.gif".into(), gif_on_screen(40, 30))]).unwrap());
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 40.0, 30.0]);
 }
+
+/// Export ▸ Images reads JBIG2 images (ISO 32000-2 §7.4.7), JBIG2 black as 0: as the image, and as
+/// a stencil `/Mask` of another. Their `/JBIG2Globals` are read, from a dictionary or the one in
+/// an array, so globals that can't be read skip the image rather than being ignored. Rows past the
+/// image's height are left out; a JBIG2 page of another width, or with fewer rows than the image,
+/// or data that isn't JBIG2, skips the image.
+#[test]
+fn jbig2_images_export_as_their_picture() {
+    let (w, h) = (203i64, 41i64);
+    let stride = 26;
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let bits: Vec<u8> = (0..stride * h as usize)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as u8
+        })
+        .collect();
+    // The first `rows` rows as RGBA: a 1 sample white, a 0 black.
+    let picture = |rows: i64| -> Vec<u8> {
+        (0..rows as usize)
+            .flat_map(|y| (0..w as usize).map(move |x| (x, y)))
+            .flat_map(|(x, y)| {
+                let v = if bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0 { 255 } else { 0 };
+                [v, v, v, 255]
+            })
+            .collect()
+    };
+    let jbig2 = pdfcraft_filters::encode_jbig2_generic(&bits, w as u32, h as u32).unwrap();
+    // A page whose image is `data` as JBIG2, `width` × `height`. With `globals`, its /DecodeParms
+    // (an array when `.1`) name a globals stream; with `mask`, it is the stencil /Mask of a grey
+    // image.
+    let page = |width: i64, height: i64, data: &[u8], globals: Option<(&[u8], bool)>, mask: bool| {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut d = image_dict(width, height, "DeviceGray", 1);
+            d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            if let Some((g, in_array)) = globals {
+                let g = doc.add(Object::Stream(Stream::from_raw(Dict::new(), g.to_vec())));
+                let mut parms = Dict::new();
+                parms.set(b"JBIG2Globals".to_vec(), Object::Ref(g));
+                d.set(b"DecodeParms".to_vec(), if in_array { Object::Array(vec![Object::Dict(parms)]) } else { Object::Dict(parms) });
+            }
+            if !mask {
+                return Stream::from_raw(d, data.to_vec());
+            }
+            d.remove(b"ColorSpace");
+            d.set(b"ImageMask".to_vec(), Object::Bool(true));
+            let m = doc.add(Object::Stream(Stream::from_raw(d, data.to_vec())));
+            let mut image = image_dict(width, height, "DeviceGray", 8);
+            image.set(b"Mask".to_vec(), Object::Ref(m));
+            Stream::from_raw(image, vec![128; (width * height) as usize])
+        });
+        doc
+    };
+    let skipped = |doc: &Document| {
+        let out = extract_images(doc, &[0], 0);
+        out.images.is_empty() && out.skipped.len() == 1
+    };
+
+    assert_eq!(exported_rgba(&page(w, h, &jbig2, None, false)), ("png", picture(h)));
+    assert_eq!(exported_rgba(&page(w, h, &jbig2, Some((&[][..], false)), false)).1, picture(h), "empty globals");
+    for in_array in [false, true] {
+        assert!(skipped(&page(w, h, &jbig2, Some((&b"not JBIG2"[..], in_array)), false)), "unreadable globals, in an array: {in_array}");
+    }
+    assert_eq!(exported_rgba(&page(w, h - 5, &jbig2, None, false)).1, picture(h - 5), "rows past the height");
+    for (width, height, data) in [(w + 8, h, &jbig2[..]), (w - 1, h, &jbig2[..]), (w, h + 1, &jbig2[..]), (w, h, &b"not JBIG2"[..])] {
+        assert!(skipped(&page(width, height, data, None, false)), "{width} × {height}, {} bytes", data.len());
+    }
+    // Damaged data never panics.
+    for end in [0, 1, 10, 20, 30, jbig2.len() / 2] {
+        let _ = extract_images(&page(w, h, &jbig2[..end], None, false), &[0], 0);
+    }
+
+    // As a stencil /Mask, its 1 samples (JBIG2 white) hide the image.
+    let alpha: Vec<u8> = picture(h).as_chunks::<4>().0.iter().map(|p| 255 - p[0]).collect();
+    assert_eq!(alphas(&exported_rgba(&page(w, h, &jbig2, None, true)).1), alpha);
+}

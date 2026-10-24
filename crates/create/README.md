@@ -25,6 +25,8 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
+JBIG2 images and masks (JBIG2 as their only filter) are decoded with `hayro-jbig2`, their `/JBIG2Globals` included,
+as `JBIG2Decode` gives them: black as 0. A JBIG2 page of another width than the image is skipped.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.
 The existing 16-bit path still uses each sample's high byte. JPEG and mask Decode handling remain limited.
