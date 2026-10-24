@@ -8,7 +8,7 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest};
 use std::sync::Arc;
 
 /// 100 pt at scale 1 is 100 pixels to the em, so a width of 556 units is 55.6 pixels.
-const SIZE: f64 = 100.0;
+pub(crate) const SIZE: f64 = 100.0;
 const EURO: u8 = 0x80;
 
 fn pdf(objects: &[String]) -> Vec<u8> {
@@ -31,13 +31,18 @@ fn pdf(objects: &[String]) -> Vec<u8> {
 /// string body) shown at 100 pt in the standard font `name` with WinAnsiEncoding and no
 /// `/Widths`, starting 20 pt from the left edge.
 fn ink_runs(name: &str, text: &str) -> Vec<(u32, u32)> {
+    ink_runs_in(name, Some("WinAnsiEncoding"), text)
+}
+
+/// [`ink_runs`] in `encoding`, or with no `/Encoding` at all (the font's built-in one).
+pub(crate) fn ink_runs_in(name: &str, encoding: Option<&str>, text: &str) -> Vec<(u32, u32)> {
     let body = format!("BT /F1 {SIZE} Tf 20 40 Td ({text}) Tj ET");
     let bytes = pdf(&[
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 160] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
         format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
-        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /Encoding /WinAnsiEncoding >>"),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{} >>", encoding.map(|e| format!(" /Encoding /{e}")).unwrap_or_default()),
     ]);
     let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
     let image = renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
