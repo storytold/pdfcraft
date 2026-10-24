@@ -712,7 +712,7 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
     let pos = xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph);
-    let zoom = xf.rect.width() / xf.pw.max(1.0);
+    let zoom = xf.zoom();
     let mut commit = false;
     let mut cancel = false;
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it.

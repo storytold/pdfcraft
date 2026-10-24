@@ -683,6 +683,74 @@ fn jpeg_images_with_a_soft_mask_export_as_png_with_alpha() {
 }
 
 #[test]
+/// Both image export paths apply mask intervals independently of the image's component Decode.
+fn soft_mask_decode_ranges_become_exported_alpha() {
+    for indirect in [false, true] {
+        for (range, expected) in [
+            ([0.25, 0.75], [64, 128, 191]),
+            ([0.75, 0.25], [191, 127, 64]),
+            ([1.0, 0.0], [255, 127, 0]),
+            ([-1.0, 2.0], [0, 129, 255]),
+            ([0.5, 0.5], [128, 128, 128]),
+        ] {
+            let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+            with_image(&mut doc, |doc| {
+                let endpoints = range.into_iter().map(|v| {
+                    let value = Object::Real(v);
+                    if indirect { Object::Ref(doc.add(value)) } else { value }
+                });
+                let decode = Object::Array(endpoints.collect());
+                let decode = if indirect { Object::Ref(doc.add(decode)) } else { decode };
+                let mut mask = image_dict(3, 1, "DeviceGray", 8);
+                mask.set(b"Decode".to_vec(), decode);
+                let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0, 128, 255])));
+                let mut image = image_dict(3, 1, "DeviceRGB", 8);
+                image.set(b"SMask".to_vec(), Object::Ref(mask));
+                image.set(b"Decode".to_vec(), decode_array(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0]));
+                Stream::from_raw(image, [0, 64, 255].repeat(3))
+            });
+            let doc = reopen(&doc);
+            let out = extract_images(&doc, &[0], 0);
+            assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+            assert_eq!(out.images.len(), 1);
+            let pixels = exported_png_pixels(&out.images[0].data);
+            assert_eq!(alphas(&pixels), expected, "Decode {range:?}, indirect={indirect}");
+            assert!(pixels.as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 64, 255]), "image component Decode stays independent");
+            let (ext, bytes) = image_file(&doc, out.images[0].object).unwrap();
+            assert_eq!(ext, "png");
+            assert_eq!(exported_png_pixels(&bytes), pixels, "Save Image As and Export all images agree");
+        }
+    }
+}
+
+#[test]
+/// Packed and JPEG samples map to opacity before resizing to their image's dimensions.
+fn soft_mask_decode_maps_packed_and_jpeg_masks_before_resizing() {
+    for jpeg in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mask = if jpeg {
+                let mut mask = image_dict(4, 2, "DeviceGray", 8);
+                mask.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+                mask.set(b"Decode".to_vec(), decode_array(&[0.25, 0.25]));
+                Stream::from_raw(mask, real_jpeg())
+            } else {
+                let mut mask = image_dict(2, 1, "DeviceGray", 1);
+                mask.set(b"Decode".to_vec(), decode_array(&[-1.0, 2.0]));
+                Stream::from_raw(mask, vec![0b0100_0000])
+            };
+            let mask = doc.add(Object::Stream(mask));
+            let mut image = image_dict(4, 2, "DeviceRGB", 8);
+            image.set(b"SMask".to_vec(), Object::Ref(mask));
+            Stream::from_raw(image, vec![10; 24])
+        });
+        // Clipping before resizing differs from resizing first, then clipping to [0, 255].
+        let expected = if jpeg { vec![64; 8] } else { vec![0, 64, 191, 255, 0, 64, 191, 255] };
+        assert_eq!(alphas(&exported_rgba(&reopen(&doc)).1), expected, "jpeg={jpeg}");
+    }
+}
+
+#[test]
 fn soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha() {
     // A 2×1 soft mask on a 4×2 image is scaled to the image's size.
     let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();

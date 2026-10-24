@@ -1302,13 +1302,18 @@ impl Renderer {
                         xs = tiling_cell_scale(xs, t.x_step, MAX_PIXMAP_SIZE);
                         ys = tiling_cell_scale(ys, t.y_step, MAX_PIXMAP_SIZE);
 
-                        let x_step = xs * t.x_step;
-                        let y_step = ys * t.y_step;
+                        // PdfCraft patch (25): the cell pixmap repeats every `pix_width` pixels,
+                        // so one step must be exactly that many pixels. The cell is drawn at the
+                        // scale that makes it so, and the paint transform below maps the pixmap
+                        // back onto pattern space: cells sit at whole multiples of the step at
+                        // any device scale. Drawing at the unrounded scale repeated the cell a
+                        // fraction of a pixel too early or late, and the error grew with every
+                        // step away from the pattern's origin.
+                        let (pix_width, xs) = tiling_cell_pixels(xs, t.x_step, MAX_PIXMAP_SIZE);
+                        let (pix_height, ys) = tiling_cell_pixels(ys, t.y_step, MAX_PIXMAP_SIZE);
 
-                        let scaled_width = bbox.width() as f32 * xs;
-                        let scaled_height = bbox.height() as f32 * ys;
-                        let pix_width = x_step.abs().round() as u16;
-                        let pix_height = y_step.abs().round() as u16;
+                        let scaled_width = bbox.width() * xs;
+                        let scaled_height = bbox.height() * ys;
 
                         let mut renderer = Self {
                             ctx: RenderContext::new_with(
@@ -1332,7 +1337,7 @@ impl Renderer {
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
                         };
-                        let mut initial_transform = Affine::scale_non_uniform(xs as f64, ys as f64)
+                        let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
                         t.interpret(&mut renderer, initial_transform, is_stroke);
                         let mut pix = Pixmap::new(pix_width, pix_height);
@@ -1341,14 +1346,14 @@ impl Renderer {
                         renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
 
                         // TODO: Fix these
-                        if x_step < 0.0 {
+                        if t.x_step < 0.0 {
                             initial_transform *=
-                                Affine::new([-1.0, 0.0, 0.0, 1.0, scaled_width as f64, 0.0]);
+                                Affine::new([-1.0, 0.0, 0.0, 1.0, scaled_width, 0.0]);
                         }
 
-                        if y_step < 0.0 {
+                        if t.y_step < 0.0 {
                             initial_transform *=
-                                Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, scaled_height as f64]);
+                                Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, scaled_height]);
                         }
 
                         paint_transform =
@@ -2185,4 +2190,27 @@ pub fn tiling_cell_scale(scale: f32, step: f32, max_pixels: f32) -> f32 {
     } else {
         scale
     }
+}
+
+/// PdfCraft patch (25): the side of a tiling cell pixmap in pixels, and the scale to draw the
+/// cell at so that one `step` spans exactly that many pixels. The pixmap repeats every whole
+/// number of pixels; drawing the cell at `scale` itself would repeat it at `round(scale × step)`
+/// instead of `scale × step`, a fraction of a pixel off at every step (ISO 32000-2 8.7.3.1: cells
+/// are displaced by multiples of `/XStep` and `/YStep`). The side is kept within 1 and
+/// `max_pixels` (itself at most `u16::MAX`). When `scale × step` isn't finite and positive,
+/// `scale` is kept and the side is `max_pixels` for an infinite product, 1 otherwise.
+pub fn tiling_cell_pixels(scale: f32, step: f32, max_pixels: f32) -> (u16, f64) {
+    // A whole number of pixels; `max` and `min` (not `clamp`, which panics on NaN) make a NaN cap 1.
+    let max = f64::from(max_pixels).floor().max(1.0).min(f64::from(u16::MAX));
+    let (scale, step) = (f64::from(scale), f64::from(step.abs()));
+    let exact = scale * step;
+    if !(exact.is_finite() && exact > 0.0) {
+        let pixels = if exact == f64::INFINITY { max } else { 1.0 };
+        // In 1..=u16::MAX, so the cast is exact.
+        return (pixels as u16, scale);
+    }
+    let pixels = exact.round().max(1.0).min(max);
+    // `pixels` is in 1..=u16::MAX, so the cast is exact; `step` is positive and finite here
+    // (`exact` is), so the division is too.
+    (pixels as u16, pixels / step)
 }

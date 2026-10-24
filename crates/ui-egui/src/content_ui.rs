@@ -510,7 +510,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
-    let zoom = xf.rect.width() / xf.pw.max(1.0);
+    let zoom = xf.zoom();
     let Some(draft) = view.content.draft.as_mut() else { return (None, false) };
     let font = crate::edit_text_ui::editor_font(&draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));
     let text = AddedText { text: draft.text.clone(), ..draft.style.clone() };
@@ -537,6 +537,16 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     }
     let r = screen_rect(&xf, info, page, draft.rect);
     let source_rect = draft.index.map(|_| screen_rect(&xf, info, page, draft.style.rect));
+    // At least 60 points wide, so a short box can still be clicked into. Where that is wider than
+    // the box, the editor reaches past it away from the edge its text keeps (the right edge for
+    // right-aligned text, both halves for centred), so the text stays where the page draws it.
+    let width = r.width().max(60.0);
+    let anchor = match draft.style.align {
+        pdfcraft_engine::TextAlign::Center => 0.5,
+        pdfcraft_engine::TextAlign::Right => 1.0,
+        pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify => 0.0,
+    };
+    let at = r.min - egui::vec2((width - r.width()) * anchor, 0.0);
     let background_ready = draft.index.is_some_and(|index| view.text_background.ready_added(page, index));
     let tokens = Tokens::get(ctx);
     let (mut commit, mut cancel, mut done) = (false, false, false);
@@ -548,7 +558,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     egui::Area::new(egui::Id::new(("added-text", view.id.0)))
         .fade_in(false)
         .order(egui::Order::Foreground)
-        .fixed_pos(r.min)
+        .fixed_pos(at)
         .constrain_to(view.viewport_rect())
         .constrain(false)
         .show(ctx, |ui| {
@@ -560,18 +570,34 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
             let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
+            // Laid out as the page draws it, so opening the box doesn't show it realigned.
+            // shortcut: justified text is shown left-aligned here (TextEdit can't justify), until the editor gets its own layouter.
+            let halign = match t.style.align {
+                pdfcraft_engine::TextAlign::Center => egui::Align::Center,
+                pdfcraft_engine::TextAlign::Right => egui::Align::Max,
+                pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify => egui::Align::Min,
+            };
+            // Character spacing shows as the page will draw it, scaled like the font.
+            let letter_spacing = (t.style.char_spacing * f64::from(zoom)) as f32;
+            let mut spaced = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                let job = spaced_job(text.as_str(), &font, Color32::from_rgb(cr, cg, cb), letter_spacing, wrap_width, halign);
+                ui.fonts_mut(|f| f.layout_job(job))
+            };
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let resp = ui.add(
-                    egui::TextEdit::multiline(&mut t.text)
-                        .font(font)
-                        .desired_width(r.width().max(60.0))
-                        .desired_rows(1)
-                        .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
-                        .text_color(Color32::from_rgb(cr, cg, cb))
-                        .hint_text(tl!("Type text"))
-                        .id_salt("added-text-edit"),
-                );
+                let mut edit = egui::TextEdit::multiline(&mut t.text)
+                    .font(font.clone())
+                    .desired_width(width)
+                    .desired_rows(1)
+                    .horizontal_align(halign)
+                    .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
+                    .text_color(Color32::from_rgb(cr, cg, cb))
+                    .hint_text(tl!("Type text"))
+                    .id_salt("added-text-edit");
+                if letter_spacing != 0.0 {
+                    edit = edit.layouter(&mut spaced);
+                }
+                let resp = ui.add(edit);
                 if t.focus {
                     resp.request_focus();
                     t.focus = false;
@@ -714,6 +740,8 @@ impl crate::PdfCraftApp {
 
     /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
     pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
+        // A newer copy wins over a whole-document copy still reading its pages.
+        self.document_copy = None;
         let Some((_, id)) = self.active_ids() else { return false };
         if !self.may_copy(id) {
             return false;
@@ -927,6 +955,17 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
     out
 }
 
+/// The editor's layout of added text with character spacing. The page puts the spacing after every
+/// character, the last of a line included (`latin_width`), while epaint puts it only between
+/// characters: the wrap width gives up one spacing so both break lines at the same place.
+fn spaced_job(text: &str, font: &egui::FontId, color: Color32, letter_spacing: f32, wrap_width: f32, halign: egui::Align) -> egui::text::LayoutJob {
+    let format = egui::TextFormat { font_id: font.clone(), color, extra_letter_spacing: letter_spacing, ..Default::default() };
+    let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
+    job.wrap.max_width = (wrap_width - letter_spacing).max(0.0);
+    job.halign = halign;
+    job
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::kittest::Queryable;
@@ -974,5 +1013,45 @@ mod tests {
         assert!(i.flip_h && !i.flip_v, "Flip horizontal mirrors left and right");
         let i = flipped("Flip vertical");
         assert!(i.flip_v && !i.flip_h, "Flip vertical mirrors top and bottom");
+    }
+
+    /// #4245: the page counts the spacing after a line's last character too, so a line that fits
+    /// only without it wraps in the saved text and must wrap in the editor.
+    #[test]
+    fn editor_wraps_where_the_saved_text_does_with_trailing_spacing() {
+        let rows = |wrap: f32| {
+            let mut n = 0;
+            let mut h = egui_kittest::Harness::new_ui_state(
+                move |ui, n: &mut usize| {
+                    let font = egui::FontId::proportional(14.0);
+                    let job = spaced_job("AAAA BBBB", &font, Color32::BLACK, 10.0, wrap, egui::Align::Min);
+                    *n = ui.fonts_mut(|f| f.layout_job(job)).rows.len();
+                },
+                n,
+            );
+            h.run();
+            n = *h.state();
+            n
+        };
+        // The text's width without the trailing spacing, as epaint measures it.
+        let one_line = rows(f32::INFINITY);
+        assert_eq!(one_line, 1);
+        let width = {
+            let mut w = 0.0;
+            let mut h = egui_kittest::Harness::new_ui_state(
+                |ui, w: &mut f32| {
+                    let font = egui::FontId::proportional(14.0);
+                    let job = spaced_job("AAAA BBBB", &font, Color32::BLACK, 10.0, f32::INFINITY, egui::Align::Min);
+                    *w = ui.fonts_mut(|f| f.layout_job(job)).rect.width();
+                },
+                w,
+            );
+            h.run();
+            w = *h.state();
+            w
+        };
+        // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
+        assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
+        assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
     }
 }

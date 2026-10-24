@@ -217,7 +217,7 @@ pub fn resize_edges(ctx: &egui::Context) {
                 let response = ui.interact(rect, ui.id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
                 // Sensing only drags, a drag starts on the press itself.
                 if response.drag_started() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                    desktop_grab(ui.ctx(), egui::ViewportCommand::BeginResize(direction));
                 }
             }
             // Without the desktop's frame or shadow, a hairline keeps the window apart from
@@ -229,6 +229,41 @@ pub fn resize_edges(ctx: &egui::Context) {
                 egui::StrokeKind::Inside,
             );
         });
+}
+
+fn grab_id() -> egui::Id {
+    egui::Id::new("window_controls_desktop_grab")
+}
+
+/// Hand the pointer to the desktop to move or resize the window. On Wayland the compositor keeps
+/// the button's release and winit reports only that the pointer left, which egui doesn't count as
+/// a release; egui would think the button still held, and the next press on an edge or the title
+/// bar wouldn't start a drag until a click inside the window. The release comes back on the next
+/// input (`release_after_desktop_grab`).
+pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    ctx.data_mut(|d| d.insert_temp(grab_id(), ()));
+    ctx.request_repaint();
+}
+
+/// After `desktop_grab`, add the primary button's release to the next input, unless it brings one.
+/// The release goes before the input's first press (the next resize or move, or a click), which
+/// egui would otherwise end straight away; a release after that press is the press's own.
+pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if ctx.data_mut(|d| d.remove_temp::<()>(grab_id())).is_none() {
+        return;
+    }
+    let first = raw.events.iter().enumerate().find_map(|(n, e)| match e {
+        egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } => Some((n, *pressed)),
+        _ => None,
+    });
+    let at = match first {
+        Some((_, false)) => return,
+        Some((n, true)) => n,
+        None => raw.events.len(),
+    };
+    let (pos, modifiers) = ctx.input(|i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
+    raw.events.insert(at, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
 }
 
 #[cfg(test)]
@@ -284,5 +319,74 @@ mod tests {
         for (_, r) in super::zones(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), 5.0, 16.0) {
             assert!(r.width() >= 0.0 && r.height() >= 0.0);
         }
+    }
+
+    #[test]
+    fn a_desktop_grab_gives_the_button_release_back() {
+        let ctx = egui::Context::default();
+        let releases = |raw: &egui::RawInput| {
+            raw.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count()
+        };
+        let mut raw = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 0, "no grab, no release");
+
+        super::desktop_grab(&ctx, egui::ViewportCommand::StartDrag);
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 1, "the release the desktop kept");
+
+        let mut raw = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 0, "only once");
+
+        super::desktop_grab(&ctx, egui::ViewportCommand::BeginResize(ResizeDirection::East));
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerButton {
+            pos: Pos2::ZERO,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 1, "not doubled when the input brings it");
+    }
+
+    #[test]
+    fn the_release_goes_before_the_press_of_the_next_grab() {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: Pos2::new(5.0, 5.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let primary = |raw: &egui::RawInput| {
+            raw.events
+                .iter()
+                .filter_map(|e| if let egui::Event::PointerButton { pressed, .. } = e { Some(*pressed) } else { None })
+                .collect::<Vec<_>>()
+        };
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>, grab: Option<egui::ViewportCommand>| {
+            let mut raw = egui::RawInput { events, ..Default::default() };
+            super::release_after_desktop_grab(&ctx, &mut raw);
+            let order = primary(&raw);
+            ctx.run_ui(raw, |ui| {
+                if let Some(command) = grab.clone() {
+                    super::desktop_grab(ui.ctx(), command);
+                }
+            })
+            .textures_delta
+            .clear();
+            order
+        };
+        // The press of the first resize starts the grab; the desktop keeps its release.
+        frame(vec![egui::Event::PointerMoved(Pos2::new(5.0, 5.0)), button(true)], Some(egui::ViewportCommand::BeginResize(ResizeDirection::East)));
+        // The next input brings the press of the second resize.
+        assert_eq!(frame(vec![button(true)], None), [false, true], "the kept release, then the new press");
+        assert!(ctx.input(|i| i.pointer.primary_down()), "the second resize holds the button");
+
+        // A quick click's release belongs to its own press, not to the grab before it.
+        frame(vec![], Some(egui::ViewportCommand::StartDrag));
+        assert_eq!(frame(vec![button(true), button(false)], None), [false, true, false]);
     }
 }

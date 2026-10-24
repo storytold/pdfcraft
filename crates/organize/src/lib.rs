@@ -13,6 +13,7 @@
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
 
+mod attachments;
 mod boxes;
 mod dedupe;
 mod import;
@@ -24,6 +25,7 @@ mod transition;
 pub mod view;
 mod xmp;
 
+pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name};
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use dedupe::dedupe_resources;
 pub use import::{
@@ -658,10 +660,21 @@ pub fn check_custom_key(name: &str) -> Result<(), OrganizeError> {
     Ok(())
 }
 
-/// Read a document-information entry as text.
+/// Read a document-information entry as text: `/Info`, else the XMP packet (Title, Author,
+/// Subject, Keywords, Creator and Producer, see `xmp`).
 pub fn info(doc: &Document, key: &str) -> Option<String> {
-    let info = doc.trailer().get(b"Info").map(|o| doc.resolve(o))?;
-    info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text()))
+    let in_info = doc
+        .trailer()
+        .get(b"Info")
+        .map(|o| doc.resolve(o))
+        .and_then(|info| info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())));
+    // Files that state it only in their XMP packet (#2373).
+    in_info.filter(|v| !v.trim_matches('\0').trim().is_empty()).or_else(|| xmp::info_value(doc, key))
+}
+
+/// Whether the document information has an entry `key`, of any type.
+pub fn has_info(doc: &Document, key: &str) -> bool {
+    doc.trailer().get(b"Info").map(|o| doc.resolve(o)).is_some_and(|info| info.as_dict().is_some_and(|d| d.get(key.as_bytes()).is_some()))
 }
 
 /// Set (or clear, with an empty value) a document-information entry.
@@ -691,12 +704,18 @@ fn set_info_entry(doc: &mut Document, key: &[u8], entry: Option<Object>) -> Resu
             })?;
         }
         _ => {
-            let Some(v) = entry else { return Ok(()) };
             let mut d = match doc.trailer().get(b"Info") {
                 Some(Object::Dict(d)) => d.clone(),
                 _ => Dict::new(),
             };
-            d.set(key.to_vec(), v);
+            match entry {
+                Some(v) => d.set(key.to_vec(), v),
+                None => {
+                    if d.remove(key).is_none() {
+                        return Ok(());
+                    }
+                }
+            }
             let r = doc.add(d);
             doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
         }

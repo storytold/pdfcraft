@@ -897,6 +897,11 @@ impl Document {
         &self.version
     }
 
+    /// Set the PDF header version (`"1.4"`, `"1.7"`, `"2.0"`, …) written by a full save.
+    pub fn set_version(&mut self, version: impl Into<String>) {
+        self.version = version.into();
+    }
+
     pub fn trailer(&self) -> &Dict {
         &self.trailer
     }

@@ -121,7 +121,7 @@ fi
 
 # ---- .deb / .rpm --------------------------------------------------------------------------------
 if has deb || has rpm; then
-  command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
+  command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/docs/install/)" >&2; exit 1; }
   export VERSION
   export RELEASE="1${PDFCRAFT_BUILD_LABEL:+.$PDFCRAFT_BUILD_LABEL}"
   export NFPM_ARCH="$DEB_ARCH"

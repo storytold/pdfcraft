@@ -26,7 +26,19 @@ use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, MAX_PAGE_FORMS, ObjRe
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
-const MAX_DEPTH: usize = 12;
+/// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
+/// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
+/// otherwise survive -- but it also removes whatever else that form drew, marked or not. So the
+/// limit has to reach as deep as anything the reader can see: the renderer follows forms to 50
+/// (`MAX_NESTED_INTERPRETATION_DEPTH`) and so does Edit text's reader (`text::MAX_FORM_DEPTH`).
+/// At 12, a page with a 13-deep chain lost the text of its innermost form even with nothing in it
+/// marked (#3645); past 50 nothing is drawn by any of the three, so removing it costs nothing
+/// visible.
+pub(crate) const MAX_DEPTH: usize = 50;
+
+// A form a reader still shows must be walkable here, or a redaction removes content that is
+// visible; the build says so rather than a test, so the two limits cannot drift apart.
+const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -443,8 +455,8 @@ fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], de
         if depth >= MAX_DEPTH {
             return None;
         }
-        let Ok(_data) = s.decoded() else { return None };
-        match content_draws(doc, content, xo, name, depth + 1, seen) {
+        let Ok(data) = s.decoded() else { return None };
+        match content_draws(doc, std::slice::from_ref(&data), xo, name, depth + 1, seen) {
             Some(false) => {}
             other => return other,
         }
@@ -1269,6 +1281,9 @@ fn xobject(
             {
                 return None;
             }
+            // Too deep: this form cannot be read, so it goes (Apply) or the page is left alone
+            // (Verify), as a form that will not decode does. The page's decode budget below is what
+            // keeps a fan-out or a cycle from costing 2^50 walks.
             if scope.depth >= MAX_DEPTH {
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan

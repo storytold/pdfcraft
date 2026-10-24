@@ -608,6 +608,7 @@
 	Discard private data of other applications	Elimina dati privati di altre applicazioni
 	Discard hidden text	Elimina testo nascosto
 	Use Flate to encode streams that are not encoded	Usa Flate per codificare i flussi non codificati
+	In streams that use LZW encoding, use Flate instead	Nei flussi con codifica LZW, usa Flate
 	Remove invalid links and bookmarks	Rimuovi collegamenti e segnalibri non validi
 	Remove unreferenced named destinations	Rimuovi destinazioni con nome non referenziate
 	Compress document structure (object streams)	Comprimi struttura del documento (flussi di oggetti)
@@ -2047,6 +2048,10 @@
 	Perimeter	Perimetro
 	Area	Area
 	Drawing scale	Scala del disegno
+	Scale	Scala
+	Common scales	Scale comuni
+	Enter a scale such as 1:50.	Inserisci una scala come 1:50.
+	Applying a scale switches units to m / mm.	Applicando una scala le unità passano a m / mm.
 	Snapping	Aggancio
 	Export measurements	Esporta misure
 	Open a PDF to measure it.	Apri un PDF per misurarlo.
@@ -2208,6 +2213,7 @@
 	Remove saved {what}	Rimuovi l'elemento salvato: {what}
 	Remove {name} from Recent	Rimuovi {name} dai recenti
 	Reopen the files that were open when PdfCraft last closed	Riapri i file aperti alla chiusura precedente di PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Ripristina l’ultima vista (pagina, zoom e visualizzazione delle pagine) quando un documento viene riaperto
 	Reset page size	Ripristina dimensione pagine
 	Reset to printer defaults	Ripristina le impostazioni predefinite della stampante
 	Reverse closed arrow	Freccia chiusa inversa
@@ -2328,6 +2334,8 @@ key	Space	Spazio
 	Printer paper and scaling may differ. Check driver settings.	Carta e scala della stampante possono differire. Controlla le impostazioni del driver.
 	Drawing scale changes. Use Actual size for full-scale plans.	La scala del disegno cambia. Usa Dimensioni effettive per le planimetrie in scala.
 	Reload documents when their files change on disk	Ricarica i documenti quando i loro file cambiano sul disco
+	Don't show again	Non mostrare più
+	Show a notice when a document is secured	Mostra un avviso quando un documento è protetto
 	Always use my default zoom and page layout	Usa sempre il mio ingrandimento e layout di pagina predefiniti
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Questo file è cambiato sul disco. Ricarica mostra la nuova versione e scarta le modifiche non salvate; Salva la sostituisce con questa versione.
 	Reload	Ricarica
@@ -2693,6 +2701,11 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Attach a file…	Allega un file…
+	Delete attachment	Elimina allegato
+	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web
+	Attach {name}	Allega {name}
+	Delete attachment {key}	Elimina allegato {key}
 	Font	Carattere
 	Bulleted list	Elenco puntato
 	Numbered list	Elenco numerato
@@ -2747,3 +2760,6 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Oggi

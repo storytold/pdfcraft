@@ -1137,10 +1137,15 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn dests_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    bookmarks_harness("dests.pdf", DESTS)
+}
+
+/// `pdf` open with the Bookmarks panel showing, once the window's layout holds still.
+fn bookmarks_harness(name: &'static str, pdf: &'static [u8]) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("dests.pdf", None, DESTS.to_vec()).expect("opens");
+        app.open_bytes(name, None, pdf.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "bookmarks").unwrap();
         app
@@ -1190,13 +1195,15 @@ fn bookmark_destinations_scroll_to_their_position() {
     let d = from_viewport_corner(&h, 1, 0.25, 0.5);
     assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "the destination point is at the window's top-left: {d:?}");
 
-    // Malformed operands fall back to the top of the page at the current zoom.
+    // Unusable operands are read as null, which keeps the reader's place in user space: y 300
+    // was at the window's top on page 2 (its crop box starts at y 100), so on page 3 (crop from
+    // 0) y 300 is there too, a quarter down, at the current zoom.
     h.get_by_label("Broken").click();
     h.run_steps(6);
     let v = &h.state().views[0];
     assert_eq!((v.current, v.zoom), (2, 3.0));
-    let d = from_viewport_corner(&h, 2, 0.0, 0.0);
-    assert!(d.y > 0.0 && d.y < 40.0, "page 3 is scrolled to its top: {d:?}");
+    let d = from_viewport_corner(&h, 2, 0.0, 0.25);
+    assert!(d.y.abs() < 2.0, "y 300 on page 3 is at the top of the window: {d:?}");
 }
 
 #[test]
@@ -1217,6 +1224,42 @@ fn link_destinations_scroll_to_their_position() {
     assert_eq!((v.current, v.fit), (1, Fit::Width), "/FitH goes to page 2 and fits its width");
     let d = from_viewport_corner(&h, 1, 0.0, 0.2);
     assert!(d.y.abs() < 2.0, "y 420 on page 2 is at the top of the window: {d:?}");
+}
+
+/// Two 300×400 pages. A bookmark shows page 1 at 400% with (40, 360) at the window's top-left;
+/// the link there goes to page 2 as CAD exports write their cross-references, `/XYZ null null 0`.
+const KEEP_PLACE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 11 0 R /Count 1 >> endobj
+11 0 obj << /Title (Start) /Parent 10 0 R /Dest [3 0 R /XYZ 40 360 4] >> endobj
+20 0 obj << /Type /Annot /Subtype /Link /Rect [60 320 140 350] /Border [0 0 0] /Dest [4 0 R /XYZ null null 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn a_link_without_a_position_keeps_the_place_on_the_next_page() {
+    let mut h = bookmarks_harness("keep-place.pdf", KEEP_PLACE);
+    h.get_by_label("Start").click();
+    h.run_steps(6);
+    assert_eq!((h.state().views[0].current, h.state().views[0].zoom), (0, 4.0));
+    let (fx, fy) = (40.0 / 300.0, 40.0 / 400.0);
+    let d = from_viewport_corner(&h, 0, fx, fy);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "(40, 360) is at the window's top-left: {d:?}");
+
+    let r = rect(&h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * (100.0 / 300.0), r.min.y + r.height() * (1.0 - 335.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.zoom), (1, 4.0), "the link goes to page 2 at the same zoom");
+    let d = from_viewport_corner(&h, 1, fx, fy);
+    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "page 2 shows the same place, not its top: {d:?}");
 }
 
 /// Two pages with a text field on each and a non-embedded Helvetica.

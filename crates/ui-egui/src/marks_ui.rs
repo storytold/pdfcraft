@@ -1,12 +1,13 @@
 //! Add Header and Footer, Add Watermark and Add Background dialogs (Acrobat: Edit a PDF ▸ …;
-//! dialog snapshots d13, d14, d12d). Each has the shared Page Range Options and a schematic
-//! preview of the current page. "Update" opens the same dialog in replace mode.
+//! dialog snapshots d13, d14, d12d). Each has the shared Page Range Options and a preview of a
+//! page the range selects, with the marks laid out on it. "Update" opens the same dialog in
+//! replace mode.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, icons, widgets};
 
 /// How far a watermark may be moved from the page centre, in points.
 const MAX_OFFSET: f64 = 20_000.0;
@@ -89,6 +90,9 @@ pub struct MarksDraft {
     pub use_file: bool,
     pub file: Option<(String, std::sync::Arc<Vec<u8>>)>,
     pub file_page: usize,
+    /// The page (0-based) the preview was stepped to; `None` previews the current page. Reset
+    /// each time the dialog opens.
+    pub preview: Option<usize>,
 }
 
 impl Default for MarksDraft {
@@ -106,6 +110,7 @@ impl Default for MarksDraft {
             use_file: false,
             file: None,
             file_page: 1,
+            preview: None,
         }
     }
 }
@@ -124,14 +129,30 @@ fn color_button(ui: &mut egui::Ui, c: &mut [f64; 3]) {
     }
 }
 
-/// A schematic of the current page with the marks laid out (no rendering needed).
-fn preview(ui: &mut egui::Ui, t: &Tokens, size: (f64, f64), draw: impl FnOnce(&egui::Painter, Rect, f32)) {
+/// The page (displayed size `size`) with the marks laid out on it. `picture` is its thumbnail,
+/// rendered off the UI thread like the pages panel's; until it arrives the page is a blank sheet.
+/// `tint` multiplies the page, which is how a background behind its content looks.
+fn preview(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    size: (f64, f64),
+    picture: Option<egui::TextureId>,
+    tint: Color32,
+    draw: impl FnOnce(&egui::Painter, Rect, f32),
+) {
     let (w, h) = (size.0.max(1.0), size.1.max(1.0));
     let s = (190.0 / w.max(h)) as f32;
     let (r, _) = ui.allocate_exact_size(vec2(210.0, 210.0), egui::Sense::hover());
     let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
     let painter = ui.painter_at(r);
-    painter.rect_filled(page, CornerRadius::ZERO, Color32::WHITE);
+    match picture {
+        Some(tex) => {
+            painter.image(tex, page, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+        }
+        None => {
+            painter.rect_filled(page, CornerRadius::ZERO, tint);
+        }
+    }
     painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
     draw(&painter, page, s);
 }
@@ -141,13 +162,44 @@ fn rgb32(c: [f64; 3]) -> Color32 {
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
+/// The tint of a page over a background of `color` at `opacity`: the colour shows where the page
+/// is white and the content stays on top. A non-finite opacity is opaque, as the engine has it.
+fn behind(color: [f64; 3], opacity: f64) -> Color32 {
+    let a = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
+    rgb32(color.map(|c| 1.0 - a * (1.0 - c)))
+}
+
+/// The page (0-based) the preview shows: the current one when the range selects it, otherwise the
+/// first page the range selects (the current one again when it selects none).
+fn preview_page(range: &PageRange, current: usize, count: usize) -> usize {
+    let pages = range.pages(count);
+    if pages.contains(&current) { current } else { pages.first().copied().unwrap_or(current) }
+}
+
+/// [`preview_page`] for the page stepped to (`stepped`), or the current page if none. A page
+/// stepped to that the range leaves out is replaced by the page shown, so widening the range again
+/// keeps that page rather than jumping back.
+fn shown_preview(range: &PageRange, stepped: &mut Option<usize>, current: usize, count: usize) -> usize {
+    let shown = preview_page(range, stepped.unwrap_or(current), count);
+    if stepped.is_some() {
+        *stepped = Some(shown);
+    }
+    shown
+}
+
+/// The page the preview steps to from `shown`: the range's next page after it (`forward`) or the
+/// last one before it, or `None` at either end.
+fn step_preview(range: &PageRange, shown: usize, count: usize, forward: bool) -> Option<usize> {
+    let pages = range.pages(count);
+    if forward { pages.into_iter().find(|&p| p > shown) } else { pages.into_iter().rev().find(|&p| p < shown) }
+}
+
 /// The dialog for `kind`; returns (apply, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: MarkKind) -> (bool, bool) {
     let Some((i, id)) = app.active_ids() else { return (false, true) };
     let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let count = doc.info.pages.len();
-    let page = doc.info.pages.get(current).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
     let units = app.units;
     let d = &mut app.marks_draft;
     let mut browse = false;
@@ -313,13 +365,22 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     ui.label(egui::RichText::new(tl!("Page Range Options")).font(theme::semibold(12.5)));
     d.range.ui(ui, count);
     ui.add_space(8.0);
-    // Preview of the current page.
+    // The preview: the current page (or the page stepped to), or the first one the range selects
+    // if it leaves that out, drawn from its thumbnail at its displayed size (after /Rotate), the
+    // frame the engine lays the marks out in.
+    let target = shown_preview(&d.range, &mut d.preview, current, count);
+    let page = doc.info.pages.get(target).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+    let picture = app.views.get_mut(i).and_then(|view| {
+        view.need_thumbnail(target, true);
+        view.thumb_id(target)
+    });
+    let tint = if kind == MarkKind::Background && !d.use_file { behind(d.bg.color, d.bg.opacity) } else { Color32::WHITE };
     let hf = d.hf.clone();
     let size_h = page.1.max(1.0);
-    let (wm, bg, fit) = (d.wm.clone(), d.bg.clone(), d.fit);
+    let (wm, fit) = (d.wm.clone(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
     ui.horizontal(|ui| {
-        preview(ui, t, page, |p, r, s| match kind {
+        preview(ui, t, page, picture, tint, |p, r, s| match kind {
             MarkKind::HeaderFooter => {
                 if hf.shrink {
                     // The band the page content shrinks into, centred across.
@@ -382,19 +443,28 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     Color32::GRAY,
                 );
             }
-            MarkKind::Background => {
-                p.rect_filled(r, CornerRadius::ZERO, rgb32(bg.color).gamma_multiply(bg.opacity as f32));
-            }
+            // A colour is the page's tint.
+            MarkKind::Background => {}
         });
         ui.vertical(|ui| {
-            ui.label(
-                egui::RichText::new(crate::i18n::fmt(
-                    tl!("Preview: page {p} of {n}"),
-                    &[("p", &(current + 1).to_string()), ("n", &count.to_string())],
-                ))
-                .small()
-                .color(t.text_faint),
-            );
+            ui.horizontal(|ui| {
+                // Steps through the pages the range selects.
+                let (back, next) = (step_preview(&d.range, target, count, false), step_preview(&d.range, target, count, true));
+                if ui.add_enabled_ui(back.is_some(), |ui| icons::button(ui, "chevron-left", 22.0, false, tl!("Previous page"))).inner.clicked() {
+                    d.preview = back.or(d.preview);
+                }
+                ui.label(
+                    egui::RichText::new(crate::i18n::fmt(
+                        tl!("Preview: page {p} of {n}"),
+                        &[("p", &(target + 1).to_string()), ("n", &count.to_string())],
+                    ))
+                    .small()
+                    .color(t.text_faint),
+                );
+                if ui.add_enabled_ui(next.is_some(), |ui| icons::button(ui, "chevron-right", 22.0, false, tl!("Next page"))).inner.clicked() {
+                    d.preview = next.or(d.preview);
+                }
+            });
             let n = d.range.pages(count).len();
             let applies =
                 if n == 1 { tl!("Applies to 1 page").to_string() } else { crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &n.to_string())]) };
@@ -544,6 +614,61 @@ mod tests {
         assert_eq!(r.pages(4), [0, 1, 2, 3]);
         let r = PageRange { all: false, from: 1, to: 1, subset: Subset::All };
         assert_eq!(r.pages(38), [0]);
+    }
+
+    #[test]
+    fn the_preview_shows_a_page_the_range_selects() {
+        let all = PageRange::default();
+        assert_eq!(preview_page(&all, 2, 5), 2, "the current page when the range selects it");
+        let even = PageRange { all: true, subset: Subset::Even, ..PageRange::default() };
+        assert_eq!(preview_page(&even, 0, 5), 1, "otherwise the first page the range selects");
+        let later = PageRange { all: false, from: 3, to: 4, subset: Subset::All };
+        assert_eq!(preview_page(&later, 0, 5), 2);
+        let none = PageRange { all: false, from: 4, to: 2, subset: Subset::All };
+        assert_eq!(preview_page(&none, 1, 5), 1, "the current page when the range selects none");
+        assert_eq!(preview_page(&all, 0, 0), 0, "no pages at all");
+    }
+
+    #[test]
+    fn the_preview_steps_through_the_pages_the_range_selects() {
+        let odd = PageRange { all: true, subset: Subset::Odd, ..PageRange::default() };
+        // Pages 1, 3 and 5 (0-based 0, 2, 4) of 5.
+        assert_eq!(step_preview(&odd, 0, 5, true), Some(2));
+        assert_eq!(step_preview(&odd, 2, 5, true), Some(4));
+        assert_eq!(step_preview(&odd, 4, 5, true), None, "the last page has no next");
+        assert_eq!(step_preview(&odd, 4, 5, false), Some(2));
+        assert_eq!(step_preview(&odd, 0, 5, false), None, "the first page has no previous");
+        // From a page the range leaves out, to the nearest one it selects on that side.
+        assert_eq!(step_preview(&odd, 1, 5, true), Some(2));
+        assert_eq!(step_preview(&odd, 1, 5, false), Some(0));
+        assert_eq!(step_preview(&odd, 0, 0, true), None, "no pages at all");
+        // A page stepped to is previewed while the range selects it, and the range's first page
+        // once a new range leaves it out.
+        assert_eq!(preview_page(&odd, 2, 5), 2);
+        let later = PageRange { all: false, from: 4, to: 5, subset: Subset::All };
+        assert_eq!(preview_page(&later, 2, 5), 3);
+        // Narrowing the range past the page stepped to keeps the page shown instead, also once
+        // the range is widened again.
+        let mut stepped = Some(4);
+        let first_two = PageRange { all: false, from: 1, to: 2, subset: Subset::All };
+        assert_eq!(shown_preview(&first_two, &mut stepped, 1, 5), 0);
+        assert_eq!(stepped, Some(0));
+        assert_eq!(shown_preview(&PageRange::default(), &mut stepped, 1, 5), 0);
+        // A page stepped to inside the range stays; with none stepped to, the current page shows.
+        let mut stepped = Some(2);
+        assert_eq!(shown_preview(&odd, &mut stepped, 0, 5), 2);
+        assert_eq!(stepped, Some(2));
+        let mut stepped = None;
+        assert_eq!(shown_preview(&odd, &mut stepped, 4, 5), 4);
+        assert_eq!(stepped, None);
+    }
+
+    #[test]
+    fn a_background_tints_the_page_it_is_behind() {
+        assert_eq!(behind([1.0, 0.0, 0.0], 1.0), Color32::from_rgb(255, 0, 0));
+        assert_eq!(behind([1.0, 0.0, 0.0], 0.0), Color32::WHITE);
+        assert_eq!(behind([0.0, 0.0, 0.0], 0.5), Color32::from_rgb(128, 128, 128));
+        assert_eq!(behind([0.2, 0.4, 0.6], f64::NAN), behind([0.2, 0.4, 0.6], 1.0), "opaque, as the engine has it");
     }
 
     #[test]

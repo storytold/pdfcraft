@@ -5,7 +5,11 @@ use base64::Engine;
 use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
-use crate::model::*;
+use crate::model::{
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
+    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
+    Value,
+};
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
@@ -146,7 +150,23 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
         3 => [e(0), e(1), e(2), e(1)],
         _ => [e(0), e(1), e(2), e(3)],
     };
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, fill: parse_fill(child(n, "fill")) })
+    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+}
+
+/// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
+/// bottom-left: one applies to all four, and a corner not given is the last one given. Without
+/// any, the corners are square.
+fn parse_corners(n: XmlNode) -> [Corner; 4] {
+    let given: Vec<Corner> = children(n, "corner")
+        .take(4)
+        .map(|c| Corner {
+            presence: Presence::parse(c.attribute("presence")),
+            radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
+            inverted: c.attribute("inverted") == Some("1"),
+        })
+        .collect();
+    let Some(last) = given.last().copied() else { return [Corner::default(); 4] };
+    std::array::from_fn(|i| given.get(i).copied().unwrap_or(last))
 }
 
 /// `<font>`: typeface, size, weight, posture, underline, fill color and horizontal scale.
@@ -201,7 +221,7 @@ fn parse_common(n: XmlNode) -> Common {
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become
-/// embedded fields.
+/// embedded fields; the text of an `<a href>` keeps where it links to.
 fn parse_rich(body: XmlNode) -> RichText {
     #[derive(Clone, Default)]
     struct Style {
@@ -210,6 +230,8 @@ fn parse_rich(body: XmlNode) -> RichText {
         underline: Option<bool>,
         size: Option<f64>,
         h_scale: Option<f64>,
+        /// The `href` of the `<a>` the text is in.
+        link: Option<std::sync::Arc<str>>,
     }
     /// `base` with the CSS declarations in `css` applied: weight, style, underline, size and
     /// `xfa-font-horizontal-scale`. Anything else is ignored.
@@ -254,6 +276,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                             size: style.size,
                             h_scale: style.h_scale,
                             embed: None,
+                            link: style.link.clone(),
                         },
                     );
                 }
@@ -285,6 +308,13 @@ fn parse_rich(body: XmlNode) -> RichText {
                         "b" => st.bold = Some(true),
                         "i" => st.italic = Some(true),
                         "u" => st.underline = Some(true),
+                        // A link's text keeps where it points; an `<a>` without one (a named
+                        // anchor) leaves the text as it was.
+                        "a" => {
+                            if let Some(href) = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()) {
+                                st.link = Some(std::sync::Arc::from(href));
+                            }
+                        }
                         _ => {}
                     }
                     let embed = c.attributes().find(|a| a.name() == "embed").map(|a| a.value().trim_start_matches('#').to_string());
@@ -300,6 +330,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                                 size: st.size,
                                 h_scale: st.h_scale,
                                 embed: Some(e),
+                                link: st.link.clone(),
                             },
                         );
                     }
@@ -378,7 +409,7 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
             "rectangle" => {
                 let mut b = parse_border(Some(c)).unwrap_or_default();
                 b.fill = parse_fill(child(c, "fill"));
-                return Value::Rectangle(b);
+                return Value::Rectangle(Box::new(b));
             }
             "date" | "time" | "dateTime" | "integer" | "decimal" | "float" | "boolean" => return Value::Text(text_of(c)),
             _ => {}
@@ -397,7 +428,9 @@ fn parse_caption(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Option<Capti
             Some("inline") => Placement::Inline,
             _ => Placement::Left,
         },
-        reserve: attr_measure(n, "reserve").filter(|r| *r >= 0.0),
+        // A reserve of zero or less sizes the caption to its content, as none does (XFA 3.3,
+        // the caption's reserve).
+        reserve: attr_measure(n, "reserve").filter(|r| *r > 0.0),
         presence: Presence::parse(n.attribute("presence")),
         value: parse_value(child(n, "value"), warnings),
         font: parse_font(child(n, "font")),
@@ -478,6 +511,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         }
         _ => ChoiceList::default(),
     };
+    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
     let validate_el = child(n, "validate");
     let validate_message = validate_el
         .and_then(|v| child(v, "message"))
@@ -492,7 +526,8 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
         check_round: ui_el.is_some_and(|e| e.attribute("shape") == Some("round")),
-        multiline: ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true")),
+        multiline,
+        no_scroll: ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off")),
         caption: parse_caption(child(n, "caption"), warnings),
         value: parse_value(value_el, warnings),
         items,

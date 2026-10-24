@@ -72,6 +72,134 @@ pub fn auto_text_size_by(width: f64, height: f64, multiline: bool, line_width: i
     if tw.is_finite() && tw > width { (size * width / tw).max(4.0) } else { size }
 }
 
+/// How a text field's widget lays its value out in [`field_appearance_drawn`], for asking
+/// whether a value fits it ([`TextBox::fits`]): what a field that doesn't scroll (`DoNotScroll`,
+/// ISO 32000-2 Table 228) still takes. Built from the same pieces the appearance uses: the `/DA`
+/// font from the form's `/DR` (Helvetica where that font can't show the text), the room inside
+/// the border and the 2 pt padding, the `/DA` size (or the automatic size), and wrapping for a
+/// multi-line field; the two must change together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBox {
+    /// The `/DA` font from `/DR`, when it is one the appearance can draw with.
+    font: Option<FontText>,
+    /// Width and height inside the border and padding.
+    inner_w: f64,
+    inner_h: f64,
+    /// The `/DA` size; `None` for an automatic (`0 Tf`) size, which shrinks to fit.
+    size: Option<f64>,
+    multiline: bool,
+    password: bool,
+    /// A comb field: its cells, not its width, bound it (`/MaxLen`).
+    comb: bool,
+}
+
+/// The [`TextBox`] widget `w` of text field `f` lays its value out in.
+pub fn text_box(doc: &Document, f: &Field, w: &Widget) -> TextBox {
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let pad = 2.0 + border_width(doc, &wd);
+    let multiline = f.has(flags::MULTILINE);
+    TextBox {
+        font: dr_font(doc, &da.font).map(|(_, enc)| enc),
+        inner_w: (place.layout_w - 2.0 * pad).max(1.0),
+        inner_h: place.layout_h - 2.0 * pad,
+        size: (da.size > 0.0 && da.size.is_finite()).then_some(da.size),
+        multiline,
+        password: f.has(flags::PASSWORD),
+        comb: f.has(flags::COMB) && !multiline && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0),
+    }
+}
+
+impl TextBox {
+    /// Whether `text` fits: on one line within the width, or, multi-line, wrapped within the
+    /// height, as the appearance draws it. An automatic size shrinks before text stops fitting,
+    /// so such a field is full only when the text no longer fits at its smallest size (4 pt). A
+    /// comb field always fits (its `/MaxLen` bounds it).
+    pub fn fits(&self, text: &str) -> bool {
+        if self.comb || text.is_empty() {
+            return true;
+        }
+        let shown: String = if self.password { "*".repeat(text.chars().count()) } else { text.to_string() };
+        // The font the appearance would choose for this text.
+        let can_show = |enc: &FontText| if self.multiline { shown.split(['\n', '\r']).all(|l| enc.can_encode(l)) } else { enc.can_encode(&shown) };
+        let font = self.font.as_ref().filter(|enc| can_show(enc)).unwrap_or(&FontText::WinAnsi);
+        let width_of = |t: &str, size: f64| font.width(t, size);
+        // The smallest an automatic size goes ([`auto_text_size_by`]).
+        let size = self.size.unwrap_or(4.0);
+        if self.multiline {
+            // As the appearance draws it: the first baseline is 0.85 em below the padded top and
+            // a line is drawn while its descent (0.207 em) stays inside the border, so the
+            // padding below the last line is not needed: `inner_h` plus 2 pt.
+            // Long words break by character, so a line is wider than the box only when it is a
+            // single character wider than the box, which the appearance still cuts at the sides.
+            let lines = wrap_with(&shown, size, self.inner_w, width_of);
+            let above = lines.len().saturating_sub(1) as f64;
+            above * size * 1.15 + 1.057 * size <= self.inner_h + 2.0 + 0.01 && lines.iter().all(|l| width_of(l, size) <= self.inner_w + 0.01)
+        } else {
+            // A line break in a single-line value is drawn as a space.
+            let line: String = shown.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
+            width_of(&line, size) <= self.inner_w + 1e-6
+        }
+    }
+
+    /// An edit from `before` to `after` as a field that doesn't scroll takes it: all of it when
+    /// `after` fits, and otherwise as much of the text it inserted (typed or pasted) as still
+    /// fits, keeping what it removed removed. Returns the text and where the caret goes (in
+    /// characters, after what was kept of the insertion).
+    pub fn fitted_edit(&self, before: &str, after: &str) -> (String, usize) {
+        let (b, a): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+        // The edit replaced b[p..b.len() - q] with a[p..a.len() - q].
+        let p = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
+        let most = b.len().min(a.len()).saturating_sub(p);
+        let q = b.iter().rev().zip(a.iter().rev()).take(most).take_while(|(x, y)| x == y).count();
+        // q <= a.len() - p, so these are in range; `get` keeps it so if that ever changes.
+        let end = a.len().saturating_sub(q);
+        let (prefix, inserted, suffix) = (a.get(..p).unwrap_or_default(), a.get(p..end).unwrap_or_default(), a.get(end..).unwrap_or_default());
+        let with = |k: usize| prefix.iter().chain(inserted.get(..k).unwrap_or_default()).chain(suffix).collect::<String>();
+        if self.fits(after) {
+            return (after.to_string(), p + inserted.len());
+        }
+        // The longest of the insertion's first `from..=to` characters that fits, halving: in one
+        // font a longer text is never narrower. `None` when even `from` doesn't fit.
+        let longest = |from: usize, to: usize| -> Option<usize> {
+            if from > to || !self.fits(&with(from)) {
+                return None;
+            }
+            let (mut lo, mut hi) = (from, to);
+            while lo < hi {
+                let mid = lo + (hi - lo).div_ceil(2);
+                if self.fits(&with(mid)) { lo = mid } else { hi = mid - 1 }
+            }
+            Some(lo)
+        };
+        // The font can change once, from the form's own to Helvetica, at the first inserted
+        // character the form's font can't show: each side of that point is searched on its own.
+        let n = inserted.len();
+        let kept = match self.font_switch(prefix, inserted, suffix) {
+            Some(t) => longest(0, t.saturating_sub(1)).into_iter().chain(longest(t, n)).max(),
+            None => longest(0, n),
+        }
+        .unwrap_or(0);
+        (with(kept), p + kept)
+    }
+
+    /// Where an insertion changes the font [`Self::fits`] measures in: how much of `inserted`
+    /// (between `prefix` and `suffix`) first includes a character the form's own font can't show,
+    /// when everything around it can be shown in that font. `None` when the font never changes.
+    fn font_switch(&self, prefix: &[char], inserted: &[char], suffix: &[char]) -> Option<usize> {
+        let enc = self.font.as_ref().filter(|_| !self.password)?;
+        // As `fits` decides: a multi-line value is checked line by line, its breaks aside.
+        let shows = |c: &char| (self.multiline && matches!(c, '\n' | '\r')) || enc.can_encode(&c.to_string());
+        if !prefix.iter().chain(suffix).all(shows) {
+            return None;
+        }
+        inserted.iter().position(|c| !shows(c)).map(|i| i + 1)
+    }
+}
+
 /// `/MK /R` as a quadrant, or 0 when it is missing or not a multiple of 90.
 pub(crate) fn mk_rotation(doc: &Document, wd: &Dict) -> i64 {
     let Some(raw) = wd.get(b"MK") else { return 0 };
@@ -277,10 +405,14 @@ fn stroke_op(fill: &str) -> String {
     }
 }
 
-/// Background and border from `/MK` and `/BS`; returns (content, border width).
+/// Background and border from `/MK` and `/BS`; returns (content, border width). A round XFA
+/// check button's ([`is_round`]) are a circle inside the widget instead of its rectangle.
 fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
     let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
     let mut c = String::new();
+    if is_round(doc, wd) {
+        return round_frame(doc, wd, mk.as_ref(), w, h);
+    }
     if let Some(bg) = color_array(doc, mk.as_ref(), b"BG") {
         c.push_str(&format!("{bg}\n0 0 {} {} re f\n", n(w), n(h)));
     }
@@ -346,17 +478,125 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
     (c, 0.0)
 }
 
+/// Whether `wd` is a check box or radio button PdfCraft laid out for a round XFA check button
+/// (`/PCXfaRound true`, written by the XFA layout).
+fn is_round(doc: &Document, wd: &Dict) -> bool {
+    matches!(wd.get(b"PCXfaRound").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
+}
+
+/// [`frame`] for a round check button: the `/MK /BG` background as a disc and the `/MK /BC`
+/// border as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A
+/// dashed border stays dashed and an underline stays an underline; any other style is drawn
+/// solid, and a border as wide as the circle fills it. Returns the border width.
+fn round_frame(doc: &Document, wd: &Dict, mk: Option<&Dict>, w: f64, h: f64) -> (String, f64) {
+    let mut c = String::new();
+    let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h).max(0.0) / 2.0);
+    if let Some(bg) = color_array(doc, mk, b"BG") {
+        c.push_str(&format!("{bg}\n{}f\n", circle_path(cx, cy, r)));
+    }
+    let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
+    let bw = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0);
+    let style = bs.as_ref().and_then(|b| b.name(b"S").map(<[u8]>::to_vec)).unwrap_or_default();
+    match color_array(doc, mk, b"BC") {
+        // An underline stays one: only the bottom edge, as for any widget.
+        Some(bc) if bw > 0.0 && style == b"U" => {
+            c.push_str(&format!("{}\n{} w\n0 {} m {} {} l S\n", stroke_op(&bc), n(bw), n(bw / 2.0), n(w), n(bw / 2.0)));
+            (c, bw)
+        }
+        // A border as wide as the circle fills it: a disc in the border's colour.
+        Some(bc) if bw > 0.0 && bw >= 2.0 * r => {
+            c.push_str(&format!("{bc}\n{}f\n", circle_path(cx, cy, r)));
+            (c, 2.0 * r)
+        }
+        Some(bc) if bw > 0.0 => {
+            let dashed = style == b"D";
+            // The stroke is centred on the path: inset by half its width, it stays inside.
+            let path = circle_path(cx, cy, r - bw / 2.0);
+            c.push_str(&format!("{}\n{} w\n{}{path}S\n[] 0 d\n", stroke_op(&bc), n(bw), if dashed { "[3] 0 d\n" } else { "" }));
+            (c, bw)
+        }
+        _ => (c, 0.0),
+    }
+}
+
+/// A closed circle of radius `r` around (`cx`, `cy`) as four Bézier arcs, ending with a space
+/// so a paint operator can follow.
+fn circle_path(cx: f64, cy: f64, r: f64) -> String {
+    // The control-point distance for a quarter circle.
+    let k = 0.5523 * r;
+    format!(
+        "{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c ",
+        n(cx + r),
+        n(cy),
+        n(cx + r),
+        n(cy + k),
+        n(cx + k),
+        n(cy + r),
+        n(cx),
+        n(cy + r),
+        n(cx - k),
+        n(cy + r),
+        n(cx - r),
+        n(cy + k),
+        n(cx - r),
+        n(cy),
+        n(cx - r),
+        n(cy - k),
+        n(cx - k),
+        n(cy - r),
+        n(cx),
+        n(cy - r),
+        n(cx + k),
+        n(cy - r),
+        n(cx + r),
+        n(cy - k),
+        n(cx + r),
+        n(cy)
+    )
+}
+
 /// The width [`frame`] insets the content by: the `/BS` border width when the widget has a
 /// border colour, doubled for beveled and inset borders, and 0 without a border.
 fn border_width(doc: &Document, wd: &Dict) -> f64 {
     let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
     let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
-    let bw = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0);
+    let bw = line_width(doc, wd);
     if color_array(doc, mk.as_ref(), b"BC").is_none() || bw <= 0.0 {
         return 0.0;
     }
     let style = bs.as_ref().and_then(|b| b.name(b"S").map(<[u8]>::to_vec)).unwrap_or_default();
     if style == b"B" || style == b"I" { 2.0 * bw } else { bw }
+}
+
+/// The widget's border line width, `/BS /W` (default 1, Table 168), as [`frame`] strokes it.
+fn line_width(doc: &Document, wd: &Dict) -> f64 {
+    let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
+    // `f64::max` turns NaN into 0, as it does a negative width.
+    bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0)
+}
+
+/// Comb fields stop drawing their cells past this many; they would be a solid block anyway.
+const MAX_COMB_DIVIDERS: usize = 500;
+
+/// The lines between the `cells` positions of a comb field `w` × `h` (ISO 32000-2 Table 228,
+/// Comb: the field is divided into `MaxLen` equally spaced positions), in the border's colour and
+/// width, inside the border. None without a border, or past [`MAX_COMB_DIVIDERS`] cells.
+fn comb_dividers(doc: &Document, wd: &Dict, w: f64, h: f64, cells: usize) -> String {
+    let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
+    let inset = border_width(doc, wd);
+    let lw = line_width(doc, wd);
+    let Some(bc) = color_array(doc, mk.as_ref(), b"BC") else { return String::new() };
+    if !(inset > 0.0 && inset.is_finite() && lw > 0.0 && lw.is_finite()) || !(2..=MAX_COMB_DIVIDERS).contains(&cells) {
+        return String::new();
+    }
+    let cell = w / cells as f64;
+    let mut c = format!("{}\n{} w\n", stroke_op(&bc), n(lw));
+    for i in 1..cells {
+        let x = cell * i as f64;
+        c.push_str(&format!("{} {} m {} {} l\n", n(x), n(inset), n(x), n(h - inset)));
+    }
+    c.push_str("S\n");
+    c
 }
 
 /// Where a list box draws its options: one row per option from the top, starting with option
@@ -449,6 +689,45 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
 /// hold it: the form's font is a simple (WinAnsi) font, Helvetica stands in for one PdfCraft can't
 /// write with (an embedded subset, `Identity-H`), or a UCS-2 CMap meets a character beyond U+FFFF.
 pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
+    let (stream, unencodable, _) = field_appearance_fit(doc, f, w, values, format);
+    (stream, unencodable)
+}
+
+/// A text value that its box cuts off at the field's font size (#4018).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Overflow {
+    /// One line `width` points wide, with `room` for it, at `size` points.
+    Wide { width: f64, room: f64, size: f64 },
+    /// `lines` wrapped lines, of which the box shows `room`, at `size` points.
+    Tall { lines: usize, room: usize, size: f64 },
+    /// One line `height` points high (ascent to descent), with `room` for it, at `size` points.
+    High { height: f64, room: f64, size: f64 },
+}
+
+impl std::fmt::Display for Overflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Wide { width, room, size } => {
+                write!(f, "the value does not fit: {} pt wide at {} pt, room for {} pt", fmt(*width), fmt(*size), fmt(*room))
+            }
+            Self::Tall { lines, room, size } => write!(f, "the value does not fit: {lines} lines at {} pt, room for {room}", fmt(*size)),
+            Self::High { height, room, size } => {
+                write!(f, "the value does not fit: {} pt high at {} pt, room for {} pt", fmt(*height), fmt(*size), fmt(*room))
+            }
+        }
+    }
+}
+
+/// Whether the text field's value, drawn in widget `w`, is cut off by its box.
+pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow> {
+    if f.kind != FieldKind::Text {
+        return None;
+    }
+    field_appearance_fit(doc, f, w, &f.value, true).2
+}
+
+/// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
+fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -513,6 +792,7 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
         }
     };
     let mut size = da.size;
+    let mut overflow = None;
     match f.kind {
         FieldKind::List => {
             // Every option, one per line from the top (from `/TI`); selected ones highlighted.
@@ -539,12 +819,24 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
                     size = auto_text_size(&text, inner_w, height - 2.0 * pad, true, width_of);
                 }
                 let mut y = height - pad - size * 0.85;
-                for line in wrap_with(&text, size, inner_w, width_of) {
+                let lines = wrap_with(&text, size, inner_w, width_of);
+                // The lines whose descent stays inside the border; the rest are cut off.
+                let mut room = 0;
+                for line in &lines {
                     if y < -size {
                         break;
                     }
-                    show(&mut body, x_for(&line, size), y, &line);
+                    if y - 0.207 * size >= bw - 0.01 {
+                        room += 1;
+                    }
+                    show(&mut body, x_for(line, size), y, line);
                     y -= size * 1.15;
+                }
+                if room < lines.len() {
+                    overflow = Some(Overflow::Tall { lines: lines.len(), room, size });
+                } else if let Some(tw) = lines.iter().map(|l| width_of(l, size)).filter(|tw| *tw > inner_w + 0.01).reduce(f64::max) {
+                    // A character wider than the box is a line of its own, still cut at the sides.
+                    overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                 }
             } else {
                 if size == 0.0 {
@@ -557,14 +849,24 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
                 }
                 // Centre Helvetica's ascent (0.718) and descent (0.207) vertically.
                 let y = (height - 0.925 * size) / 2.0 + 0.207 * size;
+                // The clip box is inside the border; a line taller than it is cut at the top and bottom.
+                let room_h = height - 2.0 * bw;
+                if 0.925 * size > room_h + 0.01 {
+                    overflow = Some(Overflow::High { height: 0.925 * size, room: room_h, size });
+                }
                 if comb {
                     let cells = f.max_len.unwrap_or(1).max(1);
                     let cell = width / cells as f64;
+                    c.push_str(&comb_dividers(doc, &wd, width, height, cells));
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
                         show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
                     }
                 } else {
+                    let tw = width_of(&text.replace(['\n', '\r'], " "), size);
+                    if overflow.is_none() && tw > inner_w + 0.01 {
+                        overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
+                    }
                     show(&mut body, x_for(&text, size), y, &text);
                 }
             }
@@ -595,13 +897,17 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(res));
-    (Stream::flate(d, &content), unencodable)
+    // Nothing drawn is nothing cut, however small the box.
+    let overflow = overflow.filter(|_| !text.is_empty());
+    (Stream::flate(d, &content), unencodable, overflow)
 }
 
 /// On/Off appearances for a check box or radio button that has none (a check mark or a dot,
 /// drawn as paths, so no symbol font is needed).
+/// The mark is drawn in the colour of the widget's `/DA`, else of `f_da` (the field's): the
+/// Appearance tab's Text Color (#4261).
 /// The streams are added to `doc` as indirect objects (streams can't be direct objects).
-pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name: &str) -> Dict {
+pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name: &str, f_da: &str) -> Dict {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
@@ -609,6 +915,7 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
     let (width, height) = (place.layout_w, place.layout_h);
     let (frame_c, _) = frame(doc, &wd, width, height);
     let style = crate::author::CheckStyle::of_widget(doc, &wd, kind);
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
     let mut form = |content: String| -> Object {
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("XObject"));
@@ -617,7 +924,7 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
         Object::Ref(doc.add(Object::Stream(Stream::flate(d, content.as_bytes()))))
     };
     let s = width.min(height);
-    let mark = check_mark(style, width / 2.0, height / 2.0, s);
+    let mark = check_mark(style, width / 2.0, height / 2.0, s, &da.color);
     let mut nd = Dict::new();
     nd.set(crate::name_bytes(on_name), form(format!("{frame_c}{mark}")));
     nd.set(b"Off".to_vec(), form(frame_c));
@@ -627,12 +934,13 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
 }
 
 /// The on-state mark for `style` (#94), centred on (`cx`, `cy`) in a box whose smaller side is
-/// `s`, drawn in black.
-fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> String {
+/// `s`, drawn in the fill colour operation `color` (`0 g`, `0 0 1 rg`).
+fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64, color: &str) -> String {
     use crate::author::CheckStyle;
+    let (fill, stroke) = (color, stroke_op(color));
     // A filled polygon through `pts`.
     let polygon = |pts: &[(f64, f64)]| {
-        let mut c = String::from("0 g\n");
+        let mut c = format!("{fill}\n");
         for (i, (x, y)) in pts.iter().enumerate() {
             c.push_str(&format!("{} {} {} ", n(*x), n(*y), if i == 0 { "m" } else { "l" }));
         }
@@ -642,7 +950,7 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> Str
     let line = n((s * 0.1).max(1.0));
     match style {
         CheckStyle::Check => format!(
-            "0 G\n{line} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
+            "{stroke}\n{line} w 1 J 1 j\n{} {} m {} {} l {} {} l S\n",
             n(cx - s * 0.28),
             n(cy),
             n(cx - s * 0.08),
@@ -653,7 +961,7 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> Str
         CheckStyle::Cross => {
             let d = s * 0.25;
             format!(
-                "0 G\n{line} w 1 J\n{} {} m {} {} l S\n{} {} m {} {} l S\n",
+                "{stroke}\n{line} w 1 J\n{} {} m {} {} l S\n{} {} m {} {} l S\n",
                 n(cx - d),
                 n(cy - d),
                 n(cx + d),
@@ -666,7 +974,7 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> Str
         }
         CheckStyle::Square => {
             let d = s * 0.22;
-            format!("0 g\n{} {} {} {} re f\n", n(cx - d), n(cy - d), n(2.0 * d), n(2.0 * d))
+            format!("{fill}\n{} {} {} {} re f\n", n(cx - d), n(cy - d), n(2.0 * d), n(2.0 * d))
         }
         CheckStyle::Diamond => {
             let d = s * 0.3;
@@ -688,7 +996,7 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> Str
             let r = s * 0.25;
             let k = 0.5523 * r;
             format!(
-                "0 g\n{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c f\n",
+                "{fill}\n{} {} m {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c {} {} {} {} {} {} c f\n",
                 n(cx + r),
                 n(cy),
                 n(cx + r),
@@ -718,6 +1026,94 @@ fn check_mark(style: crate::author::CheckStyle, cx: f64, cy: f64, s: f64) -> Str
             )
         }
     }
+}
+
+/// How a check box or radio button widget `w` of field `f` looks in state on (`on`) or Off when
+/// the file has no appearance for that state: its `/MK` background and border ([`frame`]), and
+/// when on, its caption `/MK /CA` (ISO 32000-2 Table 192: the normal caption, which check boxes
+/// and radio buttons may use too) as a ZapfDingbats character, as in the check box example of
+/// 12.7.5.2.3: `4` (a check mark) by default, `l` (a dot) for a radio button. The character is
+/// drawn in the `/DA` colour, at the `/DA` size or, for an automatic size (`0 Tf`), filling most
+/// of the box. ZapfDingbats is one of the standard 14 fonts, so no font program is needed.
+pub(crate) fn button_state_shown(doc: &Document, f: &Field, w: &Widget, on: bool) -> Stream {
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
+    let (frame_c, bw) = frame(doc, &wd, width, height);
+    let mut content = frame_c.into_bytes();
+    let mut res = Dict::new();
+    if on {
+        let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
+        let caption = mk.as_ref().and_then(|mk| mk.get(b"CA")).and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text()));
+        let dingbats = pdfcraft_fonts::Std14::ZapfDingbats;
+        // The caption's first character as a ZapfDingbats code, when the font has a glyph there.
+        let code = caption
+            .and_then(|s| s.chars().next())
+            .and_then(|ch| u8::try_from(u32::from(ch)).ok())
+            .filter(|&code| dingbats.width(code) > 0.0)
+            .unwrap_or(if f.kind == FieldKind::Radio { b'l' } else { b'4' });
+        let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+        // The glyph's advance and (about) its height, in ems.
+        let (advance, tall) = (dingbats.width(code) / 1000.0, 0.75);
+        let room = |side: f64| (side - 2.0 * bw - 2.0).max(1.0);
+        // An automatic size leaves a margin of a tenth of the room on each side.
+        let size = if da.size > 0.0 { da.size } else { (0.8 * room(width) / advance.max(0.1)).min(0.8 * room(height) / tall).clamp(1.0, 300.0) };
+        let (x, y) = ((width - advance * size) / 2.0, (height - tall * size) / 2.0 + 0.05 * size);
+        content.extend(format!("q\nBT\n/ZaDb {} Tf\n{}\n{} {} Td\n", n(size), da.color, n(x), n(y)).bytes());
+        content.extend(literal(&[code]));
+        content.extend_from_slice(b" Tj\nET\nQ\n");
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("ZapfDingbats"));
+        let mut fonts = Dict::new();
+        fonts.set(b"ZaDb".to_vec(), Object::Dict(font));
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+    }
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Form"));
+    set_form_box(&mut d, place);
+    d.set(b"Resources".to_vec(), Object::Dict(res));
+    Stream::flate(d, &content)
+}
+
+/// How a push button widget `w` of field `f` with no normal appearance looks: its `/MK`
+/// background and border, in the `/BS` width and style ([`frame`]: Table 168, `B` beveled, `I`
+/// inset), with its caption `/MK /CA` (Table 192) centred in the `/DA` font, size and colour.
+/// A button with an icon (`/MK /I`) is drawn as PdfCraft draws its own buttons, icon included.
+pub(crate) fn push_button_shown(doc: &Document, f: &Field, w: &Widget) -> Stream {
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
+    if mk.contains(b"I") {
+        return crate::author::button_appearance(doc, w, &f.da).0;
+    }
+    let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let (width, height) = (place.layout_w, place.layout_h);
+    let (frame_c, _) = frame(doc, &wd, width, height);
+    let mut content = frame_c.into_bytes();
+    let caption = mk.get(b"CA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).unwrap_or_default();
+    let mut fonts = Dict::new();
+    if !caption.is_empty() && mk.get(b"TP").and_then(|t| doc.resolve(t).as_int()) != Some(1) {
+        let da = wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text()));
+        // The automatic size PdfCraft's own buttons use.
+        let auto = ((height - 4.0) * 0.6).clamp(4.0, 14.0);
+        let (ops, name, font, _) = button_caption(doc, da.as_deref().unwrap_or(&f.da), &caption, width, height, auto);
+        content.extend(ops);
+        fonts.set(name.into_bytes(), font);
+    }
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Form"));
+    set_form_box(&mut d, place);
+    d.set(b"Resources".to_vec(), Object::Dict(res));
+    Stream::flate(d, &content)
 }
 
 #[cfg(test)]

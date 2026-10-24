@@ -157,7 +157,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     let (back, close) = panel_header(ui, t, g.label, Some(tl!("Back to all tools")));
     if back {
         app.left = LeftPanel::AllTools;
-        app.mode = crate::Mode::AllTools;
+        app.enter_mode(crate::Mode::AllTools);
     }
     if close {
         app.left_open = false;
@@ -302,7 +302,7 @@ fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static 
     ui.horizontal(|ui| {
         if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
             app.left = LeftPanel::AllTools;
-            app.mode = crate::Mode::AllTools;
+            app.enter_mode(crate::Mode::AllTools);
         }
         // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
         let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
@@ -884,6 +884,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
                     RightPanel::Attachments => {
+                        let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
+                        if attachable {
+                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
+                                    panel_command = Some("edit.attach");
+                                }
+                            });
+                        }
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
@@ -915,6 +923,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                             && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
                                         {
                                             attachment_action = Some((ai, true));
+                                        }
+                                        if let pdfcraft_render::AttachmentSource::Document { key } = &a.source
+                                            && attachable
+                                            && icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment")).clicked()
+                                        {
+                                            panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
                                         }
                                     });
                                 });
@@ -1125,7 +1139,10 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
     if let Some(levels) = cx.expand {
         ui.data_mut(|d| d.insert_temp(id, depth < levels));
     }
-    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open || depth == 0);
+    // A bookmark opens as the file says at every level: a positive /Count is open, a negative
+    // one (or none) closed (ISO 32000-2 §12.3.3, Table 151). The reader's own toggles and a
+    // search override it.
+    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open);
     let x_text = indent + 20.0;
     if let Some((rpath, text)) = cx.rename.as_mut()
         && rpath.as_slice() == path
@@ -1408,6 +1425,13 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
                 }
                 if ui.button(tl!("Extract pages")).clicked() {
                     view.pending_action = Some(crate::canvas::ViewAction::Extract);
+                    ui.close();
+                }
+                if ui.button(tl!("Split document…")).clicked() {
+                    if view.selected.is_empty() {
+                        view.select_pages(&[i]);
+                    }
+                    view.pending_action = Some(crate::canvas::ViewAction::SplitBeforeSelected);
                     ui.close();
                 }
                 if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
