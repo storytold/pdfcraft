@@ -74,10 +74,16 @@ fn parse(body: &str) -> Result<Release, String> {
     let version = v["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64).ok_or("no release found")?.to_string();
     let url = v["html_url"]
         .as_str()
-        .filter(|u| u.strip_prefix(RELEASES_PAGE).is_some_and(|rest| rest.starts_with('/') && !rest.contains(['?', '#', '\\'])))
+        .filter(|u| u.strip_prefix(RELEASES_PAGE).and_then(|rest| rest.strip_prefix('/')).is_some_and(release_path))
         .unwrap_or(RELEASES_PAGE)
         .to_string();
     Ok(Release { version, url })
+}
+
+/// A path below [`RELEASES_PAGE`] that stays there: plain segments only. A browser resolves `.`
+/// and `..` (also percent-encoded, so no `%` at all) and leaves on `?`, `#` or `\` (#3929).
+fn release_path(rest: &str) -> bool {
+    rest.split('/').all(|s| !s.is_empty() && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b)))
 }
 
 #[cfg(test)]
@@ -88,7 +94,15 @@ mod tests {
     fn answers_are_read_and_only_our_release_pages_are_offered() {
         let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/storytold/pdfcraft/releases/tag/v0.2.0"}"#).unwrap();
         assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/storytold/pdfcraft/releases/tag/v0.2.0".into() });
-        for elsewhere in ["https://example.com/pdfcraft.exe", "https://github.com/storytold/pdfcraft/releases.evil/x", "javascript:alert(1)"] {
+        for elsewhere in [
+            "https://example.com/pdfcraft.exe",
+            "https://github.com/storytold/pdfcraft/releases.evil/x",
+            "javascript:alert(1)",
+            // A browser resolves `..` (also percent-encoded) to another github.com page (#3929).
+            "https://github.com/storytold/pdfcraft/releases/../../other/repo",
+            "https://github.com/storytold/pdfcraft/releases/%2e%2e/%2E%2E/other/repo",
+            "https://github.com/storytold/pdfcraft/releases/tag/v1//x",
+        ] {
             let r = parse(&format!(r#"{{"tag_name":"v9.9.9","html_url":"{elsewhere}"}}"#)).unwrap();
             assert_eq!(r.url, RELEASES_PAGE, "{elsewhere}");
         }

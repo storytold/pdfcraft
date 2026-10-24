@@ -55,7 +55,8 @@ impl Models {
     }
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
-    /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
+    /// beside the executable ([`Models::dirs_beside_exe`]), then, in debug builds only, the source
+    /// tree's `assets/models/` (a release binary must not look in the build machine's tree, #3929).
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
     }
@@ -69,6 +70,7 @@ impl Models {
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
             dirs.extend(Self::dirs_beside_exe(&exe));
         }
+        #[cfg(debug_assertions)]
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models"));
         dirs
     }
@@ -82,6 +84,11 @@ impl Models {
     pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
         vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/pdfcraft/models")]
     }
+}
+
+/// Whether `len` bytes are a `width` × `height` RGBA image, without overflowing (#3929).
+fn is_rgba(len: usize, width: u32, height: u32) -> bool {
+    u64::from(width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(4)) == u64::try_from(len).ok()
 }
 
 /// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
@@ -132,7 +139,7 @@ impl Ocr {
             return Err(OcrError::EmptyImage);
         }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let rgb: std::borrow::Cow<[u8]> = if is_rgba(pixels.len(), width, height) {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
         } else {
             pixels.into()
@@ -359,6 +366,15 @@ mod tests {
         // The euro sign follows the ASCII punctuation (class 44; 0 is the CTC blank), not a second E.
         assert_eq!(chars.iter().position(|&c| c == '€'), Some(43));
         assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
+    }
+
+    /// #3929: the RGBA size check can't overflow (it panicked in debug builds and wrapped in release).
+    #[test]
+    fn rgba_size_check_does_not_overflow() {
+        assert!(is_rgba(16, 2, 2));
+        assert!(!is_rgba(12, 2, 2));
+        assert!(!is_rgba(4, u32::MAX, u32::MAX));
+        assert!(!is_rgba(0, 65_536, 16_384), "4 × 65536 × 16384 wraps to 0 in u32");
     }
 
     #[test]
