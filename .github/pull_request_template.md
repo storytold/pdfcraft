@@ -28,6 +28,14 @@ crate integration test or an end-to-end one. For a bug fix, **please check that 
 fails before your fix** by reverting the fix and watching it go red. A test nobody has seen
 fail is not evidence that it pins anything.
 
+Use a synthetic fixture and assert an outcome a user would notice: the text, the page count,
+the bitmap size, the byte size, or a capped count. A test that only checks "it did not crash",
+or that a tool name is registered, stays green when a later change keeps the call and drops
+the behaviour. Assert the size of the work when the cost is the bug: pixels, bytes, or pages.
+CPU percent is not an assertion. It moves with the core count, the load, and the machine, so
+the same healthy job can read as a few cores on one computer and as a saturated machine on
+another, while a job that decoded a huge bitmap still looks busy for the right reason.
+
 ## Never-crash
 
 Every PDF, script, MCP call, settings file and keystroke is untrusted input (`AGENTS.md` §4).
