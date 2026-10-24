@@ -479,6 +479,10 @@ pub struct PdfCraftApp {
     /// The web build's files being read in Web Workers (progress in `ocr_batch`).
     #[cfg(target_arch = "wasm32")]
     ocr_web_batch: Option<ocr_web::Batch>,
+    /// The web build's files chosen before the text recognition models were downloaded, with
+    /// the settings they were chosen with: read once the models are ready.
+    #[cfg(target_arch = "wasm32")]
+    ocr_web_waiting: Option<ocr_ui::WaitingFiles>,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the

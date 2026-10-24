@@ -314,14 +314,22 @@ impl Drop for Pool {
 }
 
 /// Close the workers once they have been idle a while (called when no recognition is running).
-pub fn close_idle_workers() {
+/// The page only draws a frame when something happens, so one is asked for when the idle time
+/// runs out: otherwise the workers' memory stays taken until the next click or key.
+pub fn close_idle_workers(ctx: &egui::Context) {
     POOL.with_borrow_mut(|pool| {
         // Answers still arriving for a cancelled run free their workers (and are dropped).
         if let Some(p) = pool.as_mut() {
             p.update();
         }
-        if pool.as_ref().is_some_and(|p| !p.busy() && now() - p.last_used > IDLE_CLOSE_MS) {
+        let Some(p) = pool.as_ref().filter(|p| !p.busy()) else { return };
+        let idle = now() - p.last_used;
+        if idle > IDLE_CLOSE_MS {
             *pool = None;
+        } else {
+            // `as` saturates (and a NaN becomes 0); a little past the limit, so the check passes.
+            let left = (IDLE_CLOSE_MS - idle).max(0.0) as u64;
+            ctx.request_repaint_after(std::time::Duration::from_millis(left.saturating_add(50)));
         }
     });
 }

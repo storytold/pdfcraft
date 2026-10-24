@@ -191,6 +191,8 @@ impl PdfCraftApp {
             ocr_batch: None,
             #[cfg(target_arch = "wasm32")]
             ocr_web_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            ocr_web_waiting: None,
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
