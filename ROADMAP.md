@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (M12: XFA data pictures recognize existing English month-name tokens; estimates unchanged)
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M8, #3205 follow-up: labelled Italian international phone numbers with a slash match whole; estimates unchanged)
@@ -199,6 +201,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-24 (M12, XFA data pictures):** Data bindings recognize the existing English abbreviated/full month names, so named-month dates read as ISO script values, display in their edit picture and save back in the declared data picture. Three synthetic regressions failed before the fix; complete-date guards and unrelated data are retained. Locale support is unchanged and XFA remains partial. Estimates unchanged.
 - **2026-10-23 (M7, #4280):** Edit text names each standard stand-in font after its face (`PCEdTimesBold`, ...) instead of one shared `PCEdHelv`. Rewriting a bold paragraph whose subset lacks an accent no longer repoints the paragraphs set earlier in a regular stand-in at Times-Bold, and the editor's frame stays on the paragraph being edited. Pages saved by older builds keep their shared name and are not repaired. Estimates unchanged.
 - **2026-10-23 (M8, #3205 follow-up):** Phone-pattern redaction matches complete labelled Italian geographic numbers such as `Tel. +39 0426/123456`, with synthetic matcher and mark/apply/save/reopen coverage; unlabelled international slash numbers remain unsupported.
 - **2026-10-23 (M7, #2636 partial):** A new `PasteContent` edit pastes an added text box or image copied in the same document or another, keeping its style, picture, turns, flips and crop, as one undo step; `content_copy` drives it headlessly. A paste lands beside earlier copies (18 pt steps) and stays on the page. A pasted image reuses its picture object in its own document and after the first paste into another; there a colour profile is dropped and CMYK colours stored losslessly are turned to RGB. The desktop keys and menus follow in separate PRs. Estimates unchanged.
