@@ -1634,6 +1634,7 @@
 	Sending to {printer}…	ກຳລັງສົ່ງໄປຍັງ {printer}…
 	Choose a folder for the searchable files	ເລືອກໂຟນເດີສຳລັບໄຟລ໌ທີ່ສາມາດຄົ້ນຫາໄດ້
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ໄຟລ໌ຈະຖືກຮວມແຕ່ເທິງລົງລຸ່ມ. ປະຊ່ອງໜ້າຫວ່າງໄວ້ເພື່ອເອົາທຸກໜ້າ.
+	Add a bookmark for each file	ເພີ່ມບຸກມາກໃຫ້ແຕ່ລະໄຟລ໌
 	Unlock…	ປົດລັອກ…
 	Select a password-protected file first	ເລືອກໄຟລ໌ທີ່ປົກປ້ອງດ້ວຍລະຫັດຜ່ານກ່ອນ
 	Enter the permissions password to allow combining	ປ້ອນລະຫັດຜ່ານການອະນຸຍາດເພື່ອຮວມໄຟລ໌

@@ -1602,6 +1602,7 @@
 	Sending to {printer}…	Lähetetään tulostimeen {printer}…
 	Choose a folder for the searchable files	Valitse kansio haettaville tiedostoille
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Tiedostot yhdistetään ylhäältä alas. Jätä Sivut tyhjäksi, niin kaikki sivut otetaan mukaan.
+	Add a bookmark for each file	Lisää kirjanmerkki jokaiselle tiedostolle
 	Unlock…	Avaa lukitus…
 	Select a password-protected file first	Valitse ensin salasanalla suojattu tiedosto
 	Enter the permissions password to allow combining	Salli yhdistäminen antamalla käyttöoikeuksien salasana

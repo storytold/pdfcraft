@@ -2127,6 +2127,7 @@
 	Every PDF, image and text file in the folder and the folders inside it	Tous les PDF, images et fichiers texte du dossier et des dossiers qu'il contient
 	File name	Nom du fichier
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Les fichiers sont combinés de haut en bas. Laissez Pages vide pour prendre toutes les pages.
+	Add a bookmark for each file	Ajouter un signet pour chaque fichier
 	Hide password	Masquer le mot de passe
 	Includes unsaved changes	Inclut des modifications non enregistrées
 	Its security settings don't allow copying pages	Ses paramètres de sécurité n'autorisent pas la copie des pages

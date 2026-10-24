@@ -556,6 +556,7 @@
 	File Name	Filnavn
 	File size	Filstørrelse
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Filene slås sammen fra topp til bunn. La Sider stå tomt for å ta med alle sidene.
+	Add a bookmark for each file	Legg til et bokmerke for hver fil
 	Files are combined in the order shown. Drag them to change it.	Filene slås sammen i rekkefølgen som vises. Dra dem for å endre den.
 	Files for {name}	Filer for {name}
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Filer du åpner i PdfCraft vises her. Slipp en PDF hvor som helst for å åpne den.

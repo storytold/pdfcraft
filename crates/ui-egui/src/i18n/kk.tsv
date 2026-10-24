@@ -1595,6 +1595,7 @@
 	Sent to {printer}: {msg}	{printer} принтеріне жіберілді: {msg}
 	Choose a folder for the searchable files	Іздеуге болатын файлдар үшін қалта таңдаңыз
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файлдар жоғарыдан төмен қарай біріктіріледі. Барлық бетті алу үшін «Беттер» өрісін бос қалдырыңыз.
+	Add a bookmark for each file	Әр файлға бетбелгі қосу
 	Unlock…	Блоктан шығару…
 	Select a password-protected file first	Алдымен құпиясөзбен қорғалған файлды таңдаңыз
 	Enter the permissions password to allow combining	Біріктіруге рұқсат ету үшін рұқсаттар құпиясөзін енгізіңіз

@@ -1614,6 +1614,7 @@
 	Choose a folder for the searchable files	Tria una carpeta per als fitxers amb text cercable
 	Files are combined in this order. Leave Pages empty to take every page.	Els fitxers es combinen en aquest ordre. Deixa Pàgines en blanc per agafar totes les pàgines.
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Els fitxers es combinen de dalt a baix. Deixa Pàgines en blanc per agafar totes les pàgines.
+	Add a bookmark for each file	Afegeix un marcador per a cada fitxer
 	Unlock…	Desbloqueja…
 	Select a password-protected file first	Selecciona primer un fitxer protegit amb contrasenya
 	Enter the permissions password to allow combining	Introdueix la contrasenya de permisos per permetre la combinació

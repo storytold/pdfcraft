@@ -1605,6 +1605,7 @@
 	Sending to {printer}…	กำลังส่งไปที่ {printer}…
 	Choose a folder for the searchable files	เลือกโฟลเดอร์สำหรับไฟล์ที่ค้นหาข้อความได้
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ไฟล์จะถูกรวมจากบนลงล่าง เว้นช่องหน้าว่างไว้เพื่อใช้ทุกหน้า
+	Add a bookmark for each file	เพิ่มบุ๊กมาร์กสำหรับแต่ละไฟล์
 	Unlock…	ปลดล็อก…
 	Select a password-protected file first	เลือกไฟล์ที่ป้องกันด้วยรหัสผ่านก่อน
 	Enter the permissions password to allow combining	ป้อนรหัสผ่านสิทธิ์เพื่ออนุญาตการรวมไฟล์

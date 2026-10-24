@@ -1726,6 +1726,7 @@ key	Space	Mezerník
 	Sent to {printer}: {msg}	Odesláno na {printer}: {msg}
 	Choose a folder for the searchable files	Vyberte složku pro prohledávatelné soubory
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Soubory se slučují shora dolů. Ponecháte-li Stránky prázdné, použijí se všechny stránky.
+	Add a bookmark for each file	Přidat záložku pro každý soubor
 	Unlock…	Odemknout…
 	Select a password-protected file first	Nejdřív vyberte soubor chráněný heslem
 	Enter the permissions password to allow combining	Zadejte heslo oprávnění, které povolí slučování

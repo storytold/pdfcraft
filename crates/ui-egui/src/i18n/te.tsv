@@ -2084,6 +2084,7 @@ action wizard	Start	ప్రారంభించు
 	Selected pages	ఎంచుకున్న పేజీలు
 	Set layer visibility	లేయర్‌లను చూపించు లేదా దాచు
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ఫైల్‌లు పై నుండి కిందికి కలపబడతాయి. అన్ని పేజీలను తీసుకోవడానికి పేజీలు ఫీల్డ్‌ను ఖాళీగా వదలండి.
+	Add a bookmark for each file	ప్రతి ఫైల్‌కు ఒక బుక్‌మార్క్ జోడించు
 	Unlock…	అన్‌లాక్ చేయి…
 	Select a password-protected file first	ముందుగా పాస్‌వర్డ్‌తో రక్షించిన ఫైల్‌ను ఎంచుకోండి
 	Enter the permissions password to allow combining	కలపడాన్ని అనుమతించడానికి అనుమతుల పాస్‌వర్డ్‌ను నమోదు చేయండి

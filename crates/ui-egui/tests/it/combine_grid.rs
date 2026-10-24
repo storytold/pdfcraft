@@ -1748,6 +1748,34 @@ fn a_split_file_counts_once_and_combines_with_one_bookmark() {
 }
 
 #[test]
+fn combine_can_leave_out_the_bookmark_per_file_and_the_choice_is_kept() {
+    // #3679: one checkbox, kept in the settings, so a merge needs no clean-up of bookmarks after.
+    let mut h = grid_of_pages(&[("one.pdf", 2), ("two.pdf", 1)]);
+    assert!(h.state().combine_file_bookmarks, "on by default, as before");
+    h.get_by_label("Add a bookmark for each file").click();
+    h.run_steps(2);
+    assert!(!h.state().combine_file_bookmarks);
+    let saved = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&saved);
+    assert!(!fresh.combine_file_bookmarks, "read back from the settings");
+    h.hover_at(egui::pos2(5.0, 890.0));
+    h.run_steps(2);
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.len(), 1, "the result opens");
+    assert_eq!(texts_of(app, 0), ["Page 1", "Page 2", "Page 1"]);
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert!(doc.info.outline.is_empty(), "no bookmark per file, and these files have none of their own");
+    // Scriptable, with a clear refusal for anything else.
+    let app = h.state_mut();
+    app.set_option("combine-file-bookmarks", "true").unwrap();
+    assert!(app.combine_file_bookmarks);
+    assert_eq!(app.set_option("combine-file-bookmarks", "no"), Err("combine-file-bookmarks must be true or false".into()));
+}
+
+#[test]
 fn pages_picked_out_of_sight_or_before_an_undo_are_let_go_of() {
     // Regression: a page picked, then hidden (its file collapsed, or the list shown) or undone,
     // stayed picked, and the trash or Delete took it.

@@ -2121,6 +2121,7 @@
 	Every PDF, image and text file in the folder and the folders inside it	Jedes PDF, jedes Bild und jede Textdatei im Ordner und in seinen Unterordnern
 	File name	Dateiname
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Dateien werden von oben nach unten kombiniert. Lass „Seiten“ leer, um alle Seiten zu übernehmen.
+	Add a bookmark for each file	Für jede Datei ein Lesezeichen hinzufügen
 	Hide password	Passwort ausblenden
 	Includes unsaved changes	Enthält ungespeicherte Änderungen
 	Its security settings don't allow copying pages	Die Sicherheitseinstellungen erlauben kein Kopieren von Seiten

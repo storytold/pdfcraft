@@ -2074,6 +2074,7 @@
 	Every PDF in the folder and the folders inside it	Klasördeki ve içindeki klasörlerdeki her PDF
 	File name	Dosya adı
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Dosyalar yukarıdan aşağıya doğru birleştirilir. Tüm sayfaları almak için Sayfalar alanını boş bırakın.
+	Add a bookmark for each file	Her dosya için yer işareti ekle
 	Hide password	Parolayı gizle
 	Includes unsaved changes	Kaydedilmemiş değişiklikleri içerir
 	Its security settings don't allow copying pages	Güvenlik ayarları sayfaların kopyalanmasına izin vermiyor

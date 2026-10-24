@@ -1671,6 +1671,7 @@
 	Sending to {printer}…	{printer} に送信しています…
 	Choose a folder for the searchable files	検索可能なファイルの保存先フォルダーを選択
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ファイルは上から順に結合されます。すべてのページを使用する場合は「ページ」を空欄にしてください。
+	Add a bookmark for each file	ファイルごとにしおりを追加
 	Unlock…	ロックを解除…
 	Select a password-protected file first	先にパスワードで保護されたファイルを選択してください
 	Enter the permissions password to allow combining	結合を許可するには権限パスワードを入力してください

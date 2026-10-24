@@ -1573,6 +1573,7 @@
 	Sending to {printer}…	正在傳送到{printer}…
 	Choose a folder for the searchable files	選擇可搜尋檔案的資料夾
 	Files are combined from top to bottom. Leave Pages empty to take every page.	檔案將按從上到下的順序合併。頁碼留空表示取全部頁面。
+	Add a bookmark for each file	為每個檔案新增書籤
 	Unlock…	解除鎖定…
 	Select a password-protected file first	請先選取一個受密碼保護的檔案
 	Enter the permissions password to allow combining	輸入權限密碼以允許合併

@@ -701,6 +701,7 @@ impl Host for crate::PdfCraftApp {
                 "showing": self.combine_showing(),
                 "view": self.combine_view.as_str(),
                 "zoom": self.combine_zoom,
+                "file_bookmarks": self.combine_file_bookmarks,
                 "files": self.combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
                 "selected": self.combine_selection(),
                 "thumbnails": self.combine_thumbnails().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),

@@ -2106,6 +2106,7 @@
 	Every PDF, image and text file in the folder and the folders inside it	A mappa és az almappái minden PDF-je, képe és szövegfájlja
 	File name	Fájlnév
 	Files are combined from top to bottom. Leave Pages empty to take every page.	A fájlok fentről lefelé egyesülnek. Hagyd üresen az Oldalak mezőt, ha minden oldalt kérsz.
+	Add a bookmark for each file	Könyvjelző hozzáadása minden fájlhoz
 	Hide password	Jelszó elrejtése
 	Includes unsaved changes	Nem mentett módosításokat tartalmaz
 	Its security settings don't allow copying pages	A biztonsági beállításai nem engedik az oldalak másolását

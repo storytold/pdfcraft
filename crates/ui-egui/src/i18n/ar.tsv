@@ -1661,6 +1661,7 @@
 	Sending to {printer}…	جارٍ الإرسال إلى {printer}…
 	Choose a folder for the searchable files	اختر مجلدًا للملفات القابلة للبحث
 	Files are combined from top to bottom. Leave Pages empty to take every page.	تُدمج الملفات من الأعلى إلى الأسفل. اترك «الصفحات» فارغًا لأخذ كل الصفحات.
+	Add a bookmark for each file	إضافة إشارة مرجعية لكل ملف
 	Unlock…	إلغاء القفل…
 	Select a password-protected file first	حدد أولًا ملفًا محميًا بكلمة مرور
 	Enter the permissions password to allow combining	أدخل كلمة مرور الأذونات للسماح بالدمج

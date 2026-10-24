@@ -779,6 +779,7 @@
 	File name	Emri i skedarit
 	File size	Madhësia e skedarit
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Skedarët bashkohen nga lart poshtë. Lëre Faqet bosh për të marrë çdo faqe.
+	Add a bookmark for each file	Shto një libërshënues për çdo skedar
 	Files are combined in this order. Leave Pages empty to take every page.	Skedarët bashkohen sipas këtij rendi. Lëre Faqet bosh për të marrë çdo faqe.
 	Files for {name}	Skedarët për {name}
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	Skedarët që hap në PdfCraft shfaqen këtu. Hidh një PDF kudo për ta hapur.
