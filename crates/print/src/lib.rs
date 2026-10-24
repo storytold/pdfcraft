@@ -20,6 +20,8 @@
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
+#[cfg(target_os = "linux")]
+pub mod portal;
 pub mod range;
 pub mod spool;
 #[cfg(test)]

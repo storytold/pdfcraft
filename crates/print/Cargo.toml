@@ -17,3 +17,10 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Same safe D-Bus/runtime crates already used by platform; no Tokio runtime or toolkit.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io"] }
+futures-lite = "2"
+async-io = "2"
+tempfile = "3"

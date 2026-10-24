@@ -418,6 +418,19 @@ fn app_creator<'a>(
         }
         app.update_source = Some(std::sync::Arc::new(updates::latest_release));
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
+        #[cfg(target_os = "linux")]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            // X11 ids are portable strings. Wayland pointers are not portal handles; until
+            // eframe exports xdg-foreign handles, the portal opens an unparented dialog.
+            if let Ok(handle) = cc.window_handle() {
+                app.print_parent_window = match handle.as_raw() {
+                    RawWindowHandle::Xlib(window) => format!("x11:{:x}", window.window),
+                    RawWindowHandle::Xcb(window) => format!("x11:{:x}", window.window.get()),
+                    _ => String::new(),
+                };
+            }
+        }
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]
         {

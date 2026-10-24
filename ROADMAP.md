@@ -1,7 +1,11 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** patch (M10 #1905: integrate main d4454108, retain native paper/booklet handling and distinguish PDF handoff from physical printing; estimates unchanged.)
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M10, PR #3066: Flatpak printing CI: portal labels translated in all 33 catalogs; ctutils 0.4.5 inherited from main; physical output unverified; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M8, #3205 follow-up: labelled Italian international phone numbers with a slash match whole; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
@@ -200,6 +204,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 ## Progress log
 
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
+- **2026-10-24:** M10 #1905: integrate main d4454108, retain native paper/booklet handling and distinguish PDF handoff from physical printing; estimates unchanged.
 
 - **2026-10-23 (M7, #4280):** Edit text names each standard stand-in font after its face (`PCEdTimesBold`, ...) instead of one shared `PCEdHelv`. Rewriting a bold paragraph whose subset lacks an accent no longer repoints the paragraphs set earlier in a regular stand-in at Times-Bold, and the editor's frame stays on the paragraph being edited. Pages saved by older builds keep their shared name and are not repaired. Estimates unchanged.
 - **2026-10-23 (M8, #3205 follow-up):** Phone-pattern redaction matches complete labelled Italian geographic numbers such as `Tel. +39 0426/123456`, with synthetic matcher and mark/apply/save/reopen coverage; unlabelled international slash numbers remain unsupported.
@@ -676,6 +681,9 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | patch | M10 #1905: integrate main d4454108, retain native paper/booklet handling and distinguish PDF handoff from physical printing; estimates unchanged. |
+| 2026-10-23 | patch | M10 (PR #3066): translate the eight system-print portal labels in all 33 catalogs; integrate main including ctutils 0.4.5 for RUSTSEC-2026-0385. Physical output and readiness estimates unchanged. |
+| 2026-10-23 | minor | M10 (#1905, PR #3066): refreshed against main, retaining permission checks, print content filtering and layer state.  Flatpak printing through XDG Print Portal, with unchanged permissions, composed-PDF handoff and cancellable workers. Physical output remains unverified. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
 | 2026-10-23 | minor | M11: image downsampling measures physical resolution after page-local UserUnit scaling, including shared nested forms; synthetic measurement and optimization regressions. Estimates unchanged. |
 | 2026-10-23 | minor | M10: Word table cells use the grid columns they span, including cells after a merged cell; synthetic export regression and CLI reproduction. Estimates unchanged. |

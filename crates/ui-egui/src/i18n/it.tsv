@@ -2763,3 +2763,4 @@ certificate	SHA-256 digest	Impronta SHA-256
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
+# Flatpak system print portal (#1905).

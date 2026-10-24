@@ -5,7 +5,7 @@ use crate::spool::{Duplex, Job, Printer, lp_args, parse_lpstat, parse_windows_pr
 
 /// `n` pages of 200×300 (page 3 is landscape 300×200 when n ≥ 3); page i shows "(Page i+1)".
 /// Page 1 carries a printable square comment, a non-printing note, and a stamp.
-fn fixture(n: usize) -> Document {
+pub(crate) fn fixture(n: usize) -> Document {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 6 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());

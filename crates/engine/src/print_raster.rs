@@ -10,15 +10,15 @@ use pdfcraft_create::ImageResolution;
 use pdfcraft_print::{Content, Raster};
 use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderRequest};
 
+use crate::export::ExportSource;
 use crate::export::encode_png;
-use crate::{Document, guard};
+use crate::guard;
 
-/// `doc`'s pages `pages` (0-based, each once, in the order given) as an image-only PDF, one
+/// `src`'s pages `pages` (0-based, each once, in the order given) as an image-only PDF, one
 /// page per entry, the size of the source page as displayed, drawing what `content` prints.
 /// Pages too large for the renderer at `raster.dpi` render at the largest resolution it allows.
-pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Content) -> Result<Vec<u8>, String> {
+pub fn rasterize(src: &ExportSource, pages: &[usize], raster: &Raster, content: Content) -> Result<Vec<u8>, String> {
     let dpi = raster.dpi.clamp(72.0, 600.0);
-    let src = doc.export_source();
     let mut config = src.config.clone();
     // The copy below holds only what prints, so the viewer's own comment hiding plays no part.
     config.hide_comments = false;

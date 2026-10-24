@@ -181,8 +181,11 @@ otherwise; the release job checks both.
 the same binaries), then installs it and runs `pdfcraft-cli --version` in the sandbox.
 `flatpak/ai.storyteller.pdfcraft.yml` is the from-source manifest for a later Flathub submission;
 packaging-lint keeps the runtime and sandbox permissions (`finish-args`) of the two identical.
-Printing is not available in the Flatpak yet: it runs `lp`, which the freedesktop runtime lacks
-(the job logs a note); it needs the print portal. Users install the bundle with `flatpak install --user pdfcraft-<v>-linux-<arch>.flatpak`; the
+Flatpak printing uses `org.freedesktop.portal.Print`: the app sends its composed PDF through a
+read-only file descriptor and the host dialog chooses the destination, copies and duplex. No
+CUPS socket, host command execution or extra sandbox permissions are needed. The host must
+provide a Print portal (for example KDE's); see [printing](../crates/print/README.md#flatpak-system-printing)
+for layout and physical-output limitations. Users install the bundle with `flatpak install --user pdfcraft-<v>-linux-<arch>.flatpak`; the
 freedesktop runtime comes from Flathub.
 
 Locally (on Linux, with nfpm): `packaging/linux/package.sh` or `--formats "deb tar"`; then

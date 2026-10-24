@@ -2801,3 +2801,4 @@ theme	Appearance	Teema
 	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
+# Flatpak system print portal (#1905).

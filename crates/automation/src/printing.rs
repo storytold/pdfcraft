@@ -99,7 +99,7 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "count": list.len(), "printers": list }))
+        Ok(json!({ "count": list.len(), "printers": list, "system_dialog": spool::backend() == spool::Backend::Portal }))
     }
 
     pub(crate) fn printer_options(&self, a: &Args) -> Result<Value> {
@@ -191,7 +191,8 @@ impl Automation {
         let (paper_index, paper) = paper_named(a.opt_str("paper")?)?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
-        let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
+        let portal = spool::backend() == spool::Backend::Portal && a.opt_str("printer")?.is_some() && a.opt_str("path")?.is_none();
+        let raster = if a.opt_bool("as_image")?.unwrap_or(false) || (portal && a.opt_bool("grayscale")?.unwrap_or(false)) {
             let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
             if !(72.0..=600.0).contains(&dpi) {
                 return Err(bad("dpi must be between 72 and 600"));
@@ -213,6 +214,25 @@ impl Automation {
             }
             (None, Some(printer)) => {
                 let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
+                #[cfg(target_os = "linux")]
+                if portal {
+                    if !matches!(printer, "default" | "system-dialog")
+                        || a.get("copies").is_some()
+                        || a.get("duplex").is_some()
+                        || a.get("collate").is_some()
+                        || a.get("options").and_then(Value::as_object).is_some_and(|m| !m.is_empty())
+                    {
+                        return Err(bad(
+                            "Flatpak printing uses the system dialog: use printer default or system-dialog; choose copies, collate, duplex and driver options there",
+                        ));
+                    }
+                    let outcome = print::portal::submit(&bytes, &job.title, "", &Default::default()).map_err(|e| failed(e.to_string()))?;
+                    out["status"] = json!(match outcome {
+                        print::portal::Outcome::Accepted => "accepted",
+                        print::portal::Outcome::Cancelled => "cancelled",
+                    });
+                    return Ok(out);
+                }
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
