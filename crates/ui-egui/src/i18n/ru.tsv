@@ -2342,6 +2342,7 @@ animation effects	Off	Выкл
 	This document is trying to open a local file:	Этот документ пытается открыть локальный файл:
 	Move tag earlier	Переместить тег раньше
 	Move tag later	Переместить тег позже
+	Opening {name}…	Открывается {name}…
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Вы просматриваете подписанную версию документа «{from}» (ревизия {rev}). Это снимок: изменения здесь не затронут оригинал.

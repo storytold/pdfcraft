@@ -2443,6 +2443,7 @@ animation effects	Off	Desativados
 	This document is trying to open a local file:	Este documento está tentando abrir um arquivo local:
 	Move tag earlier	Mover tag para antes
 	Move tag later	Mover tag para depois
+	Opening {name}…	Abrindo {name}…
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Você está vendo a versão assinada de “{from}” (revisão {rev}). É um instantâneo: as alterações aqui não afetarão o original.

@@ -2593,6 +2593,7 @@ key	Space	Space
 	This document is trying to open a local file:	เอกสารนี้พยายามเปิดไฟล์ในเครื่อง:
 	Move tag earlier	ย้ายแท็กขึ้นก่อน
 	Move tag later	ย้ายแท็กลงทีหลัง
+	Opening {name}…	กำลังเปิด {name}…
 @plural	{n} image optimized|{n} images optimized	ปรับรูปภาพให้เหมาะสมแล้ว {n} รูป
 @plural	{n} item discarded|{n} items discarded	ทิ้งไปแล้ว {n} รายการ
 @plural	{n} byte|{n} bytes	{n} ไบต์

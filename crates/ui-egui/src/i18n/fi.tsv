@@ -2357,6 +2357,7 @@ animation effects	Off	Ei käytössä
 	This document is trying to open a local file:	Tämä asiakirja yrittää avata paikallisen tiedoston:
 	Move tag earlier	Siirrä tagia aiemmaksi
 	Move tag later	Siirrä tagia myöhemmäksi
+	Opening {name}…	Avataan {name}…
 	Tools	Työkalut
 	Inspector	Tarkastin
 	Save (M4)	Tallenna (M4)

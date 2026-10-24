@@ -2591,6 +2591,7 @@ key	Space	Space
 	Minimize	Minimalkan
 	Move tag earlier	Pindahkan tag lebih awal
 	Move tag later	Pindahkan tag lebih lambat
+	Opening {name}…	Membuka {name}…
 	Only allow this if you trust the source document.	Hanya izinkan ini jika Anda mempercayai dokumen sumber.
 	Open this local PDF?	Buka PDF lokal ini?
 	Remove "{name}" from this list? The file itself is not deleted.	Hapus "{name}" dari daftar ini? File itu sendiri tidak dihapus.

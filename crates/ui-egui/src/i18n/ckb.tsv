@@ -2405,6 +2405,7 @@ animation effects	Off	ناچالاک
 	This document is trying to open a local file:	ئەم بەڵگەنامەیە هەوڵی کردنەوەی فایلێکی ناوخۆیی دەدات:
 	Move tag earlier	گواستنەوەی تاگ بۆ پێشتر
 	Move tag later	گواستنەوەی تاگ بۆ دواتر
+	Opening {name}…	کردنەوەی {name}…
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	تۆ وەشانی واژووکراوی “{from}” دەبینیت (پێداچوونەوەی {rev}). ئەمە وێنەیەکی چەسپاوە: گۆڕانکارییەکانی لێرە کار لە ڕەسەنەکە ناکەن.

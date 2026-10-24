@@ -2434,6 +2434,7 @@ animation effects	Off	Izklopljeni
 	This document is trying to open a local file:	Ta dokument poskuša odpreti lokalno datoteko:
 	Move tag earlier	Premakni oznako prej
 	Move tag later	Premakni oznako pozneje
+	Opening {name}…	Odpiranje {name}…
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ogledate si podpisano različico dokumenta „{from}“ (revizija {rev}). To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.

@@ -2605,6 +2605,7 @@ key	Space	Spațiu
 	This document is trying to open a local file:	Acest document încearcă să deschidă un fișier local:
 	Move tag earlier	Mutare etichetă mai devreme
 	Move tag later	Mutare etichetă mai târziu
+	Opening {name}…	Se deschide {name}…
 	4 x 6 in label (101.6 x 152.4 mm)	Etichetă 4 x 6 inch (101,6 x 152,4 mm)
 	Characters	Caractere
 	Characters without spaces	Caractere fără spații

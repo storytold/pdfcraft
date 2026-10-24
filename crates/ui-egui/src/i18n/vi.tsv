@@ -2649,6 +2649,7 @@ key	End	End
 key	Space	Space
 	Move tag earlier	Chuyển thẻ lên trước
 	Move tag later	Chuyển thẻ ra sau
+	Opening {name}…	Đang mở {name}…
 	Tag form fields	Gắn thẻ các trường biểu mẫu
 	Only allow this if you trust the source document.	Chỉ cho phép nếu bạn tin tưởng tài liệu nguồn.
 	Open this local PDF?	Mở PDF cục bộ này?

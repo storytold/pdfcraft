@@ -2590,6 +2590,7 @@ certificate	SHA-256 digest	SHA-256 다이제스트
 	Minimize	최소화
 	Move tag earlier	태그를 앞으로 이동
 	Move tag later	태그를 뒤로 이동
+	Opening {name}…	{name} 여는 중…
 	Only allow this if you trust the source document.	원본 문서를 신뢰하는 경우에만 이를 허용하세요.
 	Open this local PDF?	이 로컬 PDF를 여시겠습니까?
 	Remove "{name}" from this list? The file itself is not deleted.	"{name}"을(를) 이 목록에서 제거하시겠습니까? 파일 자체는 삭제되지 않습니다.

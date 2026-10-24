@@ -397,9 +397,15 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    // Above the progress notice while a job runs.
-    let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
-    let lift = if card > 0.0 { 28.0 + card + 10.0 } else { 28.0 };
+    // Above the running job and opening notices.
+    let progress =
+        if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
+    #[cfg(not(target_arch = "wasm32"))]
+    let opening =
+        if app.opening_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(OPENING_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
+    #[cfg(target_arch = "wasm32")]
+    let opening = 0.0;
+    let lift = 28.0 + progress + opening;
     egui::Area::new(egui::Id::new("toast"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
@@ -437,6 +443,8 @@ pub struct ProgressNotice {
 
 /// Where the progress notice keeps its height this frame, for placing the toast above it.
 const PROGRESS_HEIGHT: &str = "progress-notice-height";
+#[cfg(not(target_arch = "wasm32"))]
+const OPENING_HEIGHT: &str = "opening-notice-height";
 
 /// Draw [`PdfCraftApp::progress_notice`]: the label, a bar that eases towards the fraction with
 /// a light sweeping across it, the percentage and Cancel. Returns true when Cancel was clicked.
@@ -507,6 +515,58 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(PROGRESS_HEIGHT), area.response.rect.height()));
     ctx.request_repaint_after(std::time::Duration::from_millis(33));
     cancel
+}
+
+/// Draw an indeterminate opening card above the progress card, if any.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn opening_notice(label: Option<&str>, progress_visible: bool, ctx: &egui::Context) {
+    let Some(label) = label else {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(OPENING_HEIGHT), 0.0_f32));
+        return;
+    };
+    let t = Tokens::get(ctx);
+    let screen = ctx.content_rect();
+    let (fill, text) = if t.dark() {
+        (Color32::from_rgb(0xEC, 0xEC, 0xEF), Color32::from_rgb(0x22, 0x22, 0x26))
+    } else {
+        (Color32::from_rgb(0x2A, 0x2A, 0x2F), Color32::WHITE)
+    };
+    let progress_height = if progress_visible { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(PROGRESS_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
+    let animated = crate::motion::animated(ctx);
+    let area = egui::Area::new(egui::Id::new("opening-notice"))
+        .order(egui::Order::Tooltip)
+        .pivot(Align2::CENTER_BOTTOM)
+        .fixed_pos(screen.center_bottom() - vec2(0.0, 28.0 + progress_height))
+        .show(ctx, |ui| {
+            egui::Frame::NONE.fill(fill).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
+                let width = 340.0_f32.min(screen.width() - 64.0).max(160.0);
+                ui.set_width(width);
+                ui.horizontal(|ui| {
+                    let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator));
+                    let center = rect.center();
+                    let painter = ui.painter();
+                    if animated {
+                        let now = ui.input(|i| i.time);
+                        let phase = if now.is_finite() && now >= 0.0 { (now * 8.0).floor() as usize % 8 } else { 0 };
+                        for i in 0..8 {
+                            let angle = std::f32::consts::TAU * i as f32 / 8.0;
+                            let point = center + vec2(angle.cos() * 6.0, angle.sin() * 6.0);
+                            let age = (phase + 8 - i) % 8;
+                            let alpha = 0.2 + 0.8 * (1.0 - age as f32 / 8.0);
+                            painter.circle_filled(point, 1.5, text.gamma_multiply(alpha));
+                        }
+                    } else {
+                        painter.circle_stroke(center, 6.0, Stroke::new(1.5, text.gamma_multiply(0.7)));
+                    }
+                    ui.add(egui::Label::new(egui::RichText::new(label).color(text)).wrap());
+                });
+            });
+        });
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(OPENING_HEIGHT), area.response.rect.height()));
+    if animated {
+        ctx.request_repaint_after(std::time::Duration::from_millis(80));
+    }
 }
 
 /// The ArtCraft wordmark (Storyteller's brand, docs/brand/; not open source), sized to `height`.

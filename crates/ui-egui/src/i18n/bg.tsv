@@ -2392,6 +2392,7 @@ animation effects	Off	Изключени
 	This document is trying to open a local file:	Този документ се опитва да отвори локален файл:
 	Move tag earlier	Преместване на етикета по-рано
 	Move tag later	Преместване на етикета по-късно
+	Opening {name}…	Отваряне на {name}…
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Разглеждате подписаната версия на „{from}“ (редакция {rev}). Това е моментна снимка: промените тук няма да засегнат оригинала.

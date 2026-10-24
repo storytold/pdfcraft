@@ -2679,6 +2679,7 @@ key	Space	Tarpas
 	This document is trying to open a local file:	Šis dokumentas bando atverti vietinį failą:
 	Move tag earlier	Perkelti žymą anksčiau
 	Move tag later	Perkelti žymą vėliau
+	Opening {name}…	Atidaroma {name}…
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Jūs peržiūrite pasirašytą „{from}“ versiją ({rev} versija). Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.

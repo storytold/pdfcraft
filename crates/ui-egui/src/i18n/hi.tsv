@@ -2590,6 +2590,7 @@ certificate	SHA-256 digest	SHA-256 डाइजेस्ट
 	Minimize	न्यूनतम करें
 	Move tag earlier	टैग पहले ले जाएँ
 	Move tag later	टैग बाद में ले जाएँ
+	Opening {name}…	{name} खुल रहा है…
 	Only allow this if you trust the source document.	इसे केवल तभी अनुमति दें जब आप स्रोत दस्तावेज़ पर भरोसा करें।
 	Open this local PDF?	यह स्थानीय पीडीएफ़ खोलें?
 	Remove "{name}" from this list? The file itself is not deleted.	"{name}" को इस सूची से हटाएँ? फ़ाइल स्वयं नहीं मिटती।

@@ -2576,6 +2576,7 @@ animation effects	Off	Desactivados
 	This document is trying to open a local file:	Este documento intenta abrir un archivo local:
 	Move tag earlier	Mover etiqueta antes
 	Move tag later	Mover etiqueta después
+	Opening {name}…	Abriendo {name}…
 	Turn upside down (180°)	Girar boca abajo (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Etiqueta 4 × 6 in (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Recorta cada página a su área impresa, la endereza y la ajusta a la hoja sin deformarla. Una etiqueta por hoja.

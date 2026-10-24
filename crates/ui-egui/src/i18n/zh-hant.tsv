@@ -2303,6 +2303,7 @@ animation effects	Off	關
 	This document is trying to open a local file:	此文件正嘗試開啟本機檔案：
 	Move tag earlier	將標記前移
 	Move tag later	將標記後移
+	Opening {name}…	正在開啟 {name}…
 	Turn upside down (180°)	上下顛倒 (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 英吋標籤 (101.6 × 152.4 公釐)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	將每頁裁切至其列印區域，轉正後不拉伸地符合紙張。每張紙一個標籤。

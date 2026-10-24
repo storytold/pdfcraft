@@ -457,6 +457,14 @@ struct PendingOpen {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+struct OpeningNotice {
+    token: u64,
+    /// The language `label` is in, so a language change while the open is pending re-translates it.
+    lang: i18n::Lang,
+    label: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct OpenRequest {
     name: String,
     path: Option<String>,
@@ -602,6 +610,8 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    #[cfg(not(target_arch = "wasm32"))]
+    opening_notice: Option<OpeningNotice>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -996,6 +1006,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            opening_notice: None,
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
@@ -1240,7 +1252,22 @@ impl PdfCraftApp {
             recovered: request.recovered,
             then: request.then,
         });
+        self.refresh_opening_notice();
         Ok(token)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh_opening_notice(&mut self) {
+        let Some(pending) = self.pending_opens.first() else {
+            self.opening_notice = None;
+            return;
+        };
+        let lang = i18n::current();
+        if self.opening_notice.as_ref().is_some_and(|notice| notice.token == pending.token && notice.lang == lang) {
+            return;
+        }
+        self.opening_notice =
+            Some(OpeningNotice { token: pending.token, lang, label: i18n::fmt(tl!("Opening {name}…"), &[("name", &pending.name)]) });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1269,6 +1296,7 @@ impl PdfCraftApp {
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+        self.refresh_opening_notice();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2159,6 +2187,8 @@ impl PdfCraftApp {
         if widgets::progress_notice(self, ctx) {
             self.cancel_optimize();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        widgets::opening_notice(self.opening_notice.as_ref().map(|notice| notice.label.as_str()), self.progress_notice.is_some(), ctx);
     }
 
     fn sync_theme(&mut self, ctx: &egui::Context) {

@@ -2538,6 +2538,7 @@
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Vis en enkel tittellinje for vindusknappene i stedet for fanelinjen. GNOME tegner ikke tittellinjer for apper, så denne følger ikke temaet.
 	Move tag earlier	Flytt tagg tidligere
 	Move tag later	Flytt tagg senere
+	Opening {name}…	Åpner {name}…
 	Next tab	Neste fane
 	Previous tab	Forrige fane
 	Hide hover previews for highlights without comment text	Skjul forhåndsvisning ved peking for uthevinger uten kommentartekst
