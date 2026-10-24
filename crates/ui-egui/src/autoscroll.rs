@@ -1,9 +1,13 @@
-//! Middle-button scrolling for the document viewport: Linux latches auto-scroll, other
-//! platforms pan while the button is held. Either way the page tools never see the button,
+//! Middle-button scrolling for the document viewport: Linux and Windows latch auto-scroll,
+//! while other platforms pan while the button is held. Either way the page tools never see the button,
 //! because egui's drag responses accept every pointer button. Also the edge scrolling of a
 //! text-selection drag.
 
 use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Stroke, Vec2, vec2};
+
+fn autoscroll_supported() -> bool {
+    cfg!(any(target_os = "linux", target_os = "windows"))
+}
 
 const DEAD_ZONE: f32 = 15.0;
 // Chromium's autoscroll_controller.cc uses distance^2.2 * 0.000008; its
@@ -48,7 +52,7 @@ impl AutoScroll {
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
     /// once started, moving outside that viewport still controls the speed.
     pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"))
+        self.update_for_platform(ui, viewport, organize, autoscroll_supported())
     }
 
     fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool) -> Vec2 {
@@ -259,7 +263,7 @@ mod tests {
         Event::PointerButton { pos, button: PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE }
     }
 
-    /// Run one frame of the non-Linux path; `check` sees the pan delta inside the frame.
+    /// Run one frame of the drag-to-pan path; `check` sees the pan delta inside the frame.
     fn drag_frame(ctx: &Context, scroll: &mut AutoScroll, events: Vec<Event>, focused: bool, check: impl Fn(&AutoScroll, Vec2)) {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused, ..Default::default() },
@@ -269,6 +273,45 @@ mod tests {
             },
         );
         // This input-only test has no renderer to apply the generated font texture.
+        output.textures_delta.clear();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_enables_middle_click_autoscroll() {
+        assert!(autoscroll_supported(), "Windows must enable middle-click AutoScroll");
+    }
+
+    #[test]
+    fn latch_path_activates_on_middle_click() {
+        let ctx = Context::default();
+        let mut scroll = AutoScroll::default();
+        let p = egui::pos2(100.0, 100.0);
+
+        // Establish the viewport layer before sending pointer input.
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), focused: true, ..Default::default() },
+            |ui| {
+                scroll.update_for_platform(ui, ui.max_rect(), false, true);
+            },
+        );
+        output.textures_delta.clear();
+
+        // Middle-click should latch AutoScroll on a supported platform.
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+                events: vec![Event::PointerMoved(p), middle(p, true)],
+                focused: true,
+                ..Default::default()
+            },
+            |ui| {
+                scroll.update_for_platform(ui, ui.max_rect(), false, true);
+                assert!(scroll.active(), "middle-click should activate AutoScroll");
+                assert!(!scroll.panning(), "AutoScroll must not start drag-to-pan");
+                assert!(scroll.blocks_input(), "middle-click must not reach page tools");
+            },
+        );
         output.textures_delta.clear();
     }
 
@@ -282,7 +325,7 @@ mod tests {
         drag_frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, |s, d| {
             assert_eq!(d, Vec2::ZERO);
             assert!(s.panning() && s.blocks_input(), "the press itself must not reach the page tools");
-            assert!(!s.active(), "no auto-scroll latch outside Linux");
+            assert!(!s.active(), "no auto-scroll latch on platforms using drag-to-pan");
         });
         drag_frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(-30.0, 40.0))], true, |s, d| {
             assert_eq!(d, vec2(-30.0, 40.0), "the page follows the pointer on both axes");
