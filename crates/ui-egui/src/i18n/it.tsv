@@ -2701,6 +2701,21 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Send by email…	Invia per email…
+	Sending by email isn't available in the browser	L'invio per email non è disponibile nel browser
+	Still waiting for your email app…	Ancora in attesa dell'app di posta…
+	The copy to attach couldn't be written: {e}	Impossibile scrivere la copia da allegare: {e}
+	Attaching {name} to a new email message…	Aggiunta di {name} a un nuovo messaggio email…
+	the request stopped without an answer	la richiesta si è interrotta senza risposta
+	Couldn't attach the file	Impossibile allegare il file
+	Open message and show file	Apri il messaggio e mostra il file
+	{program} can't take a file from PdfCraft.	{program} non può ricevere un file da PdfCraft.
+	Your default email app can't take a file from PdfCraft.	L'app di posta predefinita non può ricevere un file da PdfCraft.
+	No email app is set up on this computer.	Su questo computer non è configurata alcuna app di posta.
+	Your email app didn't open a message in time.	L'app di posta non ha aperto un messaggio in tempo.
+	Your email app couldn't log on to your mailbox.	L'app di posta non è riuscita ad accedere alla tua casella.
+	Your email app didn't open a message. It said: {why}.	L'app di posta non ha aperto un messaggio. Ha detto: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Apri un nuovo messaggio senza il file e PdfCraft mostrerà {name} nella sua cartella, così potrai allegarlo tu.
 	Attach a file…	Allega un file…
 	Delete attachment	Elimina allegato
 	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web

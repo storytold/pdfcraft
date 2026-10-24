@@ -2439,6 +2439,21 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Send by email…	透過電子郵件傳送…
+	Sending by email isn't available in the browser	瀏覽器中無法透過電子郵件傳送
+	Still waiting for your email app…	仍在等待郵件應用程式…
+	The copy to attach couldn't be written: {e}	無法寫入要附加的副本：{e}
+	Attaching {name} to a new email message…	正在將 {name} 附加到新郵件…
+	the request stopped without an answer	要求未獲回應就停止了
+	Couldn't attach the file	無法附加檔案
+	Open message and show file	開啟郵件並顯示檔案
+	{program} can't take a file from PdfCraft.	{program} 無法從 PdfCraft 接收檔案。
+	Your default email app can't take a file from PdfCraft.	預設郵件應用程式無法從 PdfCraft 接收檔案。
+	No email app is set up on this computer.	此電腦上未設定郵件應用程式。
+	Your email app didn't open a message in time.	郵件應用程式未及時開啟郵件。
+	Your email app couldn't log on to your mailbox.	郵件應用程式無法登入你的信箱。
+	Your email app didn't open a message. It said: {why}.	郵件應用程式未開啟郵件。它的回覆：{why}。
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	請開啟一封不含附件的新郵件，PdfCraft 會在資料夾中顯示 {name}，讓你自行附加。
 	Attach a file…	附加檔案…
 	Delete attachment	刪除附件
 	Attaching files is not available on the web yet	網頁版尚不支援附加檔案

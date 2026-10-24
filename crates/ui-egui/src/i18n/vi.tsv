@@ -2755,6 +2755,21 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Send by email…	Gửi qua email…
+	Sending by email isn't available in the browser	Không thể gửi qua email trong trình duyệt
+	Still waiting for your email app…	Vẫn đang chờ ứng dụng email của bạn…
+	The copy to attach couldn't be written: {e}	Không thể ghi bản sao để đính kèm: {e}
+	Attaching {name} to a new email message…	Đang đính kèm {name} vào một thư email mới…
+	the request stopped without an answer	yêu cầu đã dừng mà không có phản hồi
+	Couldn't attach the file	Không thể đính kèm tệp
+	Open message and show file	Mở thư và hiển thị tệp
+	{program} can't take a file from PdfCraft.	{program} không thể nhận tệp từ PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Ứng dụng email mặc định của bạn không thể nhận tệp từ PdfCraft.
+	No email app is set up on this computer.	Chưa có ứng dụng email nào được thiết lập trên máy tính này.
+	Your email app didn't open a message in time.	Ứng dụng email của bạn không mở thư kịp thời.
+	Your email app couldn't log on to your mailbox.	Ứng dụng email của bạn không thể đăng nhập vào hộp thư.
+	Your email app didn't open a message. It said: {why}.	Ứng dụng email của bạn không mở thư. Thông báo: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Mở một thư mới không có tệp, và PdfCraft sẽ hiển thị {name} trong thư mục của nó để bạn tự đính kèm.
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

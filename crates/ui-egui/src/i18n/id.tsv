@@ -2758,6 +2758,21 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Attaching {name} to a new email message…	Melampirkan {name} ke pesan email baru…
+	Couldn't attach the file	Tidak dapat melampirkan file
+	No email app is set up on this computer.	Tidak ada aplikasi email yang disiapkan di komputer ini.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Buka pesan baru tanpanya, dan PdfCraft akan menampilkan {name} di foldernya agar Anda dapat melampirkannya sendiri.
+	Open message and show file	Buka pesan dan tampilkan file
+	Send by email…	Kirim lewat email…
+	Sending by email isn't available in the browser	Pengiriman lewat email tidak tersedia di browser
+	Still waiting for your email app…	Masih menunggu aplikasi email Anda…
+	The copy to attach couldn't be written: {e}	Salinan untuk dilampirkan tidak dapat ditulis: {e}
+	Your default email app can't take a file from PdfCraft.	Aplikasi email default Anda tidak dapat menerima file dari PdfCraft.
+	Your email app couldn't log on to your mailbox.	Aplikasi email Anda tidak dapat masuk ke kotak surat Anda.
+	Your email app didn't open a message in time.	Aplikasi email Anda tidak membuka pesan tepat waktu.
+	Your email app didn't open a message. It said: {why}.	Aplikasi email Anda tidak membuka pesan. Katanya: {why}.
+	the request stopped without an answer	permintaan berhenti tanpa jawaban
+	{program} can't take a file from PdfCraft.	{program} tidak dapat menerima file dari PdfCraft.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

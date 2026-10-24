@@ -813,6 +813,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            Dialog::SendEmail => {
+                close = crate::send_email_ui::problem_body(ui, app, &t);
+                return;
+            }
             Dialog::Revert => {
                 let name = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.name.clone()).unwrap_or_default();
                 ui.label(egui::RichText::new(tl!("Revert")).font(theme::semibold(18.0)));

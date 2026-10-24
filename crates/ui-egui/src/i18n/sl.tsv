@@ -2494,6 +2494,21 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Send by email…	Pošlji po e-pošti…
+	Sending by email isn't available in the browser	Pošiljanje po e-pošti v brskalniku ni na voljo
+	Still waiting for your email app…	Še vedno čakam na e-poštni program…
+	The copy to attach couldn't be written: {e}	Kopije za prilogo ni bilo mogoče zapisati: {e}
+	Attaching {name} to a new email message…	Prilaganje {name} novemu e-poštnemu sporočilu…
+	the request stopped without an answer	zahteva se je ustavila brez odgovora
+	Couldn't attach the file	Datoteke ni bilo mogoče priložiti
+	Open message and show file	Odpri sporočilo in prikaži datoteko
+	{program} can't take a file from PdfCraft.	{program} ne more sprejeti datoteke iz PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Vaš privzeti e-poštni program ne more sprejeti datoteke iz PdfCraft.
+	No email app is set up on this computer.	V tem računalniku ni nastavljen noben e-poštni program.
+	Your email app didn't open a message in time.	E-poštni program ni pravočasno odprl sporočila.
+	Your email app couldn't log on to your mailbox.	E-poštni program se ni mogel prijaviti v vaš poštni predal.
+	Your email app didn't open a message. It said: {why}.	E-poštni program ni odprl sporočila. Sporočil je: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Odprite novo sporočilo brez nje in PdfCraft bo prikazal {name} v njeni mapi, da jo priložite sami.
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo

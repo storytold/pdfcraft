@@ -2747,6 +2747,21 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Send by email…	Siųsti el. paštu…
+	Sending by email isn't available in the browser	Siuntimas el. paštu naršyklėje nepasiekiamas
+	Still waiting for your email app…	Vis dar laukiama el. pašto programos…
+	The copy to attach couldn't be written: {e}	Nepavyko įrašyti pridedamos kopijos: {e}
+	Attaching {name} to a new email message…	{name} pridedamas prie naujo el. laiško…
+	the request stopped without an answer	užklausa baigėsi be atsakymo
+	Couldn't attach the file	Nepavyko pridėti failo
+	Open message and show file	Atverti laišką ir rodyti failą
+	{program} can't take a file from PdfCraft.	{program} negali priimti failo iš PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Numatytoji el. pašto programa negali priimti failo iš PdfCraft.
+	No email app is set up on this computer.	Šiame kompiuteryje nenustatyta jokia el. pašto programa.
+	Your email app didn't open a message in time.	El. pašto programa laiku neatvėrė laiško.
+	Your email app couldn't log on to your mailbox.	El. pašto programai nepavyko prisijungti prie jūsų pašto dėžutės.
+	Your email app didn't open a message. It said: {why}.	El. pašto programa neatvėrė laiško. Ji pranešė: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Atverkite naują laišką be jo, ir PdfCraft parodys {name} jo aplanke, kad galėtumėte pridėti patys.
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

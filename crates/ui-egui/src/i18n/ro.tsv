@@ -2781,6 +2781,21 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Attaching {name} to a new email message…	Se atașează {name} la un mesaj de e-mail nou…
+	Couldn't attach the file	Nu s-a putut atașa fișierul
+	No email app is set up on this computer.	Nu este configurată nicio aplicație de e-mail pe acest calculator.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Deschideți un mesaj nou fără el, iar PdfCraft va afișa {name} în folderul său, ca să îl puteți atașa singur.
+	Open message and show file	Deschidere mesaj și afișare fișier
+	Send by email…	Trimitere prin e-mail…
+	Sending by email isn't available in the browser	Trimiterea prin e-mail nu este disponibilă în browser
+	Still waiting for your email app…	Se așteaptă încă aplicația dvs. de e-mail…
+	The copy to attach couldn't be written: {e}	Copia de atașat nu a putut fi scrisă: {e}
+	Your default email app can't take a file from PdfCraft.	Aplicația dvs. de e-mail implicită nu poate primi un fișier de la PdfCraft.
+	Your email app couldn't log on to your mailbox.	Aplicația dvs. de e-mail nu s-a putut conecta la căsuța poștală.
+	Your email app didn't open a message in time.	Aplicația dvs. de e-mail nu a deschis un mesaj la timp.
+	Your email app didn't open a message. It said: {why}.	Aplicația dvs. de e-mail nu a deschis un mesaj. A spus: {why}.
+	the request stopped without an answer	cererea s-a oprit fără răspuns
+	{program} can't take a file from PdfCraft.	{program} nu poate primi un fișier de la PdfCraft.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

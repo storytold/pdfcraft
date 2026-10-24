@@ -2781,6 +2781,21 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Attaching {name} to a new email message…	S'està adjuntant {name} a un missatge de correu nou…
+	Couldn't attach the file	No s'ha pogut adjuntar el fitxer
+	No email app is set up on this computer.	No hi ha cap aplicació de correu configurada en aquest ordinador.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Obre un missatge nou sense el fitxer, i PdfCraft et mostrarà {name} a la seva carpeta perquè l'adjuntis tu mateix.
+	Open message and show file	Obre el missatge i mostra el fitxer
+	Send by email…	Envia per correu electrònic…
+	Sending by email isn't available in the browser	L'enviament per correu electrònic no està disponible al navegador
+	Still waiting for your email app…	Encara s'espera l'aplicació de correu…
+	The copy to attach couldn't be written: {e}	No s'ha pogut escriure la còpia per adjuntar: {e}
+	Your default email app can't take a file from PdfCraft.	L'aplicació de correu predeterminada no pot rebre un fitxer de PdfCraft.
+	Your email app couldn't log on to your mailbox.	L'aplicació de correu no ha pogut iniciar la sessió a la teva bústia.
+	Your email app didn't open a message in time.	L'aplicació de correu no ha obert cap missatge a temps.
+	Your email app didn't open a message. It said: {why}.	L'aplicació de correu no ha obert cap missatge. Ha dit: {why}.
+	the request stopped without an answer	la sol·licitud s'ha aturat sense resposta
+	{program} can't take a file from PdfCraft.	{program} no pot rebre un fitxer de PdfCraft.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

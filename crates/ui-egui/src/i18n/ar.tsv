@@ -2766,6 +2766,21 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Send by email…	إرسال بالبريد الإلكتروني…
+	Sending by email isn't available in the browser	الإرسال بالبريد الإلكتروني غير متاح في المتصفح
+	Still waiting for your email app…	لا يزال في انتظار تطبيق البريد…
+	The copy to attach couldn't be written: {e}	تعذّرت كتابة النسخة المراد إرفاقها: {e}
+	Attaching {name} to a new email message…	جارٍ إرفاق {name} برسالة بريد إلكتروني جديدة…
+	the request stopped without an answer	توقف الطلب دون رد
+	Couldn't attach the file	تعذّر إرفاق الملف
+	Open message and show file	فتح الرسالة وإظهار الملف
+	{program} can't take a file from PdfCraft.	لا يستطيع {program} استلام ملف من PdfCraft.
+	Your default email app can't take a file from PdfCraft.	لا يستطيع تطبيق البريد الافتراضي استلام ملف من PdfCraft.
+	No email app is set up on this computer.	لم يتم إعداد أي تطبيق بريد على هذا الكمبيوتر.
+	Your email app didn't open a message in time.	لم يفتح تطبيق البريد رسالة في الوقت المحدد.
+	Your email app couldn't log on to your mailbox.	تعذّر على تطبيق البريد تسجيل الدخول إلى صندوق بريدك.
+	Your email app didn't open a message. It said: {why}.	لم يفتح تطبيق البريد رسالة. قال: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	افتح رسالة جديدة بدونه، وسيُظهر PdfCraft الملف {name} في مجلده لتتمكن من إرفاقه بنفسك.
 	Attach a file…	إرفاق ملف…
 	Delete attachment	حذف المرفق
 	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد

@@ -2507,6 +2507,21 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Attaching {name} to a new email message…	Po bashkëngjitet {name} te një mesazh i ri emaili…
+	Couldn't attach the file	Nuk u bashkëngjit dot skedari
+	No email app is set up on this computer.	Në këtë kompjuter nuk është caktuar aplikacion emaili.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Hapni një mesazh të ri pa të, dhe PdfCraft do ta shfaqë {name} në dosjen e tij që ta bashkëngjitni vetë.
+	Open message and show file	Hap mesazhin dhe shfaq skedarin
+	Send by email…	Dërgo me email…
+	Sending by email isn't available in the browser	Dërgimi me email nuk është i disponueshëm në shfletues
+	Still waiting for your email app…	Ende po pritet aplikacioni juaj i emailit…
+	The copy to attach couldn't be written: {e}	Kopja për t'u bashkëngjitur nuk u shkrua dot: {e}
+	Your default email app can't take a file from PdfCraft.	Aplikacioni juaj i parazgjedhur i emailit nuk mund të marrë skedar nga PdfCraft.
+	Your email app couldn't log on to your mailbox.	Aplikacioni juaj i emailit nuk mundi të hyjë në kutinë tuaj postare.
+	Your email app didn't open a message in time.	Aplikacioni juaj i emailit nuk hapi dot një mesazh në kohë.
+	Your email app didn't open a message. It said: {why}.	Aplikacioni juaj i emailit nuk hapi dot një mesazh. Tha: {why}.
+	the request stopped without an answer	kërkesa u ndërpre pa përgjigje
+	{program} can't take a file from PdfCraft.	{program} nuk mund të marrë skedar nga PdfCraft.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

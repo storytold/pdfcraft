@@ -2485,6 +2485,21 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Send by email…	E-postayla gönder…
+	Sending by email isn't available in the browser	E-postayla gönderme tarayıcıda kullanılamaz
+	Still waiting for your email app…	E-posta uygulaması hâlâ bekleniyor…
+	The copy to attach couldn't be written: {e}	Eklenecek kopya yazılamadı: {e}
+	Attaching {name} to a new email message…	{name} yeni bir e-posta iletisine ekleniyor…
+	the request stopped without an answer	istek yanıt vermeden durdu
+	Couldn't attach the file	Dosya eklenemedi
+	Open message and show file	İletiyi aç ve dosyayı göster
+	{program} can't take a file from PdfCraft.	{program}, PdfCraft’tan dosya alamıyor.
+	Your default email app can't take a file from PdfCraft.	Varsayılan e-posta uygulamanız PdfCraft’tan dosya alamıyor.
+	No email app is set up on this computer.	Bu bilgisayarda kurulu bir e-posta uygulaması yok.
+	Your email app didn't open a message in time.	E-posta uygulamanız zamanında bir ileti açmadı.
+	Your email app couldn't log on to your mailbox.	E-posta uygulamanız posta kutunuzda oturum açamadı.
+	Your email app didn't open a message. It said: {why}.	E-posta uygulamanız bir ileti açmadı. Yanıtı: {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Dosya olmadan yeni bir ileti açın; PdfCraft, {name} dosyasını klasöründe gösterecek, böylece kendiniz ekleyebilirsiniz.
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor

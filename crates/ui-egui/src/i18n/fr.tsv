@@ -2489,6 +2489,21 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Send by email…	Envoyer par e-mail…
+	Sending by email isn't available in the browser	L'envoi par e-mail n'est pas disponible dans le navigateur
+	Still waiting for your email app…	En attente de votre application de courrier…
+	The copy to attach couldn't be written: {e}	La copie à joindre n'a pas pu être écrite : {e}
+	Attaching {name} to a new email message…	Ajout de {name} à un nouveau message…
+	the request stopped without an answer	la demande s'est arrêtée sans réponse
+	Couldn't attach the file	Impossible de joindre le fichier
+	Open message and show file	Ouvrir le message et afficher le fichier
+	{program} can't take a file from PdfCraft.	{program} ne peut pas recevoir de fichier de PdfCraft.
+	Your default email app can't take a file from PdfCraft.	Votre application de courrier par défaut ne peut pas recevoir de fichier de PdfCraft.
+	No email app is set up on this computer.	Aucune application de courrier n'est configurée sur cet ordinateur.
+	Your email app didn't open a message in time.	Votre application de courrier n'a pas ouvert de message à temps.
+	Your email app couldn't log on to your mailbox.	Votre application de courrier n'a pas pu se connecter à votre boîte aux lettres.
+	Your email app didn't open a message. It said: {why}.	Votre application de courrier n'a pas ouvert de message. Elle a indiqué : {why}.
+	Open a new message without it, and PdfCraft will show {name} in its folder so you can attach it yourself.	Ouvrez un nouveau message sans lui, et PdfCraft affichera {name} dans son dossier pour que vous le joigniez vous-même.
 	Attach a file…	Joindre un fichier…
 	Delete attachment	Supprimer la pièce jointe
 	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web
