@@ -4186,6 +4186,68 @@ fn scripts_in_an_xfa_form_see_the_xfa_plugin_installed() {
 }
 
 #[test]
+fn automatic_field_scripts_cannot_print() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "qty").unwrap();
+    for event in [FieldEvent::Keystroke, FieldEvent::Validate, FieldEvent::Calculate, FieldEvent::Format] {
+        let mut runner = js::JsRunner::new(&cos, "order.pdf");
+        let result = runner.run(
+            event,
+            "console.println('before'); this.print(); this.pageNum = 0; this.print(); app.alert('ok'); event.value = '4';",
+            target,
+            "2",
+            &fields,
+        );
+        assert!(result.rc, "{event:?}: {result:?}");
+        assert_eq!(result.value, "4");
+        assert_eq!(runner.output.requests, [js::Request::GoToPage(0)], "{event:?}: {:?}", runner.output);
+        assert_eq!(runner.output.alerts, ["ok"]);
+        assert!(runner.output.console.contains(&"before".to_string()));
+        assert!(runner.output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{:?}", runner.output);
+        assert!(runner.output.errors.is_empty());
+
+        runner.output = js::JsOutput::default();
+        runner.run(event, "this.print(); throw new Error('broken script');", target, "2", &fields);
+        assert!(runner.output.requests.is_empty(), "{event:?}: {:?}", runner.output);
+        assert!(runner.output.errors.iter().any(|e| e.contains("broken script")));
+    }
+}
+
+#[test]
+fn form_calculations_cannot_print_but_buttons_and_console_can() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldScript {
+            name: "total".into(),
+            event: "calculate".into(),
+            script: Some("this.print(); event.value = times(getField('price').value, getField('qty').value);".into()),
+        },
+    )
+    .unwrap();
+    s.take_js_output(id);
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.requests.is_empty(), "{out:?}");
+    assert!(out.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert!(page_texts(&s, id)[0].contains("USD 10.00"));
+
+    for (target, qty, formatted) in [(Some("go"), 6, "USD 15.00"), (None, 8, "USD 20.00")] {
+        let out = s.run_javascript(id, &format!("getField('qty').value = {qty}; this.print();"), target).unwrap();
+        assert_eq!(out.requests, [js::Request::Print]);
+        let automatic = s.take_js_output(id);
+        assert!(automatic.requests.is_empty(), "{automatic:?}");
+        assert!(automatic.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{automatic:?}");
+        assert!(automatic.errors.is_empty(), "{automatic:?}");
+        assert!(page_texts(&s, id)[0].contains(formatted));
+    }
+}
+
+#[test]
 fn edit_history_does_not_replay_field_script_side_effects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
