@@ -408,6 +408,7 @@ pub struct Document {
     /// Where `endstream` occurs in `data`; see [`EndstreamIndex`].
     endstreams: Arc<EndstreamIndex>,
     source_identity: Arc<()>,
+    initial_read_state: Option<ReadState>,
     entries: Arc<XrefIndex>,
     trailer: Dict,
     revisions: Arc<Vec<Revision>>,
@@ -546,6 +547,7 @@ impl Document {
             data: Arc::new(Vec::new()),
             endstreams: Arc::default(),
             source_identity: Arc::new(()),
+            initial_read_state: None,
             entries: Arc::new(XrefIndex::empty()),
             trailer: Dict::new(),
             revisions: Arc::new(Vec::new()),
@@ -629,6 +631,7 @@ impl Document {
             data,
             endstreams: Arc::default(),
             source_identity: Arc::new(()),
+            initial_read_state: None,
             entries: Arc::new(XrefIndex::empty()),
             trailer: Dict::new(),
             revisions: Arc::new(Vec::new()),
@@ -697,6 +700,7 @@ impl Document {
             Arc::make_mut(&mut doc.repair_log).push("exhausted trailer /Size; new objects use unused object numbers".into());
         }
         doc.next_num = max.saturating_add(1).max(size).max(1);
+        doc.initial_read_state = Some(doc.read_state());
         Ok(doc)
     }
 
@@ -891,6 +895,25 @@ impl Document {
     /// changes with every edit, so a value derived from the document can be cached against it.
     pub fn read_state(&self) -> ReadState {
         ReadState { source: self.source_identity(), trailer: self.trailer.clone(), overlay: self.overlay.clone() }
+    }
+
+    /// Whether this parsed document still reads as it did when opened. In-memory documents have
+    /// no original read state.
+    pub fn is_original_read_state(&self) -> bool {
+        self.initial_read_state.as_ref().is_some_and(|state| state.matches(self))
+    }
+
+    /// A bounded read-only inspection view over this parsed source.
+    ///
+    /// The original bytes, cross-reference data, revisions, and authentication state are shared.
+    /// Object caches and the copy-on-write overlay are independent so inspection cannot populate
+    /// or mutate the editor's caches.
+    pub fn inspection_view(&self, stream_limit: usize) -> Self {
+        let mut view = self.clone();
+        view.cache = Arc::default();
+        view.objstms = Arc::default();
+        view.stream_limit = stream_limit.min(crate::object::MAX_DECODED);
+        view
     }
 
     pub fn version(&self) -> &str {
@@ -3179,6 +3202,25 @@ endobj
         let bytes = Arc::new(crate::write_full(&doc, &crate::SaveOptions::default()).unwrap());
         assert!(Document::open(bytes.clone()).is_ok());
         assert!(Document::open_with_stream_limit(bytes, None, 512).is_err());
+    }
+
+    #[test]
+    fn inspection_view_reuses_source_identity_with_independent_caches() {
+        let bytes = Arc::new(crate::write_full(&Document::new_empty(), &crate::SaveOptions::default()).unwrap());
+        let source = Document::open(bytes).unwrap();
+        let root = source.root().unwrap();
+        source.try_get(root.num).unwrap();
+
+        let view = source.inspection_view(512);
+
+        assert_eq!(view.source_identity(), source.source_identity());
+        assert_eq!(view.stream_limit, 512);
+        assert!(view.stream_limited());
+        assert!(!Arc::ptr_eq(&view.cache, &source.cache));
+        assert!(!Arc::ptr_eq(&view.objstms, &source.objstms));
+        assert!(source.cache.lock().unwrap().contains_key(&root.num));
+        assert!(view.cache.lock().unwrap().is_empty());
+        assert!(matches!(&*view.try_get(root.num).unwrap(), Object::Dict(_)));
     }
 
     /// A /Prev chain that loops back on itself stops at the loop (and says so).

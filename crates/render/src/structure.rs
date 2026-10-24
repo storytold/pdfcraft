@@ -10,6 +10,29 @@ use std::sync::{
 use lopdf::{Dictionary, Error, Object, ObjectId, Result};
 use pdfcraft_cos::{Document, Object as CosObject};
 
+#[cfg(test)]
+thread_local! {
+    static SOURCE_PATH_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_source_path_counts() {
+    SOURCE_PATH_COUNTS.with(|counts| counts.set((0, 0)));
+}
+
+#[cfg(test)]
+pub(crate) fn source_path_counts() -> (usize, usize) {
+    SOURCE_PATH_COUNTS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn record_source_path(shared: bool) {
+    SOURCE_PATH_COUNTS.with(|counts| {
+        let (independent, reused) = counts.get();
+        counts.set(if shared { (independent, reused + 1) } else { (independent + 1, reused) });
+    });
+}
+
 pub(crate) trait Structure {
     fn trailer(&self) -> &Dictionary;
     fn get_object(&self, id: ObjectId) -> Result<&Object>;
@@ -132,6 +155,8 @@ impl Structure for lopdf::Document {
 
 type Slot = (u32, OnceLock<Option<Box<Object>>>);
 
+const INSPECTION_STREAM_LIMIT: usize = 256 << 20;
+
 pub(crate) struct LazyStructure {
     source: Document,
     trailer: Dictionary,
@@ -143,7 +168,19 @@ pub(crate) struct LazyStructure {
 
 impl LazyStructure {
     pub(crate) fn new(bytes: Arc<Vec<u8>>, password: Option<&str>) -> std::result::Result<Self, String> {
-        let source = Document::open_with_stream_limit(bytes, password, 256 << 20).map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        record_source_path(false);
+        let source = Document::open_with_stream_limit(bytes, password, INSPECTION_STREAM_LIMIT).map_err(|e| e.to_string())?;
+        Self::from_parsed(source)
+    }
+
+    pub(crate) fn from_document(source: &Document) -> std::result::Result<Self, String> {
+        #[cfg(test)]
+        record_source_path(true);
+        Self::from_parsed(source.inspection_view(INSPECTION_STREAM_LIMIT))
+    }
+
+    fn from_parsed(source: Document) -> std::result::Result<Self, String> {
         if !source.repair_log().is_empty() {
             return Err("the structure requires compatibility repair".into());
         }
@@ -289,6 +326,14 @@ trailer
         let lazy = LazyStructure::new(Arc::new(bytes), None).unwrap();
         assert_eq!(Structure::page_ids(&eager), expected);
         assert_eq!(Structure::page_ids(&lazy), expected);
+    }
+
+    #[test]
+    fn lazy_structure_view_keeps_parsed_cos_source_identity() {
+        let source = Document::new_empty();
+        let view = LazyStructure::from_document(&source).unwrap();
+
+        assert_eq!(view.source.source_identity(), source.source_identity());
     }
 
     #[test]
