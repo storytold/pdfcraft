@@ -2489,6 +2489,14 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Export to Excel…	Exporter vers Excel…
+	Export to Excel	Exporter vers Excel
+	Sheets	Feuilles
+	One sheet for the whole document	Une feuille pour tout le document
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Un tableau qui s'étend sur plusieurs pages reste d'un seul tenant ; les pages se suivent vers le bas de la feuille.
+	One sheet per page	Une feuille par page
+	Each page on its own sheet, named Page 1, Page 2…	Chaque page sur sa propre feuille, nommée Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Les tableaux deviennent des cellules ; les nombres, montants, pourcentages et dates deviennent des valeurs qu'Excel peut calculer, affichées comme sur la page.
 	Attach a file…	Joindre un fichier…
 	Delete attachment	Supprimer la pièce jointe
 	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web

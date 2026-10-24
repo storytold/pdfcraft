@@ -2781,6 +2781,14 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Un tabel care se întinde pe mai multe pagini rămâne întreg; paginile se succed pe foaie, una sub alta.
+	Each page on its own sheet, named Page 1, Page 2…	Fiecare pagină pe foaia ei, denumită Pagina 1, Pagina 2…
+	Export to Excel	Exportare în Excel
+	Export to Excel…	Exportare în Excel…
+	One sheet for the whole document	O foaie pentru tot documentul
+	One sheet per page	O foaie pe pagină
+	Sheets	Foi
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tabelele devin celule; numerele, sumele, procentele și datele devin valori cu care Excel poate calcula, afișate ca pe pagină.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

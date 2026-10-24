@@ -2439,6 +2439,14 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Export to Excel…	匯出為 Excel…
+	Export to Excel	匯出為 Excel
+	Sheets	工作表
+	One sheet for the whole document	整份文件一個工作表
+	A table that runs across pages stays together; the pages follow one another down the sheet.	跨頁的表格保持完整；各頁在工作表中依序向下排列。
+	One sheet per page	每頁一個工作表
+	Each page on its own sheet, named Page 1, Page 2…	每頁各自一個工作表，名為 Page 1、Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	表格會變成儲存格；數字、金額、百分比和日期會變成 Excel 可以計算的值，顯示與頁面相同。
 	Attach a file…	附加檔案…
 	Delete attachment	刪除附件
 	Attaching files is not available on the web yet	網頁版尚不支援附加檔案

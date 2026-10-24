@@ -2494,6 +2494,14 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Export to Excel…	Izvozi v Excel…
+	Export to Excel	Izvozi v Excel
+	Sheets	Listi
+	One sheet for the whole document	En list za ves dokument
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Tabela, ki se nadaljuje čez več strani, ostane skupaj; strani si na listu sledijo navzdol.
+	One sheet per page	En list na stran
+	Each page on its own sheet, named Page 1, Page 2…	Vsaka stran na svojem listu z imenom Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tabele postanejo celice; števila, zneski, odstotki in datumi postanejo vrednosti, s katerimi Excel lahko računa, prikazane kot na strani.
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo

@@ -2485,6 +2485,14 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Export to Excel…	Excel'e dışa aktar…
+	Export to Excel	Excel'e Dışa Aktar
+	Sheets	Sayfalar
+	One sheet for the whole document	Tüm belge için tek sayfa
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Birden çok sayfaya yayılan bir tablo bir arada kalır; sayfalar çalışma sayfasında alt alta sıralanır.
+	One sheet per page	Her sayfa için bir çalışma sayfası
+	Each page on its own sheet, named Page 1, Page 2…	Her sayfa kendi çalışma sayfasında, adları: Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tablolar hücrelere dönüşür; sayılar, tutarlar, yüzdeler ve tarihler Excel'in hesaplayabileceği değerlere dönüşür ve sayfadaki gibi görünür.
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor

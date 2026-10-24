@@ -2755,6 +2755,14 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Export to Excel…	Xuất ra Excel…
+	Export to Excel	Xuất ra Excel
+	Sheets	Trang tính
+	One sheet for the whole document	Một trang tính cho toàn bộ tài liệu
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Bảng trải qua nhiều trang được giữ liền nhau; các trang nối tiếp nhau xuống dưới trang tính.
+	One sheet per page	Mỗi trang một trang tính
+	Each page on its own sheet, named Page 1, Page 2…	Mỗi trang trên một trang tính riêng, đặt tên Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Bảng trở thành các ô; số, số tiền, tỷ lệ phần trăm và ngày tháng trở thành giá trị Excel có thể tính toán, hiển thị như trên trang.
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

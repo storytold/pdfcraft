@@ -10,10 +10,13 @@
 
 use std::collections::HashMap;
 
+pub mod cells;
 mod pptx;
+mod xlsx;
 mod zip;
 
 pub use pptx::pptx;
+pub use xlsx::{XlsxSheets, xlsx};
 pub use zip::Zip;
 
 /// A paragraph of a page.
@@ -986,7 +989,7 @@ mod tests {
         assert!(out.contains("\\cf3000 ") || out.contains("\\cf3000\\"), "the last colour has the last slot");
     }
 
-    fn page() -> Page {
+    pub(crate) fn page() -> Page {
         let b = |t: &str, y: f64, size: f64, bold: bool| Block {
             text: t.into(),
             rect: [72.0, y, 500.0, y + size],
@@ -1245,7 +1248,7 @@ mod tests {
     }
 
     /// A 3-column table with a spanning header row and a hole in the last row.
-    fn table_page() -> Page {
+    pub(crate) fn table_page() -> Page {
         let cell = |t: &str, x: f64, y: f64, w: f64| Block {
             text: t.into(),
             rect: [x, y, x + w, y + 12.0],

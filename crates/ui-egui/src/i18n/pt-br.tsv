@@ -2503,6 +2503,14 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Export to Excel…	Exportar para Excel…
+	Export to Excel	Exportar para Excel
+	Sheets	Planilhas
+	One sheet for the whole document	Uma planilha para o documento inteiro
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Uma tabela que continua em várias páginas fica junta; as páginas seguem uma após a outra na planilha.
+	One sheet per page	Uma planilha por página
+	Each page on its own sheet, named Page 1, Page 2…	Cada página em sua própria planilha, chamada Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	As tabelas viram células; números, valores, porcentagens e datas viram valores com que o Excel pode calcular, exibidos como na página.
 	Attach a file…	Anexar um arquivo…
 	Delete attachment	Excluir anexo
 	Attaching files is not available on the web yet	Anexar arquivos ainda não está disponível na web
