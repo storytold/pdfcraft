@@ -52,6 +52,10 @@ pollster = "1.0"
 # Discover configured font directories without linking libfontconfig or running a subprocess.
 fontconfig-parser = "0.5.8"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native image clipboard on compositors implementing ext/wlr data-control.
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
 # The Objective-C wrappers and block support are already in the tree through arboard and rfd.
