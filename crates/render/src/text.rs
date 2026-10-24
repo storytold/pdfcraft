@@ -2321,6 +2321,48 @@ mod tests {
     }
 
     #[test]
+    fn whole_words_ignore_neighbours_in_scripts_written_without_spaces() {
+        // "台北市的PDF檔案" in one run: Chinese writes no spaces between words, so "台北" is a
+        // whole word inside "台北市" and "PDF" inside "的PDF檔", as Acrobat finds them with Whole
+        // words only on. A Latin neighbour still bounds: "cat" is not a whole word in "category".
+        let mut v = Vec::new();
+        word(&mut v, "台北市的PDF檔案", 10.0, 10.0, 6.0);
+        word(&mut v, "category", 74.0, 10.0, 6.0);
+        let t = layout(v);
+        assert_eq!(t.plain_text(), "台北市的PDF檔案 category");
+        assert_eq!(t.find_opts("台北", false, true), vec![0..2], "a word inside a longer run of ideographs");
+        assert_eq!(t.find_opts("北市", false, true), vec![1..3]);
+        assert_eq!(t.find_opts("PDF", false, true), vec![4..7], "Latin between ideographs");
+        assert_eq!(t.find_opts("pdf檔", false, true), vec![4..8]);
+        assert!(t.find_opts("cat", false, true).is_empty(), "Latin neighbours still bound a word");
+        assert_eq!(t.find_opts("category", false, true), vec![9..17]);
+        // Thai and Japanese kana are written without spaces too.
+        let mut v = Vec::new();
+        word(&mut v, "ภาษาไทย", 10.0, 30.0, 6.0);
+        word(&mut v, "ひらがなとカタカナ", 62.0, 30.0, 6.0);
+        let t = layout(v);
+        assert_eq!(t.find_opts("ไทย", false, true), vec![4..7]);
+        assert_eq!(t.find_opts("カタカナ", false, true), vec![12..16]);
+    }
+
+    /// #2075 review: digits still bound a whole word in those scripts (๑ is not a word inside
+    /// the number ๑๒), and letters from the later Myanmar and Han blocks don't.
+    #[test]
+    fn whole_words_in_unspaced_scripts_keep_digits_and_later_blocks() {
+        let one = |text: &str| {
+            let mut v = Vec::new();
+            word(&mut v, text, 10.0, 10.0, 6.0);
+            layout(v)
+        };
+        assert!(one("๑๒").find_opts("๑", false, true).is_empty(), "a Thai digit beside it bounds");
+        assert!(one("台北3").find_opts("台北", false, true).is_empty(), "so does an ASCII digit");
+        // Myanmar Extended-A (U+AA60), Myanmar Extended-B (U+A9E0), CJK Extension H (U+31350).
+        for text in ["\u{AA60}PDF", "\u{A9E0}PDF", "\u{31350}PDF"] {
+            assert_eq!(one(text).find_opts("PDF", false, true), vec![1..4], "{text}");
+        }
+    }
+
+    #[test]
     fn turkish_dotted_and_dotless_i_match_in_any_case() {
         // "İSTANBUL IRMAK KIŞ" on one line: each word typed in lower case must find it, and the
         // reverse. `to_lowercase` alone made `İ` two characters and left `ı` unmatched.
