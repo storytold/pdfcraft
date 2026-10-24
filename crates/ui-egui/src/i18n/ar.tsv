@@ -2372,6 +2372,30 @@ animation effects	Off	معطّلة
 	Original	الأصل
 	Greyscale	تدرج رمادي
 	Black and white	أبيض وأسود
+	; 1 page skipped	; تم تخطي صفحة واحدة
+	; corrected {n} pages	; تم تصحيح {n} صفحات
+	; {n} pages skipped	; تم تخطي {n} صفحات
+	Add searchable text	إضافة نص قابل للبحث
+	Add the PDFs to combine	أضف ملفات PDF للدمج
+	Added the first {n} PDFs in {folder}	أضيفت أول {n} ملف PDF في {folder}
+	Automatically rotate sideways and upside-down pages	تدوير الصفحات الجانبية والمقلوبة تلقائيًا
+	Correct scans	تصحيح الصفحات الممسوحة
+	Corrected scan	مسح مصحح
+	Crop scanner borders to the paper edge	قص حواف المسح حتى حافة الورق
+	Drop PDFs or folders here, or choose them.	أفلت ملفات PDF أو المجلدات هنا، أو اخترها.
+	Every PDF in the folder	كل ملف PDF في المجلد
+	Every PDF in the folder and the folders inside it	كل ملف PDF في المجلد والمجلدات داخله
+	No PDFs found in {folder}	لم يُعثر على ملفات PDF في {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	يتم قص حواف الورق الواضحة فقط. تُحفظ الحواف البيضاء التي لا يمكن تمييزها.
+	Only the document's owner can change its security (open it with the permissions password)	مالك المستند وحده يستطيع تغيير أمانه (افتحه بكلمة مرور الأذونات)
+	Safety margin (pt)	هامش الأمان (نقطة)
+	Save (M4)	حفظ (M4)
+	Scan and text recognition	المسح والتعرف على النص
+	Scan correction	تصحيح المسح
+	Scan processing cancelled	أُلغيت معالجة المسح
+	Searchable Image	صورة قابلة للبحث
+	Straighten skewed scans	تقويم الصفحات الممسوحة المائلة
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	تبقى الاتجاهات غير المؤكدة دون تغيير. يحافظ التقويم على الصورة كاملة داخل الصفحة.
 	Reading colours	ألوان القراءة
 	Replace document colours	استبدال ألوان المستند
 	Black on white	أسود على أبيض
@@ -2472,8 +2496,6 @@ animation effects	Off	معطّلة
 	A {} annotation has no appearance stream	للتعليق التوضيحي {} بلا مظهر متدفق
 	A {} annotation isn't set to print, or is hidden	التعليق التوضيحي {} غير مضبوط للطباعة أو مخفي
 	Accessibility Report	تقرير الوصول
-	Add the PDFs to combine	أضف ملفات PDF للدمج
-	Added the first {n} PDFs in {folder}	أضيفت أول {n} ملف PDF في {folder}
 	Always	دائماً
 	Automatically	تلقائياً
 	CRL Signing	توقيع CRL
@@ -2503,7 +2525,6 @@ animation effects	Off	معطّلة
 	Digital Signature	توقيع رقمي
 	Disabled	معطّل
 	Document properties (⌘D)	خصائص المستند (⌘D)
-	Drop PDFs or folders here, or choose them.	أفلت ملفات PDF أو المجلدات هنا، أو اخترها.
 	Duplicate	تكرار
 	Enabled	ممكّن
 	Encipher Only	التشفير فقط
@@ -2513,8 +2534,6 @@ animation effects	Off	معطّلة
 	Enter a page number	أدخل رقم صفحة
 	Enter the field names	أدخل أسماء الحقول
 	Error	خطأ
-	Every PDF in the folder	كل ملف PDF في المجلد
-	Every PDF in the folder and the folders inside it	كل ملف PDF في المجلد والمجلدات داخله
 	Field "{}" on page {p} has no description (tooltip)	الحقل "{}" في الصفحة {p} بلا وصف (تلميح)
 	Filename	اسم الملف
 	Flatten Fill & Sign	تسطيح التعبئة والتوقيع
@@ -2536,13 +2555,11 @@ animation effects	Off	معطّلة
 	New bookmark (⌘B)	إشارة مرجعية جديدة (⌘B)
 	Next	التالي
 	Next (⌘G)	التالي (⌘G)
-	No PDFs found in {folder}	لم يُعثر على ملفات PDF في {folder}
 	No document language is set	لم تُحدد لغة المستند
 	No page has text: the document appears to be images of pages	لا صفحة تحوي نصاً: يبدو المستند صوراً للصفحات
 	No results	لا نتائج
 	Non-Repudiation	عدم الجحود
 	On	تشغيل
-	Only the document's owner can change its security (open it with the permissions password)	مالك المستند وحده يستطيع تغيير أمانه (افتحه بكلمة مرور الأذونات)
 	Open a PDF (⌘O)	فتح PDF‏ (⌘O)
 	Open folder	فتح المجلد
 	Organize	تنظيم
@@ -2569,7 +2586,6 @@ animation effects	Off	معطّلة
 	Rev. {rev}: Signed by {name}	المراجعة {rev}: موقع من {name}
 	Rotate view clockwise (⇧⌘+)	تدوير العرض مع عقارب الساعة (⇧⌘+)
 	Rule Name	اسم القاعدة
-	Save (M4)	حفظ (M4)
 	Save as {level}	حفظ كـ {level}
 	Save changes?	حفظ التغييرات؟
 	Save file	حفظ الملف

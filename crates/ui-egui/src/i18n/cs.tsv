@@ -2423,6 +2423,22 @@ animation effects	Off	Vypnuto
 	Original	Originál
 	Greyscale	Stupně šedi
 	Black and white	Černobílé
+	; 1 page skipped	; přeskočena 1 stránka
+	; corrected {n} pages	; opraveno stránek: {n}
+	; {n} pages skipped	; přeskočeno stránek: {n}
+	Add searchable text	Přidat prohledávatelný text
+	Automatically rotate sideways and upside-down pages	Automaticky otáčet stránky na boku a vzhůru nohama
+	Correct scans	Opravit skeny
+	Corrected scan	Opravený sken
+	Crop scanner borders to the paper edge	Oříznout okraje skenu k hraně papíru
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Oříznou se pouze zřetelné hrany papíru. Nerozlišitelné bílé okraje zůstanou zachovány.
+	Safety margin (pt)	Ochranný okraj (b.)
+	Scan and text recognition	Skenování a rozpoznávání textu
+	Scan correction	Oprava skenu
+	Scan processing cancelled	Zpracování skenů zrušeno
+	Searchable Image	Prohledávatelný obrázek
+	Straighten skewed scans	Narovnat šikmé skeny
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Nejistá orientace zůstane beze změny. Narovnání zachová celý obrázek uvnitř stránky.
 	Reading colours	Barvy pro čtení
 	Replace document colours	Nahradit barvy dokumentu
 	Black on white	Černá na bílém

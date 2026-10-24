@@ -2759,6 +2759,24 @@ theme	Appearance	Tampilan
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; 1 halaman dilewati
+	; corrected {n} pages	; {n} halaman diperbaiki
+	; {n} pages skipped	; {n} halaman dilewati
+	Add searchable text	Tambahkan teks yang dapat dicari
+	Automatically rotate sideways and upside-down pages	Putar otomatis halaman yang menyamping dan terbalik
+	Correct scans	Perbaiki hasil pindai
+	Corrected scan	Hasil pindai yang diperbaiki
+	Crop scanner borders to the paper edge	Pangkas tepi pemindai hingga tepi kertas
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Hanya tepi kertas yang jelas yang dipangkas. Tepi putih yang tidak dapat dibedakan tetap dipertahankan.
+	Safety margin (pt)	Margin pengaman (pt)
+	Scan and text recognition	Pindai dan pengenalan teks
+	Scan correction	Koreksi hasil pindai
+	Scan processing cancelled	Pemrosesan hasil pindai dibatalkan
+	Searchable Image	Gambar yang Dapat Dicari
+	Straighten skewed scans	Luruskan hasil pindai yang miring
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Orientasi yang tidak pasti dibiarkan apa adanya. Pelurusan menyesuaikan seluruh gambar ke dalam halaman.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini
 

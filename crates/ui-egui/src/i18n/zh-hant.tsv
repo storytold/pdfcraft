@@ -2224,6 +2224,31 @@ animation effects	Off	關
 	Original	原始
 	Greyscale	灰階
 	Black and white	黑白
+	; 1 page skipped	; 已略過 1 頁
+	; corrected {n} pages	; 已校正 {n} 頁
+	; {n} pages skipped	; 已略過 {n} 頁
+	Add searchable text	新增可搜尋文字
+	Add the PDFs to combine	新增要合併的 PDF
+	Added the first {n} PDFs in {folder}	已新增 {folder} 中的前 {n} 個 PDF
+	Automatically rotate sideways and upside-down pages	自動旋轉側向和倒置的頁面
+	Correct scans	校正掃描件
+	Corrected scan	已校正的掃描件
+	Crop scanner borders to the paper edge	將掃描邊框裁剪至紙張邊緣
+	Drop PDFs or folders here, or choose them.	將 PDF 或資料夾拖放到此處，或選取它們。
+	Every PDF in the folder	資料夾中的所有 PDF
+	Every PDF in the folder and the folders inside it	資料夾及其子資料夾中的所有 PDF
+	Margins (in)	邊距（英寸）
+	No PDFs found in {folder}	在 {folder} 中找不到 PDF
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	僅裁剪清晰的紙張邊緣。無法區分的白色邊框將保留。
+	Only the document's owner can change its security (open it with the permissions password)	只有文件所有者才能更改安全性（請使用許可權密碼開啟）
+	Safety margin (pt)	安全邊界（點）
+	Save (M4)	儲存（M4）
+	Scan and text recognition	掃描與文字辨識
+	Scan correction	掃描校正
+	Scan processing cancelled	掃描處理已取消
+	Searchable Image	可搜尋的影像
+	Straighten skewed scans	校正掃描件傾斜
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	方向不確定時保持不變。傾斜校正會將整個影像保留在頁面內。
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	此印表機的驅動程式不接受其他程式的雙面列印設定，因此使用其自身設定。變更位置：屬性…
 	Browser's print dialog	瀏覽器的列印對話方塊
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	份數、雙面列印和色彩在瀏覽器的列印對話方塊中選擇。

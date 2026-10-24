@@ -2329,6 +2329,30 @@ animation effects	Off	Wyłączone
 	Original	Oryginał
 	Greyscale	Skala szarości
 	Black and white	Czarno-biały
+	; 1 page skipped	; pominięto 1 stronę
+	; corrected {n} pages	; poprawiono stron: {n}
+	; {n} pages skipped	; pominięto stron: {n}
+	Add searchable text	Dodaj tekst do wyszukiwania
+	Add the PDFs to combine	Dodaj pliki PDF do połączenia
+	Added the first {n} PDFs in {folder}	Dodano pierwsze {n} plików PDF z {folder}
+	Automatically rotate sideways and upside-down pages	Automatycznie obracaj strony boczne i odwrócone
+	Correct scans	Popraw skany
+	Corrected scan	Poprawiony skan
+	Crop scanner borders to the paper edge	Przytnij obramowanie skanu do krawędzi papieru
+	Drop PDFs or folders here, or choose them.	Upuść tutaj pliki PDF lub foldery albo wybierz je.
+	Every PDF in the folder	Każdy PDF w folderze
+	Every PDF in the folder and the folders inside it	Każdy PDF w folderze i jego podfolderach
+	No PDFs found in {folder}	Nie znaleziono plików PDF w {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Przycinane są tylko wyraźne krawędzie papieru. Nierozróżnialne białe marginesy zostają zachowane.
+	Only the document's owner can change its security (open it with the permissions password)	Tylko właściciel dokumentu może zmienić zabezpieczenia (otwórz go przy użyciu hasła uprawnień)
+	Safety margin (pt)	Margines bezpieczeństwa (pkt)
+	Save (M4)	Zapisz (M4)
+	Scan and text recognition	Skanowanie i rozpoznawanie tekstu
+	Scan correction	Korekcja skanu
+	Scan processing cancelled	Przetwarzanie skanów anulowane
+	Searchable Image	Obraz z możliwością wyszukiwania
+	Straighten skewed scans	Prostuj przekrzywione skany
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Niepewna orientacja pozostaje bez zmian. Prostowanie mieści cały obraz na stronie.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Sterownik tej drukarki nie przyjmuje ustawień druku dwustronnego z innych programów, więc obowiązuje jego własne ustawienie. Zmień je w oknie Właściwości…
 	Browser's print dialog	Okno drukowania przeglądarki
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Liczbę kopii, druk dwustronny i kolor wybiera się w oknie drukowania przeglądarki.

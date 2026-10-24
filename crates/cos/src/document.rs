@@ -18,7 +18,7 @@ thread_local! {
     /// Indirect `/Length` values resolved during the current outermost load: a damaged file
     /// retries a parse several ways, and each retry would resolve the same lengths again
     /// (exponential in the chain of streams whose lengths point at further streams).
-    static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    static LENGTHS: std::cell::RefCell<HashMap<ObjRef, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
 }
 
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
@@ -456,7 +456,7 @@ impl ObjectReader {
     }
 
     pub(crate) fn try_get(&mut self, reference: ObjRef) -> Result<Arc<Object>, CosError> {
-        let object = self.document.try_get(reference.num);
+        let object = self.document.try_get_reference(reference);
         // A missed eviction here only costs a re-parse, so never fail the read on a poisoned
         // lock. The editing-cache evictors propagate instead; they guard user edits.
         if let Ok(mut streams) = self.document.objstms.lock() {
@@ -1018,9 +1018,17 @@ impl Document {
 
     // ── object access ───────────────────────────────────────────────────────────────────────
 
-    /// Fetch an object by reference. Missing objects are `Null` (ISO 32000-2 §7.3.10).
+    /// Fetch an object by reference. Missing objects and references to a different generation
+    /// are `Null` (ISO 32000-2 §7.3.10).
     pub fn get(&self, r: ObjRef) -> Arc<Object> {
-        self.try_get(r.num).unwrap_or_else(|_| Arc::new(Object::Null))
+        self.try_get_reference(r).unwrap_or_else(|_| Arc::new(Object::Null))
+    }
+
+    fn try_get_reference(&self, r: ObjRef) -> Result<Arc<Object>, CosError> {
+        if r.generation != self.generation(r.num) {
+            return Ok(Arc::new(Object::Null));
+        }
+        self.try_get(r.num)
     }
 
     /// Follow a reference if `o` is one; otherwise return `o` itself.
@@ -1187,11 +1195,11 @@ impl Document {
             None | Some(XrefEntry::Free { .. }) => Ok(Object::Null),
             Some(XrefEntry::InFile { offset, .. }) => {
                 let resolve = |r: ObjRef| {
-                    if let Some(known) = LENGTHS.with(|m| m.borrow().get(&r.num).copied()) {
+                    if let Some(known) = LENGTHS.with(|m| m.borrow().get(&r).copied()) {
                         return known;
                     }
-                    let length = self.try_get(r.num).ok().and_then(|o| o.as_int());
-                    LENGTHS.with(|m| m.borrow_mut().insert(r.num, length));
+                    let length = self.try_get_reference(r).ok().and_then(|o| o.as_int());
+                    LENGTHS.with(|m| m.borrow_mut().insert(r, length));
                     length
                 };
                 let off = offset as usize;
@@ -1340,7 +1348,9 @@ impl Document {
                 let generation = current.generation(num);
                 let same = saved_nums.binary_search(&num).is_ok()
                     && self.generation(num) == generation
-                    && saved_reader.try_get(ObjRef::new(num, 0))? == current_reader.try_get(ObjRef::new(num, 0))?;
+                    // Readers check the generation, so ask for the live one: generation 0 would
+                    // read a generation-1 object as Null on both sides and drop the edit.
+                    && saved_reader.try_get(ObjRef::new(num, generation))? == current_reader.try_get(ObjRef::new(num, generation))?;
                 if !same {
                     changed.push(num);
                 }
@@ -1353,7 +1363,7 @@ impl Document {
         let mut current_reader = current.object_reader();
         for num in changed {
             let generation = current.generation(num);
-            let object = current_reader.try_get(ObjRef::new(num, 0))?;
+            let object = current_reader.try_get(ObjRef::new(num, generation))?;
             self.set(ObjRef::new(num, generation), (*object).clone());
         }
         *self.trailer_mut() = current.trailer().clone();
@@ -1425,7 +1435,7 @@ impl Document {
 
     fn root_is_catalog(&self) -> bool {
         let Some(r) = self.root() else { return false };
-        matches!(self.try_get(r.num).as_deref(), Ok(Object::Dict(d)) if d.name(b"Type") == Some(b"Catalog") || d.contains(b"Pages"))
+        matches!(self.try_get_reference(r).as_deref(), Ok(Object::Dict(d)) if d.name(b"Type") == Some(b"Catalog") || d.contains(b"Pages"))
     }
 
     #[allow(clippy::type_complexity)]
@@ -2080,7 +2090,8 @@ impl Document {
         // A file whose only trailers are cross-reference streams (and whose `startxref` is gone
         // or points nowhere) keeps its /Info, /ID and /Encrypt this way.
         let rank = |at: usize, d: &Dict| {
-            let root = self.try_get(d.reference(b"Root")?.num).ok()?;
+            // The whole reference, generation included: `3 0 R` must not find object 3 1.
+            let root = self.try_get_reference(d.reference(b"Root")?).ok()?;
             let Object::Dict(c) = &*root else { return None };
             Some((c.name(b"Type") == Some(b"Catalog") || c.contains(b"Pages"), at))
         };

@@ -5,6 +5,7 @@ Advanced optimization).
 
 ```rust
 let report = optimize(&mut doc, &Settings::default())?;   // Reduce File Size's choices
+let report = optimize(&mut doc, &Settings::lossless())?;  // preserve image data and user data
 let report = optimize(&mut doc, &Preset::Mobile.settings())?; // smaller, for screens
 // Or with progress: called before each image and the clean-up; `false` cancels.
 let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going)?;
@@ -31,7 +32,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   image masks, decode arrays, more than 8 bits, JPEG 2000, JBIG2 and CCITT. A JPEG is read with
   its colour transform (an Adobe marker's, else `/ColorTransform`, ISO 32000-2 §7.4.8), so one
   stored untransformed keeps its colours; one whose marker and `/ColorTransform` disagree is left
-  alone, since readers differ on which wins.
+  alone, since readers differ on which wins. Dimensions and decoded sample lengths are checked
+  before allocation, for images and soft masks alike; unsupported/malformed images stay
+  unchanged. A resampled soft mask gets a new reference belonging to the changed image, so other
+  users of the original mask keep it.
 - **Discard objects:** thumbnails, alternate images, document tags, print settings.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
@@ -46,6 +50,20 @@ then this, then merges identical objects and writes a full, compressed save
 (`pdfcraft_engine::optimizer::OptimizeJob`, which the UI runs on a worker thread with a
 progress bar). JPEG decoding comes from `zune-jpeg` (the decoder behind `image` and the
 renderer), JPEG encoding and resampling from the `image` crate.
+
+`Settings::lossless()` disables fragment merging, downsampling, image re-encoding, all discard flags, link and
+named-destination removal, and unused-XObject pruning. Encoded and raw image samples stay exact;
+non-image streams and the full-save structure may be compressed. The engine can still merge
+identical resources. Pass an empty `discard` list to `Session::optimized_bytes`; already absent
+categories are a successful no-op when a caller explicitly selects them. The existing
+`doc_optimize` tool exposes the profile as `profile: "lossless"` and refuses contradictory custom
+options. `Settings::default()` and `doc_reduce` keep their existing lossy choices.
+
+This is not a byte-identical archival copy: a full rewrite drops old revisions and may update the
+modification date. It is not guaranteed to be smaller. Signed PDFs are refused by the engine.
+Saved custom presets, monochrome/JBIG2/CCITT re-encoding and broader real-scan quality benchmarks
+remain separate work. The full-save reference-generation correction is tracked in upstream
+[PR #1143](https://github.com/storytold/pdfcraft/pull/1143); this change does not duplicate it.
 
 ## Target PDF version: partial compatibility
 

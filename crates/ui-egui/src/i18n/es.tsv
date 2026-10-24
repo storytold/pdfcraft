@@ -2497,6 +2497,27 @@ animation effects	Off	Desactivados
 	Original	Original
 	Greyscale	Escala de grises
 	Black and white	Blanco y negro
+	; 1 page skipped	; 1 página omitida
+	; corrected {n} pages	; {n} páginas corregidas
+	; {n} pages skipped	; {n} páginas omitidas
+	Add searchable text	Añadir texto buscable
+	Automatically rotate sideways and upside-down pages	Girar automáticamente las páginas de lado o boca abajo
+	Correct scans	Corregir escaneos
+	Corrected scan	Escaneo corregido
+	Crop scanner borders to the paper edge	Recortar los bordes del escaneo hasta el papel
+	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
+	Every PDF in the folder	Todos los PDF de la carpeta
+	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Solo se recortan los bordes claros del papel. Se conservan los bordes blancos indistinguibles.
+	Only the document's owner can change its security (open it with the permissions password)	Solo el propietario del documento puede cambiar su seguridad (ábrelo con la contraseña de permisos)
+	Safety margin (pt)	Margen de seguridad (pt)
+	Save (M4)	Guardar (M4)
+	Scan and text recognition	Escaneo y reconocimiento de texto
+	Scan correction	Corrección de escaneo
+	Scan processing cancelled	Procesamiento de escaneos cancelado
+	Searchable Image	Imagen con texto buscable
+	Straighten skewed scans	Enderezar las páginas escaneadas torcidas
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Las orientaciones dudosas no se modifican. Al enderezar, toda la imagen cabe en la página.
 	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	El controlador de esta impresora no acepta los ajustes de doble cara de otros programas, así que se aplica su propio ajuste. Cámbialo en Propiedades…
 	Browser's print dialog	Diálogo de impresión del navegador
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Las copias, la impresión a doble cara y el color se eligen en el diálogo de impresión del navegador.
@@ -2728,7 +2749,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	The password must have at least 6 characters.	La contraseña debe tener al menos 6 caracteres.
 	The password must have at least 8 characters.	La contraseña debe tener al menos 8 caracteres.
 	The passwords do not match.	Las contraseñas no coinciden.
-	Only the document's owner can change its security (open it with the permissions password)	Solo el propietario del documento puede cambiar su seguridad (ábrelo con la contraseña de permisos)
 #
 # Counts.
 @plural	{n} byte|{n} bytes	{n} byte|{n} bytes
@@ -2742,9 +2762,6 @@ certificate	SHA-256 digest	Huella SHA-256
 #
 # Combining PDFs from a folder.
 	Add the PDFs to combine	Añade los PDF que vas a combinar
-	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
-	Every PDF in the folder	Todos los PDF de la carpeta
-	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
 	Added the first {n} PDFs in {folder}	Se han añadido los primeros {n} PDF de {folder}
 	No PDFs found in {folder}	No se ha encontrado ningún PDF en {folder}
 #
@@ -2826,7 +2843,6 @@ theme	Appearance	Aspecto
 	Zoom out (⌘−)	Alejar (⌘−)
 	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
 	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
-	Save (M4)	Guardar (M4)
 
 # Prepare a form ▸ Text field table
 	Add text field table	Añadir tabla de campos de texto

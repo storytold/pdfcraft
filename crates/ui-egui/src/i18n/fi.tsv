@@ -2791,6 +2791,24 @@ theme	Appearance	Teema
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; 1 sivu ohitettiin
+	; corrected {n} pages	; {n} sivua korjattiin
+	; {n} pages skipped	; {n} sivua ohitettiin
+	Add searchable text	Lisää haettava teksti
+	Automatically rotate sideways and upside-down pages	Käännä sivuttain ja ylösalaisin olevat sivut automaattisesti
+	Correct scans	Korjaa skannaukset
+	Corrected scan	Korjattu skannaus
+	Crop scanner borders to the paper edge	Rajaa skannerin reunat paperin reunaan
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Vain selkeät paperin reunat rajataan. Erottamattomat valkoiset reunat säilytetään.
+	Safety margin (pt)	Turvamarginaali (pt)
+	Scan and text recognition	Skannaus ja tekstintunnistus
+	Scan correction	Skannauksen korjaus
+	Scan processing cancelled	Skannauksen käsittely peruttiin
+	Searchable Image	Haettava kuva
+	Straighten skewed scans	Suorista vinot skannaukset
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Epävarmat suunnat jätetään ennalleen. Suoristus sovittaa koko kuvan sivulle.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään
 

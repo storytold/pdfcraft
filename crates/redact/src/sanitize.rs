@@ -274,7 +274,9 @@ fn find_owned(o: &Object, role: Held, keys: &[&[u8]], held: &mut [usize], next: 
     let mut found = false;
     if role != Held::Map {
         for (i, k) in keys.iter().enumerate() {
-            if d.contains(k)
+            // An empty array (`/AF []`) holds nothing to remove: counting it would make an
+            // absent category look present and rewrite the document for nothing.
+            if d.get(k).is_some_and(|v| !matches!(v, Object::Array(a) if a.is_empty()))
                 && let Some(n) = held.get_mut(i)
             {
                 *n = n.saturating_add(1);
@@ -505,6 +507,13 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
 pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden, usize)>, RedactError> {
     let counts = scan(doc);
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
+    // Empty categories are already satisfied. Do not normalize page/catalog structures,
+    // or remove empty containers, then claim that nothing was changed. Filter them even
+    // alongside a populated category so every removal has a corresponding report entry.
+    let which: Vec<_> = which.iter().copied().filter(|h| count(*h) > 0).collect();
+    if which.is_empty() {
+        return Err(RedactError::NothingToApply);
+    }
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
@@ -589,7 +598,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let off = hidden_layers(doc);
     let mut cat = doc.get(root).as_dict().cloned().unwrap_or_default();
     let mut names = sub(doc, &cat, b"Names");
-    for &h in which {
+    for &h in &which {
         match h {
             Hidden::Metadata => {
                 doc.trailer_mut().remove(b"Info");

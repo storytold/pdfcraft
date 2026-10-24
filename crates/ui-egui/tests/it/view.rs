@@ -972,8 +972,12 @@ fn preferences_set_the_default_zoom() {
     let mut h = harness(&[]);
     assert!(h.state_mut().execute("app.preferences"));
     h.run_steps(3);
+    // Preferences scrolls; bring the radio button into view before the physical click.
     h.get_by_label("Zoom to page level").scroll_to_me();
-    h.run_steps(4);
+    h.run_steps(20);
+    let option = h.get_by_label("Zoom to page level").rect();
+    let card = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dialog").with("card"))).unwrap();
+    assert!(h.ctx.content_rect().contains_rect(option) && card.contains_rect(option), "zoom option {option:?} in dialog {card:?}");
     h.get_by_label("Zoom to page level").click();
     h.run_steps(2);
     assert!(h.state_mut().execute("create.blank"));

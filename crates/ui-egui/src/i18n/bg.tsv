@@ -2314,6 +2314,30 @@ animation effects	Off	Изключени
 	Original	Оригинал
 	Greyscale	Нива на сивото
 	Black and white	Черно-бяло
+	; 1 page skipped	; пропусната 1 страница
+	; corrected {n} pages	; коригирани страници: {n}
+	; {n} pages skipped	; пропуснати страници: {n}
+	Add searchable text	Добавяне на текст за търсене
+	Add the PDFs to combine	Добавете PDF файловете за обединяване
+	Added the first {n} PDFs in {folder}	Добавени са първите {n} PDF файла от {folder}
+	Automatically rotate sideways and upside-down pages	Автоматично завъртане на странични и обърнати страници
+	Correct scans	Коригиране на сканирания
+	Corrected scan	Коригирано сканиране
+	Crop scanner borders to the paper edge	Изрязване на сканираното до ръба на хартията
+	Drop PDFs or folders here, or choose them.	Пуснете тук PDF файлове или папки или ги изберете.
+	Every PDF in the folder	Всички PDF файлове в папката
+	Every PDF in the folder and the folders inside it	Всички PDF файлове в папката и в папките в нея
+	No PDFs found in {folder}	Не са открити PDF файлове в {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Изрязват се само ясно различими ръбове на хартията. Неразличимите бели полета се запазват.
+	Only the document's owner can change its security (open it with the permissions password)	Само собственикът на документа може да промени защитата му (отворете го с паролата за разрешения)
+	Safety margin (pt)	Предпазно поле (pt)
+	Save (M4)	Запиши (M4)
+	Scan and text recognition	Сканиране и разпознаване на текст
+	Scan correction	Корекция на сканиране
+	Scan processing cancelled	Обработката на сканиранията е отменена
+	Searchable Image	Изображение с търсене
+	Straighten skewed scans	Изправяне на наклонени сканирани страници
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Несигурната ориентация остава непроменена. Изправянето побира цялото изображение в страницата.
 	Reading colours	Цветове за четене
 	Replace document colours	Замяна на цветовете на документа
 	Black on white	Черно на бяло
@@ -2406,7 +2430,7 @@ animation effects	Off	Изключени
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Разглеждате редакция {rev} на „{from}“. Това е моментна снимка: промените тук няма да засегнат оригинала.
 	Turn upside down (180°)	Обърни наопаки (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Етикет 4 × 6 in (101,6 × 152,4 mm)
-	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Изрязва всяка страница до отпечатаната ѝ област, завърта я изправено и я побира в листа без разтягане. Един етикет на лист.
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Изрязва всяка страница до отпечатаната област, завърта я изправено и я побира в листа без разтягане. Един етикет на лист.
 	Find untagged content	Намиране на немаркирано съдържание
 	No untagged content was found.	Не е намерено немаркирано съдържание.
 	Found {n} untagged content problems.	Открити са {n} проблема с немаркирано съдържание.

@@ -91,7 +91,17 @@ impl OptimizeJob {
         pdfcraft_forms::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         let mut step = |stage| if progress(stage) { Ok(()) } else { Err(EditError::Cancelled) };
         step(OptimizeStage::Discarding)?;
-        let discarded = if discard.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard)? };
+        let discarded = if discard.is_empty() {
+            Vec::new()
+        } else {
+            match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
+                Ok(removed) => removed,
+                // The sanitizer guarantees this result precedes every mutation.
+                // Selecting a category the PDF does not contain is already satisfied.
+                Err(pdfcraft_redact::RedactError::NothingToApply) => Vec::new(),
+                Err(error) => return Err(error.into()),
+            }
+        };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {
                 optimize::Stage::Fragments => OptimizeStage::Fragments,

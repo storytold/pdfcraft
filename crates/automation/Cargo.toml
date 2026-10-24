@@ -25,6 +25,10 @@ default = ["mcp"]
 # The MCP server module. Opt-in at run time either way; disable to leave it out of the build.
 mcp = ["dep:base64"]
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pdfcraft-hot-folder-service = { path = "../hot-folder-service", version = "0.13.0" }
+zeroize = "1.8"
+
 [dev-dependencies]
 pdfcraft-fonts = { workspace = true }
 png = "0.18"
@@ -32,6 +36,9 @@ flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rustix = { version = "1", features = ["fs"] }

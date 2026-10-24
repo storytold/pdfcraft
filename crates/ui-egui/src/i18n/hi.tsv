@@ -2758,6 +2758,24 @@ theme	Appearance	स्वरूप
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; 1 पृष्ठ छोड़ा गया
+	; corrected {n} pages	; {n} पृष्ठ सुधारे गए
+	; {n} pages skipped	; {n} पृष्ठ छोड़े गए
+	Add searchable text	सर्च योग्य टेक्स्ट जोड़ें
+	Automatically rotate sideways and upside-down pages	बग़ल की ओर मुड़े और उल्टे पृष्ठ अपने-आप घुमाएँ
+	Correct scans	स्कैन सुधारें
+	Corrected scan	सुधारा गया स्कैन
+	Crop scanner borders to the paper edge	स्कैनर के किनारों को काग़ज़ के किनारे तक काटें
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	केवल स्पष्ट काग़ज़ के किनारे काटे जाते हैं। जिन सफ़ेद किनारों में अंतर नहीं किया जा सकता, वे रखे जाते हैं।
+	Safety margin (pt)	सुरक्षा मार्जिन (pt)
+	Scan and text recognition	स्कैन और टेक्स्ट पहचान
+	Scan correction	स्कैन सुधार
+	Scan processing cancelled	स्कैन प्रोसेसिंग रद्द की गई
+	Searchable Image	सर्च योग्य छवि
+	Straighten skewed scans	तिरछे स्कैन सीधे करें
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	अनिश्चित दिशाएँ अपरिवर्तित रहती हैं। सीधा करते समय पूरी छवि पृष्ठ के अंदर फ़िट की जाती है।
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
 

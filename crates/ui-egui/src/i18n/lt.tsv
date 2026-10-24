@@ -2691,6 +2691,24 @@ key	Space	Tarpas
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Jūs peržiūrite pasirašytą „{from}“ versiją ({rev} versija). Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Jūs peržiūrite „{from}“ {rev} versiją. Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
+
+# Scan correction integration; contributor-original translations, native review pending.
+	; 1 page skipped	; praleistas 1 puslapis
+	; corrected {n} pages	; pataisyta puslapių: {n}
+	; {n} pages skipped	; praleista puslapių: {n}
+	Add searchable text	Pridėti tekstą, kuriame galima ieškoti
+	Automatically rotate sideways and upside-down pages	Automatiškai pasukti šonu arba aukštyn kojomis nuskaitytus puslapius
+	Correct scans	Taisyti nuskaitytus vaizdus
+	Corrected scan	Pataisytas nuskaitytas vaizdas
+	Crop scanner borders to the paper edge	Apkirpti nuskaityto vaizdo kraštus iki popieriaus krašto
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Apkerpami tik aiškiai matomi popieriaus kraštai. Neatskiriami balti kraštai paliekami.
+	Safety margin (pt)	Apsauginė paraštė (pt)
+	Scan and text recognition	Nuskaitymas ir teksto atpažinimas
+	Scan correction	Nuskaityto vaizdo taisymas
+	Scan processing cancelled	Nuskaityto vaizdo apdorojimas atšauktas
+	Searchable Image	Paveikslėlis su ieškomu tekstu
+	Straighten skewed scans	Ištiesinti įstrižai nuskaitytus vaizdus
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Neaiški orientacija nekeičiama. Tiesinant visas vaizdas sutalpinamas puslapyje.
 	Turn upside down (180°)	Apversti aukštyn kojomis (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 col. etiketė (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Apkerpa kiekvieną puslapį iki spausdinamos srities, pasuka tiesiai ir pritaiko lapui neiškraipydama. Viena etiketė lape.

@@ -30,6 +30,11 @@ fn pages(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "description": format!("1-based page numbers {what}.") })
 }
 
+fn ocr_language() -> Value {
+    let codes: Vec<&str> = pdfcraft_engine::ocr::LANGUAGES.iter().map(|language| language.0).collect();
+    json!({ "type": "string", "enum": codes, "description": "Document language (default en)." })
+}
+
 fn path(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": format!("{what}: 1-based positions from the top level, e.g. [2, 1] = the first child of the second bookmark.") })
 }
@@ -1210,15 +1215,15 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image). Automatically corrects orientation and skew by default. Optionally auto_crop detected scanner borders, with crop_margin padding (0..20 pt, default 2). Set auto_rotate, deskew and auto_crop to false for an exact image, or recognize to false for correction only. Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "language": { "type": "string", "enum": ["en"], "description": "Document language (default en)." },
-                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true). false also reads pictures on such pages, without adding their text again." },
+                    "auto_rotate": { "type": "boolean", "default": true }, "deskew": { "type": "boolean", "default": true }, "auto_crop": { "type": "boolean", "default": false }, "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "default": 2 }, "recognize": { "type": "boolean", "default": true }, "language": ocr_language(),
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); false reads pictures without duplicating existing text." },
                 }),
                 &["doc"],
             )),
@@ -1229,15 +1234,35 @@ pub fn tools() -> Vec<ToolDef> {
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                     "folder": { "type": "string" },
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
-                    "language": { "type": "string", "enum": ["en"] },
+                    "auto_rotate": { "type": "boolean", "default": true }, "deskew": { "type": "boolean", "default": true }, "auto_crop": { "type": "boolean", "default": false }, "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "default": 2 }, "recognize": { "type": "boolean", "default": true }, "language": ocr_language(),
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); see ocr_recognize." },
                 }),
                 &["paths", "folder"],
             )),
+        t("ocr_enhance", "Correct scanned pages", "Crop clear black/white scanner borders to the paper edge, correct sideways/upside-down scans and straighten skew up to 12 degrees without adding text. auto_crop defaults to true, crop_margin to 2 pt (0..20). Uncertain paper edges are kept; crop_box reports the rectangle in original PDF user space. Existing text is preserved and processed unless skip_text_pages is true. Original image data is preserved. Low-confidence rotations are left unchanged. Deskew refuses pages with annotations to avoid misalignment. Undoable as one step.")
+            .cmd("ocr.enhance")
+            .with(schema(json!({"doc":doc(),"pages":pages("to correct (default all)"),"dpi":{"type":"number","minimum":72,"maximum":600},"auto_rotate":{"type":"boolean","default":true},"deskew":{"type":"boolean","default":true},"auto_crop":{"type":"boolean","default":true},"crop_margin":{"type":"number","minimum":0,"maximum":20,"default":2},"skip_text_pages":{"type":"boolean","default":false}}), &["doc"])),
         t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), where it looks for them, and the languages it reads.")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
+        t("hot_folder_configure", "Configure Hot Folder", "Save the standalone Hot Folder configuration atomically. Does not launch a background worker. Tasks contain id, name, existing disjoint input/output folders, enabled (default false), recursive, pdf, images, start_at (Unix seconds), once, interval_seconds (1..86400), settle_seconds (1..300), originals (keep/move/delete, default keep), archive (for move), and OCR settings. PDF output_plan.steps support optimization.mode off (default), lossless, reduce (150 ppi/JPEG 60), or custom with color/gray downsample, ppi, above_ppi, compression retain/zip/jpeg and quality 1..100. Only smaller optimized results are used; signed sources are refused. All nested paths honour --root; separate automation read/write roots are unsupported. Set enabled false to stop a task; partial processing is discarded. See docs/hot-folder.md.")
+            .destructive()
+            .with(schema(json!({"config":{"type":"string"}, "settings":{"type":"object", "properties":{"tasks":{"type":"array", "maxItems":32, "items":{"type":"object"}}}, "required":["tasks"], "additionalProperties":false}}), &["config", "settings"])),
+        t("hot_folder_poll", "Process ready Hot Folder inputs", "Run one scheduler pass (one stable input or combined batch per enabled task), saving durable status and receipts. Call again after the configured interval. Existing outputs are never overwritten. Explicit originals move/delete policies act only after all output steps and receipts succeed. Does not start a background worker.")
+            .destructive().with(schema(json!({"config":{"type":"string"}}), &["config"])),
+        t("hot_folder_status", "Hot Folder status", "Read configuration and durable task status, counts, last input/output and actionable errors. last_optimization reports actual documents, changed, bytes_before and bytes_after for the last successful optimized PDF batch, excluding steps with optimization off. No background work is started.")
+            .ro().with(schema(json!({"config":{"type":"string"}}), &["config"])),
+        t("hot_folder_retry", "Retry a Hot Folder task", "Clear failed attempts and reschedule a completed once task. Successful output receipts are preserved to prevent duplicate processing. Stop the task first if a worker is busy.")
+            .with(schema(json!({"config":{"type":"string"}, "task":{"type":"string"}}), &["config", "task"])),
+        t("hot_folder_run_now", "Run Hot Folder at the next poll", "Make an enabled task due at its next poll, overriding its calendar schedule once. Successful receipts remain. The task must already be enabled and its start_at must be due; no worker is started.")
+            .with(schema(json!({"config":{"type":"string"}, "task":{"type":"string"}}), &["config", "task"])),
+        t("hot_folder_service", "Manage Hot Folder system service", "Inspect or explicitly manage the system boot service matching executable and config. Changes require platform administrator rights and are unavailable under filesystem confinement. Unix install requires a non-root account; Windows installation is performed by the optional MSI component; prepare-account configures its service SID and delayed failure recovery without changing logon credentials. Nothing is installed implicitly.")
+            .destructive().with(schema(json!({"executable":{"type":"string"},"config":{"type":"string"},"action":{"type":"string","enum":["status","start","stop","enable","disable","install","uninstall","prepare-account"]},"account":{"type":"string"}}), &["executable","config","action"])),
+        t("hot_folder_source", "Connect Hot Folder source", "Manage the configured task's protected credentials or explicit Outlook device sign-in. No passwords or access tokens are returned. save_ftp_password reads a named PDFCRAFT_HOT_FOLDER_* environment variable; flow is the public object returned by outlook_begin. Stop the task before changing credentials. Credentials require the installer-provisioned service store. Outlook needs your own public-client application registration. No work starts implicitly.")
+            .destructive().with(schema(json!({"config":{"type":"string"},"task":{"type":"string"},"action":{"type":"string","enum":["credential_status","save_ftp_password","forget_credentials","outlook_begin","outlook_poll","outlook_folders"]},"password_env":{"type":"string"},"flow":{"type":"object"},"parent":{"type":"string"}}), &["config","task","action"])),
+        t("hot_folder_project", "Create Hot Folder project", "Create an open PDFCraft manifest containing ordered PDF/image paths. This is not an ABBYY proprietary project. All files must be inside the manifest's parent folder. Existing manifests are never overwritten; all paths honour --root.")
+            .with(schema(json!({"path":{"type":"string"},"files":{"type":"array","minItems":1,"maxItems":10000,"items":{"type":"string"}}}), &["path","files"])),
         t("doc_export_all_images", "Export all images", "Write the images that pages use into a folder (`<name>_Page_<n>_Image_<k>.jpg|png`, n zero-padded to the page count's digits), each once: JPEG images unchanged, others as PNG with their soft mask as alpha. min_size skips images with fewer pixels on their shorter side. Images that can't be decoded yet (JPEG 2000, JBIG2, CCITT, separations) are listed under skipped. Includes unsaved edits.")
             .cmd("export.all_images")
             .with(schema(
@@ -1397,12 +1422,13 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("doc_open_revision", "Open a revision", "Open saved revision `revision` (1 = the oldest) of a document as a new, unsaved document, to see the file as it was then.")
             .with(schema(json!({ "doc": doc(), "revision": { "type": "integer", "minimum": 1 } }), &["doc", "revision"])),
-        t("doc_optimize", "Optimize PDF", "Write an optimized copy to `path` (Acrobat's PDF Optimizer). preset: standard (default; Reduce File Size's choices) or mobile (images to 96 ppi above 144, JPEG high quality); the options below change it. compatibility: retain (default; keeps the document's version, or 1.5 when object streams are written), 1.4, 1.5, 1.6, 1.7 or 2.0. merge_fragments (default true) first puts a page picture drawn as many stacked image strips (as some PDF printers write it) back together into one image, so it can be resampled (merged_images, fragments_merged). color / gray: { downsample, ppi, above_ppi, compression: jpeg|zip|retain, quality 1–100 } (defaults: downsample to 150 ppi above 225, JPEG 60). Images are measured where pages draw them and replaced only when smaller. discard_*: thumbnails (default true), alternate_images (true), tags, print_settings; flate_unencoded (true); object_streams (default true; always off for 1.4); lzw_to_flate (true) decodes LZW streams and stores them with Flate instead, leaving any it cannot decode unchanged (lzw_streams counts the streams converted); remove_invalid_links and remove_unreferenced_dests (true); images and forms the pages list but never draw are always dropped (unused_xobjects). discard: Remove Hidden Information categories (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data). Signed documents are refused. The open document is unchanged.")
+        t("doc_optimize", "Optimize PDF", "Write an optimized copy to `path` (Acrobat's PDF Optimizer). profile: reduce (default, customizable) or lossless (preserve image streams and user data; no other optimization settings accepted except compatibility and object_streams). preset: standard (default; Reduce File Size's choices) or mobile (images to 96 ppi above 144, JPEG high quality); the options below change it. compatibility: retain (default; keeps the document's version, or 1.5 when object streams are written), 1.4, 1.5, 1.6, 1.7 or 2.0. merge_fragments (default true) first puts a page picture drawn as many stacked image strips (as some PDF printers write it) back together into one image, so it can be resampled (merged_images, fragments_merged). color / gray: { downsample, ppi, above_ppi, compression: jpeg|zip|retain, quality 1–100 } (defaults: downsample to 150 ppi above 225, JPEG 60). Images are measured where pages draw them and replaced only when smaller. discard_*: thumbnails (default true), alternate_images (true), tags, print_settings; flate_unencoded (true); object_streams (default true; always off for 1.4); lzw_to_flate (true; off for lossless) decodes LZW streams and stores them with Flate instead, leaving any it cannot decode unchanged (lzw_streams counts the streams converted); remove_invalid_links and remove_unreferenced_dests (true); remove_unused_xobjects (default true) drops images and forms the pages list but never draw (unused_xobjects). discard: Remove Hidden Information categories (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data). Already absent discard categories succeed without removal. Signed documents are refused. The open document is unchanged.")
             .cmd("optimize.advanced")
             .with(schema(
                 json!({
                     "doc": doc(),
                     "path": { "type": "string" },
+                    "profile": { "type": "string", "enum": ["reduce", "lossless"] },
                     "preset": { "type": "string", "enum": ["standard", "mobile"] },
                     "compatibility": { "type": "string", "enum": ["retain", "1.4", "1.5", "1.6", "1.7", "2.0"] },
                     "merge_fragments": { "type": "boolean" },
@@ -1417,6 +1443,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "lzw_to_flate": { "type": "boolean" },
                     "remove_invalid_links": { "type": "boolean" },
                     "remove_unreferenced_dests": { "type": "boolean" },
+                    "remove_unused_xobjects": { "type": "boolean" },
                     "discard": { "type": "array", "items": { "type": "string" } },
                 }),
                 &["doc", "path"],

@@ -3181,10 +3181,10 @@ area = "D"
 tier = "P1"
 milestone = "M4"
 status = "shipped"
-commands = ["page.boxes"]
-tools = ["page_set_box"]
-evidence = ["crates/ui-egui/tests/it/pageboxes.rs::set_page_boxes_dialog_applies_margins_to_the_chosen_pages", "crates/organize/src/tests.rs::page_boxes_default_inherit_and_set"]
-notes = "crop/trim/bleed/art/media, margins in pt/in/mm, page ranges, preview; no Remove white margins yet"
+commands = ["page.boxes", "ocr.enhance"]
+tools = ["page_set_box", "ocr_enhance"]
+evidence = ["crates/ui-egui/tests/it/pageboxes.rs::set_page_boxes_dialog_applies_margins_to_the_chosen_pages", "crates/organize/src/tests.rs::page_boxes_default_inherit_and_set", "crates/engine/tests/it/scan_ocr.rs::crop_scanner_borders_preserves_pixels_rotation_text_and_undo", "crates/automation/tests/it/automation.rs::ocr_enhance_crops_paper_edges_with_margin_and_undo", "crates/ui-egui/tests/it/ocr.rs::enhance_scan_dialog_offers_correction_without_recognition"]
+notes = "crop/trim/bleed/art/media, margins in pt/in/mm, page ranges, preview. Enhance scanned file automatically crops black/white scanner borders to clear paper edges with adjustable safety padding; retains blank paper and colored covers, supports existing page rotation and OCR layers, and undoes together with scan corrections. Indistinguishable white-on-white edges stay unchanged; no text-bounds Remove white margins or perspective crop. Original pixels remain in the PDF."
 
 [[feature]]
 id = "organize.crop-tool"
@@ -5152,7 +5152,7 @@ milestone = "M6"
 status = "partial"
 commands = ["form.detect", "form.prepare"]
 tools = ["form_detect_fields"]
-evidence = ["crates/forms/src/tests.rs::detection_finds_blanks_rules_boxes_and_names_them", "crates/forms/src/tests.rs::page_shapes_reads_rectangles_with_points_along_their_sides", "crates/engine/src/tests.rs::detecting_fields_on_a_printed_form", "crates/engine/src/tests.rs::detected_fields_have_no_border_or_fill", "crates/forms/src/tests.rs::detection_makes_a_row_of_touching_cells_one_comb_field", "crates/engine/src/tests.rs::detecting_comb_boxes_adds_one_comb_field_per_row", "crates/engine/src/tests.rs::detecting_fields_on_a_scanned_form", "crates/forms/src/detect/raster.rs::a_scanned_form_gives_its_rules_boxes_and_check_boxes", "crates/forms/src/detect/raster.rs::noise_and_uneven_paper_do_not_hide_the_lines", "crates/automation/tests/it/automation.rs::detecting_form_fields_through_tools", "crates/automation/tests/it/automation.rs::detecting_comb_boxes_through_tools", "crates/ui-egui/tests/it/javascript.rs::prepare_a_form_detects_fields_on_a_paper_form", "crates/ui-egui/tests/it/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel"]
+evidence = ["crates/forms/src/tests.rs::detection_finds_blanks_rules_boxes_and_names_them", "crates/forms/src/tests.rs::page_shapes_reads_rectangles_with_points_along_their_sides", "crates/engine/src/tests.rs::detecting_fields_on_a_printed_form", "crates/engine/src/tests.rs::detected_fields_have_no_border_or_fill", "crates/forms/src/tests.rs::detection_makes_a_row_of_touching_cells_one_comb_field", "crates/engine/src/tests.rs::detecting_comb_boxes_adds_one_comb_field_per_row", "crates/engine/src/tests.rs::detecting_fields_on_a_scanned_form", "crates/forms/src/detect/raster.rs::a_scanned_form_gives_its_rules_boxes_and_check_boxes", "crates/forms/src/detect/raster.rs::noise_and_uneven_paper_do_not_hide_the_lines", "crates/automation/tests/it/automation.rs::detecting_form_fields_through_tools", "crates/automation/tests/it/automation.rs::detecting_comb_boxes_through_tools", "crates/ui-egui/tests/it/javascript.rs::prepare_a_form_detects_fields_on_a_paper_form", "crates/ui-egui/tests/it/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/forms/src/tests.rs::checkbox_labels_can_include_the_recognized_box_mark"]
 notes = "Underscore runs, rules, empty boxes, small squares (check boxes) and rows of two or more touching cells of one size (one comb text field, character limit = cells; tested on drawn forms only); a box drawn with points along its sides (a midpoint on each vertical side, as the French 2042 form's cells) is read as the rectangle it is (#2942); runs when Prepare a form starts on a document without fields, and from Prepare a form ▸ Detect form fields at any time (existing fields are skipped). Scanned pages (an image covers at least half the page and the content draws no lines) are rendered and their rules, boxes and check boxes read from the pixels; a box with a small printed label gets a field in its empty part. Detected fields get no border and no fill, since the page already draws the line or box they sit on; fields drawn by hand keep the grey border and white fill. Tested on synthetic scans only: straight, stored sideways with /Rotate 90 (fields get /MK /R so typing reads upright), noisy, and 1 degree askew (fields stay inside their boxes but lose up to the skew in height). Labels come from the text layer or, when the OCR models are installed, from text recognition (Latin without accents, so German labels with umlauts make poorer names); without either, fields get default names (Text1, Check Box1). Recognition runs synchronously, about a second per scanned page. Not yet: dotted leader lines, tables of cells as such, deskewing, radio groups."
 
 [[feature]]
@@ -6568,8 +6568,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "Language choice exists, but the models read only the Latin alphabet without accents (English)."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_recognizes_accents_in_requested_languages", "crates/engine/tests/it/scan_ocr.rs::scan_recognizes_japanese_with_release_fonts", "crates/engine/tests/it/scan_ocr.rs::additional_latin_languages_keep_accented_words_after_save", "crates/ocr/src/lib.rs::system_locale_selects_ocr_language_with_english_fallback", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "English, German, French, Spanish, Italian, Dutch, Danish, Norwegian Bokmål, Swedish, Finnish, Portuguese and horizontal Japanese run offline. The UI initially selects the primary system/browser locale, with English fallback when unavailable or unsupported; manual choices remain available. CLI/MCP language arguments retain their deterministic English default. Icelandic, other language choices and vertical Japanese remain unclaimed."
 
 [[feature]]
 id = "ocr.searchable-image"
@@ -6577,11 +6577,11 @@ title = "Searchable image output (invisible text layer)"
 area = "I"
 tier = "P0"
 milestone = "M10"
-status = "partial"
+status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::unicode_ocr_survives_save_search_and_undo_without_changing_pixels"]
+notes = "Unicode invisible text with ToUnicode mappings; optional orientation and deskew correction preserves original image streams."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
@@ -6592,8 +6592,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "The image is left untouched."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::unicode_ocr_survives_save_search_and_undo_without_changing_pixels"]
+notes = "Disable auto_rotate and deskew for unchanged page pixels; OCR does not recompress the original image."
 
 [[feature]]
 id = "ocr.editable-text-output"
@@ -6637,11 +6637,11 @@ title = "Detect and fix page rotation"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize", "ocr.enhance"]
+tools = ["ocr_recognize", "ocr_enhance"]
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_correction_handles_all_quarter_turns_and_stale_results", "crates/automation/tests/it/automation.rs::ocr_enhance_corrects_rotation_without_adding_text"]
+notes = "Confidence-gated 90/180/270 degree correction using PP-LCNet. Blank and uncertain pages stay unchanged; correction alone or before OCR, undoable."
 
 [[feature]]
 id = "ocr.deskew"
@@ -6649,11 +6649,11 @@ title = "Deskew"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.recognize", "ocr.enhance"]
+tools = ["ocr_recognize", "ocr_enhance"]
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_deskew_without_ocr_persists_and_is_undoable"]
+notes = "Projection-profile deskew up to 12 degrees, fitting the whole scan inside the page. Preserves original image streams; pages with annotations are refused to avoid misalignment. No perspective or camera dewarping."
 
 [[feature]]
 id = "ocr.despeckle"
@@ -7324,8 +7324,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/automation/tests/it/optimize_content_boundaries.rs::fragment_merge_preserves_a_comment_across_content_pieces", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled", "crates/optimize/tests/optimize.rs::images_and_forms_nothing_draws_are_dropped", "crates/automation/tests/it/automation.rs::a_deleted_image_is_not_kept_by_reduce_or_optimize", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_picks_a_preset", "crates/automation/tests/it/automation.rs::a_page_printed_in_strips_gets_small_through_tools", "crates/optimize/tests/optimize.rs::the_mobile_preset_makes_a_printed_page_small"]
-notes = "Settings menu with the Standard and Mobile presets (Custom once an option changes; doc_optimize preset), Images (with Merge image fragments: a page picture drawn as one-pixel strips, as some PDF printers write it, is put back together so it can be resampled), Discard Objects, Discard User Data, Clean Up (also drops images and forms the pages list but never draw, such as deleted images); runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no saved custom presets, no space audit"
+evidence = ["crates/automation/tests/it/optimize_content_boundaries.rs::fragment_merge_preserves_a_comment_across_content_pieces", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/ui-egui/src/optimize_ui.rs::the_progress_card_shows_the_stage_and_cancels", "crates/engine/src/tests.rs::an_optimize_job_reports_its_stages_and_can_be_cancelled", "crates/optimize/tests/optimize.rs::images_and_forms_nothing_draws_are_dropped", "crates/automation/tests/it/automation.rs::a_deleted_image_is_not_kept_by_reduce_or_optimize", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_picks_a_preset", "crates/automation/tests/it/automation.rs::a_page_printed_in_strips_gets_small_through_tools", "crates/optimize/tests/optimize.rs::the_mobile_preset_makes_a_printed_page_small", "crates/automation/tests/it/automation.rs::lossless_optimization_through_tools_preserves_image_bytes_and_appearance", "crates/engine/src/tests.rs::optimizing_absent_hidden_information_is_a_successful_no_op", "crates/engine/src/tests.rs::optimizing_catalog_associated_files_reports_the_actual_removal", "crates/redact/src/tests.rs::absent_hidden_categories_do_not_mutate_empty_containers_or_indirect_arrays", "crates/redact/src/tests.rs::absent_categories_stay_unchanged_beside_a_reported_hidden_removal"]
+notes = "Images, Discard Objects, Discard User Data, Clean Up; background progress and Cancel. Shared Settings::lossless()/doc_optimize profile=lossless retains image streams and user data without downsampling/discards/link pruning. Selected absent Hidden categories succeed without sanitizer mutations; catalog AF attachment removals are counted and reported. Size/quality gains depend on the document. Full-save generation handling is backported from upstream #1143; all seven Hot Folder automation tests and a four-profile CLI pixel/source-preservation check pass locally on Windows. Final package acceptance remains separate; see docs/hot-folder.md. Settings menu with the Standard and Mobile presets (Custom once an option changes; doc_optimize preset), Images (with Merge image fragments: a page picture drawn as one-pixel strips, as some PDF printers write it, is put back together so it can be resampled), Discard Objects, Discard User Data, Clean Up (also drops images and forms the pages list but never draw, such as deleted images); runs in the background with a progress bar (per image) and Cancel; no Fonts or Transparency panels, no saved custom presets, no space audit"
 
 [[feature]]
 id = "optimize.downsample-images"
@@ -7336,8 +7336,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image", "crates/optimize/tests/optimize.rs::images_that_do_not_tile_a_picture_are_left_alone", "crates/optimize/tests/optimize.rs::a_deeply_nested_form_is_measured_at_its_largest_use", "crates/optimize/tests/optimize.rs::images_are_not_resampled_when_some_uses_could_not_be_measured", "crates/optimize/tests/optimize.rs::image_resolution_uses_the_pages_physical_unit", "crates/optimize/tests/optimize.rs::optimization_retains_an_image_below_threshold_on_a_scaled_page", "crates/optimize/tests/optimize.rs::shared_forms_are_measured_in_each_pages_physical_units"]
-notes = "colour and grayscale, bicubic, effective resolution measured where drawn (every use, with page-local UserUnit scaling, through nested forms up to 12 deep; when a use can't be measured, nothing is resampled); image fragments stacked edge to edge are merged first (side-by-side tiles not yet); monochrome not yet"
+evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::hostile_image_and_mask_dimensions_are_left_unchanged", "crates/optimize/tests/optimize.rs::jpeg_dimensions_and_decoded_lengths_must_match_the_dictionary", "crates/optimize/tests/optimize.rs::resampling_an_image_does_not_mutate_a_shared_soft_mask", "crates/optimize/tests/optimize.rs::a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image", "crates/optimize/tests/optimize.rs::images_that_do_not_tile_a_picture_are_left_alone", "crates/optimize/tests/optimize.rs::a_deeply_nested_form_is_measured_at_its_largest_use", "crates/optimize/tests/optimize.rs::images_are_not_resampled_when_some_uses_could_not_be_measured", "crates/optimize/tests/optimize.rs::image_resolution_uses_the_pages_physical_unit", "crates/optimize/tests/optimize.rs::optimization_retains_an_image_below_threshold_on_a_scaled_page", "crates/optimize/tests/optimize.rs::shared_forms_are_measured_in_each_pages_physical_units"]
+notes = "colour and grayscale, bicubic, effective resolution measured where drawn (every use, with page-local UserUnit scaling, through nested forms up to 12 deep; when a use can't be measured, nothing is resampled); validated dimensions/sample lengths, private resampled soft masks preserve other uses; image fragments stacked edge to edge are merged first (side-by-side tiles not yet); monochrome not yet"
 
 [[feature]]
 id = "optimize.recompress-images"
@@ -10206,3 +10206,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "misc.hot-folder"
+title = "Standalone watched-folder document processing"
+area = "N"
+tier = "P1"
+milestone = "M13"
+status = "partial"
+commands = []
+tools = ["hot_folder_configure", "hot_folder_status", "hot_folder_poll", "hot_folder_retry", "hot_folder_run_now", "hot_folder_source", "hot_folder_project", "hot_folder_service"]
+evidence = ["crates/engine/src/hot_folder.rs::hot_folder_settling_and_durable_receipts_prevent_duplicates_and_overwrites", "crates/automation/tests/it/hot_folder.rs::hot_folder_tools_produce_searchable_output_and_preserve_source", "apps/pdfcraft-hot-folder/src/ui.rs::hot_folder_ui_has_seven_languages_and_persists_a_stopped_task", "crates/automation/tests/it/hot_folder.rs::hot_folder_pdf_optimization_is_optional_reports_real_sizes_and_preserves_sources", "crates/engine/src/hot_folder_output.rs::signed_input_is_refused_before_grouping_or_image_conversion_can_remove_its_signature", "apps/pdfcraft-hot-folder/src/ui.rs::hot_folder_optimization_ui_persists_choices_and_clears_them_for_non_pdf_outputs"]
+notes = "Separate native application: local/network/FTP/Outlook/open-project sources, PDF/images, durable receipts, calendar scheduling, OCR and scan preprocessing, JSON analysis without OCR, grouped PDF/Office/XLSX/EPUB/image outputs, optional smaller-only PDF optimization (off/lossless/reduce/custom), safe source policies, task import/export and seven UI languages. Boot services use restricted accounts. Full proprietary project/output parity remains partial; see docs/hot-folder.md. No implicit service or MCP startup."

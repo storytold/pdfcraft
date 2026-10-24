@@ -2782,6 +2782,24 @@ theme	Appearance	Aspecte
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; s'ha omès 1 pàgina
+	; corrected {n} pages	; s'han corregit {n} pàgines
+	; {n} pages skipped	; s'han omès {n} pàgines
+	Add searchable text	Afegeix text cercable
+	Automatically rotate sideways and upside-down pages	Gira automàticament les pàgines de costat i cap per avall
+	Correct scans	Corregeix els escanejats
+	Corrected scan	Escaneig corregit
+	Crop scanner borders to the paper edge	Retalla les vores de l'escàner fins a la vora del paper
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Només es retallen les vores del paper clares. Les vores blanques que no es distingeixen es conserven.
+	Safety margin (pt)	Marge de seguretat (pt)
+	Scan and text recognition	Escaneig i reconeixement de text
+	Scan correction	Correcció de l'escaneig
+	Scan processing cancelled	S'ha cancel·lat el processament de l'escaneig
+	Searchable Image	Imatge amb text cercable
+	Straighten skewed scans	Redreça els escanejats inclinats
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Les orientacions incertes no es canvien. El redreçament encabeix tota la imatge dins la pàgina.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
 

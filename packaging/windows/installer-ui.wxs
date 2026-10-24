@@ -8,7 +8,7 @@
       <TextStyle Id="InstallerTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
       <Property Id="DefaultUIFont" Value="InstallerNormal" />
 
-      <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
+      <Dialog Id="InstallWelcome" Width="370" Height="245" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
         <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40"
             Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
@@ -16,28 +16,46 @@
             Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
         <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17"
             Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
-        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
-          <Publish Event="EndDialog" Value="Return" />
+        <Control Id="HotFolder" Type="CheckBox" X="20" Y="145" Width="330" Height="17"
+            Property="INSTALLHOTFOLDER" CheckBoxValue="1" Text="Also install PdfCraft &amp;Hot Folder" />
+        <Control Id="HotFolderDescription" Type="Text" X="32" Y="165" Width="318" Height="30"
+            Text="Adds a background service that starts with Windows. Only tasks you configure and enable are processed." />
+        <Control Id="Install" Type="PushButton" X="195" Y="205" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
+          <!-- CostFinalize precedes the welcome dialog, so apply the user's feature choice here. -->
+          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1" Order="1" />
+          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1" Order="2" />
+          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1" Order="3" />
+          <Publish Event="EndDialog" Value="Return" Order="4" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="280" Y="205" Width="70" Height="23" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>
 
-      <Dialog Id="InstallMaintenance" Width="370" Height="180" Title="[ProductName] Setup">
+      <Dialog Id="InstallMaintenance" Width="370" Height="225" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Maintain [ProductName]" />
         <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70"
             Text="[ProductName] is already installed. Choose Repair to restore missing files and shortcuts, or Remove to uninstall it." />
-        <Control Id="Repair" Type="PushButton" X="110" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Repair">
+        <Control Id="AddHotFolder" Type="PushButton" X="20" Y="130" Width="210" Height="23" ElevationShield="yes"
+            Text="Add Hot Folder background service" HideCondition="!HotFolder = 3" ShowCondition="!HotFolder &lt;&gt; 3">
+          <Publish Event="AddLocal" Value="HotFolder" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="RemoveHotFolder" Type="PushButton" X="20" Y="130" Width="210" Height="23" ElevationShield="yes"
+            Text="Remove Hot Folder (keep task data)" HideCondition="!HotFolder &lt;&gt; 3" ShowCondition="!HotFolder = 3">
+          <Publish Event="Remove" Value="HotFolder" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="Repair" Type="PushButton" X="110" Y="205" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Repair">
           <Publish Property="REINSTALL" Value="ALL" Order="1" />
           <Publish Property="REINSTALLMODE" Value="amus" Order="2" />
           <Publish Event="EndDialog" Value="Return" Order="3" />
         </Control>
-        <Control Id="Remove" Type="PushButton" X="195" Y="145" Width="75" Height="23" ElevationShield="yes" Text="R&amp;emove">
+        <Control Id="Remove" Type="PushButton" X="195" Y="205" Width="75" Height="23" ElevationShield="yes" Text="R&amp;emove">
           <Publish Property="REMOVE" Value="ALL" Order="1" />
           <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="280" Y="205" Width="70" Height="23" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>

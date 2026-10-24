@@ -87,6 +87,11 @@ them (images, fonts, Forms, annotations and fields as well as the catalog and pa
 name maps such as resource dictionaries. Content is read strictly: a page whose content can't be
 read in full is refused, not cleaned in part. Both make the next save a full rewrite.
 
+Attachment counts include catalog `/AF` associated-file entries as well as embedded-file
+name-tree entries and file-attachment annotations (references in different locations count
+separately). Removing only absent categories returns `NothingToApply` before any mutation;
+empty containers are preserved, including when another selected category is removed.
+
 `patterns` finds phone numbers, e-mail addresses, credit card numbers (Luhn-checked), US Social
 Security numbers and dates for Search & Redact.
 A phone label such as `Tel.` or `Fax:` also enables Italian international geographic numbers with a slash, such as `Tel. +39 0426/123456` or `Fax: +390426/123456` (#3205 follow-up).

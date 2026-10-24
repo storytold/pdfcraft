@@ -964,6 +964,12 @@ fn an_in_place_save_reports_a_required_rewrite_as_not_incremental() {
         std::fs::write(dir.join("a.pdf"), &original).unwrap();
         let mut a = auto(&dir);
         let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        if tool == "doc_remove_hidden" {
+            // Removing absent categories is a no-op. Give this rewrite test real metadata
+            // to remove, including an earlier on-disk revision that must not survive.
+            ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "Private title" }));
+            ok(&mut a, "doc_save", json!({ "doc": doc }));
+        }
         let mut args = args;
         args["doc"] = json!(doc);
         ok(&mut a, tool, args);
@@ -6132,6 +6138,64 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
 }
 
 #[test]
+fn lossless_optimization_through_tools_preserves_image_bytes_and_appearance() {
+    use pdfcraft_cos::{Document, ObjRef, Object};
+    use std::sync::Arc;
+    let dir = workdir("lossless-optimize");
+    let mut jpeg = Vec::new();
+    let pixels = (0..128 * 128).flat_map(|i| [(i % 128) as u8, (i / 128) as u8, 180]).collect::<Vec<_>>();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&pixels, 128, 128, image::ExtendedColorType::Rgb8).unwrap();
+    std::fs::write(dir.join("image.jpg"), &jpeg).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"images", "paths":["image.jpg"]}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc, "path":"original.pdf"}));
+    let original = std::fs::read(dir.join("original.pdf")).unwrap();
+    let before = a.call("page_render", &json!({"doc":doc, "page":1, "dpi":72})).unwrap();
+    let report = ok(&mut a, "doc_optimize", json!({"doc":doc, "path":"lossless.pdf", "profile":"lossless"}));
+    assert_eq!(report["images_resampled"], 0);
+    assert_eq!(report["images_recompressed"], 0);
+    assert_eq!(report["discarded"], json!([]));
+    let result = std::fs::read(dir.join("lossless.pdf")).unwrap();
+    let image_streams = |bytes| {
+        let document = Document::open(Arc::new(bytes)).unwrap();
+        document
+            .object_numbers()
+            .into_iter()
+            .filter_map(|number| {
+                let object = document.get(ObjRef::new(number, document.generation(number)));
+                match &*object {
+                    Object::Stream(stream) if stream.dict.name(b"Subtype") == Some(b"Image") => {
+                        Some((stream.dict.int(b"Width"), stream.dict.int(b"Height"), stream.raw.to_vec()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(image_streams(result), image_streams(original.clone()));
+    assert_eq!(std::fs::read(dir.join("original.pdf")).unwrap(), original);
+    let reopened = ok(&mut a, "doc_open", json!({"path":"lossless.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(a.call("page_render", &json!({"doc":reopened, "page":1, "dpi":72})).unwrap(), before);
+    for extra in [
+        json!({"profile":"unknown"}),
+        json!({"profile":"lossless", "color":{"compression":"jpeg"}}),
+        json!({"profile":"lossless", "discard":["metadata"]}),
+        json!({"profile":"lossless", "discard_tags":true}),
+        json!({"profile":"lossless", "preset":"mobile"}),
+        json!({"profile":"lossless", "merge_fragments":true}),
+    ] {
+        let mut args = json!({"doc":doc, "path":"refused.pdf"});
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(matches!(a.call("doc_optimize", &args), Err(ToolError::InvalidArgs(_))));
+        assert!(!dir.join("refused.pdf").exists());
+    }
+    let bare = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let report = ok(&mut a, "doc_optimize", json!({"doc":bare, "path":"no-metadata.pdf", "discard":["metadata"]}));
+    assert_eq!(report["discarded"], json!([]));
+    assert_eq!(ok(&mut a, "doc_open", json!({"path":"no-metadata.pdf"}))["pages"], 3);
+}
+
+#[test]
 fn initial_view_through_tools() {
     let dir = workdir("initial-view");
     let mut a = auto(&dir);
@@ -6157,6 +6221,15 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    for language in ["de", "ja", "fr", "es", "it", "nl", "da", "nb", "sv", "fi", "pt"] {
+        assert!(status["languages"].as_array().unwrap().iter().any(|l| l["code"] == language));
+    }
+    for name in ["ocr_recognize", "ocr_recognize_files"] {
+        let tool = tools().into_iter().find(|tool| tool.name == name).unwrap();
+        let advertised = &tool.input_schema["properties"]["language"]["enum"];
+        let available: Vec<_> = status["languages"].as_array().unwrap().iter().map(|language| language["code"].clone()).collect();
+        assert_eq!(advertised, &json!(available), "{name} schema must advertise the same languages as ocr_status");
+    }
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -6165,7 +6238,7 @@ fn ocr_tools_make_a_scan_searchable() {
     ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
     let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
     let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
-    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan }));
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "it" }));
     assert!(r["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{r}");
     assert!(r["words"].as_u64().unwrap() >= 4);
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
@@ -6202,6 +6275,54 @@ fn ocr_recognize_reads_pictures_on_pages_with_text() {
 }
 
 #[test]
+fn ocr_enhance_crops_paper_edges_with_margin_and_undo() {
+    let dir = workdir("ocr-crop");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        return;
+    }
+    let image = image::RgbImage::from_fn(800, 600, |x, y| image::Rgb(if (180..800).contains(&x) && y < 490 { [235; 3] } else { [25; 3] }));
+    image.save(dir.join("scan.png")).unwrap();
+    let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":["scan.png"]}))["doc"].as_u64().unwrap();
+    let no_crop = ok(&mut a, "ocr_enhance", json!({"doc":doc,"auto_crop":false,"auto_rotate":false,"deskew":false}));
+    assert!(no_crop["pages"][0]["crop_box"].is_null());
+    let cropped = ok(&mut a, "ocr_enhance", json!({"doc":doc,"crop_margin":0,"auto_rotate":false,"deskew":false}));
+    let rect = cropped["pages"][0]["crop_box"].as_array().unwrap();
+    assert!(rect[0].as_f64().unwrap() > 100.0);
+    assert_eq!(cropped["words"], 0);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"cropped.pdf"}));
+    assert_eq!(ok(&mut a, "edit_undo", json!({"doc":doc}))["undone"], "Correct scans");
+    let padded = ok(&mut a, "ocr_enhance", json!({"doc":doc,"crop_margin":10,"auto_rotate":false,"deskew":false}));
+    let padded_rect = padded["pages"][0]["crop_box"].as_array().unwrap();
+    assert!((rect[0].as_f64().unwrap() - padded_rect[0].as_f64().unwrap() - 10.0).abs() < 1.0);
+    assert!((rect[1].as_f64().unwrap() - padded_rect[1].as_f64().unwrap() - 10.0).abs() < 1.0);
+    for margin in [-1, 21] {
+        assert!(matches!(a.call("ocr_enhance", &json!({"doc":doc,"crop_margin":margin})), Err(ToolError::InvalidArgs(_))));
+    }
+}
+
+#[test]
+fn ocr_enhance_corrects_rotation_without_adding_text() {
+    let dir = workdir("ocr-enhance");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        return;
+    }
+    let sentence =
+        (0..18).map(|_| "Please read this document with the page upright. The quick brown fox jumps over the lazy dog.\n").collect::<String>();
+    let doc = ok(&mut a, "doc_create", json!({"from":"text","text":sentence}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":180}));
+    ok(&mut a, "doc_export_images", json!({"doc":doc,"folder":"scan","dpi":150,"pages":[1]}));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({"from":"images","paths":[png.to_string_lossy()]}))["doc"].as_u64().unwrap();
+    let corrected = ok(&mut a, "ocr_enhance", json!({"doc":scan,"deskew":false}));
+    assert_eq!(corrected["pages"][0]["rotation"], 180, "{corrected}");
+    assert_eq!(corrected["words"], 0);
+    let read = ok(&mut a, "ocr_recognize", json!({"doc":scan,"auto_rotate":false,"deskew":false}));
+    assert!(read["pages"][0]["text"].as_str().unwrap().contains("Please"), "{read}");
+}
+
+#[test]
 fn ocr_recognize_files_refuses_paths_outside_the_root() {
     let dir = workdir("ocr-files-root");
     let mut a = auto(&dir);
@@ -6226,7 +6347,7 @@ fn ocr_recognize_files_writes_searchable_copies() {
     let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
     let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_save", json!({ "doc": scan, "path": "in/scan.pdf" }));
-    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf", "missing.pdf"], "folder": "out" }));
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf", "missing.pdf"], "folder": "out", "language": "it" }));
     assert!(r["files"][0]["words"].as_u64().unwrap() >= 3, "{r}");
     assert!(r["files"][1]["error"].is_string(), "{r}");
     let out = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();

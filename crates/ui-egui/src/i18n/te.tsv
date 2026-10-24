@@ -2263,6 +2263,31 @@ animation effects	Off	ఆఫ్
 	Original	అసలు
 	Greyscale	గ్రేస్కేల్
 	Black and white	నలుపు తెలుపు
+	; 1 page skipped	; 1 పేజీ దాటవేయబడింది
+	; corrected {n} pages	; {n} పేజీలు సరిచేయబడ్డాయి
+	; {n} pages skipped	; {n} పేజీలు దాటవేయబడ్డాయి
+	Add searchable text	శోధించగల పాఠ్యాన్ని చేర్చు
+	Add the PDFs to combine	కలపాల్సిన PDFలను జోడించండి
+	Added the first {n} PDFs in {folder}	{folder}లోని మొదటి {n} PDFలు జోడించబడ్డాయి
+	Automatically rotate sideways and upside-down pages	పక్కకు లేదా తలక్రిందులుగా ఉన్న పేజీలను స్వయంచాలకంగా తిప్పు
+	Correct scans	స్కాన్‌లను సరిచేయి
+	Corrected scan	సరిచేసిన స్కాన్
+	Crop scanner borders to the paper edge	స్కాన్ అంచులను కాగితం అంచు వరకు కత్తిరించు
+	Drop PDFs or folders here, or choose them.	PDFలను లేదా ఫోల్డర్‌లను ఇక్కడ లాగి వదలండి, లేదా వాటిని ఎంచుకోండి.
+	Every PDF in the folder	ఫోల్డర్‌లోని ప్రతి PDF
+	Every PDF in the folder and the folders inside it	ఫోల్డర్‌లోని, దాని లోపలి ఫోల్డర్‌లలోని ప్రతి PDF
+	Margins (in)	మార్జిన్‌లు (in)
+	No PDFs found in {folder}	{folder}లో PDFలు ఏవీ కనుగొనబడలేదు
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	స్పష్టమైన కాగితం అంచులు మాత్రమే కత్తిరించబడతాయి. గుర్తించలేని తెల్ల అంచులు అలాగే ఉంటాయి.
+	Only the document's owner can change its security (open it with the permissions password)	పత్రం యజమాని మాత్రమే దాని భద్రతను మార్చగలరు (అనుమతుల పాస్‌వర్డ్‌తో దాన్ని తెరవండి)
+	Safety margin (pt)	భద్రతా అంచు (pt)
+	Save (M4)	సేవ్ చేయి (M4)
+	Scan and text recognition	స్కాన్ మరియు అక్షర గుర్తింపు
+	Scan correction	స్కాన్ సవరణ
+	Scan processing cancelled	స్కాన్ ప్రాసెసింగ్ రద్దయింది
+	Searchable Image	శోధించగల చిత్రం
+	Straighten skewed scans	వంగిన స్కాన్‌లను నిటారుగా చేయి
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	దిశ స్పష్టంగా లేనప్పుడు మార్చబడదు. నిటారుగా చేసేటప్పుడు మొత్తం చిత్రం పేజీలోనే ఉంటుంది.
 	Browser's print dialog	బ్రౌజర్ ముద్రణ డైలాగ్
 	Copies, two-sided printing and colour are chosen in the browser's print dialog.	కాపీలు, రెండు వైపుల ముద్రణ మరియు రంగును బ్రౌజర్ ముద్రణ డైలాగ్‌లో ఎంచుకుంటారు.
 	Preparing {n} sheets for printing…	ముద్రణ కోసం {n} షీట్‌లను సిద్ధం చేస్తోంది…

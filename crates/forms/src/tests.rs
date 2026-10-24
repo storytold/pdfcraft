@@ -3188,6 +3188,27 @@ fn document_scripts_read_each_name_tree_node_once() {
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }
 
+#[test]
+fn checkbox_labels_can_include_the_recognized_box_mark() {
+    use crate::detect::{Shapes, Word, detect};
+    let shapes = Shapes { boxes: vec![[30.0, 50.0, 40.0, 60.0]], rules: Vec::new() };
+    for (text, rect, expected) in [
+        ("Haupt", [46.0, 51.0, 75.0, 59.0], "Haupt"),
+        ("□Haupt", [34.0, 49.0, 75.0, 62.0], "Haupt"),
+        ("☐ Haupt", [30.0, 50.0, 75.0, 60.0], "Haupt"),
+        ("☑Haupt", [34.0, 49.0, 75.0, 62.0], "Haupt"),
+        ("☒Haupt", [34.0, 49.0, 75.0, 62.0], "Haupt"),
+        ("Haupt", [34.0, 49.0, 75.0, 62.0], "Check Box1"),
+        ("□Haupt", [10.0, 49.0, 75.0, 62.0], "Check Box1"),
+        ("□Haupt", [34.0, 70.0, 75.0, 82.0], "Check Box1"),
+        ("□", [30.0, 50.0, 40.0, 60.0], "Check Box1"),
+    ] {
+        let found = detect(&[Word { text: text.into(), rect }], &shapes, &[], &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, expected, "{text} {rect:?}");
+    }
+}
+
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,
 /// B none, C its own (`(old C)`), D is a combo without one, E a check box with states, F a list
 /// box without one, and G only a down appearance (`/D`, no `/N`).

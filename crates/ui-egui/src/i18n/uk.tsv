@@ -2373,6 +2373,30 @@ animation effects	Off	Вимкнено
 	Original	Оригінал
 	Greyscale	Відтінки сірого
 	Black and white	Чорно-білий
+	; 1 page skipped	; пропущено 1 сторінку
+	; corrected {n} pages	; виправлено сторінок: {n}
+	; {n} pages skipped	; пропущено сторінок: {n}
+	Add searchable text	Додати текст для пошуку
+	Add the PDFs to combine	Додайте PDF для об’єднання
+	Added the first {n} PDFs in {folder}	Додано перші {n} PDF із {folder}
+	Automatically rotate sideways and upside-down pages	Автоматично повертати бокові та перевернуті сторінки
+	Correct scans	Виправити скани
+	Corrected scan	Виправлений скан
+	Crop scanner borders to the paper edge	Обрізати поля скану до краю паперу
+	Drop PDFs or folders here, or choose them.	Перетягніть сюди PDF або теки чи виберіть їх.
+	Every PDF in the folder	Усі PDF у теці
+	Every PDF in the folder and the folders inside it	Усі PDF у теці та її підтеках
+	No PDFs found in {folder}	У {folder} не знайдено PDF
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Обрізаються лише чіткі краї паперу. Нерозрізненні білі поля зберігаються.
+	Only the document's owner can change its security (open it with the permissions password)	Лише власник документа може змінювати захист (відкрийте з паролем дозволів)
+	Safety margin (pt)	Захисне поле (пт)
+	Save (M4)	Зберегти (M4)
+	Scan and text recognition	Сканування та розпізнавання тексту
+	Scan correction	Виправлення скану
+	Scan processing cancelled	Обробку сканів скасовано
+	Searchable Image	Зображення з пошуком
+	Straighten skewed scans	Вирівнювати нахилені скани
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Непевно визначена орієнтація не змінюється. Під час вирівнювання все зображення вміщується на сторінці.
 	Reading colours	Кольори для читання
 	Replace document colours	Замінити кольори документа
 	Black on white	Чорний на білому

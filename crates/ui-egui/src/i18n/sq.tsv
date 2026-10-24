@@ -2508,6 +2508,24 @@ animation effects	Off	Joaktiv
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; 1 faqe u anashkalua
+	; corrected {n} pages	; u korrigjuan {n} faqe
+	; {n} pages skipped	; {n} faqe u anashkaluan
+	Add searchable text	Shto tekst të kërkueshëm
+	Automatically rotate sideways and upside-down pages	Rrotullo automatikisht faqet anash dhe me kokë poshtë
+	Correct scans	Korrigjo skanimet
+	Corrected scan	Skanim i korrigjuar
+	Crop scanner borders to the paper edge	Prit kufijtë e skanimit deri te buza e letrës
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Priten vetëm buzët e qarta të letrës. Kufijtë e bardhë që nuk dallohen ruhen.
+	Safety margin (pt)	Hapësirë sigurie (pt)
+	Scan and text recognition	Skanim dhe njohje teksti
+	Scan correction	Korrigjimi i skanimit
+	Scan processing cancelled	Përpunimi i skanimit u anulua
+	Searchable Image	Imazh i kërkueshëm
+	Straighten skewed scans	Drejto skanimet e pjerrëta
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Orientimet e pasigurta lihen të pandryshuara. Drejtimi e vendos të gjithë imazhin brenda faqes.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot
 

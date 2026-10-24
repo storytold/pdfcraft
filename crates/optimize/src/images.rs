@@ -258,14 +258,27 @@ fn count_decoded(_n: u64) {
     DECODED_PIXELS.with(|c| c.set(c.get().saturating_add(_n)));
 }
 
-/// 8-bit samples of an image (`n` components), decoded. `None` for a JPEG whose colour transform
-/// readers may disagree about ([`ycc_encoded`]).
-pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
-    let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+/// Validate both dictionary dimensions before any allocation, including soft masks.
+fn dimensions(d: &Dict, n: usize) -> Option<(u32, u32, usize)> {
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    let pixels = u64::from(w).checked_mul(u64::from(h))?;
+    if pixels == 0 || pixels > MAX_PIXELS || !matches!(n, 1 | 3) {
         return None;
     }
-    let bytes = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(n)?;
+    let bytes = usize::try_from(pixels).ok()?.checked_mul(n)?;
+    Some((w, h, bytes))
+}
+
+/// 8-bit samples of an image (`n` components), decoded within its validated size. `None` for a
+/// JPEG whose colour transform readers may disagree about ([`ycc_encoded`]).
+pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
+    let (w, h, len) = dimensions(&s.dict, n)?;
+    // Also bound encoded input copies and filter intermediates (predictor row bytes,
+    // ASCII wrappers). Unusual larger encodings stay untouched instead of being expanded.
+    let budget = len.checked_mul(2)?.checked_add(usize::try_from(h).ok()?)?.checked_add(1024)?;
+    if s.raw.len() > budget {
+        return None;
+    }
     if is_dct(s)? {
         // The colour transform matters to three components only (§7.4.8). CMYK and YCCK JPEGs
         // never get here: the colour space check excludes them. The JPEG's own size must be the
@@ -273,10 +286,11 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
         let ycc = n == 3 && ycc_encoded(doc, s)?;
         let v = jpeg_samples(&s.raw, usize::try_from(w).ok()?, usize::try_from(h).ok()?, n, ycc)?;
         count_decoded(u64::from(w) * u64::from(h));
-        (v.len() == bytes).then_some(v)
+        (v.len() == len).then_some(v)
     } else {
-        let v = s.decoded().ok()?;
-        Some(v.get(..bytes)?.to_vec())
+        // Validated size and decode budget; trailing bytes past the samples are ignored.
+        let v = s.decoded_within(budget).ok()?;
+        Some(v.get(..len)?.to_vec())
     }
 }
 
@@ -473,7 +487,7 @@ fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Co
 
 /// One image: resample and/or recompress per `settings`; `ppi` is its effective resolution.
 /// Returns the new image and its new soft mask, if the result is smaller.
-fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: usize) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
+fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: usize) -> Option<(Stream, Option<Stream>)> {
     let d = &s.dict;
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n))
         || d.contains(b"Mask")
@@ -486,11 +500,14 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         return None;
     }
     let was_dct = is_dct(s)?;
-    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
-    if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
-        return None;
-    }
-    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    let (w, h, _) = dimensions(d, n)?;
+    let resize = settings.downsample
+        && ppi.is_finite()
+        && settings.above_ppi.is_finite()
+        && settings.target_ppi.is_finite()
+        && ppi > settings.above_ppi
+        && settings.target_ppi > 0.0
+        && settings.target_ppi < ppi;
     let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
     if !resize && !recompress {
         return None;
@@ -517,18 +534,16 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
             if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
                 return None;
             }
-            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
+            let (mw, mh, _) = dimensions(&m.dict, 1)?;
             let mpx = pixels(doc, m, 1)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
-            smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
+            smask = Some(image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?);
         }
     }
-    let before = s.raw.len()
-        + smask.as_ref().map_or(0, |(r, _)| match &*doc.get(*r) {
-            Object::Stream(m) => m.raw.len(),
-            _ => 0,
-        });
-    let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());
+    // The original mask may have other users. Budget the new private mask without claiming
+    // any saving from deleting the original (even if a later full save can collect it).
+    let before = s.raw.len();
+    let after = new.raw.len().checked_add(smask.as_ref().map_or(0, |m| m.raw.len()))?;
     (after < before).then_some((new, smask))
 }
 
@@ -560,7 +575,7 @@ pub(crate) fn run(
         report.images += 1;
         let Some(n) = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs)) else { continue };
         let st = if n == 1 { &settings.gray } else { &settings.color };
-        let Some((new, smask)) = process(doc, s, ppi, st, n) else { continue };
+        let Some((mut new, smask)) = process(doc, s, ppi, st, n) else { continue };
         let resized = new.dict.int(b"Width") != s.dict.int(b"Width") || new.dict.int(b"Height") != s.dict.int(b"Height");
         report.image_bytes_before += s.raw.len();
         report.image_bytes_after += new.raw.len();
@@ -569,10 +584,11 @@ pub(crate) fn run(
         } else {
             report.images_recompressed += 1;
         }
-        doc.set(r, Object::Stream(new));
-        if let Some((mr, m)) = smask {
-            doc.set(mr, Object::Stream(m));
+        if let Some(m) = smask {
+            let private_mask = doc.add(Object::Stream(m));
+            new.dict.set(b"SMask".to_vec(), Object::Ref(private_mask));
         }
+        doc.set(r, Object::Stream(new));
     }
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);

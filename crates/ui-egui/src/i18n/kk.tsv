@@ -2439,6 +2439,24 @@ animation effects	Off	Өшірулі
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының қол қойылған нұсқасын ({rev} нұсқа) қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының {rev} нұсқасын қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
+
+# Scan correction integration; contributor-original translations, native review pending.
+	; 1 page skipped	; 1 бет өткізіп жіберілді
+	; corrected {n} pages	; {n} бет түзетілді
+	; {n} pages skipped	; {n} бет өткізіп жіберілді
+	Add searchable text	Іздеуге болатын мәтін қосу
+	Automatically rotate sideways and upside-down pages	Бүйірімен және төңкеріліп сканерленген беттерді автоматты түрде бұру
+	Correct scans	Сканерленген кескіндерді түзету
+	Corrected scan	Түзетілген сканерленген кескін
+	Crop scanner borders to the paper edge	Сканерленген кескін жиектерін қағаз шетіне дейін қию
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Тек анық қағаз шеттері қиылады. Ажыратылмайтын ақ жиектер сақталады.
+	Safety margin (pt)	Қауіпсіздік жиегі (pt)
+	Scan and text recognition	Сканерлеу және мәтінді тану
+	Scan correction	Сканерленген кескінді түзету
+	Scan processing cancelled	Сканерленген кескінді өңдеуден бас тартылды
+	Searchable Image	Іздеуге болатын сурет
+	Straighten skewed scans	Қиғаш сканерленген кескіндерді түзету
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Бағыты анықталмаған кескіндер өзгеріссіз қалады. Қисықтықты түзету кезінде бүкіл кескін бетке сыйғызылады.
 	Turn upside down (180°)	Төңкеру (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 дюйм жапсырма (101,6 × 152,4 мм)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Әр бетті басылған аймағына дейін қиып, тік бұрып, созбай параққа сыйғызады. Әр параққа бір жапсырма.

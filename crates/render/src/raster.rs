@@ -2145,9 +2145,13 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
 
+        // Hold A's flag before replacing it: once cancelled, A's worker stops waiting and frees
+        // its slot, which on a slow FreeBSD CI VM happened before the slots were read again.
+        let a_cancelled = lock(&pool.shared.busy).iter().flatten().find(|busy| same_request(busy.request, a)).map(|busy| busy.cancelled.clone());
+        let a_cancelled = a_cancelled.unwrap_or_else(|| panic!("request A is not in flight"));
         let replaced = Instant::now();
         pool.set_queue(vec![b]);
-        assert!(lock(&pool.shared.busy).iter().flatten().any(|busy| busy.cancelled.load(Ordering::Acquire)), "request A was not cancelled");
+        assert!(a_cancelled.load(Ordering::Acquire), "request A was not cancelled");
         let page = receive_before_deadline(&pool);
         assert_eq!(page.request, b);
         assert!(page.error.is_none(), "replacement request failed: {:?}", page.error);
@@ -3700,7 +3704,9 @@ trailer << /Root 1 0 R >>
                 let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
                 let _ = tx.send(renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() }));
             });
-            let page = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_else(|_| panic!("{case}: render did not finish"));
+            // A hang guard only: the pixels below check the bound. 10 s failed on a nested-KVM
+            // FreeBSD CI VM while the render was still finishing.
+            let page = rx.recv_timeout(std::time::Duration::from_secs(600)).unwrap_or_else(|_| panic!("{case}: render did not finish"));
             assert!(page.error.is_none(), "{case}: {:?}", page.error);
             assert_eq!((page.width, page.height), (40, 40), "{case}");
             let pixel = |x: u32, y: u32| {
@@ -5386,7 +5392,9 @@ trailer << /Root 1 0 R >>
                 let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
                 let _ = tx.send(renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() }));
             });
-            let page = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_else(|_| panic!("{case}: render did not finish"));
+            // A hang guard only: the pixels below check the bound. 10 s failed on a nested-KVM
+            // FreeBSD CI VM while the render was still finishing.
+            let page = rx.recv_timeout(std::time::Duration::from_secs(600)).unwrap_or_else(|_| panic!("{case}: render did not finish"));
             assert!(page.error.is_none(), "{case}: {:?}", page.error);
             assert_eq!((page.width, page.height), (40, 40), "{case}");
             let pixel = |x: u32, y: u32| {

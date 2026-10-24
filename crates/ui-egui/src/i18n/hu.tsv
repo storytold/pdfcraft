@@ -2350,6 +2350,30 @@ animation effects	Off	Ki
 	Original	Eredeti
 	Greyscale	Szürkeárnyalatos
 	Black and white	Fekete-fehér
+	; 1 page skipped	; 1 oldal kihagyva
+	; corrected {n} pages	; {n} oldal javítva
+	; {n} pages skipped	; {n} oldal kihagyva
+	Add searchable text	Kereshető szöveg hozzáadása
+	Add the PDFs to combine	Add hozzá az egyesítendő PDF-eket
+	Added the first {n} PDFs in {folder}	{folder} első {n} PDF-je hozzáadva
+	Automatically rotate sideways and upside-down pages	Oldalra vagy fejjel lefelé álló oldalak automatikus elforgatása
+	Correct scans	Szkennelések javítása
+	Corrected scan	Javított szkennelés
+	Crop scanner borders to the paper edge	Beolvasási szegélyek levágása a papír széléig
+	Drop PDFs or folders here, or choose them.	Húzz ide PDF-eket vagy mappákat, vagy válaszd ki őket.
+	Every PDF in the folder	A mappa minden PDF-je
+	Every PDF in the folder and the folders inside it	A mappa és az almappái minden PDF-je
+	No PDFs found in {folder}	Nem található PDF itt: {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Csak a jól felismerhető papírszéleket vágja körbe. A megkülönböztethetetlen fehér szegélyek megmaradnak.
+	Only the document's owner can change its security (open it with the permissions password)	Csak a dokumentum tulajdonosa módosíthatja a biztonságát (nyisd meg a jogosultsági jelszóval)
+	Safety margin (pt)	Biztonsági margó (pt)
+	Save (M4)	Mentés (M4)
+	Scan and text recognition	Szkennelés és szövegfelismerés
+	Scan correction	Szkennelés javítása
+	Scan processing cancelled	Szkennelések feldolgozása megszakítva
+	Searchable Image	Kereshető kép
+	Straighten skewed scans	Ferde szkennelt oldalak kiegyenesítése
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	A bizonytalan tájolás változatlan marad. A kiegyenesítés a teljes képet az oldalon belül tartja.
 	Reading colours	Olvasási színek
 	Replace document colours	Dokumentumszínek cseréje
 	Black on white	Fekete fehéren

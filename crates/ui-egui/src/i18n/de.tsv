@@ -2352,6 +2352,30 @@ animation effects	Off	Aus
 	Original	Original
 	Greyscale	Graustufen
 	Black and white	Schwarzweiß
+	; 1 page skipped	; 1 Seite übersprungen
+	; corrected {n} pages	; {n} Seiten korrigiert
+	; {n} pages skipped	; {n} Seiten übersprungen
+	Add searchable text	Durchsuchbaren Text hinzufügen
+	Add the PDFs to combine	Füge die zu kombinierenden PDFs hinzu
+	Added the first {n} PDFs in {folder}	Die ersten {n} PDFs aus {folder} hinzugefügt
+	Automatically rotate sideways and upside-down pages	Seitlich oder kopfstehend gescannte Seiten automatisch drehen
+	Correct scans	Scans korrigieren
+	Corrected scan	Korrigierter Scan
+	Crop scanner borders to the paper edge	Scanränder bis zur Papierkante beschneiden
+	Drop PDFs or folders here, or choose them.	Lege PDFs oder Ordner hier ab oder wähle sie aus.
+	Every PDF in the folder	Jedes PDF im Ordner
+	Every PDF in the folder and the folders inside it	Jedes PDF im Ordner und in seinen Unterordnern
+	No PDFs found in {folder}	Keine PDFs in {folder} gefunden
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Nur erkennbare Papierkanten werden beschnitten. Nicht unterscheidbare weiße Ränder bleiben erhalten.
+	Only the document's owner can change its security (open it with the permissions password)	Nur der Eigentümer des Dokuments kann die Sicherheit ändern (öffne es mit dem Berechtigungspasswort)
+	Safety margin (pt)	Sicherheitsrand (pt)
+	Save (M4)	Speichern (M4)
+	Scan and text recognition	Scan und Texterkennung
+	Scan correction	Scan korrigieren
+	Scan processing cancelled	Scan-Verarbeitung abgebrochen
+	Searchable Image	Durchsuchbares Bild
+	Straighten skewed scans	Schief eingescannte Seiten geraderichten
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Unsichere Ausrichtungen bleiben unverändert. Beim Geraderichten bleibt das gesamte Bild innerhalb der Seite.
 	Reading colours	Lesefarben
 	Replace document colours	Dokumentfarben ersetzen
 	Black on white	Schwarz auf weiß

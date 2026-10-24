@@ -2758,6 +2758,24 @@ theme	Appearance	모양
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; 1페이지 건너뜀
+	; corrected {n} pages	; {n}페이지 보정됨
+	; {n} pages skipped	; {n}페이지 건너뜀
+	Add searchable text	검색 가능한 텍스트 추가
+	Automatically rotate sideways and upside-down pages	옆으로 눕거나 거꾸로 된 페이지 자동 회전
+	Correct scans	스캔 보정
+	Corrected scan	보정된 스캔
+	Crop scanner borders to the paper edge	스캔 테두리를 용지 가장자리까지 자르기
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	명확한 용지 가장자리만 자릅니다. 구분할 수 없는 흰색 테두리는 유지됩니다.
+	Safety margin (pt)	안전 여백(pt)
+	Scan and text recognition	스캔 및 텍스트 인식
+	Scan correction	스캔 보정
+	Scan processing cancelled	스캔 처리가 취소됨
+	Searchable Image	검색 가능한 이미지
+	Straighten skewed scans	기울어진 스캔 바로잡기
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	방향이 불확실하면 그대로 둡니다. 기울기 보정 시 전체 이미지를 페이지 안에 맞춥니다.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘
 

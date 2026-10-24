@@ -160,18 +160,19 @@ update the numbers.
   (`AGENTS.md` §4).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
 
-### 7. OCR reads only unaccented Latin
+### 7. OCR still has language and scan-cleanup gaps
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle, background and camera clean-up; MRC compression; pluggable engines; OCR in the
-  browser; scanner input.
-- **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
-  accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
-  (Dutch). Acrobat ships on-device recognition for dozens of languages.
-- **Impact:** scanned documents are a core Pro workflow outside English.
-- **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
-  [file-format-parity.md](file-format-parity.md).
-
+- **Now available:** English, German, French, Spanish, Italian, Dutch, Danish, Norwegian Bokmål,
+  Swedish, Finnish, Portuguese and horizontal Japanese, Unicode search/copy,
+  automatic quarter-turn correction and deskew up to 12 degrees, including correction without OCR.
+  Clear paper edges can now define an automatic crop with safety padding; ambiguous white borders
+  stay unchanged, and original image pixels remain in the PDF.
+- **Missing:** additional language choices, vertical Japanese, editable-text output, deskew on pages
+  with annotations, despeckle, background/camera cleanup, MRC compression, browser OCR and scanner input.
+- **Evidence:** `crates/engine/tests/it/scan_ocr.rs` and the OCR automation/UI tests; model tests require
+  `cargo xtask models`, Japanese fixture generation requires the release `CRAFT_FONTS_DIR` input.
+- **Impact:** scanned documents remain a core Pro workflow with wider language and layout demands.
+- **Estimate:** previous 40–75 h estimate needs reassessment after this narrower feature slice.
 ### 8. Office export weak, Office import absent
 
 - **Missing:** Word export that keeps layout; Excel and PowerPoint export; creating PDFs from Office,
@@ -404,6 +405,7 @@ update the numbers.
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
+| 2026-10-11 | minor | M10: multilingual OCR, orientation/deskew, and conservative scanner-border crop with padding. Ambiguous edges and camera cleanup remain open. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |
 | 2026-10-13 | minor | Gap 6: Organize Pages selects and reveals the current page on open, including after an earlier grid selection elsewhere (#1910). Estimates unchanged. |
 | 2026-10-12 | minor | Gap 6: rubber stamps, explicit image rectangles and PDF-page stamps read upright on rotated pages (#1398). Estimates unchanged. |

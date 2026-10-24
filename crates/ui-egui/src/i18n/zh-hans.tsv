@@ -2315,6 +2315,31 @@ animation effects	Off	关
 	Original	原始
 	Greyscale	灰度
 	Black and white	黑白
+	; 1 page skipped	; 已跳过 1 页
+	; corrected {n} pages	; 已校正 {n} 页
+	; {n} pages skipped	; 已跳过 {n} 页
+	Add searchable text	添加可搜索文本
+	Add the PDFs to combine	添加要合并的 PDF
+	Added the first {n} PDFs in {folder}	已添加 {folder} 中的前 {n} 个 PDF
+	Automatically rotate sideways and upside-down pages	自动旋转侧向和倒置的页面
+	Correct scans	校正扫描件
+	Corrected scan	已校正的扫描件
+	Crop scanner borders to the paper edge	将扫描边框裁剪至纸张边缘
+	Drop PDFs or folders here, or choose them.	将 PDF 或文件夹拖放到此处，或选择它们。
+	Every PDF in the folder	文件夹中的所有 PDF
+	Every PDF in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF
+	Margins (in)	边距（英寸）
+	No PDFs found in {folder}	在 {folder} 中未找到 PDF
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	仅裁剪清晰的纸张边缘。无法区分的白色边框将保留。
+	Only the document's owner can change its security (open it with the permissions password)	只有文档所有者才能更改安全性（请使用权限密码打开）
+	Safety margin (pt)	安全边距（磅）
+	Save (M4)	保存 (M4)
+	Scan and text recognition	扫描和文字识别
+	Scan correction	扫描校正
+	Scan processing cancelled	扫描处理已取消
+	Searchable Image	可搜索的图像
+	Straighten skewed scans	校正扫描件倾斜
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	方向不确定时保持不变。倾斜校正会将整个图像保留在页面内。
 	Reading colours	阅读配色
 	Replace document colours	替换文档颜色
 	Black on white	白底黑字

@@ -11,7 +11,7 @@
   default, optional, and an update keeps the installed version's choice). Files opened with
   PdfCraft arrive on its command line.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package
       Name="PdfCraft"
       Manufacturer="Learning Machines LLC"
@@ -27,8 +27,13 @@
         Message="PdfCraft must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported." />
     <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes"
+    <!-- Keep shared component GUIDs stable: installing over the old product preserves
+         SCM's account and protected password, including an administrator-selected gMSA. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
         DowngradeErrorMessage="A newer version of PdfCraft is already installed." />
+    <!-- Preview binaries may share a numeric FileVersion. Replace packaged payload
+         even at equal versions; user tasks/secrets are not installer-owned files. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Windows Installer requires an Icon id ending in .ico or .exe, or advertised shortcuts and
@@ -77,7 +82,32 @@
     </Property>
     <SetProperty Id="INSTALLIMAGECONTEXTMENU" Value="1" After="AppSearch" Sequence="first"
         Condition="NOT INSTALLIMAGECONTEXTMENU AND (NOT IMAGECONTEXTMENURELEASE OR EXISTINGIMAGECONTEXTMENU)" />
+    <!-- Opt-in companion. INSTALLHOTFOLDER=1 also works for unattended deployment. -->
+    <Property Id="INSTALLHOTFOLDER" Secure="yes" />
+    <Property Id="HOTFOLDERPRESENT" Secure="yes">
+      <RegistrySearch Id="ExistingHotFolder" Root="HKLM" Key="Software\PdfCraft\HotFolder" Name="TaskFile" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLHOTFOLDER" Value="1" After="AppSearch" Sequence="both"
+        Condition="HOTFOLDERPRESENT AND NOT INSTALLHOTFOLDER" />
+    <!-- InstallServices reconfigures an existing service, including its logon.
+         Detect registration independently of retained task data. Do not read or
+         transport credentials: SCM keeps the existing account and password. -->
+    <Property Id="HOTFOLDERSERVICEACCOUNT" Secure="yes">
+      <RegistrySearch Id="ExistingHotFolderService" Root="HKLM"
+          Key="SYSTEM\CurrentControlSet\Services\PdfCraftHotFolder" Name="ObjectName" Type="raw" />
+    </Property>
     <UIRef Id="PdfcraftInstallerUI" />
+
+    <!-- Use the safe service API rather than MSI 5's unreliable ServiceConfig table.
+         The fixed installed executable runs elevated, after service registration and
+         before its first start. No account passwords enter MSI properties or logs. -->
+    <CustomAction Id="PrepareHotFolderService" FileRef="PdfcraftHotFolderExe"
+        ExeCommand="--service-action prepare-account --config &quot;[HotFolderData]tasks.json&quot;"
+        Execute="deferred" Impersonate="no" Return="check" />
+    <InstallExecuteSequence>
+      <InstallServices Condition="NOT HOTFOLDERSERVICEACCOUNT" />
+      <Custom Action="PrepareHotFolderService" Before="StartServices" Condition="$PdfcraftHotFolderApp = 3" />
+    </InstallExecuteSequence>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="PdfCraft">
@@ -86,17 +116,81 @@
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="PdfcraftProgramData" Name="PdfCraft">
+        <Directory Id="HotFolderData" Name="HotFolder">
+          <Directory Id="HotFolderSecrets" Name="secrets" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
 
     <Feature Id="Main" Title="PdfCraft" Level="1">
       <ComponentGroupRef Id="PdfcraftFiles" />
       <ComponentGroupRef Id="PdfcraftModels" />
     </Feature>
+    <Feature Id="HotFolder" Title="PdfCraft Hot Folder"
+        Description="Automatically process configured folders in the background." Level="2" AllowAdvertise="no">
+      <Level Value="1" Condition="INSTALLHOTFOLDER = 1" />
+      <ComponentGroupRef Id="PdfcraftHotFolderFiles" />
+    </Feature>
   </Package>
 
   <Fragment>
+    <ComponentGroup Id="PdfcraftHotFolderFiles" Directory="INSTALLFOLDER">
+      <Component Id="PdfcraftHotFolderApp" Guid="BB2EC64C-7ADB-4D81-A11D-7FBA0A37BB9A">
+        <File Id="PdfcraftHotFolderExe" Source="$(var.BinDir)\pdfcraft-hot-folder.exe" KeyPath="yes" />
+        <ServiceInstall Id="HotFolderService" Name="PdfCraftHotFolder" DisplayName="PdfCraft Hot Folder"
+            Description="Processes explicitly enabled PDF and image folder tasks at system startup."
+            Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
+            Account="NT AUTHORITY\LocalService"
+            Arguments="--service --config &quot;[HotFolderData]tasks.json&quot;">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+              ThirdFailureActionType="restart" ResetPeriodInDays="1" RestartServiceDelayInSeconds="60" />
+        </ServiceInstall>
+        <ServiceControl Id="HotFolderServiceControl" Name="PdfCraftHotFolder"
+            Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="PdfcraftHotFolderSecrets" Directory="HotFolderSecrets" Guid="4D641968-81D3-474E-867D-C03E18E80584">
+        <CreateFolder>
+          <PermissionEx Sddl="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-19)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)" />
+        </CreateFolder>
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\HotFolder" Name="SecretsDirectory"
+            Type="string" Value="[HotFolderSecrets]" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftHotFolderData" Directory="HotFolderData" Guid="6A9F747C-23E8-4242-9779-157B44B4CBF0">
+        <!-- An unelevated user may inspect task state, but only administrators and the
+             restricted service account can change the configured work. Keep user tasks on uninstall. -->
+        <CreateFolder>
+          <PermissionEx Sddl="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-19)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)(A;OICI;GRGX;;;BU)" />
+        </CreateFolder>
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\HotFolder" Name="TaskFile"
+            Type="string" Value="[HotFolderData]tasks.json" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftHotFolderShortcut" Directory="ProgramMenuFolder" Guid="3750C6ED-93C7-430E-9DAD-873060F5CF38">
+        <Shortcut Id="HotFolderStartMenuShortcut" Name="PdfCraft Hot Folder"
+            Description="Configure automatic OCR and scan processing"
+            Target="[#PdfcraftHotFolderExe]" Arguments="--config &quot;[HotFolderData]tasks.json&quot;" WorkingDirectory="INSTALLFOLDER"
+            Icon="PdfcraftIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Shortcuts" Name="HotFolder" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <ComponentGroup Id="PdfcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="PdfcraftApp" Guid="E724C1C6-091F-4E21-A685-80D089FDBE21">
         <File Id="PdfcraftExe" Source="$(var.BinDir)\pdfcraft.exe" KeyPath="yes" />
+
+        <!-- Clear legacy image-menu keys before WriteRegistryValues recreates the opted-in
+             menu. Late product removal preserves shared components and the SCM account. -->
+        <RemoveRegistryKey Id="LegacyImageMenu_png" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jpg" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jpeg" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_tif" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.tif\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_tiff" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.tiff\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_gif" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.gif\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_bmp" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.bmp\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jp2" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jp2\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_j2k" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.j2k\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jpx" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
 
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft.exe" Value="[#PdfcraftExe]" Type="string" />
 
@@ -164,8 +258,8 @@
       <!-- Image context menu (#190): "Create PDF with PdfCraft…" opens the DPI chooser, without
            changing image file defaults. Its own component with an HKLM key path, so
            INSTALLIMAGECONTEXTMENU=0 leaves it out and uninstall removes it. These rows were in
-           PdfcraftApp up to 0.7.1; moving them is safe because MajorUpgrade removes the old version
-           before installing (afterInstallValidate), so no old row is left behind. -->
+           PdfcraftApp up to 0.7.1; its RemoveRegistryKey rows clear the legacy entries before
+           this component writes the selected menu, including upgrades with the menu disabled. -->
       <Component Id="PdfcraftImageContextMenu" Guid="1B783BF3-12DF-4588-AF80-E2CEA8BC1E5A"
           Condition="INSTALLIMAGECONTEXTMENU = 1">
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" KeyPath="yes" />

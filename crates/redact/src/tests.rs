@@ -1315,6 +1315,59 @@ fn hidden_information_is_counted_and_removed() {
     assert!(shown, "the field's value stays visible as page content");
 }
 
+fn empty_hidden_containers() -> Document {
+    let mut doc = one_page(b"", "", Vec::new());
+    let info = doc.add(Object::Dict(Dict::new()));
+    doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(info));
+    let empty_tree = Object::Dict(Dict::from_iter([(b"Names".to_vec(), Object::Array(Vec::new()))]));
+    let names = doc.add(Object::Dict(Dict::from_iter([(b"EmbeddedFiles".to_vec(), empty_tree.clone()), (b"JavaScript".to_vec(), empty_tree)])));
+    doc.update_dict(doc.root().unwrap(), |cat| {
+        cat.set(b"AF".to_vec(), Object::Array(Vec::new()));
+        cat.set(b"Names".to_vec(), Object::Ref(names));
+        cat.set(b"Outlines".to_vec(), Object::Dict(Dict::new()));
+        cat.set(b"PageMode".to_vec(), Object::Name(b"UseOutlines".to_vec()));
+    })
+    .unwrap();
+    let annots = doc.add(Object::Array(Vec::new()));
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    doc.update_dict(page.obj, |dict| dict.set(b"Annots".to_vec(), Object::Ref(annots))).unwrap();
+    doc
+}
+
+#[test]
+fn absent_hidden_categories_do_not_mutate_empty_containers_or_indirect_arrays() {
+    use crate::sanitize::{HIDDEN, remove_hidden, scan};
+    let source = empty_hidden_containers();
+    assert!(scan(&source).iter().all(|(_, count)| *count == 0));
+    let objects = |doc: &Document| doc.object_numbers().into_iter().map(|n| (n, doc.get(ObjRef::new(n, doc.generation(n))))).collect::<Vec<_>>();
+    for selection in [Vec::new(), HIDDEN.to_vec()] {
+        let mut doc = source.clone();
+        assert_eq!(remove_hidden(&mut doc, &selection), Err(RedactError::NothingToApply));
+        assert_eq!(objects(&doc), objects(&source));
+        assert_eq!(doc.trailer(), source.trailer());
+        assert_eq!(doc.modified_objects(), source.modified_objects());
+        assert_eq!(doc.full_save_required(), source.full_save_required());
+    }
+}
+
+#[test]
+fn absent_categories_stay_unchanged_beside_a_reported_hidden_removal() {
+    use crate::sanitize::{HIDDEN, Hidden, remove_hidden};
+    let mut doc = empty_hidden_containers();
+    doc.update_dict(doc.root().unwrap(), |cat| cat.set(b"PieceInfo".to_vec(), Object::Dict(Dict::new()))).unwrap();
+    assert_eq!(remove_hidden(&mut doc, &HIDDEN).unwrap(), [(Hidden::PrivateData, 1)]);
+    let cat = doc.get(doc.root().unwrap());
+    let cat = cat.as_dict().unwrap();
+    assert!(!cat.contains(b"PieceInfo"));
+    assert!(doc.trailer().contains(b"Info"));
+    assert!(cat.contains(b"AF") && cat.contains(b"Outlines"));
+    assert_eq!(cat.name(b"PageMode"), Some(&b"UseOutlines"[..]));
+    let names = doc.resolve(cat.get(b"Names").unwrap());
+    let names = names.as_dict().unwrap();
+    assert!(names.contains(b"EmbeddedFiles") && names.contains(b"JavaScript"));
+    assert!(doc.full_save_required());
+}
+
 /// A one-page document whose catalog names an outline root (object 5). `items` are the outline
 /// items, objects 6 onward.
 fn outlined_document(items: Vec<Vec<u8>>) -> Document {

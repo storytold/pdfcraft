@@ -2683,6 +2683,7 @@ key	Space	Space
 	Characters without spaces	Ký tự không tính dấu cách
 	Counting words… {n} pages read	Đang đếm từ… đã đọc {n} trang
 	Crop Image	Xén hình ảnh
+
 	Current page only	Chỉ trang hiện tại
 	DN: 	Tên phân biệt: 
 	Date: 	Ngày: 
@@ -2792,6 +2793,24 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+
+# Main/Hot Folder integration: contributor-original additions; native review pending.
+	; 1 page skipped	; đã bỏ qua 1 trang
+	; corrected {n} pages	; đã chỉnh sửa {n} trang
+	; {n} pages skipped	; đã bỏ qua {n} trang
+	Add searchable text	Thêm văn bản có thể tìm kiếm
+	Automatically rotate sideways and upside-down pages	Tự động xoay các trang nằm ngang hoặc bị lộn ngược
+	Correct scans	Chỉnh sửa bản quét
+	Corrected scan	Bản quét đã chỉnh sửa
+	Crop scanner borders to the paper edge	Cắt viền bản quét đến mép giấy
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Chỉ cắt những mép giấy nhận diện rõ. Các viền trắng không thể phân biệt sẽ được giữ lại.
+	Safety margin (pt)	Lề an toàn (pt)
+	Scan and text recognition	Quét và nhận dạng văn bản
+	Scan correction	Chỉnh sửa bản quét
+	Scan processing cancelled	Đã hủy xử lý bản quét
+	Searchable Image	Ảnh có thể tìm kiếm văn bản
+	Straighten skewed scans	Chỉnh thẳng bản quét bị nghiêng
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Giữ nguyên hướng khi không xác định chắc chắn. Việc chỉnh nghiêng sẽ đặt toàn bộ ảnh vừa trong trang.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hôm nay

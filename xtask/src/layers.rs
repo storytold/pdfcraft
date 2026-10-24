@@ -78,6 +78,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(6)),
     // L7 platform + frontends
     ("platform", Class::Layer(7)),
+    ("hot-folder-service", Class::Layer(7)),
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
@@ -87,6 +88,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // L8 apps + tooling
     ("pdfcraft", Class::Exempt),
     ("cli", Class::Exempt),
+    ("hot-folder", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
@@ -96,6 +98,7 @@ pub const STANDALONE_DEPS: &[(&str, &[&str])] = &[("cos", &["filters", "crypt", 
 
 /// Allowed same-layer edges (architecture §3 rule 1). `forms → js` is deliberately absent.
 pub const SIDEWAYS: &[(&str, &str)] = &[
+    ("automation", "hot-folder-service"),
     ("redact", "edit"),
     ("audit", "edit"),
     ("a11y", "preflight"),

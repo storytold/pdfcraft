@@ -2365,6 +2365,25 @@ animation effects	Off	Desativados
 	Original	Original
 	Greyscale	Escala de cinza
 	Black and white	Preto e branco
+	; 1 page skipped	; 1 página ignorada
+	; corrected {n} pages	; {n} páginas corrigidas
+	; {n} pages skipped	; {n} páginas ignoradas
+	Add searchable text	Adicionar texto pesquisável
+	Automatically rotate sideways and upside-down pages	Girar automaticamente páginas de lado ou de cabeça para baixo
+	Correct scans	Corrigir digitalizações
+	Corrected scan	Digitalização corrigida
+	Crop scanner borders to the paper edge	Recortar as bordas da digitalização até o papel
+	No PDFs found in {folder}	Nenhum PDF encontrado em {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Somente bordas nítidas do papel são recortadas. Bordas brancas indistinguíveis são mantidas.
+	Only the document's owner can change its security (open it with the permissions password)	Somente o proprietário do documento pode alterar sua segurança (abra-o com a senha de permissões)
+	Safety margin (pt)	Margem de segurança (pt)
+	Save (M4)	Salvar (M4)
+	Scan and text recognition	Digitalização e reconhecimento de texto
+	Scan correction	Correção de digitalização
+	Scan processing cancelled	Processamento das digitalizações cancelado
+	Searchable Image	Imagem pesquisável
+	Straighten skewed scans	Endireitar digitalizações inclinadas
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Orientações incertas permanecem inalteradas. Ao endireitar, toda a imagem cabe na página.
 	Reading colours	Cores de leitura
 	Replace document colours	Substituir as cores do documento
 	Black on white	Preto no branco
@@ -2594,13 +2613,11 @@ animation effects	Off	Desativados
 	New bookmark (⌘B)	Novo marcador (⌘B)
 	Next	Próximo
 	Next (⌘G)	Próximo (⌘G)
-	No PDFs found in {folder}	Nenhum PDF encontrado em {folder}
 	No document language is set	Nenhum idioma foi definido para o documento
 	No page has text: the document appears to be images of pages	Nenhuma página contém texto: o documento parece ser composto por imagens de páginas
 	No results	Nenhum resultado
 	Non-Repudiation	Não repúdio
 	On	Ativado
-	Only the document's owner can change its security (open it with the permissions password)	Somente o proprietário do documento pode alterar sua segurança (abra-o com a senha de permissões)
 	Open a PDF (⌘O)	Abrir um PDF (⌘O)
 	Open folder	Abrir pasta
 	Organize	Organizar
@@ -2627,7 +2644,6 @@ animation effects	Off	Desativados
 	Rev. {rev}: Signed by {name}	Rev. {rev}: assinada por {name}
 	Rotate view clockwise (⇧⌘+)	Girar a visualização no sentido horário (⇧⌘+)
 	Rule Name	Nome da regra
-	Save (M4)	Salvar (M4)
 	Save as {level}	Salvar como {level}
 	Save changes?	Salvar as alterações?
 	Save file	Salvar arquivo

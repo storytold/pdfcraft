@@ -1,30 +1,55 @@
 //! pdfcraft-ocr — Scan & OCR ▸ Recognize text (L4).
 //!
-//! Recognition runs the ocrs engine (MIT/Apache-2.0) with its pre-trained models (CC-BY-SA-4.0,
-//! fetched by `cargo xtask models`; see ATTRIBUTION.toml). The caller renders a page to pixels;
-//! [`Ocr::recognize`] finds the words in them, and [`text_layer`] turns words placed in user space
-//! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
-//! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
-//!
-//! The models read the Latin alphabet (English and other languages written without accents).
+//! Ocrs detects text; PaddleOCR models read English, accented Latin/Japanese and
+//! classify page orientation through RTen. Models are fetched by `cargo xtask models` (see
+//! ATTRIBUTION.toml), never at runtime. The engine places Unicode invisible text in PDFs;
+//! [`text_layer`] remains the legacy WinAnsi content helper. See README.md for limitations.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
+pub mod crop;
+mod multilingual;
+pub mod scan;
 
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.rten";
 pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
+pub const MULTILINGUAL_MODEL: &str = "multilingual-recognition.onnx";
+pub const ORIENTATION_MODEL: &str = "document-orientation.onnx";
+pub const DICTIONARY: &str = "multilingual-dictionary.txt";
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// Supported and tested language choices (ISO 639-1).
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("de", "Deutsch"),
+    ("ja", "日本語"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("nl", "Nederlands"),
+    ("da", "Dansk"),
+    ("nb", "Norsk bokmål"),
+    ("sv", "Svenska"),
+    ("fi", "Suomi"),
+    ("pt", "Português"),
+];
+
+/// Map the primary system locale to an OCR choice, independently of UI translations.
+/// Regional variants share a recognizer. Missing or unsupported locales use English.
+pub fn language_for_locale(locale: Option<&str>) -> &'static str {
+    let primary = locale.unwrap_or_default().trim().split(['-', '_', '.', '@']).next().unwrap_or_default();
+    // Older platforms use the generic Norwegian tag for Bokmål.
+    let primary = if primary.eq_ignore_ascii_case("no") { "nb" } else { primary };
+    LANGUAGES.iter().find(|(code, _)| code.eq_ignore_ascii_case(primary)).map_or("en", |(code, _)| *code)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -40,7 +65,7 @@ pub enum OcrError {
     EmptyImage,
 }
 
-/// Where the two model files are.
+/// Where the detector and English recognizer are; multilingual assets live alongside them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
     pub detection: PathBuf,
@@ -48,10 +73,13 @@ pub struct Models {
 }
 
 impl Models {
-    /// The models in `dir`, if both files are there.
+    /// The models in `dir`, if every required file is there.
     pub fn in_dir(dir: &Path) -> Option<Models> {
         let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
-        (m.detection.is_file() && m.recognition.is_file()).then_some(m)
+        (m.detection.is_file()
+            && m.recognition.is_file()
+            && [MULTILINGUAL_MODEL, ORIENTATION_MODEL, DICTIONARY].iter().all(|f| dir.join(f).is_file()))
+        .then_some(m)
     }
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
@@ -106,6 +134,7 @@ impl Line {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    multilingual: multilingual::Multilingual,
 }
 
 impl Ocr {
@@ -118,7 +147,8 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        let dir = models.recognition.parent().ok_or(OcrError::NoModels)?;
+        Ok(Ocr { engine, multilingual: multilingual::Multilingual::load(dir)? })
     }
 
     /// Load the models found by [`Models::find`].
@@ -132,7 +162,8 @@ impl Ocr {
             return Err(OcrError::EmptyImage);
         }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let count = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)).ok_or(OcrError::EmptyImage)?;
+        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == count {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
         } else {
             pixels.into()
@@ -159,6 +190,32 @@ impl Ocr {
             })
             .filter(|l| !l.words.is_empty())
             .collect())
+    }
+
+    pub fn recognize_language(&self, image: &image::RgbImage, language: &str) -> Result<Vec<Line>, OcrError> {
+        if !LANGUAGES.iter().any(|l| l.0 == language) {
+            return Err(OcrError::Recognize(format!("unsupported language: {language}")));
+        }
+        use rten_imageproc::BoundingRect;
+        let source = ocrs::ImageSource::from_bytes(image.as_raw(), image.dimensions()).map_err(|e| OcrError::Recognize(e.to_string()))?;
+        let input = self.engine.prepare_input(source).map_err(|e| OcrError::Recognize(e.to_string()))?;
+        let found = self.engine.detect_words(&input).map_err(|e| OcrError::Recognize(e.to_string()))?;
+        let boxes = self.engine.find_text_lines(&input, &found);
+        let mut out = Vec::new();
+        for line in boxes {
+            let rect = line.iter().map(|r| r.bounding_rect()).fold([f32::INFINITY, f32::INFINITY, 0.0f32, 0.0f32], |a, r| {
+                [a[0].min(r.left()), a[1].min(r.top()), a[2].max(r.right()), a[3].max(r.bottom())]
+            });
+            let words = self.multilingual.read_line(image, rect)?;
+            if !words.is_empty() {
+                out.push(Line { words });
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn orientation(&self, image: &image::RgbImage) -> Result<u16, OcrError> {
+        self.multilingual.orientation(image)
     }
 }
 
@@ -194,7 +251,7 @@ const X_HEIGHT: f64 = 0.523;
 /// How far `text`'s ink reaches above and below the baseline, in em fractions: a word box is
 /// tight around the ink, so "DT" spans the cap height only, "sun" the x-height, and "gap" reaches
 /// down to the descender. Text without letters or digits keeps the full ascender-descender span.
-fn ink_extent(text: &str) -> (f64, f64) {
+pub fn ink_extent(text: &str) -> (f64, f64) {
     if !text.chars().any(char::is_alphanumeric) {
         return (BOX_EM - DESCENT, -DESCENT);
     }
@@ -244,6 +301,41 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn system_locale_selects_ocr_language_with_english_fallback() {
+        for (locale, expected) in [
+            ("de-AT", "de"),
+            ("de_CH.UTF-8", "de"),
+            ("JA-jp", "ja"),
+            ("fr-CA", "fr"),
+            ("es-MX", "es"),
+            ("it-IT", "it"),
+            ("nl-BE", "nl"),
+            ("da-DK", "da"),
+            ("nb-NO", "nb"),
+            ("no_NO", "nb"),
+            ("sv-FI", "sv"),
+            ("fi_FI", "fi"),
+            ("pt-BR", "pt"),
+            ("pt_PT@euro", "pt"),
+            (" EN-us ", "en"),
+            ("is-IS", "en"),
+            ("nn-NO", "en"),
+            ("zh-Hans", "en"),
+            ("C.UTF-8", "en"),
+            ("POSIX", "en"),
+            ("", "en"),
+            ("日本語", "en"),
+            ("deutsch", "en"),
+        ] {
+            assert_eq!(super::language_for_locale(Some(locale)), expected, "{locale}");
+        }
+        assert_eq!(super::language_for_locale(None), "en");
+        for (code, _) in super::LANGUAGES {
+            assert_eq!(super::language_for_locale(Some(code)), *code);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -342,7 +434,7 @@ mod tests {
             std::fs::create_dir_all(&models_dir).unwrap();
             let found = || Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d));
             assert_eq!(found(), None, "{name}: no models yet");
-            for file in [DETECTION_MODEL, RECOGNITION_MODEL] {
+            for file in [DETECTION_MODEL, RECOGNITION_MODEL, MULTILINGUAL_MODEL, ORIENTATION_MODEL, DICTIONARY] {
                 std::fs::write(models_dir.join(file), b"model").unwrap();
             }
             let models = found().unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
@@ -381,6 +473,10 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, px).unwrap()).to_rgb8();
+        let multi = ocr.recognize_language(&image, "de").unwrap();
+        assert!(multi.iter().map(Line::text).collect::<Vec<_>>().join(" ").contains("HELLO"), "{multi:?}");
+        let _ = ocr.orientation(&image).unwrap();
     }
 
     mod test_image {

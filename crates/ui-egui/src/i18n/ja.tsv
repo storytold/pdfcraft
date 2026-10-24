@@ -2351,6 +2351,31 @@ animation effects	Off	オフ
 	Original	オリジナル
 	Greyscale	グレースケール
 	Black and white	白黒
+	; 1 page skipped	; 1 ページをスキップ
+	; corrected {n} pages	; {n} ページを補正
+	; {n} pages skipped	; {n} ページをスキップ
+	Add searchable text	検索可能なテキストを追加
+	Add the PDFs to combine	結合する PDF を追加
+	Added the first {n} PDFs in {folder}	{folder} の最初の {n} 個の PDF を追加しました
+	Automatically rotate sideways and upside-down pages	横向きや上下逆のページを自動回転
+	Correct scans	スキャンを補正
+	Corrected scan	補正済みスキャン
+	Crop scanner borders to the paper edge	スキャンの余白を用紙の端まで切り抜く
+	Drop PDFs or folders here, or choose them.	ここに PDF またはフォルダーをドロップするか、選択してください。
+	Every PDF in the folder	フォルダー内のすべての PDF
+	Every PDF in the folder and the folders inside it	フォルダーとその中のフォルダーにあるすべての PDF
+	Margins (in)	余白（インチ）
+	No PDFs found in {folder}	{folder} に PDF が見つかりません
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	明確な用紙の端だけを切り抜きます。区別できない白い余白は保持します。
+	Only the document's owner can change its security (open it with the permissions password)	文書の所有者のみセキュリティを変更できます（権限パスワードで開いてください）
+	Safety margin (pt)	安全余白（pt）
+	Save (M4)	保存（M4）
+	Scan and text recognition	スキャンと文字認識
+	Scan correction	スキャン補正
+	Scan processing cancelled	スキャン処理をキャンセルしました
+	Searchable Image	検索可能な画像
+	Straighten skewed scans	スキャンの傾きを補正
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	向きが不確かな場合は変更しません。傾き補正では画像全体をページ内に収めます。
 	Reading colours	読書用の色
 	Replace document colours	文書の色を置き換える
 	Black on white	白地に黒

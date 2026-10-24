@@ -2782,6 +2782,24 @@ theme	Appearance	Aspect
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
 
+# Hot Folder scan correction (#1063): AI-assisted from the English labels; native review pending.
+	; 1 page skipped	; 1 pagină omisă
+	; corrected {n} pages	; {n} pagini corectate
+	; {n} pages skipped	; {n} pagini omise
+	Add searchable text	Adăugare text în care se poate căuta
+	Automatically rotate sideways and upside-down pages	Rotire automată a paginilor culcate și răsturnate
+	Correct scans	Corectare scanări
+	Corrected scan	Scanare corectată
+	Crop scanner borders to the paper edge	Decupare margini scaner până la marginea hârtiei
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Sunt decupate doar marginile clare ale hârtiei. Marginile albe care nu se pot distinge se păstrează.
+	Safety margin (pt)	Margine de siguranță (pt)
+	Scan and text recognition	Scanare și recunoaștere text
+	Scan correction	Corectare scanare
+	Scan processing cancelled	Procesarea scanării a fost anulată
+	Searchable Image	Imagine în care se poate căuta
+	Straighten skewed scans	Îndreptare scanări înclinate
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Orientările incerte rămân neschimbate. Îndreptarea încadrează întreaga imagine în pagină.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi
 

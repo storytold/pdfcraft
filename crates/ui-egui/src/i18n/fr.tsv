@@ -2351,6 +2351,28 @@ animation effects	Off	Désactivés
 	Original	Original
 	Greyscale	Niveaux de gris
 	Black and white	Noir et blanc
+	; 1 page skipped	; 1 page ignorée
+	; corrected {n} pages	; {n} pages corrigées
+	; {n} pages skipped	; {n} pages ignorées
+	Add searchable text	Ajouter du texte consultable
+	Add the PDFs to combine	Ajoutez les PDF à combiner
+	Added the first {n} PDFs in {folder}	Les {n} premiers PDF de {folder} ont été ajoutés
+	Automatically rotate sideways and upside-down pages	Pivoter automatiquement les pages de côté ou à l’envers
+	Correct scans	Corriger les numérisations
+	Corrected scan	Numérisation corrigée
+	Crop scanner borders to the paper edge	Rogner les bordures du scan au bord du papier
+	Every PDF in the folder	Tous les PDF du dossier
+	No PDFs found in {folder}	Aucun PDF trouvé dans {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Seuls les bords nets du papier sont rognés. Les bordures blanches indiscernables sont conservées.
+	Only the document's owner can change its security (open it with the permissions password)	Seul le propriétaire du document peut modifier sa protection (ouvrez-le avec le mot de passe d'autorisations)
+	Safety margin (pt)	Marge de sécurité (pt)
+	Save (M4)	Enregistrer (M4)
+	Scan and text recognition	Numérisation et reconnaissance de texte
+	Scan correction	Correction de numérisation
+	Scan processing cancelled	Traitement des numérisations annulé
+	Searchable Image	Image consultable
+	Straighten skewed scans	Redresser les pages numérisées de travers
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Les orientations incertaines restent inchangées. Le redressement conserve toute l’image dans la page.
 	Reading colours	Couleurs de lecture
 	Replace document colours	Remplacer les couleurs du document
 	Black on white	Noir sur blanc
@@ -2515,8 +2537,6 @@ animation effects	Off	Désactivés
 	A {} annotation has no appearance stream	Une annotation {} n'a pas de flux d'apparence
 	A {} annotation isn't set to print, or is hidden	Une annotation {} n'est pas réglée pour l'impression, ou est masquée
 	Accessibility Report	Rapport d'accessibilité
-	Add the PDFs to combine	Ajoutez les PDF à combiner
-	Added the first {n} PDFs in {folder}	Les {n} premiers PDF de {folder} ont été ajoutés
 	Always	Toujours
 	Automatically	Automatiquement
 	CRL Signing	Signature de LCR
@@ -2558,7 +2578,6 @@ animation effects	Off	Désactivés
 	Enter a page number	Saisissez un numéro de page
 	Enter the field names	Saisissez les noms des champs
 	Error	Erreur
-	Every PDF in the folder	Tous les PDF du dossier
 	Every PDF in the folder and the folders inside it	Tous les PDF du dossier et de ses sous-dossiers
 	Field "{}" on page {p} has no description (tooltip)	Le champ « {} » de la page {p} n'a pas de description (info-bulle)
 	Filename	Nom du fichier
@@ -2580,13 +2599,11 @@ animation effects	Off	Désactivés
 	New bookmark (⌘B)	Nouveau signet (⌘B)
 	Next	Suivant
 	Next (⌘G)	Suivant (⌘G)
-	No PDFs found in {folder}	Aucun PDF trouvé dans {folder}
 	No document language is set	Aucune langue de document n'est définie
 	No page has text: the document appears to be images of pages	Aucune page ne contient de texte : le document semble être constitué d'images de pages
 	No results	Aucun résultat
 	Non-Repudiation	Non-répudiation
 	On	Activé
-	Only the document's owner can change its security (open it with the permissions password)	Seul le propriétaire du document peut modifier sa protection (ouvrez-le avec le mot de passe d'autorisations)
 	Open a PDF (⌘O)	Ouvrir un PDF (⌘O)
 	Open folder	Ouvrir le dossier
 	Organize	Organiser
@@ -2613,7 +2630,6 @@ animation effects	Off	Désactivés
 	Rev. {rev}: Signed by {name}	Rév. {rev} : signé par {name}
 	Rotate view clockwise (⇧⌘+)	Pivoter l'affichage vers la droite (⇧⌘+)
 	Rule Name	Nom de la règle
-	Save (M4)	Enregistrer (M4)
 	Save as {level}	Enregistrer comme {level}
 	Save changes?	Enregistrer les modifications ?
 	Save file	Enregistrer le fichier

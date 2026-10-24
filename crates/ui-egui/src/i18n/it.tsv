@@ -2360,6 +2360,29 @@ animation effects	Off	Disattivati
 	Original	Originale
 	Greyscale	Scala di grigi
 	Black and white	Bianco e nero
+	; 1 page skipped	; 1 pagina saltata
+	; corrected {n} pages	; {n} pagine corrette
+	; {n} pages skipped	; {n} pagine saltate
+	Add searchable text	Aggiungi testo ricercabile
+	Add the PDFs to combine	Aggiungi i PDF da combinare
+	Added the first {n} PDFs in {folder}	Aggiunti i primi {n} PDF di {folder}
+	Automatically rotate sideways and upside-down pages	Ruota automaticamente le pagine laterali o capovolte
+	Correct scans	Correggi scansioni
+	Corrected scan	Scansione corretta
+	Crop scanner borders to the paper edge	Ritaglia i bordi della scansione fino al foglio
+	Every PDF in the folder	Tutti i PDF nella cartella
+	Every PDF in the folder and the folders inside it	Tutti i PDF nella cartella e nelle sue sottocartelle
+	No PDFs found in {folder}	Nessun PDF trovato in {folder}
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Vengono ritagliati solo i bordi riconoscibili del foglio. I bordi bianchi indistinguibili vengono mantenuti.
+	Only the document's owner can change its security (open it with the permissions password)	Solo il proprietario del documento può modificarne la protezione (aprilo con la password delle autorizzazioni)
+	Safety margin (pt)	Margine di sicurezza (pt)
+	Save (M4)	Salva (M4)
+	Scan and text recognition	Scansione e riconoscimento del testo
+	Scan correction	Correzione scansione
+	Scan processing cancelled	Elaborazione scansioni annullata
+	Searchable Image	Immagine ricercabile
+	Straighten skewed scans	Raddrizza le scansioni inclinate
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	Gli orientamenti incerti restano invariati. Il raddrizzamento mantiene l’intera immagine nella pagina.
 	Reading colours	Colori di lettura
 	Replace document colours	Sostituisci i colori del documento
 	Black on white	Nero su bianco
@@ -2731,7 +2754,6 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Next	Avanti
 	On	Attivo
 	Rotate view clockwise (⇧⌘+)	Ruota la vista in senso orario (⇧⌘+)
-	Save (M4)	Salva (M4)
 	Save changes?	Salvare le modifiche?
 	System	Sistema
 	Zoom in / out (also pinch or ⌘-scroll)	Ingrandisci / riduci (anche con il pizzico o ⌘+scorrimento)
