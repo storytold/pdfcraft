@@ -9,7 +9,8 @@
   and in Default apps, never forced as the default), "Edit with PdfCraft" on PDF files'
   right-click menu and "Create PDF with PdfCraft…" on image files' right-click menu (both on by
   default, optional, and an update keeps the installed version's choice). Files opened with
-  PdfCraft arrive on its command line.
+  PdfCraft arrive on its command line. While PdfCraft is the default PDF app, File Explorer shows
+  PDFs' first pages as thumbnails (pdfcraft_thumbnails.dll).
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
@@ -159,6 +160,19 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="Icon" Value="&quot;[#PdfcraftExe]&quot;,0" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+      </Component>
+
+      <!-- First-page thumbnails in File Explorer: pdfcraft_thumbnails.dll (crates/thumbnails) is an
+           IThumbnailProvider registered for PdfCraft.Document, the file type .pdf files have while
+           PdfCraft is the default PDF app. With another default app, that app's thumbnails (if any)
+           apply: neither .pdf nor another app's file type is touched. Explorer runs thumbnail
+           handlers in its own isolated process. -->
+      <Component Id="PdfcraftThumbnails" Guid="75E01844-838F-403B-B75B-3E07E8EBC68F">
+        <File Id="PdfcraftThumbnailsDll" Source="$(var.BinDir)\pdfcraft_thumbnails.dll" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{68E114F4-EB01-42A6-BD92-1695F3711CD1}" Value="PdfCraft PDF thumbnails" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{68E114F4-EB01-42A6-BD92-1695F3711CD1}\InprocServer32" Value="[#PdfcraftThumbnailsDll]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{68E114F4-EB01-42A6-BD92-1695F3711CD1}\InprocServer32" Name="ThreadingModel" Value="Apartment" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Value="{68E114F4-EB01-42A6-BD92-1695F3711CD1}" Type="string" />
       </Component>
 
       <!-- Image context menu (#190): "Create PDF with PdfCraft…" opens the DPI chooser, without

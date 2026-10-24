@@ -444,6 +444,13 @@ impl PageRenderer {
         self.pdf.as_ref().map(|p| p.pages().len()).unwrap_or(0)
     }
 
+    /// A page's displayed size in points (after its rotation), as `render` draws it; `None` when
+    /// the page doesn't exist or its box can't be read. Never panics.
+    pub fn page_size(&self, page: usize) -> Option<(f32, f32)> {
+        let pdf = self.pdf.as_ref()?;
+        catch_unwind(AssertUnwindSafe(|| pdf.pages().get(page).map(|p| p.render_dimensions()))).ok().flatten()
+    }
+
     /// Snapshot the work counters collected by this renderer.
     pub fn stats(&self) -> RenderStats {
         self.stats
