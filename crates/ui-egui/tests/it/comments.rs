@@ -3051,7 +3051,7 @@ fn drawing_tools_snap_to_the_pages_paths_with_f3() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     assert!(!h.state().comment_prefs.snap, "off until asked for");
     // Off: the clicks land where they were made (a little off the drawing).
     for p in [(53.0, 47.0), (147.0, 53.0)] {
@@ -3170,7 +3170,7 @@ fn marks_and_text_boxes_snap_with_f3() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let centre = |a: &Annotation| ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
     assert!(h.state_mut().execute("sign.fill.cross"));
     h.run_steps(2);
@@ -3227,7 +3227,7 @@ fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // A cross beside the table and a rectangle below the line's left end.
     assert!(h.state_mut().execute("sign.fill.cross"));
     h.run_steps(2);
@@ -3299,7 +3299,7 @@ fn tab_picks_the_point_of_a_moved_comment_that_goes_onto_the_target() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let rect = Shape::Rectangle { rect: [30.0, 10.0, 60.0, 30.0] };
     assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
         page: 0,
@@ -3360,7 +3360,7 @@ fn line_ends_snap_when_dragged_and_lines_by_their_ends_when_moved() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let shape = Shape::Line { from: [40.0, 80.0], to: [80.0, 80.0], start: LineEnding::None, end: LineEnding::None };
     assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
         page: 0,
