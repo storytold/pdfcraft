@@ -1,5 +1,8 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (M11: the optimizer stores Group 3 fax images as Group 4, and packs black-and-white RGB and two-entry indexed images to one bit; estimates unchanged)
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (M11: black-and-white images above 450 ppi are averaged down to 300 ppi by the optimizer; estimates unchanged)
+> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: the PDF Optimizer and Reduce File Size store black-and-white images as CCITT Group 4 when smaller; estimates unchanged)
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M12 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections; estimates unchanged)
 
@@ -239,6 +242,10 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | M11: the PDF Optimizer and Reduce File Size store Group 3 fax images as Group 4 when smaller (`Document::fax_params`), and pack eight-bit `DeviceRGB` of only black and white (as grey) and indexed images of 2, 4 or 8 bits that use only palette entries 0 and 1 (keeping the palette) to one bit, so Monochrome Images compresses and downsamples them. Estimates unchanged. |
+| 2026-10-24 | minor | M11: monochrome downsampling: the PDF Optimizer and Reduce File Size average black-and-white images (1-bit, CCITT fax, eight-bit black-and-white grey) above 450 ppi down to 300 ppi, by area with ties black, as Monochrome Images ▸ Downsample to and `doc_optimize` `mono: { downsample, ppi, above_ppi }`; CCITT decoding moves into `pdfcraft-filters` (`decode_ccitt`) behind `Document::decoded_image`. Estimates unchanged. |
+| 2026-10-24 | minor | M11: Create PDF stores pictures of only black and white at one bit (Group 4 or Flate, whichever is smaller) instead of eight-bit grey; the optimizer packs eight-bit black-and-white grey images to one bit before Monochrome Images compresses them; Export ▸ Images decodes CCITT fax images. Estimates unchanged. |
+| 2026-10-23 | minor | M11: black-and-white images (1-bit, and image masks) are stored losslessly as CCITT Group 4 when that is smaller: PDF Optimizer ▸ Images ▸ Monochrome Images (on by default, so Reduce File Size too), `doc_optimize` `mono`; `pdfcraft_filters::encode_g4`. JBIG2 and monochrome downsampling not yet. Estimates unchanged. |
 | 2026-10-22 | minor | M4, #3916 partial: edits and Undo/Redo cancel Organize page drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
 | 2026-10-22 | minor | M14 #3558: rebased macOS association recovery; reuse #3042 shared metadata preservation instead of a duplicate save wrapper. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |

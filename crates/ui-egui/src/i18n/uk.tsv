@@ -586,6 +586,8 @@
 	Clean Up	Очищення
 	Color Images	Кольорові зображення
 	Grayscale Images	Зображення у відтінках сірого
+	Monochrome Images	Монохромні зображення
+	CCITT Group 4	CCITT група 4
 	Bicubic downsampling to	Бікубічне зниження роздільної здатності до
 	for images above	для зображень із роздільною здатністю понад
 	Compression	Стиснення

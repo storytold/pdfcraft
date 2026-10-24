@@ -588,6 +588,8 @@
 	Clean Up	クリーンアップ
 	Color Images	カラー画像
 	Grayscale Images	グレースケール画像
+	Monochrome Images	白黒画像
+	CCITT Group 4	CCITT グループ 4
 	Bicubic downsampling to	バイキュービック法でダウンサンプル:
 	for images above	対象画像の解像度:
 	Compression	圧縮
