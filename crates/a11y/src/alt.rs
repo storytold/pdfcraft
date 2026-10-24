@@ -2,6 +2,7 @@
 //! figure as decorative (its content becomes an artifact and its tag goes away).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -61,17 +62,44 @@ pub(crate) fn tree_root(doc: &Document) -> Option<Dict> {
     cat.get(b"StructTreeRoot").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned())
 }
 
-/// The standard type of a structure type through the role map.
-pub(crate) fn standard(doc: &Document, role_map: &Dict, s: &[u8]) -> Vec<u8> {
-    let mut t = s.to_vec();
+/// A resolved role borrows direct names or holds the cached indirect object alive.
+pub(crate) enum RoleName<'a> {
+    Borrowed(&'a [u8]),
+    Indirect(Arc<Object>),
+}
+
+impl AsRef<[u8]> for RoleName<'_> {
+    /// Borrow the resolved role name without copying direct bytes or the cached indirect object.
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(name) => name,
+            Self::Indirect(object) => object.as_name().unwrap_or_default(),
+        }
+    }
+}
+
+/// Resolve at most twelve aliases, without copying names or malformed direct values.
+pub(crate) fn standard<'a>(doc: &Document, role_map: &'a Dict, s: &'a [u8]) -> RoleName<'a> {
+    let mut t = RoleName::Borrowed(s);
     for _ in 0..12 {
-        if crate::structure::is_standard(&t) {
+        if crate::structure::is_standard(t.as_ref()) {
             break;
         }
-        match role_map.get(&t).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)) {
-            Some(n) if n != t => t = n,
+        let next = match role_map.get(t.as_ref()) {
+            Some(Object::Name(name)) => RoleName::Borrowed(name),
+            Some(Object::Ref(reference)) => {
+                let object = doc.get(*reference);
+                if object.as_name().is_none() {
+                    break;
+                }
+                RoleName::Indirect(object)
+            }
             _ => break,
+        };
+        if next.as_ref() == t.as_ref() {
+            break;
         }
+        t = next;
     }
     t
 }
@@ -308,7 +336,7 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let figures: Vec<(Element, Option<usize>)> = elements(doc)
         .into_iter()
-        .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
+        .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s).as_ref() == b"Figure"))
         .map(|e| {
             let page = e.page.and_then(|p| index.get(&p).copied());
             (e, page)
@@ -333,12 +361,13 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
         .collect()
 }
 
+/// Require a dictionary whose role resolves to Figure through the structure root's RoleMap.
 fn check_figure(doc: &Document, obj: ObjRef) -> Result<Dict, AltError> {
     let root = tree_root(doc).ok_or(AltError::Untagged)?;
     let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let d = doc.get(obj).as_dict().cloned().ok_or(AltError::NotAFigure(obj.num))?;
     match d.name(b"S") {
-        Some(s) if standard(doc, &role_map, s) == b"Figure" => Ok(d),
+        Some(s) if standard(doc, &role_map, s).as_ref() == b"Figure" => Ok(d),
         _ => Err(AltError::NotAFigure(obj.num)),
     }
 }
@@ -583,4 +612,95 @@ fn clear_parent_tree(doc: &mut Document, key: i64, obj: ObjRef) -> Result<(), Al
     }
     doc.update_dict(pt, |d| d.set(b"Nums".to_vec(), Object::Array(nums)))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Create a minimal synthetic document for role-resolution regressions.
+    fn document() -> Document {
+        Document::open(Arc::new(b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n".to_vec())).unwrap()
+    }
+
+    /// Keep the original borrowed role when a direct alias has a malformed value.
+    #[test]
+    fn malformed_direct_roles_keep_the_original_name_without_copying() {
+        let doc = document();
+        let mut dictionary = Dict::new();
+        dictionary.set("Payload", Object::String(PdfString::literal(vec![b'x'; 256 * 1024])));
+        for value in [Object::Dict(dictionary), Object::Array(vec![Object::Int(7); 8192]), Object::String(PdfString::text("H2"))] {
+            let mut roles = Dict::new();
+            roles.set("Broken", value);
+            let original: &[u8] = b"Broken";
+            let resolved = standard(&doc, &roles, original);
+            let name: &[u8] = resolved.as_ref();
+            assert_eq!(name, original);
+            assert!(std::ptr::eq(name, original), "rejecting a malformed value must retain the borrowed role name");
+        }
+    }
+
+    /// Resolve direct aliases by borrowing the target name bytes.
+    #[test]
+    fn direct_role_aliases_share_the_target_name() {
+        let doc = document();
+        let mut roles = Dict::new();
+        roles.set("Chapter", Object::name("Alias"));
+        roles.set("Alias", Object::name("H3"));
+        let resolved = standard(&doc, &roles, b"Chapter");
+        let name: &[u8] = resolved.as_ref();
+        assert_eq!(name, b"H3");
+        assert!(std::ptr::eq(name, roles.name(b"Alias").unwrap()), "a direct alias must not duplicate name storage");
+    }
+
+    /// Keep an indirect role's cached object alive rather than copying its name.
+    #[test]
+    fn indirect_role_aliases_share_the_resolved_name() {
+        let mut doc = document();
+        let target = doc.add(Object::name("H5"));
+        let held = doc.get(target);
+        let mut roles = Dict::new();
+        roles.set("Chapter", Object::Ref(target));
+        let resolved = standard(&doc, &roles, b"Chapter");
+        let name: &[u8] = resolved.as_ref();
+        assert_eq!(name, b"H5");
+        assert!(std::ptr::eq(name, held.as_name().unwrap()), "an indirect alias must share its cached object");
+    }
+
+    /// Retain the original role for malformed indirect values and unsupported reference chains.
+    #[test]
+    fn malformed_indirect_roles_and_reference_chains_keep_the_fallback() {
+        let mut doc = document();
+        let valid = doc.add(Object::name("H4"));
+        let indirect_reference = doc.add(Object::Ref(valid));
+        let malformed = doc.add(Object::Array(vec![Object::Int(0); 1024]));
+        for value in [Object::Ref(indirect_reference), Object::Ref(malformed), Object::Ref(ObjRef::new(u32::MAX, 0))] {
+            let mut roles = Dict::new();
+            roles.set("Custom", value);
+            let resolved = standard(&doc, &roles, b"Custom");
+            let name: &[u8] = resolved.as_ref();
+            assert_eq!(name, b"Custom", "one lookup follows only one PDF object reference");
+        }
+    }
+
+    /// Preserve standard roles and the existing alias-depth and cycle fallback rules.
+    #[test]
+    fn role_alias_limits_cycles_and_standard_roles_keep_their_semantics() {
+        let doc = document();
+        let mut roles = Dict::new();
+        roles.set("A", Object::name("B"));
+        roles.set("B", Object::name("A"));
+        roles.set("Self", Object::name("Self"));
+        roles.set("P", Object::name("H6"));
+        for index in 0..13 {
+            roles.set(format!("Alias{index}"), Object::name(&format!("Alias{}", index + 1)));
+        }
+        roles.set("Alias13", Object::name("H2"));
+        for (input, expected) in [("A", "A"), ("Self", "Self"), ("P", "P"), ("Alias0", "Alias12"), ("Alias2", "H2")] {
+            let resolved = standard(&doc, &roles, input.as_bytes());
+            let name: &[u8] = resolved.as_ref();
+            assert_eq!(name, expected.as_bytes());
+        }
+    }
 }

@@ -331,7 +331,8 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
     if let Some(owner) = property.table_attribute_of() {
         let role_map =
             alt::tree_root(doc).and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-        let ty = element.dict.name(b"S").map(|s| alt::standard(doc, &role_map, s)).unwrap_or_default();
+        let ty = element.dict.name(b"S").map(|s| alt::standard(doc, &role_map, s));
+        let ty: &[u8] = ty.as_ref().map(AsRef::as_ref).unwrap_or_default();
         if ty != owner.as_bytes() {
             let name = if property == TagProperty::Summary { "summary" } else { "scope" };
             return Err(TagError::WrongTagType(name, owner));

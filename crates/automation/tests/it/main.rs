@@ -7,3 +7,4 @@ mod button_caption;
 mod form_bulk;
 mod hostile_args;
 mod optimize_content_boundaries;
+mod tagged_headings_export;

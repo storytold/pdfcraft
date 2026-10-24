@@ -1034,7 +1034,8 @@ mod linebreak;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
-    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block, text_blocks, text_lines,
+    clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, reading_blocks_with_heading_levels, replace_block, replace_line,
+    rewrite_block, text_blocks, text_lines,
 };
 pub mod added;
 pub use added::{
