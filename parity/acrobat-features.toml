@@ -1950,8 +1950,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited"]
-notes = "bold and italic through the standard families; underline drawn under each line in the text colour"
+evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited", "crates/edit/src/tests.rs::synthetic_bold_and_italic_keep_the_face_and_can_be_taken_away", "crates/edit/src/tests.rs::a_word_slanted_by_its_text_matrix_stays_in_its_paragraph", "crates/automation/tests/it/automation.rs::synthetic_bold_and_italic_draw_save_reopen_and_come_off_through_tools"]
+notes = "bold and italic through the standard families; underline drawn under each line in the text colour. In a face without bold or italic, per range or paragraph synthetically (text_edit synthetic_bold: 2 Tr stroked in the fill colour, 1/30 em; synthetic_italic: 12° shear), keeping the face, advances and wrapping; false takes either away, also a word processor's. A word slanted by its text matrix stays in its paragraph at its set size. Still missing: reading doesn't report synthetic bold/italic as bold/italic, and the desktop app's bold/italic buttons don't offer it yet"
 
 [[feature]]
 id = "edit.text-super-subscript"

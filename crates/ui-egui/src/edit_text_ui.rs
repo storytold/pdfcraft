@@ -359,6 +359,8 @@ impl LineEditor {
                 underline: style.underline.take(),
                 char_spacing: style.char_spacing.take(),
                 scale: style.scale.take(),
+                synthetic_bold: None,
+                synthetic_italic: None,
             });
         }
         style

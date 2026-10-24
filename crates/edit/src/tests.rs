@@ -1796,6 +1796,8 @@ fn styled_fallback_batches_keep_face_choices_and_range_styles() {
         underline: None,
         char_spacing: None,
         scale: None,
+        synthetic_bold: None,
+        synthetic_italic: None,
     };
     let style = text::BlockStyle {
         width: Some(520.0),
@@ -4821,6 +4823,8 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
                 underline: Some(true),
                 char_spacing: None,
                 scale: None,
+                synthetic_bold: None,
+                synthetic_italic: None,
             },
             RangeStyle {
                 range: b..b + 4,
@@ -4831,6 +4835,8 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
                 underline: None,
                 char_spacing: Some(0.2),
                 scale: Some(90.0),
+                synthetic_bold: None,
+                synthetic_italic: None,
             },
         ],
         width: Some(300.0),
@@ -4860,6 +4866,8 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
             underline: None,
             char_spacing: None,
             scale: None,
+            synthetic_bold: None,
+            synthetic_italic: None,
         }],
         ..Default::default()
     };
@@ -5248,6 +5256,8 @@ fn turned_paragraph_keeps_its_line_breaks_when_a_word_is_added() {
         underline: None,
         char_spacing: None,
         scale: None,
+        synthetic_bold: None,
+        synthetic_italic: None,
     };
     let style = text::BlockStyle { ranges: vec![range], ..Default::default() };
     assert!(text::rewrite_block(&mut doc, 0, 0, Some("Only line"), &style).is_err());
@@ -5521,6 +5531,8 @@ fn rows_the_edit_does_not_reach_keep_their_source_operators() {
         underline: None,
         char_spacing: None,
         scale: None,
+        synthetic_bold: None,
+        synthetic_italic: None,
     };
     text::rewrite_block(&mut doc, 0, block, Some(&draft), &text::BlockStyle { ranges: vec![range], ..Default::default() }).unwrap();
     let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
@@ -7354,6 +7366,8 @@ fn carriage_returns_break_rows_on_the_styled_path() {
         underline: None,
         char_spacing: None,
         scale: None,
+        synthetic_bold: None,
+        synthetic_italic: None,
     };
     for style in [text::BlockStyle::default(), text::BlockStyle { ranges: vec![red], ..Default::default() }] {
         let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
@@ -7374,4 +7388,121 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     assert_eq!(text::replace_block(&mut doc, 0, 0, "ab  ba   ab").unwrap().substituted, None);
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
+}
+
+/// A run a page shows, with how it is painted.
+#[derive(Debug)]
+struct ShownRun {
+    text: String,
+    /// The rendering mode (`Tr`), stroke colour (`RG`) and line width (`w`).
+    mode: i64,
+    stroke: Vec<f64>,
+    width: f64,
+    tm: [f64; 6],
+}
+
+/// The runs a page shows.
+fn shown_runs(doc: &Document) -> Vec<ShownRun> {
+    let (mut mode, mut stroke, mut width, mut tm) = (0, Vec::new(), 1.0, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let (mut saved, mut runs) = (Vec::new(), Vec::new());
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        match op.op.as_slice() {
+            b"q" => saved.push((mode, stroke.clone(), width)),
+            b"Q" => (mode, stroke, width) = saved.pop().unwrap(),
+            b"Tr" => mode = op.operands[0].as_int().unwrap(),
+            b"RG" => stroke = op.nums::<3>().unwrap().to_vec(),
+            b"w" => width = op.num(0).unwrap(),
+            b"Tm" => tm = op.nums::<6>().unwrap(),
+            b"Tj" | b"TJ" => {
+                let strings = match &op.operands[0] {
+                    Object::Array(items) => {
+                        items.iter().filter_map(|o| if let Object::String(s) = o { Some(s.bytes.clone()) } else { None }).collect()
+                    }
+                    Object::String(s) => vec![s.bytes.clone()],
+                    _ => Vec::new(),
+                };
+                let text = strings.iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<String>();
+                runs.push(ShownRun { text, mode, stroke: stroke.clone(), width, tm });
+            }
+            _ => {}
+        }
+    }
+    runs
+}
+
+/// Bold and italic for a face that has neither: the range is filled and stroked in its own colour
+/// and slanted, in its own font, with its advances unchanged; `false` takes both away again.
+#[test]
+fn synthetic_bold_and_italic_keep_the_face_and_can_be_taken_away() {
+    let draft = "Plain words here";
+    let mut doc = text_page("BT /F1 12 Tf 0 0 1 rg 72 700 Td (Plain words here) Tj ET");
+    let before = text::text_lines(&doc, 0).unwrap();
+    let range = |bold, italic| text::RangeStyle {
+        range: 6..11,
+        family: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+        synthetic_bold: Some(bold),
+        synthetic_italic: Some(italic),
+    };
+    let style = |bold, italic| text::BlockStyle { ranges: vec![range(bold, italic)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &style(true, true)).unwrap();
+    let mut doc = reopen(&doc);
+    let runs = shown_runs(&doc);
+    let words = runs.iter().find(|r| r.text.contains("words")).unwrap();
+    assert!(!words.text.contains("Plain") && !words.text.contains("here"), "{runs:?}");
+    assert_eq!((words.mode, words.stroke.as_slice()), (2, [0.0, 0.0, 1.0].as_slice()), "filled and stroked in its own blue");
+    assert!((words.width - 12.0 * text::SYNTHETIC_BOLD).abs() < 1e-3, "{} pt", words.width);
+    assert!((words.tm[2] / words.tm[3] - text::SYNTHETIC_SLANT).abs() < 1e-3, "{:?}", words.tm);
+    for plain in runs.iter().filter(|r| !r.text.contains("words")) {
+        assert_eq!((plain.mode, plain.tm[2]), (0, 0.0), "the rest stays as it was: {plain:?}");
+    }
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert!(after.iter().all(|l| l.base_font == "Helvetica"), "the face stays");
+    assert_eq!(after.iter().map(|l| l.text.trim()).collect::<Vec<_>>().join(" "), draft);
+    let span =
+        |lines: &[text::TextLine]| [lines.iter().map(|l| l.rect[0]).fold(f64::MAX, f64::min), lines.iter().map(|l| l.rect[2]).fold(0.0, f64::max)];
+    let (old, new) = (span(&before), span(&after));
+    assert!((old[0] - new[0]).abs() < 0.01 && (old[1] - new[1]).abs() < 0.01, "the advances stay: {old:?} {new:?}");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "the slanted, emboldened word stays in its paragraph: {blocks:?}");
+    // Taken away again, in the next edit: upright and only filled.
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &style(false, false)).unwrap();
+    for run in shown_runs(&reopen(&doc)) {
+        assert_eq!((run.mode, run.tm[2]), (0, 0.0), "{run:?}");
+    }
+    // Not stretched by the slant its box had: the words end where they did.
+    let upright = span(&text::text_lines(&reopen(&doc), 0).unwrap());
+    assert!((old[0] - upright[0]).abs() < 0.01 && (old[1] - upright[1]).abs() < 0.01, "{old:?} {upright:?}");
+}
+
+#[test]
+fn a_slant_keeps_the_baseline_and_the_height() {
+    let turned = [0.0, 2.0, -3.0, 0.5, 10.0, 20.0];
+    let s = text::slanted(turned, true);
+    assert_eq!(s[..2], turned[..2]);
+    assert_eq!(s[4..], turned[4..]);
+    // Upright again: the vertical axis is square to the baseline and as high as before.
+    let up = text::slanted(s, false);
+    assert!((up[0] * up[2] + up[1] * up[3]).abs() < 1e-9);
+    assert!((up[2].hypot(up[3]) - 3.0).abs() < 1e-9, "{up:?}");
+    // Slanted along the baseline by tan 12° of that height.
+    let along = (s[2] - up[2]) * s[0] / 2.0 + (s[3] - up[3]) * s[1] / 2.0;
+    assert!((along - 3.0 * text::SYNTHETIC_SLANT).abs() < 1e-9, "{along}");
+    assert_eq!(text::slanted([0.0; 6], true), [0.0; 6], "a degenerate baseline stays");
+}
+
+/// Word processors draw italic in a face without one by shearing the text matrix: such a word
+/// stays in its paragraph, at the size it is set in.
+#[test]
+fn a_word_slanted_by_its_text_matrix_stays_in_its_paragraph() {
+    let doc = text_page("BT /F1 12 Tf 1 0 0 1 72 700 Tm (Plain ) Tj 1 0 0.2126 1 102.012 700 Tm (words) Tj 1 0 0 1 134.016 700 Tm ( here) Tj ET");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), ["Plain words here"]);
+    // Set in 12 pt: the slant leans the glyphs over, it doesn't make them taller.
+    assert!(text::text_lines(&doc, 0).unwrap().iter().all(|l| (l.size - 12.0).abs() < 1e-9));
 }

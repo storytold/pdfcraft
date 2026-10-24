@@ -707,6 +707,8 @@ impl Automation {
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
                     width: a.opt_num("width")?,
+                    synthetic_bold: a.opt_bool("synthetic_bold")?,
+                    synthetic_italic: a.opt_bool("synthetic_italic")?,
                     ..Default::default()
                 };
                 let (dx, dy) = (a.opt_num("dx")?, a.opt_num("dy")?);
@@ -2434,6 +2436,8 @@ fn parse_style_ranges(value: Option<&Value>) -> Result<Vec<pdfcraft_engine::Rang
                 underline: a.opt_bool("underline")?,
                 char_spacing: a.opt_num("char_spacing")?,
                 scale: a.opt_num("scale")?,
+                synthetic_bold: a.opt_bool("synthetic_bold")?,
+                synthetic_italic: a.opt_bool("synthetic_italic")?,
             })
         })
         .collect()

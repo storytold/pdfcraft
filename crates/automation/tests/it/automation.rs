@@ -537,6 +537,33 @@ fn tool_table_is_well_formed() {
 }
 
 #[test]
+fn synthetic_bold_and_italic_draw_save_reopen_and_come_off_through_tools() {
+    let dir = workdir("synthetic-style");
+    let mut a = auto(&dir);
+    let render = |a: &mut Automation, id| a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+    let plain = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let range = |bold, italic| json!([{"range":[0,4],"synthetic_bold":bold,"synthetic_italic":italic}]);
+    // Split where the styled one is, so only the style differs.
+    ok(&mut a, "text_edit", json!({"doc":plain,"page":1,"paragraph":1,"text":"Page 1","ranges":range(false, false)}));
+    let id = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":"Page 1","ranges":range(true, true)}));
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"styled.pdf"}));
+    let id = ok(&mut a, "doc_open", json!({"path":"styled.pdf"}))["doc"].as_u64().unwrap();
+    assert_ne!(render(&mut a, id), render(&mut a, plain), "bold and slanted");
+    let paragraphs = ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}));
+    assert_eq!(paragraphs["count"], 1, "one paragraph: {paragraphs}");
+    assert_eq!(paragraphs["paragraphs"][0]["size"], ok(&mut a, "text_paragraphs", json!({"doc":plain,"page":1}))["paragraphs"][0]["size"]);
+    ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":"Page 1","ranges":range(false, false)}));
+    eprintln!(
+        "L1 {}
+L2 {}",
+        ok(&mut a, "text_lines", json!({"doc":id,"page":1})),
+        ok(&mut a, "text_lines", json!({"doc":plain,"page":1}))
+    );
+    assert_eq!(render(&mut a, id), render(&mut a, plain), "upright and only filled again");
+}
+
+#[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");
     std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();

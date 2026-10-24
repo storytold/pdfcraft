@@ -32,6 +32,13 @@ these work in every build, the web one included. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
 no open-licence declaration are refused. Interface fallback fonts are never exported.
 
+Bold or italic for a face that has no such variant can be drawn synthetically, per range or for
+the paragraph (`synthetic_bold`, `synthetic_italic`): bold fills each glyph and strokes its outline
+in the fill colour 1/30 em wide (`2 Tr`), italic shears the text matrix by 12°. The face, its
+advances and the wrapping stay as they were, and `false` takes either away again, also where a
+word processor drew it. A run slanted that way is measured like an italic face: its box is its
+upright cell, it stays in its paragraph, and its size is the size it is set in.
+
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
 Saving and reopening therefore needs no locally installed font. Editing the same text again
 reuses the font resource the page already has, and every resource made from one program
