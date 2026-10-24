@@ -3,7 +3,10 @@
 //! page the range selects, with the marks laid out on it. "Update" opens the same dialog in
 //! replace mode.
 
-use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
+use std::sync::Arc;
+
+use egui::emath::Rot2;
+use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
@@ -11,6 +14,12 @@ use crate::{PdfCraftApp, widgets};
 
 /// How far a watermark may be moved from the page centre, in points.
 const MAX_OFFSET: f64 = 20_000.0;
+/// Pixels along the longer side of Source ▸ File's picture as rendered for the preview, whose page
+/// is at most 190 points across: sharp on a screen of more than twice that density.
+const PICTURE_SIDE: u32 = 512;
+/// A page with a picture behind it is drawn as a grid of cells this many screen points (logical
+/// pixels) across, each corner coloured by the picture.
+const CELL: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subset {
@@ -90,6 +99,8 @@ pub struct MarksDraft {
     pub use_file: bool,
     pub file: Option<(String, std::sync::Arc<Vec<u8>>)>,
     pub file_page: usize,
+    /// The file's picture for the preview.
+    pub picture: FilePicture,
 }
 
 impl Default for MarksDraft {
@@ -107,8 +118,292 @@ impl Default for MarksDraft {
             use_file: false,
             file: None,
             file_page: 1,
+            picture: FilePicture::default(),
         }
     }
+}
+
+/// Source ▸ File's picture as the engine rendered it, checked, with its summed-area table: made
+/// on the worker thread, uploaded on the UI thread.
+struct Rendered {
+    picture: pdfcraft_engine::MarkPicture,
+    pixels: [usize; 2],
+    sums: Vec<[u32; 4]>,
+}
+
+impl Rendered {
+    /// A raster that doesn't add up, or is larger than asked for, is refused, never uploaded.
+    fn new(picture: pdfcraft_engine::MarkPicture) -> Result<Self, String> {
+        let [w, h] = [picture.width, picture.height].map(|v| v as usize);
+        // A pixel over for rounding.
+        let side = PICTURE_SIDE as usize + 1;
+        if w == 0 || h == 0 || w > side || h > side {
+            return Err(format!("the picture came back {w}×{h} pixels"));
+        }
+        if w.checked_mul(h).and_then(|n| n.checked_mul(4)) != Some(picture.rgba.len()) {
+            return Err("the picture came back incomplete".into());
+        }
+        let sums = summed(&picture.rgba, w);
+        Ok(Self { picture, pixels: [w, h], sums })
+    }
+}
+
+/// The summed-area table of premultiplied RGBA pixels `w` wide (at least 1): entry
+/// `y × (w + 1) + x` holds the channel sums of the pixels above and left of (x, y), so the mean
+/// of any box takes four look-ups whatever its size.
+fn summed(rgba: &[u8], w: usize) -> Vec<[u32; 4]> {
+    let stride = w.saturating_mul(4).max(4);
+    let mut table = Vec::with_capacity((w + 1).saturating_mul(rgba.len() / stride + 1));
+    table.resize(w + 1, [0u32; 4]);
+    for (y, row) in rgba.chunks_exact(stride).enumerate() {
+        table.push([0; 4]);
+        let mut run = [0u32; 4];
+        for (x, px) in row.as_chunks::<4>().0.iter().enumerate() {
+            for (r, &c) in run.iter_mut().zip(px) {
+                *r = r.saturating_add(u32::from(c));
+            }
+            let above = table.get(y * (w + 1) + x + 1).copied().unwrap_or_default();
+            table.push(std::array::from_fn(|k| above[k].saturating_add(run[k])));
+        }
+    }
+    table
+}
+
+/// Source ▸ File's picture, uploaded: a texture, and its sums for drawing it behind the page.
+#[derive(Clone)]
+struct Picture {
+    tex: egui::TextureHandle,
+    /// Its size in pixels, and its summed-area table ([`summed`]).
+    pixels: [usize; 2],
+    sums: Arc<Vec<[u32; 4]>>,
+    /// Its size in points, which OK fits to the page.
+    size: (f64, f64),
+}
+
+impl Picture {
+    fn upload(ctx: &egui::Context, r: Rendered) -> Self {
+        let image = crate::canvas::texture_image(r.pixels, r.picture.rgba);
+        let tex = ctx.load_texture("mark-file-picture", image, egui::TextureOptions::LINEAR);
+        Self { tex, pixels: r.pixels, sums: Arc::new(r.sums), size: r.picture.size }
+    }
+
+    /// Its mean colour over a box ([`box_mean`]).
+    fn mean(&self, u: [f32; 2], v: [f32; 2]) -> Color32 {
+        box_mean(&self.sums, self.pixels, u, v)
+    }
+}
+
+/// The mean colour (premultiplied) of a picture `pixels` in size, from its summed-area table
+/// `sums` ([`summed`]), over the box `u` × `v` (from and to, 0–1 across and down). What of the
+/// box lies outside the picture is transparent.
+fn box_mean(sums: &[[u32; 4]], pixels: [usize; 2], u: [f32; 2], v: [f32; 2]) -> Color32 {
+    let [w, h] = pixels;
+    // The box's edges in whole pixels, at least one pixel across.
+    let edges = |f: [f32; 2], n: usize| {
+        let from = (f[0] * n as f32).round() as i64;
+        (from, ((f[1] * n as f32).round() as i64).max(from.saturating_add(1)))
+    };
+    let ((x0, x1), (y0, y1)) = (edges(u, w), edges(v, h));
+    let area = x1.saturating_sub(x0).saturating_mul(y1.saturating_sub(y0)).max(1).unsigned_abs();
+    let clamp = |e: i64, n: usize| e.clamp(0, n as i64) as usize;
+    let at = |x: i64, y: i64| sums.get(clamp(y, h) * (w + 1) + clamp(x, w)).copied().unwrap_or_default();
+    let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+    let channel = |k: usize| {
+        let sum = (u64::from(d[k]) + u64::from(a[k])).saturating_sub(u64::from(b[k]) + u64::from(c[k]));
+        ((sum + area / 2) / area).min(255) as u8
+    };
+    Color32::from_rgba_premultiplied(channel(0), channel(1), channel(2), channel(3))
+}
+
+/// The file and page (0-based) a picture is rendered for.
+#[derive(Clone)]
+struct PictureKey {
+    bytes: Arc<Vec<u8>>,
+    page: usize,
+}
+
+impl PictureKey {
+    fn is(&self, other: &PictureKey) -> bool {
+        Arc::ptr_eq(&self.bytes, &other.bytes) && self.page == other.page
+    }
+}
+
+type PictureAnswer = Result<Rendered, String>;
+
+/// Source ▸ File's picture for the preview, kept for the file and page it shows. It is rendered
+/// off the UI thread, one at a time, as OK brings it in ([`pdfcraft_engine::mark_picture`]);
+/// until it arrives, or when the file can't be drawn, the preview shows a frame with its name.
+#[derive(Default)]
+pub struct FilePicture {
+    /// The picture of a file and page, or why there is none.
+    shown: Option<(PictureKey, Result<Picture, String>)>,
+    /// The render under way.
+    running: Option<(PictureKey, std::sync::mpsc::Receiver<PictureAnswer>)>,
+}
+
+impl FilePicture {
+    /// The picture of `page` (0-based) of `file`, once rendered. Asking for another file or page
+    /// starts its render, once the one under way is done.
+    fn get(&mut self, ctx: &egui::Context, file: Option<&(String, Arc<Vec<u8>>)>, page: usize) -> Option<&Picture> {
+        let (name, bytes) = file?;
+        let want = PictureKey { bytes: bytes.clone(), page };
+        if let Some((key, rx)) = &self.running {
+            let answer = match rx.try_recv() {
+                Ok(answer) => Some(answer),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("the picture couldn't be drawn".into())),
+            };
+            if let Some(answer) = answer {
+                let key = key.clone();
+                self.running = None;
+                self.shown = Some((key, answer.map(|r| Picture::upload(ctx, r))));
+            }
+        }
+        if self.running.is_none() && !self.shown.as_ref().is_some_and(|(k, _)| k.is(&want)) {
+            self.start(ctx, name, want.clone());
+        }
+        match &self.shown {
+            Some((k, Ok(p))) if k.is(&want) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Render `key` on a worker thread, or here where there are none (the web).
+    fn start(&mut self, ctx: &egui::Context, name: &str, key: PictureKey) {
+        let file = pdfcraft_engine::MarkFile { name: name.to_owned(), bytes: key.bytes.clone(), page: key.page };
+        if !cfg!(target_arch = "wasm32") {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (job, repaint) = (file.clone(), ctx.clone());
+            let spawned = std::thread::Builder::new().name("mark-picture".into()).spawn(move || {
+                // The receiver may be gone (the draft was replaced): nothing to report.
+                let _ = tx.send(pdfcraft_engine::mark_picture(&job, PICTURE_SIDE).and_then(Rendered::new));
+                repaint.request_repaint();
+            });
+            if spawned.is_ok() {
+                self.running = Some((key, rx));
+                return;
+            }
+        }
+        let answer = pdfcraft_engine::mark_picture(&file, PICTURE_SIDE).and_then(Rendered::new).map(|r| Picture::upload(ctx, r));
+        self.shown = Some((key, answer));
+    }
+}
+
+/// A cache: a copy shares the picture shown, not the render under way.
+impl Clone for FilePicture {
+    fn clone(&self) -> Self {
+        Self { shown: self.shown.clone(), running: None }
+    }
+}
+
+impl std::fmt::Debug for FilePicture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilePicture").field("shown", &self.shown.is_some()).field("running", &self.running.is_some()).finish()
+    }
+}
+
+/// A cache: drafts that say the same are equal whatever they have rendered.
+impl PartialEq for FilePicture {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// A picture mark as OK draws it: its scale relative to the page, its turn (degrees
+/// counter-clockwise), its offset from the page centre (points, right and up) and its opacity.
+#[derive(Clone, Copy)]
+struct PictureMark<'a> {
+    picture: &'a Picture,
+    scale: f64,
+    rotation: f64,
+    offset: [f64; 2],
+    opacity: f64,
+}
+
+impl<'a> PictureMark<'a> {
+    /// Laid out on the page drawn as `page`, at `s` pixels a point, where `picture` in
+    /// `pdfcraft-edit` puts it: fitted to the page at its scale, centred plus its offset, turned.
+    fn place(self, page: Rect, s: f32) -> Placed<'a> {
+        let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+        let (w, h) = (f64::from(page.width() / s), f64::from(page.height() / s));
+        let (sw, sh) = (self.picture.size.0.max(0.01), self.picture.size.1.max(0.01));
+        let k = (w / sw).min(h / sh) * if self.scale.is_finite() && self.scale > 0.0 { self.scale } else { 1.0 };
+        let centre = page.center() + vec2(finite(self.offset[0]) as f32 * s, -finite(self.offset[1]) as f32 * s);
+        Placed {
+            picture: self.picture,
+            rect: Rect::from_center_size(centre, vec2((sw * k) as f32 * s, (sh * k) as f32 * s)),
+            // Counter-clockwise on the page is clockwise-negative on screen.
+            turn: Rot2::from_angle(-(finite(self.rotation) as f32).to_radians()),
+            opacity: if self.opacity.is_finite() { self.opacity.clamp(0.0, 1.0) as f32 } else { 1.0 },
+        }
+    }
+}
+
+/// A picture laid out on the preview's page: its rectangle before the turn, turned about its centre.
+struct Placed<'a> {
+    picture: &'a Picture,
+    rect: Rect,
+    turn: Rot2,
+    opacity: f32,
+}
+
+impl Placed<'_> {
+    /// The picture drawn over the page.
+    fn mesh(&self) -> egui::Mesh {
+        let mut mesh = egui::Mesh::with_texture(self.picture.tex.id());
+        mesh.add_rect_with_uv(self.rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(self.opacity));
+        mesh.rotate(self.turn, self.rect.center());
+        mesh
+    }
+
+    /// What shows at `pos`, a corner of the page's grid, where the page is white with the
+    /// picture behind it: the picture over white paper, or the paper where the picture isn't.
+    /// The picture is averaged over the grid cell around `pos`, so detail finer than a cell is
+    /// blended, not picked at random.
+    fn behind(&self, pos: Pos2) -> Color32 {
+        let local = self.turn.inverse() * (pos - self.rect.center());
+        let (u, v) = (local.x / self.rect.width() + 0.5, local.y / self.rect.height() + 0.5);
+        let (du, dv) = (CELL / 2.0 / self.rect.width(), CELL / 2.0 / self.rect.height());
+        if ![u, v, du, dv].iter().all(|f| f.is_finite()) || u + du < 0.0 || u - du > 1.0 || v + dv < 0.0 || v - dv > 1.0 {
+            return Color32::WHITE;
+        }
+        let c = self.picture.mean([u - du, u + du], [v - dv, v + dv]).gamma_multiply(self.opacity);
+        let paper = 255 - c.a();
+        Color32::from_rgb(c.r().saturating_add(paper), c.g().saturating_add(paper), c.b().saturating_add(paper))
+    }
+}
+
+/// What shows where the page is white, behind its content: a colour (white for nothing), or a
+/// picture.
+enum Behind<'a> {
+    Colour(Color32),
+    Picture(PictureMark<'a>),
+}
+
+/// The page drawn as `page` from its picture `tex` (a white sheet without one) as a grid of
+/// cells, each corner tinted by `tint`: a mesh's colours multiply its texture, which is how what
+/// is behind the page's content shows where the page is white.
+fn tinted_page(page: Rect, tex: Option<egui::TextureId>, tint: impl Fn(Pos2) -> Color32) -> egui::Mesh {
+    let cells = |len: f32| (len / CELL).ceil().clamp(1.0, 512.0) as u32;
+    let (cols, rows) = (cells(page.width()), cells(page.height()));
+    let mut mesh = egui::Mesh::with_texture(tex.unwrap_or_default());
+    for j in 0..=rows {
+        for i in 0..=cols {
+            let f = vec2(i as f32 / cols as f32, j as f32 / rows as f32);
+            let pos = page.min + f * page.size();
+            let uv = if tex.is_some() { pos2(f.x, f.y) } else { egui::epaint::WHITE_UV };
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: tint(pos) });
+        }
+    }
+    for j in 0..rows {
+        for i in 0..cols {
+            let a = j * (cols + 1) + i;
+            let c = a + cols + 1;
+            mesh.add_triangle(a, a + 1, c);
+            mesh.add_triangle(a + 1, c + 1, c);
+        }
+    }
+    mesh
 }
 
 const PAGE_FORMATS: [&str; 5] = ["<<1>>", "<<1 of n>>", "<<1/n>>", "<<Page 1>>", "<<Page 1 of n>>"];
@@ -127,13 +422,13 @@ fn color_button(ui: &mut egui::Ui, c: &mut [f64; 3]) {
 
 /// The page (displayed size `size`) with the marks laid out on it. `picture` is its thumbnail,
 /// rendered off the UI thread like the pages panel's; until it arrives the page is a blank sheet.
-/// `tint` multiplies the page, which is how a background behind its content looks.
+/// What is `behind` the page multiplies it, which is how it looks behind the page's content.
 fn preview(
     ui: &mut egui::Ui,
     t: &Tokens,
     size: (f64, f64),
     picture: Option<egui::TextureId>,
-    tint: Color32,
+    behind: Behind<'_>,
     draw: impl FnOnce(&egui::Painter, Rect, f32),
 ) {
     let (w, h) = (size.0.max(1.0), size.1.max(1.0));
@@ -141,12 +436,16 @@ fn preview(
     let (r, _) = ui.allocate_exact_size(vec2(210.0, 210.0), egui::Sense::hover());
     let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
     let painter = ui.painter_at(r);
-    match picture {
-        Some(tex) => {
+    match (behind, picture) {
+        (Behind::Colour(tint), Some(tex)) => {
             painter.image(tex, page, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
         }
-        None => {
+        (Behind::Colour(tint), None) => {
             painter.rect_filled(page, CornerRadius::ZERO, tint);
+        }
+        (Behind::Picture(mark), picture) => {
+            let placed = mark.place(page, s);
+            painter.add(tinted_page(page, picture, |pos| placed.behind(pos)));
         }
     }
     painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
@@ -357,8 +656,23 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let size_h = page.1.max(1.0);
     let (wm, fit) = (d.wm.clone(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
+    // Source ▸ File: the file's picture, as OK lays it out. A background, or a watermark that
+    // appears behind the page, shows where the page is white; a watermark on top covers it.
+    let rendered = match kind {
+        MarkKind::Watermark | MarkKind::Background if d.use_file => d.picture.get(ui.ctx(), d.file.as_ref(), d.file_page.saturating_sub(1)),
+        _ => None,
+    };
+    let mark = rendered.map(|picture| match kind {
+        MarkKind::Background => PictureMark { picture, scale: d.bg.scale, rotation: 0.0, offset: [0.0; 2], opacity: d.bg.opacity },
+        _ => PictureMark { picture, scale: wm.scale, rotation: wm.rotation, offset: wm.offset, opacity: wm.opacity },
+    });
+    let under = kind == MarkKind::Background || wm.behind;
+    let page_behind = match mark {
+        Some(mark) if under => Behind::Picture(mark),
+        _ => Behind::Colour(tint),
+    };
     ui.horizontal(|ui| {
-        preview(ui, t, page, picture, tint, |p, r, s| match kind {
+        preview(ui, t, page, picture, page_behind, |p, r, s| match kind {
             MarkKind::HeaderFooter => {
                 if hf.shrink {
                     // The band the page content shrinks into, centred across.
@@ -385,6 +699,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     p.text(pos2(x, y), align, shown, font, rgb32(hf.color));
                 }
             }
+            // The picture behind the page is drawn with the page.
+            MarkKind::Watermark | MarkKind::Background if mark.is_some() => {
+                if let Some(mark) = mark.filter(|_| !under) {
+                    p.add(mark.place(r, s).mesh());
+                }
+            }
+            // Until the picture arrives, or when the file can't be drawn: a frame with its name.
             MarkKind::Watermark if file_name.is_some() => {
                 let side = r.width().min(r.height()) * wm.scale as f32;
                 let centre = r.center() + vec2(wm.offset[0] as f32 * s, -wm.offset[1] as f32 * s);
@@ -603,6 +924,24 @@ mod tests {
         assert_eq!(behind([1.0, 0.0, 0.0], 0.0), Color32::WHITE);
         assert_eq!(behind([0.0, 0.0, 0.0], 0.5), Color32::from_rgb(128, 128, 128));
         assert_eq!(behind([0.2, 0.4, 0.6], f64::NAN), behind([0.2, 0.4, 0.6], 1.0), "opaque, as the engine has it");
+    }
+
+    #[test]
+    fn a_picture_behind_the_page_is_averaged_over_each_cell() {
+        // 2 × 2: opaque red, opaque blue on top; transparent, opaque white below.
+        let rgba = [255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255];
+        let sums = summed(&rgba, 2);
+        assert_eq!(sums.len(), 9);
+        let mean = |u: [f32; 2], v: [f32; 2]| box_mean(&sums, [2, 2], u, v);
+        assert_eq!(mean([0.0, 0.5], [0.0, 0.5]), Color32::from_rgb(255, 0, 0), "one pixel");
+        assert_eq!(mean([0.5, 1.0], [0.5, 1.0]), Color32::WHITE);
+        assert_eq!(mean([0.0, 1.0], [0.0, 0.5]), Color32::from_rgba_premultiplied(128, 0, 128, 255), "red and blue");
+        assert_eq!(mean([0.0, 1.0], [0.0, 1.0]), Color32::from_rgba_premultiplied(128, 64, 128, 191), "all four");
+        assert_eq!(mean([-1.0, 0.0], [0.0, 1.0]), Color32::TRANSPARENT, "outside the picture");
+        assert_eq!(mean([-0.5, 0.5], [0.0, 0.5]), Color32::from_rgba_premultiplied(128, 0, 0, 128), "half outside");
+        // Edges that aren't numbers, or are far off, neither panic nor overflow.
+        mean([f32::NAN, f32::INFINITY], [f32::NEG_INFINITY, 1e30]);
+        assert_eq!(box_mean(&[], [0, 0], [0.0, 1.0], [0.0, 1.0]), Color32::TRANSPARENT, "no pixels");
     }
 
     #[test]

@@ -265,6 +265,145 @@ fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     assert_eq!(tint, egui::Color32::from_rgb(255, 255, 217), "the default pale yellow, opaque");
 }
 
+/// A one-page PDF of `w` × `h` points painted with `content`: a file to take a mark from.
+fn picture_pdf(w: u32, h: u32, content: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >>
+stream
+{content}
+endstream
+endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// The pictures painted last frame on the preview's page `page` other than the page's own (and
+/// the interface's glyphs): a mark from a file laid on it. Paint order and mesh.
+fn pictures_on(h: &Harness<'static, PdfCraftApp>, page: egui::Rect) -> Vec<(usize, std::sync::Arc<egui::Mesh>)> {
+    let thumb = h.state().views[0].thumb(0).map(|t| t.id());
+    h.output()
+        .shapes
+        .iter()
+        .enumerate()
+        .filter_map(|(k, s)| match &s.shape {
+            egui::Shape::Mesh(m)
+                if m.texture_id != egui::TextureId::default() && Some(m.texture_id) != thumb && page.expand(1.0).contains_rect(m.calc_bounds()) =>
+            {
+                Some((k, m.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A mark from a file on the preview of page 1, once the page's and the file's pictures have
+/// rendered off the UI thread, both from the same frame (the dialog may still move while it
+/// settles): the page's paint order and bounds, the mark's paint order and mesh.
+fn wait_for_mark(h: &mut Harness<'static, PdfCraftApp>) -> (usize, egui::Rect, usize, std::sync::Arc<egui::Mesh>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        h.step();
+        if let [(at, page, _)] = page_pictures(h, 0)[..]
+            && let [(mark_at, mark)] = &pictures_on(h, page)[..]
+        {
+            return (at, page, *mark_at, mark.clone());
+        }
+        assert!(std::time::Instant::now() < deadline, "the preview never showed the file's picture");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// The colour a mesh gives the point nearest `at`.
+fn colour_at(m: &egui::Mesh, at: egui::Pos2) -> egui::Color32 {
+    m.vertices.iter().min_by(|a, b| a.pos.distance(at).total_cmp(&b.pos.distance(at))).map(|v| v.color).unwrap_or_default()
+}
+
+#[test]
+fn a_mark_from_a_file_previews_its_picture_where_ok_puts_it() {
+    use egui::{Color32, pos2};
+    let mut h = harness_with(content_fixture());
+    // A watermark from a 200 × 100 PDF page painted red, at half the page, moved 30 pt right
+    // and 20 pt up, half opaque (#2817 item 14).
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.use_file = true;
+        d.file = Some(("stamp.pdf".into(), std::sync::Arc::new(picture_pdf(200, 100, "1 0 0 rg 0 0 200 100 re f"))));
+        d.wm.scale = 0.5;
+        d.wm.rotation = 0.0;
+        d.wm.offset = [30.0, 20.0];
+        d.wm.opacity = 0.5;
+    }
+    let (at, page, mark_at, mark) = wait_for_mark(&mut h);
+    assert!(at < mark_at, "the watermark is on top of the page");
+    // Fitted to the 300 × 400 page: 1.5 × the picture, half of that is 150 × 75 pt.
+    let s = page.width() / 300.0;
+    let r = mark.calc_bounds();
+    near(r.width(), 150.0 * s, "width");
+    near(r.height(), 75.0 * s, "height");
+    near(r.center().x, page.center().x + 30.0 * s, "moved right");
+    near(r.center().y, page.center().y - 20.0 * s, "moved up");
+    assert!(mark.vertices.iter().all(|v| v.color == Color32::WHITE.gamma_multiply(0.5)), "half opaque");
+    // Turned a quarter counter-clockwise: the picture's top-left corner comes to the bottom left.
+    h.state_mut().marks_draft.wm.rotation = 90.0;
+    h.run_steps(2);
+    let (_, page, _, mark) = wait_for_mark(&mut h);
+    let r = mark.calc_bounds();
+    near(r.width(), 75.0 * s, "turned, width");
+    near(r.height(), 150.0 * s, "turned, height");
+    near(r.center().x, page.center().x + 30.0 * s, "turned about its centre, across");
+    near(r.center().y, page.center().y - 20.0 * s, "turned about its centre, down");
+    let corner = mark.vertices.iter().find(|v| v.uv == pos2(0.0, 0.0)).map(|v| v.pos).unwrap();
+    near(corner.x, r.left(), "top-left corner, across");
+    near(corner.y, r.bottom(), "top-left corner, down");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // A background from a 100 × 100 page painted red, at half the page: 150 × 150 pt in the
+    // middle. It is behind the content, so it shows through the page's white, with nothing
+    // painted over the page.
+    assert!(h.state_mut().execute("edit.background"));
+    h.run_steps(2);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.use_file = true;
+        d.file = Some(("paper.pdf".into(), std::sync::Arc::new(picture_pdf(100, 100, "1 0 0 rg 0 0 100 100 re f"))));
+        d.bg.scale = 0.5;
+        d.bg.opacity = 1.0;
+    }
+    let red = Color32::from_rgb(255, 0, 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let page_mesh = loop {
+        h.step();
+        let thumb = h.state().views[0].thumb(0).map(|t| t.id());
+        let mesh = h.output().shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Mesh(m) if Some(m.texture_id) == thumb => Some(m.clone()),
+            _ => None,
+        });
+        if let Some(m) = mesh.filter(|m| colour_at(m, m.calc_bounds().center()) == red) {
+            break m;
+        }
+        assert!(std::time::Instant::now() < deadline, "the background's picture never showed through the page");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let page = page_mesh.calc_bounds();
+    let point = |x: f32, y: f32| pos2(page.left() + x * s, page.bottom() - y * s);
+    assert_eq!(colour_at(&page_mesh, point(150.0, 140.0)), red, "inside, near the bottom edge");
+    assert_eq!(colour_at(&page_mesh, point(150.0, 110.0)), Color32::WHITE, "below it");
+    assert_eq!(colour_at(&page_mesh, point(90.0, 200.0)), red, "inside, near the left edge");
+    assert_eq!(colour_at(&page_mesh, point(60.0, 200.0)), Color32::WHITE, "left of it");
+    assert_eq!(colour_at(&page_mesh, page.min), Color32::WHITE, "the page's corner");
+    assert!(pictures_on(&h, page).is_empty(), "nothing is painted over the page");
+}
+
 /// Pages from 1 to 1 stays one page: the dialog used to turn "to" back into the last page on
 /// every frame while both were 1, so only page 1 could not be chosen alone. The field starts on
 /// the last page.

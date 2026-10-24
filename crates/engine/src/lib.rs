@@ -27,6 +27,7 @@ pub mod export;
 pub mod field_table;
 pub mod js;
 pub mod links;
+mod mark_picture;
 pub mod ocr;
 pub mod optimizer;
 pub mod print_raster;
@@ -41,6 +42,7 @@ mod text_preview;
 pub mod word_count;
 pub mod xfa;
 
+pub use mark_picture::{MAX_MARK_PICTURE_SIDE, MarkPicture, mark_picture};
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::StampPreview;
