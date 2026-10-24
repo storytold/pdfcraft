@@ -2085,3 +2085,59 @@ fn go_to_page_brings_the_page_into_view_horizontally() {
     let (r, vp) = (v.page_screen_rect(2).expect("page 3 on screen"), v.viewport_rect());
     assert!(r.left() >= vp.left() && r.right() <= vp.right(), "page 3 at {r:?}, viewport {vp:?}");
 }
+
+/// View ▸ Zoom ▸ Loupe tool: toggles the floating loupe window and aperture tracking,
+/// adjusts magnification factor and aperture position, and resets when closed or toggled off.
+#[test]
+fn loupe_tool_toggles_and_magnifies_target() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+
+    // Initial state: loupe is closed, quick tool is Select.
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+
+    // Execute view.loupe command.
+    assert!(h.state_mut().execute("view.loupe"));
+    h.run_steps(3);
+
+    // Loupe is now active.
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Loupe);
+    let loupe = h.state().loupe.as_ref().expect("loupe state active");
+    assert!(loupe.open);
+    assert_eq!(loupe.zoom, 2.0);
+    assert_eq!(loupe.page, 0);
+
+    // Test zoom stepping and clamping.
+    h.state_mut().loupe.as_mut().unwrap().zoom_step(true);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 2.5);
+    h.state_mut().loupe.as_mut().unwrap().set_zoom(8.5);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 8.0);
+    h.state_mut().loupe.as_mut().unwrap().set_zoom(0.5);
+    assert_eq!(h.state().loupe.as_ref().unwrap().zoom, 1.0);
+
+    // Setting loupe target updates center and page.
+    h.state_mut().set_loupe_target(0, [0.3, 0.7]);
+    assert_eq!(h.state().loupe.as_ref().unwrap().center, [0.3, 0.7]);
+
+    // Test Turkish localization.
+    h.state_mut().set_option("language", "tr").unwrap();
+    h.run_steps(2);
+    let lang = pdfcraft_ui_egui::i18n::Lang::from_code("tr").unwrap();
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(lang, "Loupe tool"), "Büyüteç aracı");
+
+    // Toggle off via command.
+    assert!(h.state_mut().execute("view.loupe"));
+    h.run_steps(3);
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+
+    // Re-activating loupe and then losing the active document resets QuickTool::Loupe to Select.
+    assert!(h.state_mut().execute("view.loupe"));
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Loupe);
+    h.state_mut().active = None;
+    h.run_steps(2);
+    assert!(h.state().loupe.is_none());
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+}

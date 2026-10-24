@@ -1043,11 +1043,11 @@ title = "Loupe magnifier tool"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.loupe"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/viewer.rs::loupe_tool_toggles_and_magnifies_target"]
+notes = "View ▸ Zoom ▸ Loupe tool: movable window displaying a magnified view of the target rectangle on the active page, with zoom slider (100%–800%) and interactive canvas tracking."
 
 [[feature]]
 id = "view.pan-and-zoom"

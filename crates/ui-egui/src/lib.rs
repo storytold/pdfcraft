@@ -57,6 +57,7 @@ mod crop;
 mod drag_pointer;
 mod export_ui;
 mod js_ui;
+pub mod loupe_ui;
 #[cfg(target_os = "macos")]
 mod macos_association;
 mod marks_ui;
@@ -257,6 +258,8 @@ pub enum QuickTool {
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
     /// Select tool does the same while Alt/Option is held at the start of a drag.
     ColumnSelect,
+    /// View ▸ Zoom ▸ Loupe tool: magnifies page area in a floating window.
+    Loupe,
 }
 
 /// A file dropped on a page grid: its name, and its bytes or, for a file on disk, the path they are
@@ -758,6 +761,8 @@ pub struct PdfCraftApp {
     pub duplicate_draft: Option<DuplicateDraft>,
     /// Text field table: the table being set up, and the page it goes on.
     pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
+    /// View ▸ Zoom ▸ Loupe tool: active state for the loupe magnifier window and canvas aperture.
+    pub loupe: Option<loupe_ui::LoupeState>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
@@ -1082,6 +1087,7 @@ impl PdfCraftApp {
             attach_override: None,
             duplicate_draft: None,
             field_table_draft: None,
+            loupe: None,
             form_preview: false,
             window_title: String::new(),
             recovery: None,
@@ -2867,6 +2873,11 @@ impl PdfCraftApp {
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
+                    "loupe" => {
+                        let page = self.active.and_then(|i| self.views.get(i)).map_or(0, |v| v.current);
+                        self.loupe = Some(loupe_ui::LoupeState::new(page));
+                        QuickTool::Loupe
+                    }
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;
@@ -3419,6 +3430,31 @@ impl PdfCraftApp {
             {
                 view.finish_render_frame(ctx, &doc.info, &doc.renderer);
             }
+        }
+    }
+
+    /// Toggles the Loupe magnifier tool.
+    pub fn toggle_loupe(&mut self) {
+        if self.loupe.is_some() {
+            self.loupe = None;
+            if self.quick_tool == QuickTool::Loupe {
+                self.quick_tool = QuickTool::Select;
+            }
+        } else {
+            let page = self.active.and_then(|i| self.views.get(i)).map_or(0, |v| v.current);
+            self.loupe = Some(loupe_ui::LoupeState::new(page));
+            self.quick_tool = QuickTool::Loupe;
+        }
+    }
+
+    /// Sets the target page and center point for the active loupe magnifier.
+    pub fn set_loupe_target(&mut self, page: usize, center: [f32; 2]) {
+        if let Some(loupe) = &mut self.loupe {
+            loupe.set_center(page, center);
+        } else {
+            let mut state = loupe_ui::LoupeState::new(page);
+            state.set_center(page, center);
+            self.loupe = Some(state);
         }
     }
 }

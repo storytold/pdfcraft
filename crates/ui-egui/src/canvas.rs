@@ -3024,7 +3024,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::Loupe => false,
     };
     let prefs = &app.comment_prefs;
     let redact_mark = (app.redact_prefs.hover_fill, app.redact_prefs.opacity);
@@ -3073,6 +3074,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut field_props = false;
     let mut field_placed = false;
     let mut open_table: Option<(usize, [f64; 4])> = None;
+    let loupe_preview = app.loupe.as_ref().map(|l| (l.page, l.center, l.zoom, l.viewport_size));
+    let mut loupe_target = None;
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
@@ -3408,6 +3411,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
                 crate::zoom_snap::page_input(ui, &resp, &xf, i, view);
             }
+            if tool == QuickTool::Loupe
+                && let Some((page, norm_pos)) = crate::loupe_ui::page_input(ui, &resp, &xf, i)
+            {
+                loupe_target = Some((page, norm_pos));
+            }
             if tool == QuickTool::EnhanceCamera {
                 crate::camera_ui::page_input(ui, &resp, &xf, i, view, can_modify);
             }
@@ -3738,6 +3746,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if tool == QuickTool::Link {
                 crate::link_ui::paint(ui, painter, &xf, i, info, &doc_links, view);
+            }
+            if let Some((l_page, l_center, l_zoom, l_vp)) = loupe_preview
+                && l_page == i
+            {
+                crate::loupe_ui::paint_canvas_aperture(painter, &xf, l_center, l_zoom, view.zoom, l_vp);
             }
             if preparing {
                 crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
@@ -4356,6 +4369,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         } else {
             app.redact_prefs.mark(page, quads, &author)
         });
+    }
+    if let Some((page, norm_pos)) = loupe_target {
+        app.set_loupe_target(page, norm_pos);
     }
     match image_action {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),

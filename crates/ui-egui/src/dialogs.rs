@@ -10,6 +10,7 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
 
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    crate::loupe_ui::show(app, ctx);
     dialogs(app, ctx);
     // Last, so it sits above Document Properties when Security's Unlock… asked for it.
     unlock(app, ctx);

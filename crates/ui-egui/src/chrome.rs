@@ -586,6 +586,17 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if widgets::menu_item(ui, tl!("Zoom out"), &key(ZOOM_OUT)).clicked() {
                             v.zoom_step(false);
                         }
+                        if widgets::menu_item(ui, tl!("Marquee zoom"), &crate::commands::command_shortcut_label(&ctx, "view.marquee_zoom")).clicked()
+                        {
+                            ui.close();
+                            app.execute("view.marquee_zoom");
+                            return;
+                        }
+                        if widgets::menu_item(ui, tl!("Loupe tool"), &crate::commands::command_shortcut_label(&ctx, "view.loupe")).clicked() {
+                            ui.close();
+                            app.execute("view.loupe");
+                            return;
+                        }
                         if widgets::menu_item(ui, tl!("Rotate view clockwise"), &key(ROTATE_CW)).clicked() {
                             v.rotate_view(true);
                         }
