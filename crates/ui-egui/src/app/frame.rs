@@ -86,7 +86,10 @@ impl PdfCraftApp {
         self.scroll_speed.apply(ctx, raw);
         // While a comment is turned by its handle, Tab turns it a quarter further (Shift+Tab
         // back). Taken before egui sees it: egui would move the keyboard focus to a toolbar button.
-        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+        // Not while a dialog or the palette has the keyboard.
+        let overlay = self.modal_open() || self.palette_open;
+        if !overlay
+            && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && let Some(comments::Gesture::Rotate { quarter, .. }) = view.comments.gesture.as_mut()
         {
             let step = comments::take_turn_tabs(&mut raw.events);
