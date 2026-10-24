@@ -1090,9 +1090,46 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     ui.end_row();
                     if let Some(l) = d.look.as_mut() {
                         ui.label(tl!("Font:"));
-                        egui::ComboBox::from_id_salt("field-font").selected_text(l.font.label()).show_ui(ui, |ui| {
-                            for f in FieldFont::ALL {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let active_thai = pdfcraft_fonts::active_thai_font_entry();
+                        #[cfg(target_arch = "wasm32")]
+                        let active_thai: Option<pdfcraft_fonts::ThaiFontEntry> = None;
+
+                        let current_label = match l.font {
+                            FieldFont::Thai => active_thai.as_ref().map(|e| e.name.clone()).unwrap_or_else(|| "Thai".to_string()),
+                            f => f.label().to_string(),
+                        };
+                        egui::ComboBox::from_id_salt("field-font").selected_text(current_label).show_ui(ui, |ui| {
+                            ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
+                            for f in [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier] {
                                 ui.selectable_value(&mut l.font, f, f.label());
+                            }
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                let thai_fonts = pdfcraft_fonts::available_thai_fonts();
+                                if !thai_fonts.is_empty() {
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                                    for entry in &thai_fonts {
+                                        let selected = l.font == FieldFont::Thai && active_thai.as_ref().is_some_and(|e| e.name == entry.name);
+                                        if ui.selectable_label(selected, &entry.name).clicked() {
+                                            l.font = FieldFont::Thai;
+                                            if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
+                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                                            }
+                                        }
+                                    }
+                                } else if pdfcraft_fonts::document_thai_font().is_some() {
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                                    ui.selectable_value(&mut l.font, FieldFont::Thai, "Thai");
+                                }
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            if pdfcraft_fonts::document_thai_font().is_some() {
+                                ui.separator();
+                                ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                                ui.selectable_value(&mut l.font, FieldFont::Thai, "Thai");
                             }
                         });
                         ui.end_row();
@@ -1198,7 +1235,12 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                         alignment(ui, &mut d.quadding);
                         ui.end_row();
                         let l = ui.label(tl!("Default Value:"));
-                        ui.add(crate::widgets::line(&mut d.default).desired_width(260.0)).labelled_by(l.id);
+                        if ui.add(crate::widgets::line(&mut d.default).desired_width(260.0)).labelled_by(l.id).changed()
+                            && d.default.chars().any(|c| ('\u{0E01}'..='\u{0E7F}').contains(&c))
+                            && let Some(l) = d.look.as_mut()
+                        {
+                            l.font = FieldFont::Thai;
+                        }
                         ui.end_row();
                     });
                     ui.add_space(6.0);

@@ -935,6 +935,11 @@ pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, script
     if f.read_only() {
         return Err(FormError::ReadOnly(name.into()));
     }
+    if let FieldValue::Text(s) = value
+        && s.chars().any(appearance::is_thai)
+    {
+        let _ = author::ensure_thai_font(doc);
+    }
     write_value(doc, f, value, scripts)?;
     author::form_fonts_as_objects(doc, &all)?;
     // Fields with the same fully qualified name are one field (§12.7.3.1). Writers that repeat a
@@ -1249,6 +1254,33 @@ pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) ->
 
 /// Regenerate the normal appearance of every widget of a text or choice field.
 fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    let has_thai = values.iter().any(|v| v.chars().any(appearance::is_thai));
+    if has_thai {
+        let _ = author::ensure_thai_font(doc);
+        let da_str = doc
+            .get(f.obj)
+            .as_dict()
+            .and_then(|d| d.get(b"DA"))
+            .map(|o| doc.resolve(o))
+            .and_then(|o| o.as_string().map(|s| s.to_text()))
+            .unwrap_or_else(|| f.da.clone());
+        let parsed = appearance::parse_da(&da_str);
+        let has_thai_resource = acroform(doc)
+            .and_then(|af| af.get(b"DR").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+            .and_then(|dr| dr.get(b"Font").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()))
+            .is_some_and(|f| f.contains(b"Thai"));
+        if has_thai_resource && matches!(parsed.font.as_str(), "Helv" | "TiRo" | "Cour") {
+            let new_da = format!("/Thai {} Tf {}", appearance::fmt(parsed.size), parsed.color);
+            let _ = doc.update_dict(f.obj, |d| d.set(b"DA".to_vec(), PdfString::literal(new_da.as_bytes().to_vec())));
+            for w in &f.widgets {
+                let _ = doc.update_dict(w.obj, |d| {
+                    if d.contains(b"DA") {
+                        d.set(b"DA".to_vec(), PdfString::literal(new_da.as_bytes().to_vec()));
+                    }
+                });
+            }
+        }
+    }
     let shown = match values {
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
@@ -1493,12 +1525,22 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
             let stream = match cache.get(w.obj, &inputs) {
                 Some(stream) => stream,
                 None => {
+                    let target = copy.get_or_insert_with(|| doc.clone());
                     let stream = match f.kind {
                         FieldKind::CheckBox | FieldKind::Radio => appearance::button_state_shown(doc, &f, w, state.as_deref() != Some("Off")),
                         FieldKind::PushButton => appearance::push_button_shown(doc, &f, w),
-                        _ => appearance::field_appearance_drawn(doc, &f, w, &f.value, true).0,
+                        _ => appearance::field_appearance_drawn(target, &f, w, &f.value, true).0,
                     };
-                    cache.insert(w.obj, inputs, &stream);
+                    let has_t3 = stream
+                        .dict
+                        .get(b"Resources")
+                        .and_then(Object::as_dict)
+                        .and_then(|r| r.get(b"Font"))
+                        .and_then(Object::as_dict)
+                        .is_some_and(|fonts| fonts.contains(b"T3Thai"));
+                    if !has_t3 {
+                        cache.insert(w.obj, inputs, &stream);
+                    }
                     stream
                 }
             };

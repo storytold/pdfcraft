@@ -1389,17 +1389,44 @@ impl Automation {
                 for (k, key) in ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"].iter().enumerate() {
                     hf.text[k] = a.opt_str(key)?.unwrap_or_default().to_string();
                 }
+                if let Some(font) = a.opt_str("font")? {
+                    if font.eq_ignore_ascii_case("times") || font.eq_ignore_ascii_case("times-roman") || font.eq_ignore_ascii_case("times roman") {
+                        hf.font = pdfcraft_engine::FontFamily::Times;
+                    } else if font.eq_ignore_ascii_case("courier") {
+                        hf.font = pdfcraft_engine::FontFamily::Courier;
+                    } else if font.eq_ignore_ascii_case("helvetica") {
+                        hf.font = pdfcraft_engine::FontFamily::Helvetica;
+                    } else {
+                        let lower = font.to_lowercase();
+                        let thai_fonts = pdfcraft_fonts::available_thai_fonts();
+                        let found = thai_fonts.iter().find(|e| {
+                            let matches_name = e.file_name.to_lowercase() == lower
+                                || e.name.to_lowercase() == lower
+                                || e.family.to_lowercase() == lower
+                                || e.file_name.to_lowercase().contains(&lower)
+                                || e.name.to_lowercase().contains(&lower)
+                                || e.family.to_lowercase().contains(&lower);
+                            if !matches_name {
+                                return false;
+                            }
+                            if e.path.as_os_str().is_empty() {
+                                return true;
+                            }
+                            self.check_roots(&e.file_name, &e.path, file_access::Access::Read).is_ok()
+                                && self.root.as_ref().is_none_or(|r| e.path.starts_with(r))
+                        });
+                        if let Some(entry) = found {
+                            let _ = pdfcraft_fonts::set_active_thai_font_entry(entry);
+                            hf.font_name = Some(entry.file_name.clone());
+                        } else {
+                            return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\", \"Courier\", or an installed Thai font, not {font:?}")));
+                        }
+                    }
+                }
                 if let Some(s) = a.opt_num("font_size")? {
                     hf.font_size = s;
                 }
-                hf.font = match a.opt_str("font")? {
-                    None | Some("Helvetica") => pdfcraft_engine::FontFamily::Helvetica,
-                    Some("Times") => pdfcraft_engine::FontFamily::Times,
-                    Some("Courier") => pdfcraft_engine::FontFamily::Courier,
-                    Some(other) => {
-                        return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\" or \"Courier\", not {other:?}")));
-                    }
-                };
+
                 hf.color = color("color", hf.color)?;
                 if let Some(m) = a.get("margins").and_then(Value::as_array) {
                     let m: Vec<f64> = m.iter().filter_map(Value::as_f64).collect();
@@ -1955,7 +1982,11 @@ impl Automation {
         let mut files = Vec::new();
         let mut used = std::collections::HashSet::new();
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
-            let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
+            let safe = |t: &str| {
+                t.chars()
+                    .map(|c| if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') { c } else { '_' })
+                    .collect::<String>()
+            };
             let mut base = match titles.iter().find(|t| t.0 + 1 == *first) {
                 Some((_, t)) => format!("{stem}-{}", safe(t)),
                 None => format!("{stem}-part{}", i + 1),

@@ -32,6 +32,8 @@ const TELUGU_PROBE: char = '\u{0C15}';
 const SINHALA_PROBE: char = '\u{0D9A}';
 /// Tamil letter ka (க): the face must have it to cover Tamil.
 const TAMIL_PROBE: char = '\u{0B95}';
+/// Thai letter ko kai (ก): the face must have it to cover Thai.
+const THAI_PROBE: char = '\u{0E01}';
 /// Hebrew letter alef: the face must have it to cover Hebrew.
 const HEBREW_PROBE: char = '\u{05D0}';
 /// Hangul syllable hih (힣, U+D7A3), the last of the 11,172 modern syllables: a face with it has
@@ -106,6 +108,13 @@ pub fn sinhala_fallback() -> Option<Arc<FontData>> {
 pub fn tamil_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&tamil_candidates(), TAMIL_PROBE)).clone()
+}
+
+/// The installed fallback face for Thai, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn thai_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&thai_candidates(), THAI_PROBE)).clone()
 }
 
 /// The installed fallback face for Hebrew, read once. `None` when it is turned off or no
@@ -275,6 +284,84 @@ fn tamil_candidates() -> Vec<PathBuf> {
             "lohit-tamil-fonts/Lohit-Tamil.ttf",
             "truetype/lohit-tamil/Lohit-Tamil.ttf",
         ])
+    }
+}
+
+/// Well-known locations of Thai faces, best first.
+fn thai_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(font_path) = std::env::var_os("PDFCRAFT_THAI_FONT").or_else(|| std::env::var_os("PDFCRAFT_CUSTOM_FONT")).map(PathBuf::from) {
+        paths.push(font_path);
+    }
+    // Discovered Thai fonts from project's fonts directory:
+    for entry in pdfcraft_fonts::available_thai_fonts() {
+        if !paths.contains(&entry.path) {
+            paths.push(entry.path);
+        }
+    }
+    for dir in pdfcraft_fonts::font_directories() {
+        paths.push(dir.join("Sarabun-Regular.ttf"));
+        paths.push(dir.join("TlwgTypewriter.ttf"));
+        paths.push(dir.join("THSarabunNew.ttf"));
+        paths.push(dir.join("THSarabun.ttf"));
+    }
+    for base in [PathBuf::from("assets/fonts"), PathBuf::from("../assets/fonts")] {
+        paths.push(base.join("Sarabun-Regular.ttf"));
+        paths.push(base.join("TlwgTypewriter.ttf"));
+        paths.push(base.join("THSarabunNew.ttf"));
+        paths.push(base.join("THSarabun.ttf"));
+    }
+    if cfg!(windows) {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            paths.push(local.join(r"Microsoft\Windows\Fonts\THSarabunNew.ttf"));
+            paths.push(local.join(r"Microsoft\Windows\Fonts\Sarabun-Regular.ttf"));
+            paths.push(local.join(r"Microsoft\Windows\Fonts\TlwgTypewriter.ttf"));
+        }
+        let win = windows_fonts();
+        for file in [
+            "THSarabunNew.ttf",
+            "THSarabun.ttf",
+            "Sarabun-Regular.ttf",
+            "TlwgTypewriter.ttf",
+            "LeelawUI.ttf",
+            "LeelaUIb.ttf",
+            "leelawad.ttf",
+            "leelawdb.ttf",
+            "tahoma.ttf",
+            "angsana.ttc",
+            "cordia.ttc",
+        ] {
+            paths.push(win.join(file));
+        }
+        paths
+    } else if cfg!(target_os = "macos") {
+        if let Some(font_path) = std::env::var_os("PDFCRAFT_THAI_FONT").map(PathBuf::from) {
+            paths.push(font_path);
+        }
+        for file in [
+            "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+            "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
+            "/System/Library/Fonts/Thonburi.ttc",
+            "/System/Library/Fonts/Supplemental/Sathu.ttf",
+            "/System/Library/Fonts/Supplemental/Silom.ttf",
+            "/System/Library/Fonts/Supplemental/Krungthep.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ] {
+            paths.push(PathBuf::from(file));
+        }
+        paths
+    } else {
+        paths.extend(unix_fonts(&[
+            "truetype/noto/NotoSansThai-Regular.ttf",
+            "noto/NotoSansThai-Regular.ttf",
+            "google-noto/NotoSansThai-Regular.ttf",
+            "google-noto-vf/NotoSansThai[wght].ttf",
+            "truetype/tlwg/Loma.ttf",
+            "truetype/tlwg/Waree.ttf",
+            "truetype/tlwg/Garuda.ttf",
+            "truetype/thai/Sarabun-Regular.ttf",
+        ]));
+        paths
     }
 }
 
@@ -538,16 +625,17 @@ mod tests {
         assert!(script_fallback(&candidates, HANGUL_PROBE).is_none());
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
+        assert!(script_fallback(&candidates, THAI_PROBE).is_none());
         assert!(script_fallback(&candidates, HEBREW_PROBE).is_none());
     }
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
+        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), thai_candidates(), hebrew_candidates(), hangul_candidates()]
         {
             assert!(!list.is_empty());
-            assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
-            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
+            assert!(list.iter().all(|p| p.is_absolute() || p.starts_with("assets") || p.starts_with("../assets") || cfg!(windows)), "{list:?}");
+            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc") || e.eq_ignore_ascii_case("otf"))), "{list:?}");
         }
     }
 

@@ -389,8 +389,20 @@ impl PdfCraftApp {
             None => id_dir(),
         }
         .ok_or("There is no folder to save the digital ID in.")?;
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+        let mut stem: String = d
+            .name
+            .trim()
+            .chars()
+            .map(|c| if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') { c } else { '_' })
+            .collect();
+        let device = stem.split('.').next().unwrap_or_default().to_ascii_uppercase();
+        let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (device.len() == 4
+                && (device.starts_with("COM") || device.starts_with("LPT"))
+                && device.as_bytes().get(3).is_some_and(|d| (b'1'..=b'9').contains(d)));
+        if reserved {
+            stem.insert(0, '_');
+        }
         let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }

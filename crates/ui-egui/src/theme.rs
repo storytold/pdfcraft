@@ -225,6 +225,8 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
 /// The name of the installed Tamil face [`installed_font_definitions`] may add.
 pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
+/// The name of the installed Thai face [`installed_font_definitions`] may add.
+pub const SYSTEM_THAI_FALLBACK: &str = "system-thai-fallback";
 /// The name of the installed Hebrew face [`installed_font_definitions`] may add.
 pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
@@ -241,8 +243,8 @@ pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
-/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Thai, Hebrew and Hangul faces, when there are, end
+/// every family just before that one, so Hindi, Telugu (#1531), Sinhala, Tamil (#1688), Thai,
 /// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
 /// without such faces.
 ///
@@ -259,6 +261,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
+            (SYSTEM_THAI_FALLBACK, crate::system_fonts::thai_fallback()),
             (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
             (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
         ] {

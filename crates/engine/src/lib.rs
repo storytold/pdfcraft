@@ -301,6 +301,7 @@ fn scope_of(edit: &Edit) -> Scope {
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
         | Edit::FontSizeAnnotation { .. }
+        | Edit::FontAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
@@ -1610,6 +1611,12 @@ pub enum Edit {
         index: usize,
         size: f64,
     },
+    /// Change the font of a text box, typewriter text or callout.
+    FontAnnotation {
+        page: usize,
+        index: usize,
+        font: String,
+    },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
         page: usize,
@@ -2192,7 +2199,11 @@ impl Edit {
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
-            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
+            Edit::StyleAnnotation { .. }
+            | Edit::FillAnnotation { .. }
+            | Edit::FontSizeAnnotation { .. }
+            | Edit::FontAnnotation { .. }
+            | Edit::SetAnnotationInfo { .. } => {
                 Label::of("Change comment properties")
             }
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
@@ -2358,6 +2369,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
         | Edit::FontSizeAnnotation { .. }
+        | Edit::FontAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -2651,6 +2663,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
+        Edit::FontAnnotation { page, index, font } => pdfcraft_annot::set_font(doc, *page, *index, font, &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }

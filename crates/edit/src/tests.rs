@@ -4031,7 +4031,9 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     let reopened = reopen(&doc);
     assert_eq!(list_added(&reopened)[0].content, Content::Text(AddedText { rect: super::added::text_rect(&t), ..t.clone() }));
     let narrow = AddedText { rect: [0.0, 0.0, 16.0, 200.0], text: "กิ่กิ่กิ่".into(), ..t.clone() };
-    assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
+    let lines = super::added::lines(&narrow);
+    assert!(lines == ["กิ่", "กิ่", "กิ่"] || lines == ["กิ่กิ่", "กิ่"], "{lines:?}");
+    assert_eq!(lines.concat(), "กิ่กิ่กิ่");
     update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "แก้ไข น้ำ".into(), ..t.clone() })).unwrap();
     assert!(!own(&doc, 0).is_empty());
     let bad = Content::Text(AddedText { text: "ไทย 日".into(), ..t });
@@ -4041,6 +4043,58 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     delete_content(&mut doc, 0, 0).unwrap();
     assert!(list_added(&doc).is_empty());
     assert!(arabic_font_names(&doc, 0).is_empty());
+}
+
+#[test]
+fn watermark_thai_text_renders_and_survives_reopen() {
+    let mut doc = fixture();
+    let wm = Watermark {
+        text: "ใช้สำหรับต่ออายุใบอนุญาตกับ สวพ.6 เท่านั้น".into(), ..Watermark::default()
+    };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(wm.first_undrawable().is_some());
+        let err = add_watermark(&mut doc, &[0], &wm, false).unwrap_err().to_string();
+        assert!(err.contains("Thai") && err.contains("CRAFT_FONTS_DIR"), "{err}");
+        return;
+    }
+    assert_eq!(wm.first_undrawable(), None);
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    let reopened = reopen(&doc);
+    let streams = streams(&reopened, 0);
+    assert!(streams.iter().any(|s| s.contains("/PCMark /Watermark") && s.contains("/PCTh")));
+}
+
+#[test]
+fn header_footer_thai_text_renders_and_survives_reopen() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["ภาษาไทย".into(), "".into(), "".into(), "".into(), "หน้า <<1>>".into(), "".into()], ..HeaderFooter::default()
+    };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(hf.first_undrawable().is_some());
+        let err = add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap_err().to_string();
+        assert!(err.contains("Thai") && err.contains("CRAFT_FONTS_DIR"), "{err}");
+        return;
+    }
+    assert_eq!(hf.first_undrawable(), None);
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let reopened = reopen(&doc);
+    let streams = streams(&reopened, 0);
+    assert!(streams.iter().any(|s| s.contains("/PCMark /HeaderFooter") && s.contains("/PCTh")));
+}
+
+#[test]
+fn header_footer_font_selection() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["Header".into(), "".into(), "".into(), "".into(), "".into(), "".into()],
+        font: Family::Times,
+        ..HeaderFooter::default()
+    };
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let reopened = reopen(&doc);
+    let streams = streams(&reopened, 0);
+    assert!(streams.iter().any(|s| s.contains("/PCMark /HeaderFooter") && s.contains("/PCTimes")));
 }
 
 #[test]

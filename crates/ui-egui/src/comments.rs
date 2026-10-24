@@ -1797,7 +1797,12 @@ pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64
     let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
     let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
     let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
-    let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
+    let has_thai = text.chars().any(pdfcraft_fonts::is_thai);
+    let h = if has_thai {
+        (lines as f64 - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0
+    } else {
+        lines as f64 * size * 1.2 + 2.0 * pad + 2.0
+    };
     pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
 }
 
@@ -2653,5 +2658,7 @@ mod tests {
         let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
         assert_eq!(long[2], 300.0);
         assert!(long[3] - long[1] > 50.0);
+        let thai = text_box_rect([100.0, 500.0], "กั้นน้ำ", 12.0, 0);
+        assert!(thai[3] - thai[1] > r[3] - r[1], "Thai text box height must exceed Latin for stacked marks");
     }
 }

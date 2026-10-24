@@ -808,24 +808,41 @@ impl PdfCraftApp {
                 return;
             }
         };
-        let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
+        let safe = |t: &str| {
+            t.chars()
+                .map(|c| if !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'..='\x1f') { c } else { '_' })
+                .collect::<String>()
+        };
+        fn truncate_base(s: &str) -> &str {
+            const MAX_BASE_BYTES: usize = 255 - 16;
+            if s.len() <= MAX_BASE_BYTES {
+                return s;
+            }
+            let mut end = MAX_BASE_BYTES;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            &s[..end]
+        }
         let mut used = std::collections::HashSet::new();
         let named: Vec<(String, Arc<Vec<u8>>)> = parts
             .into_iter()
             .map(|(a, b, bytes)| {
                 // Bookmark splits are named after the bookmark that starts the part.
                 let title = titles.iter().find(|(p, _)| *p + 1 == a).map(|(_, t)| safe(t));
-                let name = match title {
-                    Some(t) => format!("{stem} - {t}.pdf"),
-                    None if a == b => format!("{stem} (page {a}).pdf"),
-                    None => format!("{stem} (pages {a}-{b}).pdf"),
+                let raw_base = match title {
+                    Some(t) => format!("{stem} - {t}"),
+                    None if a == b => format!("{stem} (page {a})"),
+                    None => format!("{stem} (pages {a}-{b})"),
                 };
+                let base = truncate_base(&raw_base);
+                let name = format!("{base}.pdf");
                 // Equal titles (or titles that sanitize alike) get (2), (3), ... so no part overwrites another; compared case-insensitively.
-                let mut unique = name.clone();
+                let mut unique = name;
                 let mut n = 1;
                 while !used.insert(unique.to_lowercase()) {
                     n += 1;
-                    unique = format!("{} ({n}).pdf", name.trim_end_matches(".pdf"));
+                    unique = format!("{base} ({n}).pdf");
                 }
                 (unique, bytes)
             })

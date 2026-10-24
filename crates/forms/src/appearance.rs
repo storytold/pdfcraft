@@ -319,6 +319,11 @@ impl FontText {
     }
 
     fn width(&self, s: &str, size: f64) -> f64 {
+        if s.chars().any(is_thai)
+            && let Ok(clusters) = pdfcraft_fonts::shape_thai(s)
+        {
+            return clusters.iter().map(|c| c.advance * size).sum();
+        }
         match self {
             Self::WinAnsi => helvetica_width(s, size),
             // The font's `/Widths`, or its standard-14 metrics (Courier, Times) when it has none.
@@ -329,6 +334,36 @@ impl FontText {
             Self::Unicode(_) => cjk_width(s, size),
         }
     }
+}
+
+/// Whether a character is in the Thai Unicode block.
+pub fn is_thai(c: char) -> bool {
+    ('\u{0E01}'..='\u{0E7F}').contains(&c)
+}
+
+/// Whether a Thai character is a combining mark (vowel sign, tone mark, or diacritic).
+pub fn is_thai_combining(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0E31}' | '\u{0E33}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4E}'
+    )
+}
+
+/// Group a string into visual comb units (grapheme-like units), keeping Thai combining marks
+/// attached to their preceding base letter.
+pub fn comb_units(text: &str, limit: usize) -> Vec<String> {
+    let mut units: Vec<String> = Vec::new();
+    for ch in text.chars() {
+        if is_thai_combining(ch) && let Some(last) = units.last_mut() {
+            last.push(ch);
+        } else {
+            if units.len() >= limit {
+                break;
+            }
+            units.push(ch.to_string());
+        }
+    }
+    units
 }
 
 /// The font resource for `name` from the form's `/DR`, if it is a font we can encode for.
@@ -343,8 +378,15 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
         // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
         // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
-        // the font's own mapping, so those still fall back to Helvetica.
-        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
+        // the font's own mapping, so those fall back to metrics with ToUnicode.
+        Some(b"Type0") => {
+            if let Some(enc_name) = fd.name(b"Encoding")
+                && let Some(cmap) = UnicodeCMap::from_name(enc_name)
+            {
+                return Some((entry, FontText::Unicode(cmap)));
+            }
+            return Some((entry, FontText::Simple(Box::new(Metrics::from_dict(doc, fd)))));
+        }
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
@@ -675,21 +717,35 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
 
 /// The appearance of a text or choice field's widget showing `values`. Characters its font can't
 /// hold come out as `?`; [`field_appearance_drawn`] says which.
-pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
+pub fn field_appearance(doc: &mut Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
     field_appearance_as(doc, f, w, values, true)
 }
 
 /// [`field_appearance`], where `format` false means `values` are already what to show (a
 /// custom Format script ran).
-pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
+pub fn field_appearance_as(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
     field_appearance_drawn(doc, f, w, values, format).0
+}
+
+enum DocArg<'a> {
+    Ro(&'a Document),
+    Rw(&'a mut Document),
+}
+
+impl<'a> DocArg<'a> {
+    fn doc(&self) -> &Document {
+        match self {
+            DocArg::Ro(d) => d,
+            DocArg::Rw(d) => d,
+        }
+    }
 }
 
 /// [`field_appearance_as`] with the first character it drew as `?` because the field's font can't
 /// hold it: the form's font is a simple (WinAnsi) font, Helvetica stands in for one PdfCraft can't
 /// write with (an embedded subset, `Identity-H`), or a UCS-2 CMap meets a character beyond U+FFFF.
-pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
-    let (stream, unencodable, _) = field_appearance_fit(doc, f, w, values, format);
+pub fn field_appearance_drawn(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
+    let (stream, unencodable, _) = field_appearance_fit(DocArg::Rw(doc), f, w, values, format);
     (stream, unencodable)
 }
 
@@ -723,11 +779,11 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     if f.kind != FieldKind::Text {
         return None;
     }
-    field_appearance_fit(doc, f, w, &f.value, true).2
+    field_appearance_fit(DocArg::Ro(doc), f, w, &f.value, true).2
 }
 
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
-fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
+fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -740,12 +796,11 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     } else {
         values
     };
-    let wobj = doc.get(w.obj);
-    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let wd = doc.doc().get(w.obj).as_dict().cloned().unwrap_or_default();
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
-    let place = placement(mk_rotation(doc, &wd), page_w, page_h);
+    let place = placement(mk_rotation(doc.doc(), &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
-    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.doc().resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
     let text: String = if f.kind == FieldKind::Combo {
         values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
     } else {
@@ -761,27 +816,109 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             enc.can_encode(&text)
         }
     };
-    let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
+    let has_thai = text.chars().any(is_thai) || f.options.iter().any(|(_, d)| d.chars().any(is_thai));
+    let mut keys: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
+    type ClusterKey = (pdfcraft_fonts::ShapedScript, String, Vec<(u32, u64, u64)>, u64);
+    let mut cluster_map: std::collections::HashMap<ClusterKey, usize> = std::collections::HashMap::new();
+    if has_thai {
+        let mut sample_strings: Vec<&str> = Vec::new();
+        let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
+        let comb_cells: Vec<String>;
+        if f.kind == FieldKind::List {
+            sample_strings.extend(f.options.iter().map(|(_, d)| d.as_str()));
+        } else if comb {
+            let cells = f.max_len.unwrap_or(1).max(1);
+            comb_cells = comb_units(&text, cells);
+            sample_strings.extend(comb_cells.iter().map(|s| s.as_str()));
+            sample_strings.push(&text);
+        } else {
+            sample_strings.push(&text);
+        }
+        for s in sample_strings {
+            for line in s.split(['\n', '\r']) {
+                if line.chars().any(is_thai)
+                    && let Ok(clusters) = pdfcraft_fonts::shape_thai(line)
+                {
+                    for c in clusters {
+                        let key = (
+                            c.script,
+                            c.text.clone(),
+                            c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(),
+                            c.advance.to_bits(),
+                        );
+                        if let std::collections::hash_map::Entry::Vacant(e) = cluster_map.entry(key) {
+                            e.insert(keys.len());
+                            keys.push(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let t3_font = if !keys.is_empty() {
+        if let DocArg::Rw(doc_mut) = &mut doc {
+            let key_refs: Vec<&pdfcraft_fonts::ShapedCluster> = keys.iter().collect();
+            pdfcraft_fonts::type3_for_clusters(doc_mut, &key_refs).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let doc_ref = doc.doc();
+    let (font_name, font_obj, enc) = match dr_font(doc_ref, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
-        None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
+        None => {
+            if text.chars().any(is_thai) {
+                if let Some((o, enc)) = dr_font(doc_ref, "Thai").filter(|(_, enc)| can_show(enc)) {
+                    ("Thai".to_string(), o, enc)
+                } else {
+                    ("Helv".to_string(), helvetica(), FontText::WinAnsi)
+                }
+            } else {
+                ("Helv".to_string(), helvetica(), FontText::WinAnsi)
+            }
+        }
     };
     let width_of = |text: &str, size: f64| enc.width(text, size);
-    let (mut c, bw) = frame(doc, &wd, width, height);
+    let (mut c, bw) = frame(doc_ref, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
-    let q = wd.get(b"Q").and_then(|o| doc.resolve(o).as_int()).unwrap_or(f.quadding);
+    let q = wd.get(b"Q").and_then(|o| doc_ref.resolve(o).as_int()).unwrap_or(f.quadding);
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
-    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
+    let thai_font_res_name = if font_name == "Thai" { "T3Thai" } else { "Thai" };
+    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str, size: f64| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
-        if unencodable.is_none() {
-            unencodable = enc.first_unencodable(&text);
+        if t3_font.is_some() && text.chars().any(is_thai) && let Ok(clusters) = pdfcraft_fonts::shape_thai(&text) {
+            let mut pen = x;
+            body.extend(format!("/{} {} Tf ", thai_font_res_name, n(size)).bytes());
+            for c in clusters {
+                let key = (
+                    c.script,
+                    c.text.clone(),
+                    c.glyphs.iter().map(|(id, [gx, gy])| (*id, gx.to_bits(), gy.to_bits())).collect(),
+                    c.advance.to_bits(),
+                );
+                if let Some(&k) = cluster_map.get(&key) {
+                    let code = (k % 240 + 1) as u8;
+                    body.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
+                    body.extend(literal(&[code]));
+                    body.extend_from_slice(b" Tj\n");
+                }
+                pen += c.advance * size;
+            }
+            body.extend(format!("/{} {} Tf ", font_name, n(size)).bytes());
+        } else {
+            if unencodable.is_none() {
+                unencodable = enc.first_unencodable(&text);
+            }
+            body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
+            body.extend(literal(&enc.encode(&text)));
+            body.extend_from_slice(b" Tj\n");
         }
-        body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&enc.encode(&text)));
-        body.extend_from_slice(b" Tj\n");
     };
     let x_for = |text: &str, size: f64| -> f64 {
         let tw = width_of(text, size);
@@ -796,8 +933,8 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     match f.kind {
         FieldKind::List => {
             // Every option, one per line from the top (from `/TI`); selected ones highlighted.
-            let fobj = doc.get(f.obj);
-            let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
+            let fobj = doc_ref.get(f.obj);
+            let rows = list_rows_of(doc_ref, &f.da, fobj.as_dict(), &wd);
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
@@ -808,7 +945,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 if values.contains(export) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
-                show(&mut body, pad, y - line + size * 0.25, display);
+                show(&mut body, pad, y - line + size * 0.25, display, size);
                 y -= line;
             }
         }
@@ -829,7 +966,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     if y - 0.207 * size >= bw - 0.01 {
                         room += 1;
                     }
-                    show(&mut body, x_for(line, size), y, line);
+                    show(&mut body, x_for(line, size), y, line, size);
                     y -= size * 1.15;
                 }
                 if room < lines.len() {
@@ -857,17 +994,16 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 if comb {
                     let cells = f.max_len.unwrap_or(1).max(1);
                     let cell = width / cells as f64;
-                    c.push_str(&comb_dividers(doc, &wd, width, height, cells));
-                    for (i, ch) in text.chars().take(cells).enumerate() {
-                        let s = ch.to_string();
-                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
+                    c.push_str(&comb_dividers(doc_ref, &wd, width, height, cells));
+                    for (i, s) in comb_units(&text, cells).into_iter().enumerate() {
+                        show(&mut body, cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s, size);
                     }
                 } else {
                     let tw = width_of(&text.replace(['\n', '\r'], " "), size);
                     if overflow.is_none() && tw > inner_w + 0.01 {
                         overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                     }
-                    show(&mut body, x_for(&text, size), y, &text);
+                    show(&mut body, x_for(&text, size), y, &text, size);
                 }
             }
         }
@@ -890,6 +1026,9 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     content.extend_from_slice(b"ET\nQ\nEMC\n");
     let mut fonts = Dict::new();
     fonts.set(font_name.into_bytes(), font_obj);
+    if let Some(t3) = t3_font {
+        fonts.set(thai_font_res_name.as_bytes().to_vec(), Object::Ref(t3));
+    }
     let mut res = Dict::new();
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     let mut d = Dict::new();

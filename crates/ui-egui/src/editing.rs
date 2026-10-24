@@ -1056,6 +1056,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
         | Edit::FontSizeAnnotation { page, .. }
+        | Edit::FontAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }

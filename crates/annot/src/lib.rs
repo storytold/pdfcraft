@@ -1455,8 +1455,8 @@ fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+fn build_appearance(doc: &mut Document, d: &Dict) -> Option<Stream> {
+    let mut stream = appearance::build_with_doc(Some(doc), d)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -1604,10 +1604,23 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let Some(stream) = build_appearance(doc, &d).or_else(other_stamp) else { continue };
-            cache.insert(r, &stream);
+            if appearance::build_with_doc(None, &d).is_none() && other_stamp().is_none() {
+                continue;
+            }
+            let doc_copy = copy.get_or_insert_with(|| doc.clone());
+            let Some(stream) = build_appearance(doc_copy, &d).or_else(other_stamp) else { continue };
+            let has_t3 = stream
+                .dict
+                .get(b"Resources")
+                .and_then(Object::as_dict)
+                .and_then(|r| r.get(b"Font"))
+                .and_then(Object::as_dict)
+                .is_some_and(|fonts| fonts.contains(b"T3Thai"));
+            if !has_t3 {
+                cache.insert(r, &stream);
+            }
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
-            apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
+            apply_appearance(doc_copy, r, &d, stream).ok();
         }
     }
     copy
@@ -1640,14 +1653,37 @@ fn rich_text(d: &mut Dict) {
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let font_name = d
+        .get(b"PCFont")
+        .and_then(Object::as_string)
+        .map(PdfString::to_text)
+        .or_else(|| {
+            let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned())?;
+            let toks: Vec<&str> = da.split_whitespace().collect();
+            for (i, t) in toks.iter().enumerate() {
+                if *t == "Tf" && i >= 2 {
+                    let font_tok = toks[i - 2].trim_start_matches('/');
+                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                        return Some("Times".to_string());
+                    } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
+                        return Some("Courier".to_string());
+                    } else if font_tok.eq_ignore_ascii_case("helv") || font_tok.eq_ignore_ascii_case("helvetica") {
+                        return Some("Helvetica".to_string());
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| "Helvetica".to_string());
+    let font_family = esc(&font_name);
     let style = format!(
-        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
+        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:{font_family};font-stretch:normal",
         n(size)
     );
     let rc = format!(
         "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xfa:spec=\"2.0.2\" style=\"{style}\">{body}</body>"
     );
-    d.set(b"DS".to_vec(), PdfString::text(&format!("font: Helvetica {}pt; text-align:{align}; color:{hex}", n(size))));
+    d.set(b"DS".to_vec(), PdfString::text(&format!("font: {font_name} {}pt; text-align:{align}; color:{hex}", n(size))));
     d.set(b"RC".to_vec(), PdfString::text(&rc));
 }
 
@@ -1752,7 +1788,13 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
     let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let has_thai = text.chars().any(pdfcraft_fonts::is_thai);
+    let h = if has_thai {
+        (lines - 1.0) * size * 1.25 + size * 1.8 + 2.0 * pad + 2.0
+    } else {
+        lines * size * 1.2 + 2.0 * pad + 2.0
+    };
+    Some([x0, top - h, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -2161,7 +2203,34 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     let before = d;
     doc.update_dict(r, |d| {
         let (col, _) = appearance::parse_da(d);
-        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(col[0]), n(col[1]), n(col[2]), n(size)).into_bytes()));
+        let da_font = d
+            .get(b"PCFont")
+            .and_then(Object::as_string)
+            .map(PdfString::to_text)
+            .map(|f| match f.as_str() {
+                "Times" => "/Times",
+                "Courier" => "/Cour",
+                _ => "/Helv",
+            })
+            .or_else(|| {
+                let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned())?;
+                let toks: Vec<&str> = da.split_whitespace().collect();
+                for (i, t) in toks.iter().enumerate() {
+                    if *t == "Tf" && i >= 2 {
+                        let font_tok = toks[i - 2].trim_start_matches('/');
+                        if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                            return Some("/Times");
+                        } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
+                            return Some("/Cour");
+                        } else if font_tok.eq_ignore_ascii_case("helv") || font_tok.eq_ignore_ascii_case("helvetica") {
+                            return Some("/Helv");
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap_or("/Helv");
+        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg {} {} Tf", n(col[0]), n(col[1]), n(col[2]), da_font, n(size)).into_bytes()));
         rich_text(d);
         touch(d, meta);
     })?;
@@ -2172,6 +2241,46 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
             let nums: Vec<f64> =
                 cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
             // Keep the top and sides; only the bottom edge moves, and only downwards.
+            match four(&nums).map(normalize) {
+                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
+                _ => apply_text_box(doc, r, fit, meta, false),
+            }
+        }
+        None => redraw_or_restore(doc, r, before.clone()),
+    };
+    if result.is_err() {
+        doc.set(r, Object::Dict(before));
+    }
+    result
+}
+
+/// Change the font of a text box, typewriter text or callout and redraw it.
+pub fn set_font(doc: &mut Document, page: usize, index: usize, font: &str, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font".into()));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        let (col, size) = appearance::parse_da(d);
+        let da_font = match font {
+            "Times" => "/Times",
+            "Courier" => "/Cour",
+            _ => "/Helv",
+        };
+        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg {} {} Tf", n(col[0]), n(col[1]), n(col[2]), da_font, n(size)).into_bytes()));
+        d.set(b"PCFont".to_vec(), PdfString::text(font));
+        rich_text(d);
+        touch(d, meta);
+    })?;
+    let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
+    let result = match fitted_box(doc, r, &text) {
+        Some(fit) => {
+            let cur = annot_dict(doc, r);
+            let nums: Vec<f64> = cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
             match four(&nums).map(normalize) {
                 Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
                 _ => apply_text_box(doc, r, fit, meta, false),
@@ -2434,6 +2543,8 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Text boxes, typewriter text and callouts: the font name.
+    pub font: Option<String>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -2465,6 +2576,30 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        font: (subtype == "FreeText").then(|| {
+            if let Some(f) = d.get(b"PCFont").and_then(Object::as_string).map(PdfString::to_text) {
+                return f;
+            }
+            let text = text_value(doc, d, b"Contents").unwrap_or_default();
+            if text.chars().any(pdfcraft_fonts::is_thai) {
+                return pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "Sarabun".to_string());
+            }
+            let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
+            let toks: Vec<&str> = da.split_whitespace().collect();
+            for (i, t) in toks.iter().enumerate() {
+                if *t == "Tf" && i >= 2 {
+                    let font_tok = toks[i - 2].trim_start_matches('/');
+                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                        return "Times".to_string();
+                    } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
+                        return "Courier".to_string();
+                    } else if font_tok.eq_ignore_ascii_case("helv") || font_tok.eq_ignore_ascii_case("helvetica") {
+                        return "Helvetica".to_string();
+                    }
+                }
+            }
+            "Helvetica".to_string()
+        }),
         subtype,
         endings: line_endings_of(d),
     })

@@ -3188,6 +3188,91 @@ fn document_scripts_read_each_name_tree_node_once() {
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }
 
+#[test]
+fn thai_text_field_appearance_and_auto_fallback() {
+    let Some(thai) = pdfcraft_fonts::document_thai_font() else { return };
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".into(),
+    ]);
+    let name = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 530.0], &NewField::Text { multiline: false }, Some("thai_field")).unwrap();
+    assert_eq!(name, "thai_field");
+
+    let thai_text = "ทดสอบภาษาไทย";
+    set_value(&mut doc, "thai_field", &FieldValue::Text(thai_text.into())).unwrap();
+
+    let f = fields(&doc).into_iter().find(|f| f.name == "thai_field").unwrap();
+    assert_eq!(f.value, vec![thai_text.to_string()]);
+
+    let af = acroform(&doc).unwrap();
+    let dr = doc.resolve(af.get(b"DR").unwrap());
+    let fonts = doc.resolve(dr.as_dict().unwrap().get(b"Font").unwrap());
+    assert!(fonts.as_dict().unwrap().contains(b"Helv"));
+
+    assert!(fonts.as_dict().unwrap().contains(b"Thai"));
+    assert!(f.da.contains("/Thai"));
+
+    let thai_obj = doc.resolve(fonts.as_dict().unwrap().get(b"Thai").unwrap());
+    let thai_dict = thai_obj.as_dict().unwrap();
+    assert_eq!(thai_dict.get(b"Subtype").and_then(|o| o.as_name()), Some(b"Type0".as_slice()));
+    let base_font = thai_dict.get(b"BaseFont").and_then(|o| o.as_name()).unwrap();
+    assert!(String::from_utf8_lossy(base_font).contains(&thai.family.replace(' ', "")));
+}
+
+#[test]
+fn thai_text_field_stacked_floating_marks_render_without_collision() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".into(),
+    ]);
+    let name = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 530.0], &NewField::Text { multiline: false }, Some("thai_field")).unwrap();
+    let text = "ตั้งแต่นี้เป็นต้นไป";
+    set_value(&mut doc, &name, &FieldValue::Text(text.into())).unwrap();
+    let f = fields(&doc).into_iter().find(|f| f.name == "thai_field").unwrap();
+    assert_eq!(f.value, vec![text.to_string()]);
+    let w = &f.widgets[0];
+    let w_obj = doc.get(w.obj);
+    let ap = w_obj.as_dict().unwrap().get(b"AP").unwrap();
+    let ap_obj = doc.resolve(ap);
+    let ap_dict = ap_obj.as_dict().unwrap();
+    let n_obj = ap_dict.get(b"N").unwrap();
+    let n_resolved = doc.resolve(n_obj);
+    let Object::Stream(n_stream) = &*n_resolved else { panic!("appearance stream") };
+    let res = n_stream.dict.get(b"Resources").unwrap();
+    let res_obj = doc.resolve(res);
+    let res_dict = res_obj.as_dict().unwrap();
+    let fonts_obj = doc.resolve(res_dict.get(b"Font").unwrap());
+    let fonts = fonts_obj.as_dict().unwrap();
+    let thai_font_obj = doc.resolve(fonts.get(b"T3Thai").or_else(|| fonts.get(b"Thai")).unwrap());
+    let thai_font = thai_font_obj.as_dict().unwrap();
+    assert_eq!(thai_font.get(b"Subtype").and_then(|o| o.as_name()), Some(b"Type3".as_slice()));
+    let to_unicode_obj = doc.resolve(thai_font.get(b"ToUnicode").unwrap());
+    let Object::Stream(to_unicode) = &*to_unicode_obj else { panic!("ToUnicode") };
+    let cmap_bytes = to_unicode.decoded().unwrap();
+    let cmap_str = String::from_utf8_lossy(&cmap_bytes);
+    let hex_cluster: String = "ต\u{0e31}\u{e49}".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(cmap_str.contains(&hex_cluster), "ToUnicode CMap must contain cluster ต\u{0e31}\u{e49}: {cmap_str}");
+    let hex_cluster2: String = "น\u{0e35}\u{e49}".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(cmap_str.contains(&hex_cluster2), "ToUnicode CMap must contain cluster น\u{0e35}\u{e49}: {cmap_str}");
+}
+
+#[test]
+fn thai_comb_field_groups_base_and_combining_marks() {
+    let units = appearance::comb_units("กิ่", 5);
+    assert_eq!(units, vec!["กิ่".to_string()]);
+
+    let units2 = appearance::comb_units("น้ำใจ", 5);
+    assert_eq!(units2, vec!["น้ำ".to_string(), "ใ".to_string(), "จ".to_string()]);
+
+    let units_limited = appearance::comb_units("น้ำใจ", 2);
+    assert_eq!(units_limited, vec!["น้ำ".to_string(), "ใ".to_string()]);
+}
+
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,
 /// B none, C its own (`(old C)`), D is a combo without one, E a check box with states, F a list
 /// box without one, and G only a down appearance (`/D`, no `/N`).
@@ -4214,9 +4299,10 @@ fn state_ap(doc: &Document, w: &Widget, state: &str) -> String {
 
 /// The decoded appearance PdfCraft would save for text or choice field `name` of `doc`.
 fn saved_look(doc: &Document, name: &str) -> String {
-    let all = fields(doc);
+    let mut doc_mut = doc.clone();
+    let all = fields(&doc_mut);
     let f = field(&all, name);
-    String::from_utf8_lossy(&appearance::field_appearance(doc, f, &f.widgets[0], &f.value).decoded().unwrap()).into_owned()
+    String::from_utf8_lossy(&appearance::field_appearance(&mut doc_mut, f, &f.widgets[0], &f.value).decoded().unwrap()).into_owned()
 }
 
 /// ISO 32000-2 Table 192 and 12.7.5.2.3: a check box with no appearance shows its `/MK /BC`
