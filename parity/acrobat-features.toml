@@ -6966,11 +6966,11 @@ title = "Print to PDF from other applications"
 area = "J"
 tier = "P3"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["apps/pdfcraft-printer/src/lib.rs::printer_entry_preserves_unicode_text_and_rejects_bad_jobs", "apps/pdfcraft-printer/src/cups.rs::pdf_bytes_survive_and_repeated_jobs_never_overwrite"]
+notes = "Experimental PdfCraft Printer: Windows 11 24H2+ x64 Print Support App and Linux CUPS 2.x backend. Windows converts supported OpenXPS using the independent writer; Linux preserves incoming PDF bytes. Windows queue registration/default preservation and private synthetic Word conversion checked locally. Linux target compilation/lints pass; native CUPS queue smoke workflow is provided but not run on this Windows host. No universal Office fidelity, Linux Save As dialog, CUPS 3.x or public signing claim. See apps/pdfcraft-printer/README.md."
 
 [[feature]]
 id = "create.distiller"
@@ -10171,3 +10171,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "create.xps-print-intermediate"
+title = "Independent XPS print-intermediate conversion"
+area = "J"
+tier = "P3"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = ["doc_create"]
+evidence = ["crates/create/src/xps.rs::xps_creates_real_text_unicode_font_and_vector_paths", "crates/create/src/xps.rs::image_brush_keeps_source_pixels_and_uses_xps_96_dpi_default", "crates/automation/tests/it/automation.rs::xps_print_conversion_retains_highlightable_text_and_vectors_through_save_reopen"]
+notes = "Separate experimental engine/CLI core preserves supported embedded-font text with Unicode mappings, solid vector paths and PNG/JPEG images; unsupported drawing refuses without raster fallback. Printer registration belongs to the separate experimental plugin. No GUI import, complex clusters, gradients or general resource brushes. See docs/xps-print-converter.md."

@@ -6,8 +6,10 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 mod extract;
 mod upright_image;
+mod xps;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
+pub use xps::from_xps;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CreateError {
@@ -222,12 +224,12 @@ fn jpx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc: None, px: (w, h), dpi })
 }
 
-fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
+fn jpeg(name: &str, bytes: &[u8], default_dpi: f64) -> Result<Embedded, CreateError> {
     let bad = |m: &str| CreateError::Image(name.into(), m.into());
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return Err(bad("not a JPEG file"));
     }
-    let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
+    let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (default_dpi, default_dpi), false);
     let mut icc_chunks = Vec::new();
     while let Some(&byte) = bytes.get(i) {
         if byte != 0xFF {
@@ -305,14 +307,14 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc, px: (w, h), dpi })
 }
 
-fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
+fn png_image(name: &str, bytes: &[u8], default_dpi: f64) -> Result<Embedded, CreateError> {
     let bad = |m: String| CreateError::Image(name.into(), m);
     let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| bad(e.to_string()))?;
     let dpi = match reader.info().pixel_dims {
         Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => (xppu as f64 * 0.0254, yppu as f64 * 0.0254),
-        _ => (72.0, 72.0),
+        _ => (default_dpi, default_dpi),
     };
     let icc = reader.info().icc_profile.as_ref().map(|p| p.to_vec());
     // The decoded size comes from the header alone, so a file of a few bytes can claim any
@@ -556,9 +558,9 @@ pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
 /// `wanted` are read.
 fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, CreateError> {
     if bytes.starts_with(&[0xFF, 0xD8]) {
-        Ok(vec![jpeg(name, &upright_image::upright(bytes))?])
+        Ok(vec![jpeg(name, &upright_image::upright(bytes), 72.0)?])
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Ok(vec![png_image(name, bytes)?])
+        Ok(vec![png_image(name, bytes, 72.0)?])
     } else if is_tiff(bytes) {
         tiff_pages(name, bytes, wanted)
     } else if bytes.starts_with(b"BM") {

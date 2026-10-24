@@ -1471,6 +1471,27 @@ impl Automation {
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {
         let (name, bytes) = match a.str("from")? {
+            "xps" => {
+                use std::io::Read as _;
+                let path = self.resolve(a.str("path")?, false)?;
+                let mut file = std::fs::File::open(&path).map_err(failed)?;
+                let mut bytes = Vec::new();
+                let mut chunk = [0u8; 8192];
+                loop {
+                    let count = file.read(&mut chunk).map_err(failed)?;
+                    if count == 0 {
+                        break;
+                    }
+                    if bytes.len().checked_add(count).is_none_or(|n| n > 256 * 1024 * 1024) {
+                        return Err(failed("XPS package exceeds 256 MiB"));
+                    }
+                    bytes.try_reserve(count).map_err(|_| failed("not enough memory for the XPS package"))?;
+                    bytes.extend_from_slice(chunk.get(..count).ok_or_else(|| failed("invalid XPS read size"))?);
+                }
+                let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Print job".into());
+                let pdf = self.session.create_from_xps(&title, &bytes).map_err(failed)?;
+                (format!("{title}.pdf"), pdf)
+            }
             "blank" => {
                 let n = a.opt_int("pages")?.unwrap_or(1).clamp(1, 10_000) as usize;
                 let (w, h) = (a.opt_num("width")?.unwrap_or(612.0), a.opt_num("height")?.unwrap_or(792.0));

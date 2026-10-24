@@ -54,9 +54,9 @@ echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-printer --target "$CROSS_TARGET" -j2)
   else
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-printer -j2)
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -67,6 +67,10 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
 install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
+install -Dm700 "$BIN/pdfcraft-cups" "$STAGE/usr/lib/cups/backend/pdfcraft"
+install -Dm644 "$HERE/pdfcraft.ppd" "$STAGE/usr/share/cups/model/pdfcraft.ppd"
+install -Dm755 "$HERE/printer-queue.sh" "$STAGE/usr/share/pdfcraft/printer/printer-queue.sh"
+install -Dm755 "$HERE/install-printer.sh" "$STAGE/usr/share/pdfcraft/printer/install-printer.sh"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
@@ -152,6 +156,9 @@ if has appimage; then
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+
+  # CUPS loads a root-owned host backend, never an executable inside an AppImage mount.
+  # The native deb/rpm or tar installation supplies the printer component.
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
   if [[ -z "$TOOL" ]]; then

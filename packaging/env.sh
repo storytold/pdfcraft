@@ -68,6 +68,7 @@ copy_docs() {
     if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$dest/"; fi
   done
   copy_font_licences "$dest"
+  cp "$ROOT/assets/icons/LICENSE-simple-icons.txt" "$dest/"
   return
 }
 

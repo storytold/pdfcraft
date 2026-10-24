@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+ xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+ xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+ xmlns:printsupport="http://schemas.microsoft.com/appx/manifest/printsupport/windows10"
+ xmlns:printsupport2="http://schemas.microsoft.com/appx/manifest/printsupport/windows10/2"
+ xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+ IgnorableNamespaces="uap uap10 printsupport printsupport2 rescap">
+  <!-- A distinct unsigned identity for the personal build; no machine trust policy is changed. -->
+  <Identity Name="PdfCraft.Printer.Personal" Publisher="CN=gh0sted5456-us, OID.2.25.311729368913984317654407730594956997722=1" Version="0.13.1.1" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>PdfCraft Printer</DisplayName>
+    <PublisherDisplayName>gh0sted5456-us</PublisherDisplayName>
+    <Logo>Assets\Logo.png</Logo>
+  </Properties>
+  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26200.0" /></Dependencies>
+  <Resources><Resource Language="en-US" /></Resources>
+  <Applications>
+    <Application Id="Printer" Executable="pdfcraft-printer-setup.exe" EntryPoint="Windows.FullTrustApplication" uap10:SupportsMultipleInstances="true">
+      <uap:VisualElements DisplayName="PdfCraft Printer" Description="Create PDFs with selectable text using PdfCraft" BackgroundColor="transparent" Square150x150Logo="Assets\Logo.png" Square44x44Logo="Assets\Logo.png" AppListEntry="none" />
+      <Extensions>
+        <printsupport:Extension Category="windows.printSupportExtension" EntryPoint="PdfCraft.Printer.SettingsTask" />
+        <printsupport2:Extension Category="windows.printSupportVirtualPrinterWorkflow" EntryPoint="PdfCraft.Printer.BackgroundTask">
+          <printsupport2:PrintSupportVirtualPrinter DisplayName="ms-resource:PrinterName" PrinterUri="pdfcraft-personal:printer" PreferredInputFormat="application/oxps" OutputFileTypes="pdf" PdcFile="Printer.pdc" />
+        </printsupport2:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>
+  <Extensions>
+    <Extension Category="windows.activatableClass.inProcessServer">
+      <InProcessServer>
+        <Path>pdfcraft_printer.dll</Path>
+        <ActivatableClass ActivatableClassId="PdfCraft.Printer.BackgroundTask" ThreadingModel="both" />
+        <ActivatableClass ActivatableClassId="PdfCraft.Printer.SettingsTask" ThreadingModel="both" />
+      </InProcessServer>
+    </Extension>
+  </Extensions>
+</Package>

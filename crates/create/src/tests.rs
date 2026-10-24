@@ -509,7 +509,7 @@ fn jpeg_fill_bytes_and_metadata_after_frame_are_preserved() {
     assert!(image.contains(b"Decode"), "APP14 after SOF still inverts CMYK");
     assert_eq!(extract_images(&doc, &[0], 0).images[0].data, bytes);
 
-    let embedded = jpeg("density.jpg", &jpeg_frame_first(jpeg_bytes())).unwrap();
+    let embedded = jpeg("density.jpg", &jpeg_frame_first(jpeg_bytes()), 72.0).unwrap();
     assert_eq!(embedded.px, (3, 2));
     assert_eq!(embedded.dpi, (300.0, 300.0), "JFIF after SOF is read");
 
@@ -528,7 +528,7 @@ fn jpeg_segment_scan_stops_at_sos_or_eoi() {
         // Neither marker needs a segment length to stop metadata scanning. The trailing
         // invalid APP2 would fail if entropy data or bytes after EOI were walked.
         bytes.extend_from_slice(&[0xFF, 0xFF, marker, 0xFF, 0xE2, 0, 1]);
-        let embedded = jpeg("boundary.jpg", &bytes).unwrap();
+        let embedded = jpeg("boundary.jpg", &bytes, 72.0).unwrap();
         assert_eq!(embedded.icc, Some(profile.clone()));
         assert_eq!(embedded.px, (3, 2));
     }
@@ -540,7 +540,7 @@ fn jpeg_segment_scan_rejects_truncated_or_invalid_lengths() {
         let mut bytes = jpeg_bytes();
         bytes.truncate(bytes.len() - 2);
         bytes.extend_from_slice(tail);
-        assert!(jpeg("truncated.jpg", &bytes).is_err(), "tail: {tail:?}");
+        assert!(jpeg("truncated.jpg", &bytes, 72.0).is_err(), "tail: {tail:?}");
     }
 }
 

@@ -31,6 +31,7 @@ description: |-
 overrides:
   deb:
     depends:
+      - cups
       - libc6 (>= 2.35)
       - libgcc-s1
       - libxkbcommon0
@@ -51,6 +52,7 @@ overrides:
     # floor names libm because the binaries' GLIBC_2.35 symbols (hypot, hypotf) are libm's: RHEL 9's
     # glibc 2.34 provides libc.so.6(GLIBC_2.35) through backports, but not this, so it refuses.
     depends:
+      - cups
       - libc.so.6()(64bit)
       - libm.so.6(GLIBC_2.35)(64bit)
       - libgcc_s.so.1()(64bit)
@@ -76,7 +78,11 @@ contents:
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree
+  - src: ${STAGE}/usr/lib/cups/backend/pdfcraft
+    dst: /usr/lib/cups/backend/pdfcraft
+    file_info: { mode: 0700, owner: root, group: root }
 
 scripts:
+  preremove: packaging/linux/printer-preremove.sh
   postinstall: packaging/linux/postinst.sh
   postremove: packaging/linux/postinst.sh

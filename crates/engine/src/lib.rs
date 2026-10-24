@@ -4478,6 +4478,13 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images(images)?)
     }
 
+    /// Convert a vector/text XPS print intermediate with PdfCraft's own writer. Unsupported
+    /// content is refused; there is no page rasterization or Microsoft PDF driver dependency.
+    pub fn create_from_xps(&self, title: &str, bytes: &[u8]) -> Result<Arc<Vec<u8>>, EditError> {
+        guard(|| self.write_new(&pdfcraft_create::from_xps(title, bytes)?))
+            .map_err(|_| EditError::Source("the XPS print intermediate could not be converted".into()))?
+    }
+
     /// Create image pages at embedded resolution or a fixed dpi, without resampling.
     pub fn create_from_images_with_resolution(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Arc<Vec<u8>>, EditError> {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)

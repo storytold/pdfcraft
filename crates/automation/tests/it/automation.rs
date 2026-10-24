@@ -7,6 +7,50 @@ use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+fn xps_print_fixture() -> Vec<u8> {
+    let mut zip = pdfcraft_export::Zip::default();
+    let page=br##"<FixedPage xmlns="http://schemas.microsoft.com/xps/2005/06" Width="816" Height="1056"><Canvas><Canvas.RenderTransform><MatrixTransform Matrix="1,0,0,1,0,0"/></Canvas.RenderTransform><Glyphs Fill="#000000" FontUri="/Resources/font.ttf" FontRenderingEmSize="20" OriginX="72" OriginY="96" UnicodeString="Highlight these words"/><Path Data="M96,160L176,160 176,200 96,200Z" Fill="#008080"/></Canvas></FixedPage>"##;
+    let page: Vec<u8> = [0xff, 0xfe].into_iter().chain(std::str::from_utf8(page).unwrap().encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    for (name,data) in [
+        ("_rels/.rels",br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.microsoft.com/xps/2005/06/fixedrepresentation" Target="Fixed.fdseq" Id="r1"/></Relationships>"#.as_slice()),
+        ("Fixed.fdseq",br#"<FixedDocumentSequence><DocumentReference Source="Documents/1.fdoc"/></FixedDocumentSequence>"#.as_slice()),
+        ("Documents/1.fdoc",br#"<FixedDocument><PageContent Source="Pages/1.fpage"/></FixedDocument>"#.as_slice()),
+        ("Documents/Pages/1.fpage",page.as_slice()),
+        ("Resources/font.ttf",include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").as_slice()),
+    ] {zip.add(name,data,true);}
+    zip.finish()
+}
+
+#[test]
+fn xps_print_conversion_retains_highlightable_text_and_vectors_through_save_reopen() {
+    let dir = workdir("xps-print-engine");
+    std::fs::write(dir.join("print.xps"), xps_print_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"xps","path":"print.xps"}))["doc"].as_u64().unwrap();
+    let found = ok(&mut a, "text_find", json!({"doc":doc,"query":"Highlight these words"}));
+    assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+    ok(&mut a, "comment_add", json!({"doc":doc,"page":1,"type":"highlight","find":"these words"}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"converted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"converted.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc":reopened}))["count"], 1);
+    assert!(page_text(&mut a, reopened)[0].contains("Highlight these words"));
+    let rendered = a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c,Content::Png{data,..} if !data.is_empty())));
+    let pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("converted.pdf")).unwrap())).unwrap();
+    assert_eq!(
+        pdf.scan_objects().filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Image".as_slice()))).count(),
+        0,
+        "text/vector page was never rasterized"
+    );
+    let before = ok(&mut a, "doc_list", json!({}));
+    std::fs::write(dir.join("bad.xps"), b"not XPS").unwrap();
+    assert!(a.call("doc_create", &json!({"from":"xps","path":"bad.xps"})).is_err());
+    let outside = workdir("xps-print-outside").join("print.xps");
+    std::fs::write(&outside, xps_print_fixture()).unwrap();
+    assert!(a.call("doc_create", &json!({"from":"xps","path":outside})).is_err());
+    assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+}
+
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];

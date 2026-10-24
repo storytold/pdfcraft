@@ -1,0 +1,51 @@
+[package]
+name = "pdfcraft-printer"
+description = "Optional PdfCraft virtual printer for Windows and Linux CUPS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "pdfcraft-printer-setup"
+path = "src/main.rs"
+
+[[bin]]
+name = "pdfcraft-cups"
+path = "src/cups_main.rs"
+
+[features]
+# Owner approved the two ABI exports for the local personal printer build on 2026-10-23.
+winrt-server = []
+bundle = []
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+pdfcraft-create.workspace = true
+pdfcraft-cos.workspace = true
+tempfile = "3"
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["ApplicationModel", "ApplicationModel_Background", "Devices_Printers", "Foundation", "Foundation_Metadata", "Graphics_Printing_Workflow", "Graphics_Printing_PrintSupport", "Management_Deployment", "Storage", "Storage_Search", "Storage_Streams", "Win32_System_WinRT"] }
+windows-core = "0.62"
+windows-registry = "0.6"
+rfd.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs", "process"] }
+signal-hook = "0.3"
+
+[build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+pdfcraft-export.workspace = true

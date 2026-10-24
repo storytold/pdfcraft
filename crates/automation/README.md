@@ -7,6 +7,12 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 
 ## API
 
+Experimental `doc_create` with `from: "xps"` and `path` converts supported XPS print
+intermediates through PdfCraft's writer. `doc_save` writes the returned document; normal
+root confinement and atomic-save rules apply. Unsupported content is refused. This is a
+separate converter foundation, with no Windows printer queue or GUI import filter yet.
+See [scope and example](../../docs/xps-print-converter.md).
+
 ```rust
 let mut a = Automation::new().with_root("/work")?;      // optional: confine all paths
 let doc = a.call("doc_open", &json!({ "path": "in.pdf" }))?;   // Vec<Content>

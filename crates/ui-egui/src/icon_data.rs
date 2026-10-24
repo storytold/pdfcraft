@@ -1,7 +1,8 @@
-//! Lucide icons (ISC licence, see assets/icons/LICENSE-lucide.txt), embedded and tinted at runtime.
+//! Lucide icons (ISC) and the Discord brand mark (Simple Icons, CC0), tinted at runtime.
 //! Generated from the contents of assets/icons/.
 
 pub static ICONS: &[(&str, &[u8])] = &[
+    ("discord", include_bytes!("../../../assets/icons/discord.svg")),
     ("accessibility", include_bytes!("../../../assets/icons/accessibility.svg")),
     ("align-center", include_bytes!("../../../assets/icons/align-center.svg")),
     ("align-justify", include_bytes!("../../../assets/icons/align-justify.svg")),

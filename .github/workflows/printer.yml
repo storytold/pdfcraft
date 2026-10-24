@@ -1,0 +1,33 @@
+name: PdfCraft Printer (Linux)
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/pdfcraft-printer/**'
+      - 'packaging/linux/**'
+      - 'crates/create/**'
+      - '.github/workflows/printer.yml'
+jobs:
+  linux-printer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Linux app and CUPS test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups cups-client cups-ppdc poppler-utils libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev
+          sudo systemctl start cups
+      - name: Build the Linux app and printer
+        run: cargo build --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-printer -j2
+      - name: Test the printer and converter
+        run: cargo test --locked -p pdfcraft-create -p pdfcraft-printer -j2
+      - name: Check CUPS registration and selectable PDF output
+        run: bash packaging/linux/test-printer.sh

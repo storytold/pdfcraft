@@ -20,6 +20,11 @@ zune-jpeg = "0.5"
 thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"
+roxmltree = "0.20"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
+flate2.workspace = true
+skrifa = "0.44"
+svgtypes = "0.15"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }

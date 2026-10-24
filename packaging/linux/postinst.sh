@@ -1,6 +1,15 @@
 #!/bin/sh
 # deb/rpm post-install and post-remove: refresh the desktop, MIME and icon caches.
 # Every tool is optional; missing ones are skipped.
+case "${1:-}" in
+  configure|1|2)
+    if command -v lpadmin >/dev/null 2>&1 && command -v lpstat >/dev/null 2>&1 && [ -S /run/cups/cups.sock ]; then
+      /usr/share/pdfcraft/printer/printer-queue.sh install || echo 'PdfCraft Printer needs setup: sudo /usr/share/pdfcraft/printer/printer-queue.sh install' >&2
+    else
+      echo 'PdfCraft Printer: install/start CUPS 2.x, then run sudo /usr/share/pdfcraft/printer/printer-queue.sh install' >&2
+    fi
+    ;;
+esac
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q /usr/share/applications || true
 fi

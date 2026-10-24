@@ -207,6 +207,9 @@
       <Component Id="PdfcraftDocumentIconLicense">
         <File Id="PdfcraftDocumentIconLicenseFile" Source="$(var.BinDir)\LICENSE-document.txt" KeyPath="yes" />
       </Component>
+      <Component Id="PdfcraftBrandIconLicense">
+        <File Id="PdfcraftBrandIconLicenseFile" Source="$(var.BinDir)\LICENSE-simple-icons.txt" KeyPath="yes" />
+      </Component>
       <Component Id="PdfcraftMitLicense">
         <File Id="PdfcraftMitLicenseFile" Source="$(var.BinDir)\LICENSE-MIT" KeyPath="yes" />
       </Component>

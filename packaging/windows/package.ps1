@@ -71,17 +71,10 @@ $Bin = Join-Path $TargetDir "$Target\release"
 # x64 build can never ship labelled arm64 (#61). Subsystem (optional header): 2 = Windows GUI,
 # 3 = console. The app must be GUI (no console window opens with it, #57); the CLI must stay
 # console so its output reaches the terminal.
-function Get-PeHeader([string] $Path) {
-  $bytes = [System.IO.File]::ReadAllBytes($Path)
-  $pe = [BitConverter]::ToInt32($bytes, 0x3C)
-  return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
-}
+. (Join-Path $PSScriptRoot 'pe.ps1')
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
 foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
-  $h = Get-PeHeader (Join-Path $Bin $check[0])
-  if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
-  if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
-  Write-Output "ok $($check[0]): $Arch, PE subsystem $($h.Subsystem)"
+  Assert-PeHeader (Join-Path $Bin $check[0]) $Machine $check[1]
 }
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
@@ -93,6 +86,7 @@ foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
   Copy-Item (Join-Path $Root $f) $Stage
 }
 Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
+Copy-Item (Join-Path $Root 'assets\icons\LICENSE-simple-icons.txt') $Stage
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe')
 
@@ -128,7 +122,7 @@ $Portable = Join-Path $TargetDir "windows-package\pdfcraft-$Version-windows-$Arc
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
-foreach ($f in 'NOTICE', 'LICENSE-document.txt') {
+foreach ($f in 'NOTICE', 'LICENSE-document.txt', 'LICENSE-simple-icons.txt') {
   Copy-Item (Join-Path $Stage $f) $Portable
 }
 Copy-Item -Recurse $Models (Join-Path $Portable 'models')
