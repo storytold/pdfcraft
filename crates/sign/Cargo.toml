@@ -18,7 +18,7 @@ pdfcraft-model = { workspace = true }
 thiserror.workspace = true
 # ASN.1 UTCTime/GeneralizedTime conversion goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 sha1 = "0.11"
 sha2 = "0.11"
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
@@ -30,7 +30,7 @@ bp384 = { version = "0.14", default-features = false, features = ["arithmetic", 
 ecdsa = { version = "0.17", default-features = false, features = ["algorithm", "der"] }
 # Verification only on native targets (RSA private-key operations use aws-lc-rs, ADR-0009).
 crypto-bigint = { version = "0.7", default-features = false, features = ["alloc"] }
-rsa = { version = "=0.10.0-rc.18", default-features = false, features = ["std", "hazmat"] }
+rsa = { version = "=0.10.0-rc.19", default-features = false, features = ["std", "hazmat"] }
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 hmac = "0.13"
 aes = "0.9"
