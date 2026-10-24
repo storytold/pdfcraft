@@ -2757,6 +2757,45 @@ fn printing_lays_out_sheets_that_render() {
     assert_eq!(s4.print_pdf(id4, &print::Settings { pages: vec![0], ..Default::default() }), Err(EditError::NotPermitted("printing")));
 }
 
+/// A dynamic XFA form's screen-only and print-only objects (`relevant`): on screen, the
+/// screen-only field and draw show and the print-only ones don't; printed, the screen-only field
+/// is left off and the print-only one is on paper. (Draws follow the layers' state on screen
+/// when printed until printing applies the layers' print usage; other viewers read it from the
+/// file.)
+#[test]
+fn xfa_screen_only_and_print_only_objects_show_and_print_where_the_form_says() {
+    let field = |name: &str, attrs: &str| {
+        format!(
+            r#"<field name="{name}" w="3in" h="0.3in" {attrs}><ui><textEdit/></ui><font typeface="Arial" size="10pt"/><value><text>{name} value</text></value></field>"#
+        )
+    };
+    let draw = |name: &str, attrs: &str| {
+        format!(r#"<draw name="{name}" w="3in" h="0.3in" {attrs}><font typeface="Arial" size="10pt"/><value><text>{name} text</text></value></draw>"#)
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}{}{}
+</subform></template></xdp:xdp>"##,
+        field("screenField", r#"relevant="-print""#),
+        field("paperField", r#"presence="invisible" relevant="+print""#),
+        draw("screenDraw", r#"relevant="-print""#),
+        draw("paperDraw", r#"presence="invisible" relevant="+print""#),
+    );
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let screen = page_texts(&s, id).join("\n");
+    assert!(screen.contains("screenField value") && screen.contains("screenDraw text"), "on screen: {screen}");
+    assert!(!screen.contains("paperField value") && !screen.contains("paperDraw text"), "on screen: {screen}");
+    let sheet = s.print_pdf(id, &print::Settings { pages: vec![0], ..Default::default() }).unwrap();
+    let mut out = Session::new();
+    let printed = out.open("print.pdf", None, Arc::new(sheet), None).unwrap();
+    let paper = page_texts(&out, printed).join("\n");
+    assert!(!paper.contains("screenField value"), "printed: {paper}");
+    assert!(paper.contains("paperField value"), "printed: {paper}");
+}
+
 /// A one-page document whose red square is in a layer; `off` switches the layer off by default.
 fn red_layer_pdf(off: bool) -> Vec<u8> {
     let content = "/OC /L1 BDC 1 0 0 rg 0 0 100 100 re f EMC";

@@ -16,7 +16,7 @@ use crate::XfaError;
 use crate::data::{DataNode, data_date_letters, data_path, data_to_iso, date_letters, is_on, iso_to_pattern};
 use crate::model::{
     Access, Area, Border, Common, Draw, ExclGroup, Field, Font, HAlign, Layout, Margin, Node, Occur, PageArea, PageRole, Para, Placement, Presence,
-    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value,
+    Rect, Script, SomIndices, Stroke, Subform, Template, Ui, VAlign, Value, Views,
 };
 use crate::text::{self, Block, Face, Span};
 
@@ -67,6 +67,12 @@ pub enum Item {
         content_type: String,
     },
     Widget(Box<Widget>),
+    /// An item drawn only on screen or only in print (XFA `relevant`, `presence`): written in an
+    /// optional content group whose usage says so.
+    Only {
+        views: Views,
+        item: Box<Item>,
+    },
 }
 
 /// A box with rounded corners ([`Item::Rounded`]).
@@ -168,6 +174,8 @@ pub struct Widget {
     pub items: Vec<String>,
     /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
     pub no_scroll: bool,
+    /// Where the field is shown: on screen, in print, or both (its annotation flags).
+    pub views: Views,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -282,6 +290,8 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// Where what is being drawn shows, as the objects it is inside say ([`Common::views`]).
+    views: Views,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -330,6 +340,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         leaves: Vec::new(),
+        views: Views::ALL,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
@@ -343,14 +354,20 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     let count = total.to_string();
     for p in &mut l.pages {
         for it in &mut p.items {
-            if let Item::Text(s) = it
-                && s.text.contains(PAGE_COUNT_MARK)
-            {
-                s.text = s.text.replace(PAGE_COUNT_MARK, &count);
-            }
+            fill_page_count(it, &count);
         }
     }
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
+}
+
+/// Put the page count `count` where text `it` holds [`PAGE_COUNT_MARK`], text drawn only on
+/// screen or only in print ([`Item::Only`]) included.
+fn fill_page_count(it: &mut Item, count: &str) {
+    match it {
+        Item::Text(s) if s.text.contains(PAGE_COUNT_MARK) => s.text = s.text.replace(PAGE_COUNT_MARK, count),
+        Item::Only { item, .. } => fill_page_count(item, count),
+        _ => {}
+    }
 }
 
 // Bytes of embedded field values copied out on this thread, for tests that bound layout work.
@@ -410,12 +427,19 @@ fn solid_extent(item: &Item) -> Option<(f64, f64)> {
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
+        Item::Only { item, .. } => solid_extent(item),
     }
 }
 
 /// `item` as the part above `cut` and the part below: solid items go whole to the side their
 /// top is on, fills and lines crossing the cut are cut in two.
 fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
+    if let Item::Only { views, item } = item {
+        // Each part shows where the whole did.
+        let wrap = |i: Item| Item::Only { views, item: Box::new(i) };
+        let (a, b) = divide(*item, cut);
+        return (a.map(wrap), b.map(wrap));
+    }
     if let Some((top, _)) = solid_extent(&item) {
         return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
     }
@@ -467,6 +491,9 @@ fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
 
 /// `item` moved by (`dx`, `dy`).
 fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
+    if let Item::Only { views, item: inner } = item {
+        return Item::Only { views, item: Box::new(moved(*inner, dx, dy)) };
+    }
     match &mut item {
         Item::Fill { rect, .. } | Item::Image { rect, .. } => {
             rect.x += dx;
@@ -488,6 +515,8 @@ fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
             w.rect.x += dx;
             w.rect.y += dy;
         }
+        // Taken apart above.
+        Item::Only { .. } => {}
     }
     item
 }
@@ -576,6 +605,14 @@ impl Layouter<'_> {
         }
     }
 
+    /// Say once when `c`'s `relevant` names a view other than print, which is drawn as if it
+    /// didn't: for drawn objects, flowed subforms and table rows alike.
+    fn warn_other_views(&mut self, c: &Common) {
+        if let Some(other) = &c.relevant_other {
+            self.warn_once(format!("the form limits some objects to views other than print (relevant \"{other}\"); they are drawn as if it didn't"));
+        }
+    }
+
     fn page_no(&self) -> usize {
         self.pages.len()
     }
@@ -601,12 +638,25 @@ impl Layouter<'_> {
         Ok(())
     }
 
+    /// Put `item` on the last page, shown where what it is inside is shown ([`Self::views`]): a
+    /// field's widget carries that itself, anything else drawn only on screen or only in print
+    /// goes in an [`Item::Only`], and what shows nowhere isn't put at all.
     fn push(&mut self, item: Item) -> Result<(), XfaError> {
         self.check_measures()?;
         self.items += 1;
         if self.items > MAX_ITEMS {
             return Err(XfaError::TooLarge("the form has too many objects to lay out".into()));
         }
+        let views = self.views;
+        let item = match item {
+            Item::Widget(mut w) => {
+                w.views = views;
+                Item::Widget(w)
+            }
+            other if views == Views::ALL => other,
+            _ if !views.any() => return Ok(()),
+            other => Item::Only { views, item: Box::new(other) },
+        };
         if let Some(p) = self.pages.last_mut() {
             p.items.push(item);
         }
@@ -666,10 +716,12 @@ impl Layouter<'_> {
         let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
         let sibs = SomIndices::of(&area.items);
-        for (i, item) in area.items.iter().enumerate() {
-            self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i))?;
-        }
-        Ok(())
+        // The master page's own objects: shown where they say, whatever the body was drawing
+        // when it needed this page.
+        let body = std::mem::replace(&mut self.views, Views::ALL);
+        let drawn = area.items.iter().enumerate().try_for_each(|(i, item)| self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i)));
+        self.views = body;
+        drawn
     }
 
     /// Move to the next content area, or the next page.
@@ -989,8 +1041,20 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── flow
 
-    /// Flow `node` (a subform; anything else is ignored) into the content areas.
+    /// Flow subform `node` (each instance the data asks for; anything else is ignored) into the
+    /// content areas, shown where it and what it is inside say ([`Common::views`]); hidden from
+    /// both, it still takes its room.
     fn flow_subform(&mut self, node: &Node, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        self.warn_other_views(node.common());
+        let views = self.views.and(node.common().views());
+        let outer = std::mem::replace(&mut self.views, views);
+        let flowed = self.flow_subform_in(node, avail, ctx, depth, sib);
+        self.views = outer;
+        flowed
+    }
+
+    /// [`Self::flow_subform`] once where the subform shows is set.
+    fn flow_subform_in(&mut self, node: &Node, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
@@ -1513,10 +1577,25 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── drawing
 
+    /// Draw table row `row` at `rect` in columns `cols`, shown where it and what it is inside say
+    /// ([`Common::views`]).
     fn draw_row(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
+        self.warn_other_views(&row.common);
+        let views = self.views.and(row.common.views());
+        if !views.any() {
+            return Ok(());
+        }
+        let outer = std::mem::replace(&mut self.views, views);
+        let drawn = self.draw_row_cells(row, cols, rect, ctx, depth, sib);
+        self.views = outer;
+        drawn
+    }
+
+    /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
+    fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &row.common.border {
             self.draw_border(b, rect)?;
         }
@@ -1543,14 +1622,27 @@ impl Layouter<'_> {
         self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
     }
 
+    /// Draw `node` at `rect`, shown where it and what it is inside say ([`Common::views`]): an
+    /// invisible object that `relevant` prints is drawn for print only, and one shown nowhere
+    /// draws nothing.
     fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
         let c = node.common();
-        if c.presence == Presence::Invisible {
+        self.warn_other_views(c);
+        let views = self.views.and(c.views());
+        if !views.any() {
             return Ok(());
         }
+        let outer = std::mem::replace(&mut self.views, views);
+        let drawn = self.draw_node_in(node, rect, ctx, depth, sib);
+        self.views = outer;
+        drawn
+    }
+
+    /// [`Self::draw_node`] once where the node shows is set.
+    fn draw_node_in(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         match node {
             Node::Draw(d) => {
                 let start = self.item_count();
@@ -1755,6 +1847,8 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draw exclusion group `g` at `rect`: its border, then each of its buttons where its layout
+    /// puts it, as one radio group, the one its data selects turned on.
     fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
@@ -1796,10 +1890,20 @@ impl Layouter<'_> {
         let sibs = SomIndices::of(&nodes);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
+                // Each button shows where it and the group say ([`Common::views`]), as any field
+                // drawn through [`Self::draw_node`] does.
+                self.warn_other_views(&f.common);
+                let views = self.views.and(f.common.views());
+                if !views.any() {
+                    continue;
+                }
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
                 let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
                 let chosen = selected.as_deref() == Some(on.as_str());
-                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i))?;
+                let outer = std::mem::replace(&mut self.views, views);
+                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i));
+                self.views = outer;
+                drawn?;
             }
         }
         Ok(())
@@ -2087,6 +2191,8 @@ impl Layouter<'_> {
             action,
             items,
             no_scroll: f.no_scroll,
+            // `push` sets where it shows.
+            views: Views::ALL,
         })))
     }
 }

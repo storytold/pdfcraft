@@ -237,6 +237,15 @@ pub struct Written {
 /// layer reads this key).
 pub const IMAGE_FIELD_KEY: &[u8] = b"PCXfaImage";
 
+/// On an optional content group PdfCraft made for what a form shows only on screen (`/Screen`)
+/// or only in print (`/Print`): a later layout of the form finds and reuses it.
+pub const RELEVANT_KEY: &[u8] = b"PCXfaRelevant";
+
+/// The optional content groups of [`RELEVANT_KEY`], by index: what the key says, the group's
+/// resource name on the pages, its `/Name`, and its view and print states.
+const GROUPS: [(&str, &str, &str, &str, &str); 2] =
+    [("Screen", "PCXfaScreen", "Form: screen only", "ON", "OFF"), ("Print", "PCXfaPrint", "Form: print only", "OFF", "ON")];
+
 /// On a check box or radio button generated for a round XFA check button (`shape="round"`): its
 /// background and border are drawn as a circle, not the widget's rectangle (the forms layer
 /// reads this key).
@@ -264,6 +273,11 @@ struct Emitter<'a> {
     warnings: Vec<String>,
     /// The signatures the file holds, by the SOM path of the field signed.
     signed: HashMap<String, Signed>,
+    /// The screen-only and print-only optional content groups ([`GROUPS`]): an earlier layout's,
+    /// or made when first needed.
+    groups: [Option<ObjRef>; 2],
+    /// Which of [`Self::groups`] this layout drew in.
+    used: [bool; 2],
 }
 
 /// A signature field of the file that has been signed.
@@ -327,14 +341,23 @@ impl Emitter<'_> {
     }
 
     /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
-    /// its border, background and kind, and return the annotation's object.
+    /// its border, background and kind, its flags saying whether it shows on screen and in print,
+    /// and return the annotation's object.
     fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
         let r = w.rect;
         let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("Annot"));
         d.set(b"Subtype".to_vec(), Object::name("Widget"));
-        d.set(b"F".to_vec(), Object::Int(4));
+        // Print (4) when it prints, NoView (32) when it isn't shown on screen, Hidden (2) when
+        // it is shown nowhere.
+        let flags = match (w.views.screen, w.views.print) {
+            (true, true) => 4,
+            (true, false) => 0,
+            (false, true) => 4 | 32,
+            (false, false) => 2,
+        };
+        d.set(b"F".to_vec(), Object::Int(flags));
         d.set(b"P".to_vec(), Object::Ref(page_ref));
         d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
         d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
@@ -664,6 +687,37 @@ impl Emitter<'_> {
         }
     }
 
+    /// Optional content group `g` of [`GROUPS`] (0 screen only, 1 print only), marked as drawn in:
+    /// an earlier layout's, or a new one whose `/Usage` says where it shows.
+    fn group(&mut self, g: usize) -> ObjRef {
+        if let Some(u) = self.used.get_mut(g) {
+            *u = true;
+        }
+        if let Some(r) = self.groups.get(g).copied().flatten() {
+            return r;
+        }
+        let (key, _, name, view, print) = GROUPS.get(g).copied().unwrap_or(GROUPS[0]);
+        let state = |event: &str, key: &str, value: &str| {
+            let mut s = Dict::new();
+            s.set(key.as_bytes().to_vec(), Object::name(value));
+            (event.as_bytes().to_vec(), Object::Dict(s))
+        };
+        let mut usage = Dict::new();
+        for (k, v) in [state("View", "ViewState", view), state("Print", "PrintState", print)] {
+            usage.set(k, v);
+        }
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("OCG"));
+        d.set(b"Name".to_vec(), Object::String(PdfString::text(name)));
+        d.set(b"Usage".to_vec(), Object::Dict(usage));
+        d.set(RELEVANT_KEY.to_vec(), Object::name(key));
+        let r = self.doc.add(Object::Dict(d));
+        if let Some(slot) = self.groups.get_mut(g) {
+            *slot = Some(r);
+        }
+        r
+    }
+
     /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
     /// content stream, the fonts and images it uses as resources, and its widgets and the links
     /// in its text as annotations. Returns the page object.
@@ -674,14 +728,34 @@ impl Emitter<'_> {
         let mut xobjects = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
+        // The group whose marked content is open, and the groups the page uses.
+        let mut open: Option<usize> = None;
+        let mut properties = Dict::new();
         // The link the text before ended in, which a next piece of it on the line widens.
         let mut last_link: Option<LinkPiece> = None;
         for (i, item) in page.items.iter().enumerate() {
+            let (group, item) = match item {
+                Item::Only { views, item } => (Some(if views.screen { 0 } else { 1 }), item.as_ref()),
+                other => (None, other),
+            };
+            // A field's widget is an annotation, not page content: the marked content runs on.
+            if !matches!(item, Item::Widget(_)) && group != open {
+                if open.is_some() {
+                    content.extend_from_slice(b"EMC\n");
+                }
+                if let Some((g, (_, resource, ..))) = group.and_then(|g| GROUPS.get(g).map(|k| (g, k))) {
+                    properties.set(resource.as_bytes().to_vec(), Object::Ref(self.group(g)));
+                    content.extend(format!("/OC /{resource} BDC\n").bytes());
+                }
+                open = group;
+                // A link's pieces join only within one group: what is in another shows elsewhere.
+                last_link = None;
+            }
             // A link's pieces join only across text and the underline drawn just before it: a fill,
             // picture, field or any other line (a rule) between them ends the link there.
             let keeps_link = match item {
                 Item::Text(_) => true,
-                Item::Line { from, to, .. } => matches!(page.items.get(i + 1), Some(Item::Text(s))
+                Item::Line { from, to, .. } => matches!(page.items.get(i + 1).map(bare), Some(Item::Text(s))
                     if (from.1 - to.1).abs() < 0.01
                         && (from.0 - s.x).abs() < 0.01
                         && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
@@ -737,6 +811,12 @@ impl Emitter<'_> {
                     content.extend(literal(&win_ansi(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
                     if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
+                        // A link works only where its text shows: one in print-only text is
+                        // NoView (32), so it can't be clicked on screen, and one in screen-only
+                        // text doesn't print, as a field's widget there.
+                        if let Some(g) = group {
+                            self.doc.update_dict(r, |d| d.set(b"F".to_vec(), Object::Int(if g == 0 { 0 } else { 4 | 32 })))?;
+                        }
                         annots.push(Object::Ref(r));
                     }
                 }
@@ -751,7 +831,12 @@ impl Emitter<'_> {
                         annots.push(Object::Ref(r));
                     }
                 }
+                // Taken apart above: an item is never wrapped twice.
+                Item::Only { .. } => {}
             }
+        }
+        if open.is_some() {
+            content.extend_from_slice(b"EMC\n");
         }
         let mut font_dict = Dict::new();
         for (name, base) in fonts {
@@ -761,6 +846,9 @@ impl Emitter<'_> {
         res.set(b"Font".to_vec(), Object::Dict(font_dict));
         if !xobjects.is_empty() {
             res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        }
+        if !properties.is_empty() {
+            res.set(b"Properties".to_vec(), Object::Dict(properties));
         }
         let mut cd = Dict::new();
         cd.set(b"Type".to_vec(), Object::name("XObject"));
@@ -838,6 +926,14 @@ impl Emitter<'_> {
         // The text's ascent and descent, as the layout measures a span's extent.
         let rect = pdf_rect(Rect::new(x, s.baseline - s.face.size * 0.8, w, s.face.size), page_height);
         (rect.iter().all(|v| v.is_finite()) && w > 0.0).then(|| (target.to_string(), rect))
+    }
+}
+
+/// `item`, or what it holds when it is shown only on screen or only in print ([`Item::Only`]).
+fn bare(item: &Item) -> &Item {
+    match item {
+        Item::Only { item, .. } => item,
+        other => other,
     }
 }
 
@@ -926,6 +1022,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     // Pictures embedded by earlier passes, from the pages this pass replaces.
     let images = earlier_images(doc, pages_ref);
     let signed = signed_fields(doc, &catalog);
+    let groups = earlier_groups(doc, &catalog);
     let mut em = Emitter {
         doc,
         images,
@@ -935,6 +1032,8 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         field_count: 0,
         warnings: Vec::new(),
         signed,
+        groups,
+        used: [false; 2],
     };
     let mut kids = Vec::new();
     for page in &form.pages {
@@ -950,7 +1049,11 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
             }
         })?;
     }
-    let Emitter { doc, fields, field_count, warnings, .. } = em;
+    let Emitter { doc, fields, field_count, warnings, groups, used, .. } = em;
+    let drawn: Vec<ObjRef> = groups.iter().zip(used).filter(|(_, u)| *u).filter_map(|(g, _)| *g).collect();
+    if !drawn.is_empty() {
+        catalog_changed |= register_groups(doc, &mut catalog, &groups, used)?;
+    }
     let count = kids.len();
     doc.update_dict(pages_ref, |d| {
         d.set(b"Type".to_vec(), Object::name("Pages"));
@@ -1011,6 +1114,126 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         doc.set(catalog_ref, Object::Dict(catalog));
     }
     Ok(Written { pages: count, fields: field_count, warnings, usage_rights })
+}
+
+/// The screen-only and print-only groups an earlier layout of the form made ([`RELEVANT_KEY`]),
+/// found among the document's optional content groups.
+fn earlier_groups(doc: &Document, catalog: &Dict) -> [Option<ObjRef>; 2] {
+    let mut out = [None; 2];
+    let ocgs = catalog
+        .get(b"OCProperties")
+        .map(|p| doc.resolve(p))
+        .and_then(|p| p.as_dict().and_then(|p| p.get(b"OCGs").map(|o| doc.resolve(o))))
+        .and_then(|o| o.as_array().cloned())
+        .unwrap_or_default();
+    for r in ocgs.iter().filter_map(Object::as_ref).take(MAX_GROUPS_SEARCHED) {
+        let key = doc.get(r).as_dict().and_then(|d| d.name(RELEVANT_KEY).map(<[u8]>::to_vec));
+        if let Some(g) = key.and_then(|k| GROUPS.iter().position(|(name, ..)| name.as_bytes() == k.as_slice()))
+            && let Some(slot) = out.get_mut(g)
+            && slot.is_none()
+        {
+            *slot = Some(r);
+        }
+    }
+    out
+}
+
+/// Most optional content groups looked at for an earlier layout's.
+const MAX_GROUPS_SEARCHED: usize = 10_000;
+
+/// Add the screen-only and print-only `groups` this layout drew in (`used`) to the document's
+/// optional content properties, keeping its own layers as they are: each goes in `/OCGs`; in the
+/// default configuration the print-only one starts off (the screen-only one starts on when the
+/// base state is off); and both join `/AS` usage applications for the View and Print events (an
+/// existing one for that event and category, or a new one), so a viewer shows each where it
+/// belongs. Nothing already there is added again. Returns whether `catalog` itself changed (a
+/// direct `/OCProperties`); an indirect one is updated where it is.
+fn register_groups(doc: &mut Document, catalog: &mut Dict, groups: &[Option<ObjRef>; 2], used: [bool; 2]) -> Result<bool, XfaError> {
+    let mine: Vec<(usize, ObjRef)> =
+        groups.iter().zip(used).enumerate().filter(|(_, (_, u))| *u).filter_map(|(i, (g, _))| g.map(|r| (i, r))).collect();
+    let indirect = catalog.get(b"OCProperties").and_then(Object::as_ref);
+    let mut props = catalog.get(b"OCProperties").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap_or_default();
+    // A list in `dict` under `key` (direct or not), with `add` appended where missing.
+    let add_refs = |doc: &mut Document, dict: &mut Dict, key: &[u8], add: &[ObjRef]| -> Result<(), XfaError> {
+        let at = dict.get(key).and_then(Object::as_ref);
+        let mut list = dict.get(key).map(|l| doc.resolve(l)).and_then(|l| l.as_array().cloned()).unwrap_or_default();
+        for r in add {
+            if !list.iter().any(|o| o.as_ref() == Some(*r)) {
+                list.push(Object::Ref(*r));
+            }
+        }
+        match at {
+            Some(a) => doc.set(a, Object::Array(list)),
+            None => dict.set(key.to_vec(), Object::Array(list)),
+        }
+        Ok(())
+    };
+    let all: Vec<ObjRef> = mine.iter().map(|(_, r)| *r).collect();
+    add_refs(doc, &mut props, b"OCGs", &all)?;
+    let d_at = props.get(b"D").and_then(Object::as_ref);
+    let mut d = props.get(b"D").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+    let base_off = d.name(b"BaseState") == Some(&b"OFF"[..]);
+    for (g, r) in &mine {
+        match (*g, base_off) {
+            (1, false) => add_refs(doc, &mut d, b"OFF", &[*r])?,
+            (0, true) => add_refs(doc, &mut d, b"ON", &[*r])?,
+            _ => {}
+        }
+    }
+    // The usage applications: one per event, with its own category.
+    let as_at = d.get(b"AS").and_then(Object::as_ref);
+    let mut apps = d.get(b"AS").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()).unwrap_or_default();
+    for event in ["View", "Print"] {
+        let matches = |doc: &Document, o: &Object| {
+            doc.resolve(o).as_dict().is_some_and(|a| {
+                a.name(b"Event") == Some(event.as_bytes())
+                    && a.get(b"Category")
+                        .map(|c| doc.resolve(c))
+                        .and_then(|c| c.as_array().cloned())
+                        .is_some_and(|c| c.len() == 1 && c.first().and_then(Object::as_name).is_some_and(|n| n == event.as_bytes()))
+            })
+        };
+        match apps.iter().position(|o| matches(doc, o)) {
+            Some(i) => {
+                let entry = apps.get(i).cloned().unwrap_or(Object::Null);
+                let mut app = doc.resolve(&entry).as_dict().cloned().unwrap_or_default();
+                add_refs(doc, &mut app, b"OCGs", &all)?;
+                match entry.as_ref() {
+                    Some(r) => doc.set(r, Object::Dict(app)),
+                    None => {
+                        if let Some(slot) = apps.get_mut(i) {
+                            *slot = Object::Dict(app);
+                        }
+                    }
+                }
+            }
+            None => {
+                let mut app = Dict::new();
+                app.set(b"Event".to_vec(), Object::name(event));
+                app.set(b"OCGs".to_vec(), Object::Array(all.iter().map(|r| Object::Ref(*r)).collect()));
+                app.set(b"Category".to_vec(), Object::Array(vec![Object::name(event)]));
+                apps.push(Object::Dict(app));
+            }
+        }
+    }
+    match as_at {
+        Some(a) => doc.set(a, Object::Array(apps)),
+        None => d.set(b"AS".to_vec(), Object::Array(apps)),
+    }
+    match d_at {
+        Some(a) => doc.set(a, Object::Dict(d)),
+        None => props.set(b"D".to_vec(), Object::Dict(d)),
+    }
+    match indirect {
+        Some(r) => {
+            doc.set(r, Object::Dict(props));
+            Ok(false)
+        }
+        None => {
+            catalog.set(b"OCProperties".to_vec(), Object::Dict(props));
+            Ok(true)
+        }
+    }
 }
 
 /// What [`strip`] took out, for the user to be told (the packets held more than the fields).
@@ -1196,6 +1419,12 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         None => catalog.set(b"AcroForm".to_vec(), Object::Dict(acro)),
     }
     catalog.remove(b"NeedsRendering");
+    // The screen-only and print-only layers stay, as the pages use them; only their key goes.
+    for r in earlier_groups(doc, &catalog).into_iter().flatten() {
+        doc.update_dict(r, |d| {
+            d.remove(RELEVANT_KEY);
+        })?;
+    }
     out.usage_rights = drop_usage_rights(doc, &mut catalog);
     doc.set(root, Object::Dict(catalog));
     // The packet streams are referenced from nowhere else: freed, so an incremental save

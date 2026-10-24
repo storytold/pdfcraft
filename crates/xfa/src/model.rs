@@ -326,6 +326,37 @@ impl Para {
     }
 }
 
+/// Where an object is drawn: on screen, when the form is printed, or both (see
+/// [`Common::views`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Views {
+    pub screen: bool,
+    pub print: bool,
+}
+
+impl Views {
+    /// On screen and in print: what an object with nothing to say is.
+    pub const ALL: Views = Views { screen: true, print: true };
+
+    /// Where an object inside a container drawn in `self` is drawn, when it alone would be drawn
+    /// in `other`: only where both are.
+    pub fn and(self, other: Views) -> Views {
+        Views { screen: self.screen && other.screen, print: self.print && other.print }
+    }
+
+    /// Drawn somewhere.
+    pub fn any(self) -> bool {
+        self.screen || self.print
+    }
+}
+
+impl Default for Views {
+    /// On screen and in print.
+    fn default() -> Self {
+        Views::ALL
+    }
+}
+
 /// What every container and leaf shares: name, box, presence, margins, border, text defaults.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Common {
@@ -341,6 +372,12 @@ pub struct Common {
     pub min_h: Option<f64>,
     pub max_h: Option<f64>,
     pub presence: Presence,
+    /// What `relevant` says about printing: `Some(true)` for `+print` (printed even when its
+    /// presence hides it on screen), `Some(false)` for `-print` (never printed), `None` when it
+    /// says nothing (printed as it is shown).
+    pub relevant: Option<bool>,
+    /// The first `relevant` token about a view other than print, which is left aside.
+    pub relevant_other: Option<String>,
     pub margin: Margin,
     pub border: Option<Border>,
     pub font: FontSpec,
@@ -359,6 +396,14 @@ pub enum Node {
 }
 
 impl Common {
+    /// Where the object itself is drawn, before what its containers say: on screen when it is
+    /// visible, and in print when `relevant` says so (`+print` even when hidden or invisible,
+    /// `-print` never), else when it is visible.
+    pub fn views(&self) -> Views {
+        let screen = self.presence == Presence::Visible;
+        Views { screen, print: self.relevant.unwrap_or(screen) }
+    }
+
     /// The top-left corner of a positioned box of `w` by `h`, from `x`, `y` and the anchor.
     pub fn top_left(&self, w: f64, h: f64) -> (f64, f64) {
         (self.x.unwrap_or(0.0) - w * self.anchor.h, self.y.unwrap_or(0.0) - h * self.anchor.v)
