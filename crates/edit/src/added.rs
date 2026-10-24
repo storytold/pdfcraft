@@ -739,6 +739,7 @@ pub(crate) fn draw_watermark_shaped(
         align: Align::Center,
         color: wm.color,
         rect: [0.0, 0.0, 1000.0, 1000.0],
+        char_spacing: 0.0,
     };
     let mut laid = Vec::new();
     for line in lines {
@@ -866,9 +867,11 @@ pub(crate) fn draw_header_footer_shaped(
         align: Align::Left,
         color: hf.color,
         rect: [0.0, 0.0, page_w, page_h],
+        char_spacing: 0.0,
     };
 
-    let mut laid_slots: Vec<(usize, Vec<(String, Vec<Piece>, f64)>)> = Vec::new();
+    type LaidSlotLine = (String, Vec<Piece>, f64);
+    let mut laid_slots: Vec<(usize, Vec<LaidSlotLine>)> = Vec::new();
     for &(slot, ref lines) in expanded {
         let mut slot_laid = Vec::new();
         for line in lines {

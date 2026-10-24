@@ -953,7 +953,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_header_footer",
             "Add header and footer",
-            "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier. replace: true swaps out existing ones (Update). Undoable.",
+            "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times, Courier or an installed Thai font name. replace: true swaps out existing ones (Update). Undoable.",
         )
         .cmd("edit.header_footer")
         .with(schema(
@@ -962,7 +962,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "pages": pages("to mark (default: all)"),
                 "header_left": { "type": "string" }, "header_center": { "type": "string" }, "header_right": { "type": "string" },
                 "footer_left": { "type": "string" }, "footer_center": { "type": "string" }, "footer_right": { "type": "string" },
-                "font": { "type": "string", "description": "Font family name (Helvetica, Times, Courier, or Thai font name)." },
+                "font": { "type": "string", "description": "Font family name: Helvetica, Times, Courier, or an installed Thai font name." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
                 "color": { "type": "string", "description": "#RRGGBB or a colour name." },
                 "margins": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 4, "maxItems": 4, "description": "Top, bottom, left, right in points (default 36, 36, 72, 72)." },

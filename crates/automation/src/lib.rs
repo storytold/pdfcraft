@@ -1398,7 +1398,7 @@ impl Automation {
                     } else {
                         let lower = font.to_lowercase();
                         let thai_fonts = pdfcraft_fonts::available_thai_fonts();
-                        let found = thai_fonts.iter().any(|e| {
+                        let found = thai_fonts.iter().find(|e| {
                             let matches_name = e.file_name.to_lowercase() == lower
                                 || e.name.to_lowercase() == lower
                                 || e.family.to_lowercase() == lower
@@ -1412,12 +1412,13 @@ impl Automation {
                                 return true;
                             }
                             self.check_roots(&e.file_name, &e.path, file_access::Access::Read).is_ok()
-                                && self.root.as_ref().map_or(true, |r| e.path.starts_with(r))
+                                && self.root.as_ref().is_none_or(|r| e.path.starts_with(r))
                         });
-                        if found {
-                            hf.font_name = Some(font.to_string());
+                        if let Some(entry) = found {
+                            let _ = pdfcraft_fonts::set_active_thai_font_entry(entry);
+                            hf.font_name = Some(entry.file_name.clone());
                         } else {
-                            return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\" or \"Courier\", not {font:?}")));
+                            return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\", \"Courier\", or an installed Thai font, not {font:?}")));
                         }
                     }
                 }

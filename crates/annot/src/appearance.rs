@@ -57,6 +57,7 @@ fn wrap_thai_paragraph(para: &str, size: f64, width: f64) -> Vec<String> {
                 line_w += space_w + word_w;
             } else {
                 lines.push(std::mem::take(&mut line));
+                line_w = 0.0;
                 if word_w <= width {
                     line = word.to_string();
                     line_w = word_w;
@@ -1028,7 +1029,17 @@ pub fn build_with_doc(doc: Option<&mut Document>, d: &Dict) -> Option<Stream> {
                 y -= line_step;
             }
             out.extend_from_slice(b"ET\n");
-            res.set(b"Font".to_vec(), helvetica_resource());
+            let mut fonts = Dict::new();
+            let mut base = Dict::new();
+            base.set(b"Type".to_vec(), Object::name("Font"));
+            base.set(b"Subtype".to_vec(), Object::name("Type1"));
+            base.set(b"BaseFont".to_vec(), Object::name(base_font));
+            base.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            fonts.set(font_alias.as_bytes().to_vec(), Object::Dict(base));
+            if let Some((t3_ref, _)) = &t3_font {
+                fonts.set(b"T3Thai".to_vec(), Object::Ref(*t3_ref));
+            }
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
             let mut stream = form(full, &out, res);
             if let Some(m) = matrix {
                 stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));

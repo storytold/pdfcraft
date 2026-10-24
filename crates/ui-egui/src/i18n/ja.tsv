@@ -2531,3 +2531,8 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+
+# Thai and standard font UI headings
+	Standard fonts	標準フォント
+	Thai fonts	タイ語フォント
+	Thai / System fonts	タイ語・システムフォント

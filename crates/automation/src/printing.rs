@@ -191,7 +191,7 @@ impl Automation {
         let (paper_index, paper) = paper_named(a.opt_str("paper")?)?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
-        let mut raster = if a.opt_bool("as_image")?.unwrap_or(false) {
+        let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
             let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
             if !(72.0..=600.0).contains(&dpi) {
                 return Err(bad("dpi must be between 72 and 600"));
@@ -200,6 +200,8 @@ impl Automation {
         } else {
             None
         };
+        #[cfg(target_os = "windows")]
+        let mut raster = raster;
         #[cfg(target_os = "windows")]
         if a.opt_str("printer")?.is_some() && raster.is_none() {
             // Direct2D's XPS print control (`d2d1.dll`) on Windows crashes with access violation

@@ -4299,9 +4299,10 @@ fn state_ap(doc: &Document, w: &Widget, state: &str) -> String {
 
 /// The decoded appearance PdfCraft would save for text or choice field `name` of `doc`.
 fn saved_look(doc: &Document, name: &str) -> String {
-    let all = fields(doc);
+    let mut doc_mut = doc.clone();
+    let all = fields(&doc_mut);
     let f = field(&all, name);
-    String::from_utf8_lossy(&appearance::field_appearance(doc, f, &f.widgets[0], &f.value).decoded().unwrap()).into_owned()
+    String::from_utf8_lossy(&appearance::field_appearance(&mut doc_mut, f, &f.widgets[0], &f.value).decoded().unwrap()).into_owned()
 }
 
 /// ISO 32000-2 Table 192 and 12.7.5.2.3: a check box with no appearance shows its `/MK /BC`

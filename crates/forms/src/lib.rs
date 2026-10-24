@@ -1525,12 +1525,22 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
             let stream = match cache.get(w.obj, &inputs) {
                 Some(stream) => stream,
                 None => {
+                    let target = copy.get_or_insert_with(|| doc.clone());
                     let stream = match f.kind {
                         FieldKind::CheckBox | FieldKind::Radio => appearance::button_state_shown(doc, &f, w, state.as_deref() != Some("Off")),
                         FieldKind::PushButton => appearance::push_button_shown(doc, &f, w),
-                        _ => appearance::field_appearance_drawn(doc, &f, w, &f.value, true).0,
+                        _ => appearance::field_appearance_drawn(target, &f, w, &f.value, true).0,
                     };
-                    cache.insert(w.obj, inputs, &stream);
+                    let has_t3 = stream
+                        .dict
+                        .get(b"Resources")
+                        .and_then(Object::as_dict)
+                        .and_then(|r| r.get(b"Font"))
+                        .and_then(Object::as_dict)
+                        .is_some_and(|fonts| fonts.contains(b"T3Thai"));
+                    if !has_t3 {
+                        cache.insert(w.obj, inputs, &stream);
+                    }
                     stream
                 }
             };

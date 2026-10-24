@@ -626,7 +626,7 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let mut settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {
+        let settings = match self.print_draft.settings(doc.info.pages.len(), &labels) {
             Ok(s) => s,
             Err(e) => {
                 self.notify_tr(&e);
@@ -634,6 +634,8 @@ impl PdfCraftApp {
             }
         };
         let name = doc.name.clone();
+        #[cfg(target_os = "windows")]
+        let mut settings = settings;
         #[cfg(target_os = "windows")]
         if self.print_draft.printer.is_some() && settings.raster.is_none() {
             // Direct2D's XPS print control (`d2d1.dll`) on Windows crashes with access violation

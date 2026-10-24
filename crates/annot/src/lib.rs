@@ -1604,10 +1604,23 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let Some(stream) = build_appearance(doc, &d).or_else(other_stamp) else { continue };
-            cache.insert(r, &stream);
+            if appearance::build_with_doc(None, &d).is_none() && other_stamp().is_none() {
+                continue;
+            }
+            let doc_copy = copy.get_or_insert_with(|| doc.clone());
+            let Some(stream) = build_appearance(doc_copy, &d).or_else(other_stamp) else { continue };
+            let has_t3 = stream
+                .dict
+                .get(b"Resources")
+                .and_then(Object::as_dict)
+                .and_then(|r| r.get(b"Font"))
+                .and_then(Object::as_dict)
+                .is_some_and(|fonts| fonts.contains(b"T3Thai"));
+            if !has_t3 {
+                cache.insert(r, &stream);
+            }
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
-            apply_appearance(doc_mut, r, &d, stream).ok();
+            apply_appearance(doc_copy, r, &d, stream).ok();
         }
     }
     copy
@@ -1662,8 +1675,9 @@ fn rich_text(d: &mut Dict) {
             None
         })
         .unwrap_or_else(|| "Helvetica".to_string());
+    let font_family = esc(&font_name);
     let style = format!(
-        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:{font_name};font-stretch:normal",
+        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:{font_family};font-stretch:normal",
         n(size)
     );
     let rc = format!(

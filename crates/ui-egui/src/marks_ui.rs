@@ -196,14 +196,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 let current_font_name =
                     d.hf.font_name
                         .clone()
-                        .unwrap_or_else(|| pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| d.hf.font.label().to_string()));
+                        .unwrap_or_else(|| d.hf.font.label().to_string());
                 egui::ComboBox::from_id_salt("hf-font-selector").selected_text(&current_font_name).width(160.0).show_ui(ui, |ui| {
-                    ui.label(egui::RichText::new("Standard fonts").small().color(t.text_muted));
+                    ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
                     for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                        let selected = d.hf.font_name.as_deref() == Some(f.label()) || (d.hf.font_name.is_none() && d.hf.font == f);
+                        let selected = d.hf.font_name.is_none() && d.hf.font == f;
                         if ui.selectable_label(selected, f.label()).clicked() {
                             d.hf.font = f;
-                            d.hf.font_name = Some(f.label().to_string());
+                            d.hf.font_name = None;
                         }
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -211,7 +211,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         let thai_fonts = pdfcraft_fonts::available_thai_fonts();
                         if !thai_fonts.is_empty() {
                             ui.separator();
-                            ui.label(egui::RichText::new("Thai fonts").small().color(t.text_muted));
+                            ui.label(egui::RichText::new(tl!("Thai fonts")).small().color(t.text_muted));
                             for entry in &thai_fonts {
                                 let selected = d.hf.font_name.as_deref() == Some(&entry.name);
                                 if ui.selectable_label(selected, &entry.name).clicked() {
@@ -319,7 +319,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                         let thai_fonts = pdfcraft_fonts::available_thai_fonts();
                         if !thai_fonts.is_empty() {
                             ui.horizontal(|ui| {
-                                ui.label("Thai fonts");
+                                ui.label(tl!("Thai fonts"));
                                 let current_title =
                                     pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "TlwgTypewriter".to_string());
                                 egui::ComboBox::from_id_salt("wm-thai-font-selector").selected_text(current_title).width(180.0).show_ui(ui, |ui| {
