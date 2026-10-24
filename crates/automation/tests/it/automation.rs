@@ -6537,6 +6537,38 @@ fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc2 }))["xfa_layout"]["pages"], 2);
 }
 
+/// Preserve scientific field text through automation, appearance generation, save/reopen and print.
+#[test]
+fn scientific_xfa_field_text_survives_save_and_print() {
+    let dir = workdir("xfa-scientific-text");
+    let template = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb"><pageSet><pageArea name="page">
+<contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/>
+</pageArea></pageSet><field name="science" w="520pt" h="40pt"><ui><textEdit/></ui>
+<font typeface="Helvetica" size="12pt"/></field></subform></template>"#;
+    std::fs::write(dir.join("science.pdf"), pdfcraft_xfa::fixtures::shell(template)).unwrap();
+    let value = "áéíóú ñ «» € µ ° ± β γ ≥ ≤ ≈ → ×";
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"science.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_fill", json!({"doc":doc,"values":{"science":value}}));
+    ok(&mut a, "doc_export_data", json!({"doc":doc,"path":"data.xml","what":"fields"}));
+    assert!(std::fs::read_to_string(dir.join("data.xml")).unwrap().contains(value));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert!(ok(&mut a, "form_fields", json!({"doc":doc}))["fields"][0]["value"].is_null());
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "form_fields", json!({"doc":doc}))["fields"][0]["value"], value);
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let doc = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({"doc":doc}));
+    assert_eq!(fields["fields"][0]["value"], value);
+    ok(&mut a, "doc_print", json!({"doc":doc,"path":"printed.pdf"}));
+    let printed = ok(&mut a, "doc_open", json!({"path":"printed.pdf"}))["doc"].as_u64().unwrap();
+    let text = ok(&mut a, "text_extract", json!({"doc":printed}));
+    assert_eq!(text["pages"][0]["text"].as_str().unwrap().trim(), value);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn cut_stack_printing_through_tools() {
     let dir = workdir("cut-stack");
