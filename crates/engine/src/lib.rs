@@ -37,6 +37,7 @@ pub mod signature_image;
 pub mod signature_scan;
 mod stamp_preview;
 pub mod text_fonts;
+pub mod text_links;
 mod text_preview;
 pub mod word_count;
 pub mod xfa;
@@ -5021,6 +5022,26 @@ impl Session {
                     .collect();
                 if !rects.is_empty() {
                     out.push((page, rects, uri));
+                }
+            }
+        }
+        out
+    }
+
+    /// The addresses written as plain text on each page that the viewer makes clickable
+    /// ([`text_links::find_text_links`]): (0-based page, address), leaving out any a link
+    /// annotation lies over.
+    pub fn text_links(&self, id: DocId) -> Vec<(usize, text_links::TextLink)> {
+        let Some(doc) = self.get(id) else { return Vec::new() };
+        let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut out = Vec::new();
+        for (page, info) in doc.info.pages.iter().enumerate() {
+            let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+            let Some(text) = res.text else { continue };
+            for link in text_links::find_text_links(&text) {
+                if !doc.info.links.iter().any(|l| l.page == page && link.covered_by(info, l.rect)) {
+                    out.push((page, link));
                 }
             }
         }

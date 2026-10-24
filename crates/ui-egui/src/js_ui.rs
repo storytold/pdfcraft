@@ -401,6 +401,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .color(t.text_muted),
     );
     ui.add(widgets::checkbox(&mut app.always_default_view, tl!("Always use my default zoom and page layout")));
+    ui.add(widgets::checkbox(&mut app.text_links, tl!("Open web and email addresses written in the page text")));
+    ui.label(
+        egui::RichText::new(tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."))
+            .small()
+            .color(t.text_muted),
+    );
     ui.horizontal(|ui| {
         ui.label(tl!("Units"));
         for u in crate::units::Unit::ALL {
