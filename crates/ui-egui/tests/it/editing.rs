@@ -6230,6 +6230,42 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     assert_eq!(h.state().left, LeftPanel::AllTools);
 }
 
+/// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
+/// strokes and says how many; with nothing to fix it says so and changes nothing.
+#[test]
+fn fix_hairlines_from_the_dialog() {
+    // A page with a zero-width line and a 2 pt line.
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let cs = doc
+        .add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S")));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::FixHairlines));
+    h.get_by_label("Type 3 font glyphs");
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 1 hairlines on 1 pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
+    // Nothing left: told, and no new undo step.
+    assert!(h.state_mut().execute("prepress.hairlines"));
+    h.run_steps(2);
+    h.get_by_label("Fix").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.clone().unwrap().0, "No hairlines found on those pages");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
+}
+
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
 /// putting the Edit text tool down does; left open, it would stay drawn in Read mode with no tool.
 #[test]

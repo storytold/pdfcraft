@@ -2402,6 +2402,16 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Narrower than	Тоньше, чем
+	New width	Новая толщина
+	Zero-width lines always count as narrower.	Линии нулевой толщины всегда считаются более тонкими.
+	Also	Также
+	Type 3 font glyphs	Глифы шрифтов Type 3
+	Pattern strokes	Штрихи узоров
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Линии, нарисованные внутри глифов Type 3 и мозаичных узоров; по умолчанию выключено.
+	No hairlines found on those pages	На этих страницах тонких линий не найдено
+	Fixed {n} hairlines on {p} pages	Исправлено {n} тонких линий на {p} страницах
+	Fix hairlines…	Исправить тонкие линии…
 	Attach a file…	Прикрепить файл…
 	Delete attachment	Удалить вложение
 	Attaching files is not available on the web yet	Прикрепление файлов в веб-версии пока недоступно

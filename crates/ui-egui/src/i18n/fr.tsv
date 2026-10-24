@@ -2489,6 +2489,16 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Narrower than	Plus fines que
+	New width	Nouvelle épaisseur
+	Zero-width lines always count as narrower.	Les lignes d'épaisseur nulle comptent toujours comme plus fines.
+	Also	Aussi
+	Type 3 font glyphs	Glyphes des polices Type 3
+	Pattern strokes	Traits des motifs
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Lignes tracées dans les glyphes Type 3 et les motifs de mosaïque ; désactivé par défaut.
+	No hairlines found on those pages	Aucune ligne fine trouvée sur ces pages
+	Fixed {n} hairlines on {p} pages	{n} lignes fines corrigées sur {p} pages
+	Fix hairlines…	Corriger les filets…
 	Attach a file…	Joindre un fichier…
 	Delete attachment	Supprimer la pièce jointe
 	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web

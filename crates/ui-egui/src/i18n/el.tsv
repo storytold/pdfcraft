@@ -2495,6 +2495,16 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Narrower than	Στενότερες από
+	New width	Νέο πλάτος
+	Zero-width lines always count as narrower.	Οι γραμμές μηδενικού πλάτους μετρούν πάντα ως στενότερες.
+	Also	Επίσης
+	Type 3 font glyphs	Γλυφές γραμματοσειρών Type 3
+	Pattern strokes	Πινελιές μοτίβων
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Γραμμές σχεδιασμένες μέσα σε γλυφές Type 3 και μοτίβα πλακιδίων· απενεργοποιημένο από προεπιλογή.
+	No hairlines found on those pages	Δεν βρέθηκαν λεπτές γραμμές σε αυτές τις σελίδες
+	Fixed {n} hairlines on {p} pages	Διορθώθηκαν {n} λεπτές γραμμές σε {p} σελίδες
+	Fix hairlines…	Διόρθωση πολύ λεπτών γραμμών…
 	Attach a file…	Επισύναψη αρχείου…
 	Delete attachment	Διαγραφή συνημμένου
 	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό

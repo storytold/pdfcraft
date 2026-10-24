@@ -2488,6 +2488,16 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Narrower than	Vékonyabb, mint
+	New width	Új vastagság
+	Zero-width lines always count as narrower.	A nulla vastagságú vonalak mindig vékonyabbnak számítanak.
+	Also	Továbbá
+	Type 3 font glyphs	Type 3 betűtípus-glifák
+	Pattern strokes	Mintavonások
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	A Type 3 glifákon és csempézett mintákon belül rajzolt vonalak; alapértelmezés szerint kikapcsolva.
+	No hairlines found on those pages	Ezeken az oldalakon nem találhatók hajszálvonalak
+	Fixed {n} hairlines on {p} pages	{n} hajszálvonal javítva {p} oldalon
+	Fix hairlines…	Hajszálvonalak javítása…
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el

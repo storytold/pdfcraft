@@ -2439,6 +2439,16 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Narrower than	細於
+	New width	新寬度
+	Zero-width lines always count as narrower.	零寬度的線一律視為更細。
+	Also	同時
+	Type 3 font glyphs	Type 3 字型字符
+	Pattern strokes	圖樣描邊
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	繪製在 Type 3 字符和拼貼圖樣內部的線；預設關閉。
+	No hairlines found on those pages	這些頁面上找不到細線
+	Fixed {n} hairlines on {p} pages	已修正 {p} 頁上的 {n} 條細線
+	Fix hairlines…	修正極細線…
 	Attach a file…	附加檔案…
 	Delete attachment	刪除附件
 	Attaching files is not available on the web yet	網頁版尚不支援附加檔案

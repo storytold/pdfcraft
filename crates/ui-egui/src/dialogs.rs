@@ -64,6 +64,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut link_command: Option<&'static str> = None;
     let mut protect_now = false;
     let mut boxes_now = false;
+    let mut fix_hairlines_now = false;
     let mut marks_now = false;
     let mut export_now = false;
     let mut props_now = false;
@@ -1129,6 +1130,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = apply || cancel;
                 return;
             }
+            Dialog::FixHairlines => {
+                let (go, cancel) = crate::hairlines_ui::body(ui, app, &t);
+                fix_hairlines_now = go;
+                close = go || cancel;
+                return;
+            }
             Dialog::NumberPages => {
                 use pdfcraft_engine::LabelStyle as L;
                 ui.label(egui::RichText::new(tl!("Number pages")).font(theme::semibold(18.0)));
@@ -1513,6 +1520,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
+    }
+    if fix_hairlines_now {
+        app.fix_hairlines();
     }
     if apply_number && let Some(edit) = number_now {
         app.apply_edit(edit);

@@ -56,6 +56,7 @@ mod credits;
 mod crop;
 mod drag_pointer;
 mod export_ui;
+mod hairlines_ui;
 mod js_ui;
 #[cfg(target_os = "macos")]
 mod macos_association;
@@ -293,6 +294,8 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Print production ▸ Fix hairlines.
+    FixHairlines,
     /// Protect Using Password.
     Protect,
     /// Set Page Boxes (crop, trim, bleed, art, media).
@@ -935,6 +938,7 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
     /// Set Page Boxes dialog state.
@@ -1285,6 +1289,7 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
+            hairlines_draft: Default::default(),
         }
     }
 
@@ -2936,6 +2941,7 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "fix-hairlines" => Some(Dialog::FixHairlines),
                     "none" => None,
                     _ => Some(Dialog::About),
                 }

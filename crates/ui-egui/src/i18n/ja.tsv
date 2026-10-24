@@ -2489,6 +2489,16 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Narrower than	次より細い
+	New width	新しい太さ
+	Zero-width lines always count as narrower.	幅ゼロの線は常に「より細い」とみなします。
+	Also	さらに
+	Type 3 font glyphs	Type 3 フォントのグリフ
+	Pattern strokes	パターンの線
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 グリフとタイルパターンの内部に描かれた線。既定ではオフです。
+	No hairlines found on those pages	これらのページにヘアラインはありません
+	Fixed {n} hairlines on {p} pages	{p} ページで {n} 本のヘアラインを修正しました
+	Fix hairlines…	極細線を修正…
 	Attach a file…	ファイルを添付…
 	Delete attachment	添付ファイルを削除
 	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません

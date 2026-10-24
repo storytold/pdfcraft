@@ -2511,6 +2511,16 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Narrower than	Тонші за
+	New width	Нова товщина
+	Zero-width lines always count as narrower.	Лінії нульової товщини завжди вважаються тоншими.
+	Also	Також
+	Type 3 font glyphs	Гліфи шрифтів Type 3
+	Pattern strokes	Штрихи візерунків
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Лінії, намальовані всередині гліфів Type 3 і мозаїчних візерунків; типово вимкнено.
+	No hairlines found on those pages	На цих сторінках тонких ліній не знайдено
+	Fixed {n} hairlines on {p} pages	Виправлено {n} тонких ліній на {p} сторінках
+	Fix hairlines…	Виправити надтонкі лінії…
 	Attach a file…	Прикріпити файл…
 	Delete attachment	Видалити вкладення
 	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне

@@ -2747,6 +2747,16 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Narrower than	Siauresnės nei
+	New width	Naujas plotis
+	Zero-width lines always count as narrower.	Nulinio pločio linijos visada laikomos siauresnėmis.
+	Also	Taip pat
+	Type 3 font glyphs	Type 3 šriftų glifai
+	Pattern strokes	Raštų brūkšniai
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Linijos, nubrėžtos Type 3 glifuose ir mozaikiniuose raštuose; pagal numatytuosius nustatymus išjungta.
+	No hairlines found on those pages	Šiuose puslapiuose plaukelinių linijų nerasta
+	Fixed {n} hairlines on {p} pages	Pataisyta {n} plaukelinių linijų {p} puslapiuose
+	Fix hairlines…	Taisyti itin plonas linijas…
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

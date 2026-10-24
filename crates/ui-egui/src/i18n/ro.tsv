@@ -2781,6 +2781,16 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Also	De asemenea
+	Fix hairlines…	Corectare linii subțiri…
+	Fixed {n} hairlines on {p} pages	S-au corectat {n} linii subțiri pe {p} pagini
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Linii desenate în interiorul glifelor Type 3 și al modelelor repetitive; dezactivat implicit.
+	Narrower than	Mai îngust decât
+	New width	Lățime nouă
+	No hairlines found on those pages	Nu s-au găsit linii subțiri pe aceste pagini
+	Pattern strokes	Contururi de model
+	Type 3 font glyphs	Glife de font Type 3
+	Zero-width lines always count as narrower.	Liniile cu lățime zero sunt întotdeauna considerate mai înguste.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

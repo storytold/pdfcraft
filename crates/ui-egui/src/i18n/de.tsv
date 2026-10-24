@@ -2490,6 +2490,16 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Narrower than	Schmaler als
+	New width	Neue Breite
+	Zero-width lines always count as narrower.	Linien mit Breite null gelten immer als schmaler.
+	Also	Außerdem
+	Type 3 font glyphs	Type-3-Schriftglyphen
+	Pattern strokes	Musterstriche
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Linien innerhalb von Type-3-Glyphen und Kachelmustern; standardmäßig aus.
+	No hairlines found on those pages	Auf diesen Seiten wurden keine Haarlinien gefunden
+	Fixed {n} hairlines on {p} pages	{n} Haarlinien auf {p} Seiten korrigiert
+	Fix hairlines…	Haarlinien korrigieren…
 	Attach a file…	Datei anhängen…
 	Delete attachment	Anhang löschen
 	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar

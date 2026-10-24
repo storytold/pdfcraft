@@ -2790,6 +2790,16 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Also	Myös
+	Fix hairlines…	Korjaa hiusviivat…
+	Fixed {n} hairlines on {p} pages	Korjattiin {n} hiusviivaa {p} sivulla
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 -glyfien ja laattakuvioiden sisään piirretyt viivat; oletuksena pois käytöstä.
+	Narrower than	Kapeampi kuin
+	New width	Uusi leveys
+	No hairlines found on those pages	Hiusviivoja ei löytynyt näiltä sivuilta
+	Pattern strokes	Kuvioviivat
+	Type 3 font glyphs	Type 3 -fonttien glyfit
+	Zero-width lines always count as narrower.	Nollaleveyksiset viivat lasketaan aina kapeammiksi.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

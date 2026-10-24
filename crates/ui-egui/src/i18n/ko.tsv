@@ -2757,6 +2757,16 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Also	추가
+	Fix hairlines…	헤어라인 수정…
+	Fixed {n} hairlines on {p} pages	{p}페이지의 헤어라인 {n}개를 수정했습니다
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 글리프와 타일링 패턴 안에 그려진 선이며, 기본값은 꺼짐입니다.
+	Narrower than	다음보다 좁음
+	New width	새 너비
+	No hairlines found on those pages	해당 페이지에서 헤어라인을 찾지 못했습니다
+	Pattern strokes	패턴 선
+	Type 3 font glyphs	Type 3 글꼴 글리프
+	Zero-width lines always count as narrower.	너비가 0인 선은 항상 더 좁은 것으로 간주됩니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

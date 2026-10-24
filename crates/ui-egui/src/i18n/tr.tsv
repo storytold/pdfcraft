@@ -2485,6 +2485,16 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Narrower than	Şundan daha ince
+	New width	Yeni genişlik
+	Zero-width lines always count as narrower.	Sıfır genişlikli çizgiler her zaman daha ince sayılır.
+	Also	Ayrıca
+	Type 3 font glyphs	Type 3 yazı tipi glifleri
+	Pattern strokes	Desen çizgileri
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 glifleri ve döşeme desenleri içinde çizilen çizgiler; varsayılan olarak kapalı.
+	No hairlines found on those pages	Bu sayfalarda ince çizgi bulunamadı
+	Fixed {n} hairlines on {p} pages	{p} sayfada {n} ince çizgi düzeltildi
+	Fix hairlines…	Kılcal çizgileri düzelt…
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor
