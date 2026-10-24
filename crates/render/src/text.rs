@@ -10,6 +10,7 @@
 
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::Pdf;
+use hayro::hayro_interpret::hayro_syntax::object::ObjectIdentifier;
 use hayro::hayro_interpret::{
     BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
 };
@@ -36,6 +37,7 @@ impl TextFilter {
     }
 }
 
+mod replacements;
 mod search;
 
 /// Whether `(x, y)` lies in or on the convex quadrilateral `quad`, whichever way it winds. A
@@ -383,7 +385,7 @@ const WORD_GAP: f32 = 0.15;
 /// a unit vector.
 type Drawn = (usize, [f64; 2], TextGlyph);
 
-struct TextDevice {
+struct TextDevice<'a> {
     /// Every glyph in content order.
     glyphs: Vec<Drawn>,
     /// How many marked content sequences are open.
@@ -397,6 +399,35 @@ struct TextDevice {
     excluded_depth: Option<usize>,
     actual_filtered: bool,
     partial_replacement: bool,
+    /// The structure elements' `/ActualText` over the MCIDs of the page's structured content
+    /// (#3660, #3732).
+    structure: replacements::Replacements<'a>,
+    /// The glyphs of each structure element with a replacement, held until the page ends, when
+    /// all its sequences are known (`place_held`); `held_index` finds an element's entry.
+    held: Vec<Held>,
+    held_index: HashMap<ObjectIdentifier, usize>,
+    /// How many structure sequences have ended on the page, numbering them in content order.
+    held_sequences: usize,
+    /// The `held` entry of the element whose sequence the open replacement is.
+    actual_structure: Option<usize>,
+}
+
+/// One structure element's replacement text and the glyphs of its sequences drawn so far.
+struct Held {
+    text: String,
+    /// Each sequence: where its glyphs go in `TextDevice::glyphs` (how many were there when it
+    /// ended), its number in content order, and its glyphs.
+    sequences: Vec<(usize, usize, Vec<Drawn>)>,
+    /// Whether a filter excluded glyphs from any of them.
+    filtered: bool,
+}
+
+/// What `TextDevice::place_held` puts in place of a held sequence: its own glyphs, or (at the
+/// element's first sequence) the element's replacement with the glyph standing for it, none for
+/// an empty one, and the text and box of each glyph it replaces.
+enum Placed {
+    Own(Vec<Drawn>),
+    Replacement(Option<Drawn>, String, Vec<(String, [f32; 4])>),
 }
 
 /// An `/ActualText` replacement: the glyph standing for it in `TextDevice::glyphs` (none for an
@@ -468,7 +499,8 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }))
 }
 
-impl TextDevice {
+impl TextDevice<'_> {
+    /// A device collecting no text yet, with no filter and no structure replacements.
     fn new() -> Self {
         TextDevice {
             glyphs: Vec::new(),
@@ -479,6 +511,11 @@ impl TextDevice {
             excluded_depth: None,
             actual_filtered: false,
             partial_replacement: false,
+            structure: replacements::Replacements::default(),
+            held: Vec::new(),
+            held_index: HashMap::new(),
+            held_sequences: 0,
+            actual_structure: None,
         }
     }
 
@@ -489,10 +526,25 @@ impl TextDevice {
     /// words can't be found.
     ///
     /// A replacement spanning several lines or writing directions stays per glyph (each glyph's own
-    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all.
+    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all. A
+    /// structure element's sequence is held instead, for `place_held` to decide with the
+    /// element's other sequences when the page ends.
     fn end_actual_text(&mut self) {
         let Some((_, text, drawn)) = self.actual.take() else { return };
-        if std::mem::take(&mut self.actual_filtered) {
+        let filtered = std::mem::take(&mut self.actual_filtered);
+        // A structure element's sequence: held until the page ends, when all of the element's
+        // sequences are known.
+        if let Some(k) = self.actual_structure.take() {
+            let order = self.held_sequences;
+            self.held_sequences = order.saturating_add(1);
+            let slot = self.glyphs.len();
+            if let Some(held) = self.held.get_mut(k) {
+                held.filtered |= filtered;
+                held.sequences.push((slot, order, drawn));
+            }
+            return;
+        }
+        if filtered {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
@@ -512,12 +564,114 @@ impl TextDevice {
         self.replaced.push(Replaced { at, text, originals });
     }
 
+    /// Places each structure element's held sequences (#3660). The element's text replaces them
+    /// only where one glyph can stand for all of them and nothing else: every one on one line in
+    /// one writing direction, with no glyph a filter excludes and no other glyph drawn between
+    /// them. That glyph is boxed around all of them, so what finds the text (search, redaction by
+    /// search) covers everything it replaces and no other searchable text (drawings, glyphs
+    /// without Unicode or ones a filter excludes between them may fall inside its box).
+    /// Otherwise each sequence keeps its own glyphs' text, as a marked-content replacement over
+    /// several lines does: an element over several lines, or around other text, is read as
+    /// drawn. Its sequences' own nested /ActualText, suppressed while the element's replacement
+    /// was open, isn't recovered then.
+    fn place_held(&mut self) {
+        let held = std::mem::take(&mut self.held);
+        self.held_index.clear();
+        if held.is_empty() {
+            return;
+        }
+        // Per sequence number: whether it drew glyphs.
+        let mut drew_glyphs = vec![false; self.held_sequences];
+        for h in &held {
+            for (_, order, drawn) in &h.sequences {
+                if let Some(entry) = drew_glyphs.get_mut(*order) {
+                    *entry = !drawn.is_empty();
+                }
+            }
+        }
+        // Per sequence number: how many sequences numbered below it drew glyphs, so that each
+        // element's range is counted once rather than scanned (a page can interleave many).
+        let mut drew_before = Vec::with_capacity(drew_glyphs.len().saturating_add(1));
+        let mut drew = 0usize;
+        drew_before.push(drew);
+        for &d in &drew_glyphs {
+            drew = drew.saturating_add(usize::from(d));
+            drew_before.push(drew);
+        }
+        // No glyph of the page, or of another element's sequence, drawn between the element's:
+        // the sequences that drew in its range are its own (its orders increase, so all of them
+        // lie in the range).
+        let contiguous = |sequences: &[(usize, usize, Vec<Drawn>)]| {
+            let (Some(first), Some(last)) = (sequences.first(), sequences.last()) else { return true };
+            let own_drew = sequences.iter().filter(|(_, _, drawn)| !drawn.is_empty()).count();
+            let in_range = last
+                .1
+                .checked_add(1)
+                .and_then(|end| drew_before.get(end))
+                .zip(drew_before.get(first.1))
+                .and_then(|(end, start)| end.checked_sub(*start));
+            sequences.iter().all(|(slot, _, _)| *slot == first.0) && in_range == Some(own_drew)
+        };
+        let own = |drawn: Vec<Drawn>| Placed::Own(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())).collect());
+        let mut placed: Vec<(usize, usize, Placed)> = Vec::new();
+        for Held { text, sequences, filtered } in held {
+            let all: Vec<Drawn> = sequences.iter().flat_map(|(_, _, drawn)| drawn.iter().cloned()).collect();
+            let replacement = if filtered || !contiguous(&sequences) { None } else { merge(&all, text.clone()) };
+            match (replacement, sequences.first()) {
+                (Some(glyph), Some(&(slot, order, _))) => {
+                    let originals = all.iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())).map(|d| (d.2.text.clone(), d.2.rect)).collect();
+                    let glyph = (!text.chars().all(|c| c.is_control())).then_some(glyph);
+                    placed.push((slot, order, Placed::Replacement(glyph, text, originals)));
+                }
+                _ => placed.extend(sequences.into_iter().map(|(slot, order, drawn)| (slot, order, own(drawn)))),
+            }
+        }
+        placed.sort_by_key(|(slot, order, _)| (*slot, *order));
+        // The glyphs drawn outside them keep their order, with each placed sequence where it
+        // ended; the replacements made outside them follow their glyphs.
+        let earlier = std::mem::take(&mut self.replaced);
+        let glyphs = std::mem::take(&mut self.glyphs);
+        let mut moved_to = Vec::with_capacity(glyphs.len());
+        let mut placed = placed.into_iter().peekable();
+        for (i, glyph) in glyphs.into_iter().enumerate() {
+            while let Some((_, _, item)) = placed.next_if(|(slot, _, _)| *slot <= i) {
+                self.place(item);
+            }
+            moved_to.push(self.glyphs.len());
+            self.glyphs.push(glyph);
+        }
+        for (_, _, item) in placed {
+            self.place(item);
+        }
+        let placed_replacements = std::mem::replace(
+            &mut self.replaced,
+            earlier.into_iter().map(|r| Replaced { at: r.at.and_then(|at| moved_to.get(at).copied()), ..r }).collect(),
+        );
+        self.replaced.extend(placed_replacements);
+    }
+
+    /// Appends `item` to the page: its own glyphs, or the replacement glyph (when there is one)
+    /// with the text it gives and the glyphs it stands for.
+    fn place(&mut self, item: Placed) {
+        match item {
+            Placed::Own(drawn) => self.glyphs.extend(drawn),
+            Placed::Replacement(glyph, text, originals) => {
+                let at = glyph.map(|glyph| {
+                    self.glyphs.push(glyph);
+                    self.glyphs.len() - 1
+                });
+                self.replaced.push(Replaced { at, text, originals });
+            }
+        }
+    }
+
     /// Ends the page. Some producers draw text twice, the copy for an outline, shadow or
     /// glow, and mark only one drawing with `/ActualText` (Canva). The unmarked redraw of a
     /// replacement's glyphs (the same text at the same places, in content order) takes the same
     /// replacement, so the two read alike and line layout drops the copy as a redraw.
     fn finish(&mut self) {
         self.end_actual_text();
+        self.place_held();
         if self.replaced.is_empty() {
             return;
         }
@@ -612,7 +766,7 @@ fn text_debug() -> bool {
     *DEBUG.get_or_init(|| std::env::var_os("PDFCRAFT_TEXT_DEBUG").is_some())
 }
 
-impl<'a> Device<'a> for TextDevice {
+impl<'a> Device<'a> for TextDevice<'a> {
     fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _: BlendMode) {}
     fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
@@ -709,6 +863,29 @@ impl<'a> Device<'a> for TextDevice {
             self.excluded_depth = Some(self.depth);
         }
     }
+    /// Opens the replacement of the structure element over the sequence `mcid` of the structured
+    /// content with parent tree key `key` (the page's own, or a form XObject's), if any.
+    /// The element encloses the sequence, so its replacement is the outer one: it comes first,
+    /// and the sequence's own /ActualText then nests inside it. The sequence's glyphs are held
+    /// with the element's others until the page ends (`place_held`). An excluded sequence is
+    /// held too, so that the element's text never stands for excluded content.
+    fn structure_marked_content(&mut self, key: i32, mcid: i32) {
+        if self.actual.is_none()
+            && let Some((element, text)) = self.structure.get(key, mcid)
+        {
+            let k = match self.held_index.get(&element) {
+                Some(&k) => k,
+                None => {
+                    let text = pdfcraft_cos::PdfString::literal(text).to_text();
+                    self.held.push(Held { text, sequences: Vec::new(), filtered: false });
+                    self.held_index.insert(element, self.held.len() - 1);
+                    self.held.len() - 1
+                }
+            };
+            self.actual = Some((self.depth, String::new(), Vec::new()));
+            self.actual_structure = Some(k);
+        }
+    }
     fn actual_text(&mut self, text: &[u8]) {
         // A replacement nested in another is already covered by the outer one.
         if self.actual.is_none() && self.excluded_depth.is_none() {
@@ -731,6 +908,8 @@ pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSetting
     extract_page_filtered(pdf, page, settings, TextFilter::default()).ok()
 }
 
+/// Extract the text of one page, leaving out what `filter` excludes. Fails when a replacement
+/// text spans included and excluded content, since its words can't be split between them.
 pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &InterpreterSettings, filter: TextFilter) -> Result<PageText, String> {
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;
@@ -743,6 +922,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
     dev.filter = filter;
+    dev.structure = replacements::Replacements::new(p);
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.
     dev.finish();
@@ -2032,6 +2212,516 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
         assert_eq!(dev.glyphs.len(), 2 * N + 2, "unmatched glyphs are kept");
         assert_eq!(dev.glyphs[1].2.text, "fi", "the redraw found within the budget takes the replacement");
+    }
+
+    /// One tagged page with key 0 in the parent tree `tree`: `content`, Helvetica as /F1, a form
+    /// /Fm0 drawing `form`, and `objects` (structure elements and tree nodes, numbered from 10, or
+    /// a replacement for one of the objects 1–7).
+    fn tagged(content: &str, form: &str, tree: &str, objects: &[(u32, &str)]) -> Pdf {
+        let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len());
+        let mut objs: Vec<(u32, String)> = vec![
+            (1, "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into()),
+            (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into()),
+            (
+                3,
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /StructParents 0 /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /Fm0 7 0 R >> >> >>"
+                    .into(),
+            ),
+            (4, stream("", content)),
+            (5, format!("<< /Type /StructTreeRoot /K 10 0 R /ParentTree {tree} >>")),
+            (6, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into()),
+            (7, stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> >>", form)),
+        ];
+        objs.retain(|(n, _)| !objects.iter().any(|(m, _)| m == n));
+        objs.extend(objects.iter().map(|(n, o)| (*n, o.to_string())));
+        objs.sort_by_key(|(n, _)| *n);
+        let size = objs.last().map_or(1, |(n, _)| n + 1);
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = vec![None; size as usize];
+        for (n, o) in &objs {
+            offsets[*n as usize] = Some(out.len());
+            out.extend(format!("{n} 0 obj\n{o}\nendobj\n").into_bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {size}\n").into_bytes());
+        for offset in offsets {
+            out.extend(match offset {
+                Some(at) => format!("{at:010} 00000 n \n").into_bytes(),
+                None => b"0000000000 65535 f \n".to_vec(),
+            });
+        }
+        out.extend(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").into_bytes());
+        Pdf::new(std::sync::Arc::new(out)).unwrap()
+    }
+
+    /// #3660: a sequence's MCID may sit in a property list named in the resources' `/Properties`
+    /// (ISO 32000-2 §14.6.2) rather than inline; it indexes the parent tree, and a filter's
+    /// MCIDs, all the same.
+    #[test]
+    fn structure_replacement_text_reads_named_property_lists() {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /StructParents 0 /Contents 4 0 R \
+                    /Resources << /Font << /F1 6 0 R >> /Properties << /MC0 << /MCID 0 >> /MC1 << /MCID 1 >> >> >> >>";
+        let content = "/Span /MC0 BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (appointroP.nt) Tj ET EMC \
+                       /P /MC1 BDC BT /F1 20 Tf 1 0 0 1 50 100 Tm (kept) Tj ET EMC";
+        let pdf = tagged(
+            content,
+            "",
+            "<< /Nums [0 [10 0 R 11 0 R]] >>",
+            &[
+                (3, page),
+                (10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (appointment) >>"),
+                (11, "<< /Type /StructElem /S /P /P 5 0 R /K 1 >>"),
+            ],
+        );
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "appointment\nkept");
+        let filter = TextFilter { mcids: HashSet::from([1]), ..TextFilter::default() };
+        let counted = extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), filter).unwrap();
+        assert_eq!(counted.plain_text(), "appointment");
+    }
+
+    /// #3660: replacement text given on a structure element (ISO 32000-2 §14.9.4) replaces the
+    /// content it encloses, found through the page's `/StructParents` entry in the parent tree. An
+    /// OCR layer's misread words are tagged this way with the right ones.
+    #[test]
+    fn actual_text_of_a_structure_element_replaces_its_content() {
+        let parents = "<< /Nums [0 [11 0 R 12 0 R]] >>";
+        let ocr = "/Span <</MCID 0>> BDC BT 3 Tr /F1 14 Tf 50 250 Td (an appointroP.nt online) Tj ET EMC \
+                   /P <</MCID 1>> BDC BT 0 Tr /F1 12 Tf 50 200 Td (Plain text) Tj ET EMC";
+        let pdf = tagged(
+            ocr,
+            "",
+            parents,
+            &[
+                (10, "<< /Type /StructElem /S /Document /P 5 0 R /K [11 0 R 12 0 R] >>"),
+                (11, "<< /Type /StructElem /S /Span /P 10 0 R /Pg 3 0 R /K 0 /ActualText (an appointment online) >>"),
+                (12, "<< /Type /StructElem /S /P /P 10 0 R /Pg 3 0 R /K 1 >>"),
+            ],
+        );
+        let text = marked_text(&pdf, 0);
+        assert_eq!(text.plain_text(), "an appointment online\nPlain text");
+        assert_eq!(text.find("appointment").len(), 1);
+        assert!(text.find("appointroP").is_empty(), "the misread words are no longer found");
+        // Excluding invisible text (word count) leaves the whole replaced OCR span out, as it
+        // leaves out the OCR glyphs it replaces.
+        let filter = TextFilter { images: true, ..TextFilter::default() };
+        let counted = extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), filter).unwrap();
+        assert_eq!(counted.plain_text(), "Plain text");
+
+        // An element over two sequences gives its text once, for both; an ancestor's text covers
+        // its descendants' content. Around other text, its sequences keep their own.
+        let objects = [
+            (10, "<< /Type /StructElem /S /P /P 5 0 R /K [11 0 R 12 0 R] /ActualText (XY) >>"),
+            (11, "<< /Type /StructElem /S /Span /P 10 0 R /K 0 >>"),
+            (12, "<< /Type /StructElem /S /Span /P 10 0 R /K 1 >>"),
+        ];
+        let line = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0>> BDC (ab) Tj EMC /Span <</MCID 1>> BDC (de) Tj EMC ET";
+        assert_eq!(marked_text(&tagged(line, "", parents, &objects), 0).plain_text(), "XY");
+        let line = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0>> BDC (ab) Tj EMC (c) Tj /Span <</MCID 1>> BDC (de) Tj EMC ET";
+        assert_eq!(marked_text(&tagged(line, "", parents, &objects), 0).plain_text(), "abcde");
+
+        // Nested replacements: the outermost covers everything inside it, the marked content's
+        // own /ActualText included.
+        let line = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0 /ActualText (in)>> BDC (x) Tj EMC ET";
+        let pdf = tagged(
+            line,
+            "",
+            "<< /Nums [0 [11 0 R]] >>",
+            &[
+                (10, "<< /Type /StructElem /S /P /P 5 0 R /K [11 0 R] /ActualText (OUT) >>"),
+                (11, "<< /Type /StructElem /S /Span /P 10 0 R /K 0 /ActualText (inner) >>"),
+            ],
+        );
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "OUT");
+
+        // A parent tree split into kids, with limits.
+        let line = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0>> BDC (x) Tj EMC ET";
+        let pdf = tagged(
+            line,
+            "",
+            "20 0 R",
+            &[
+                (10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (fixed) >>"),
+                (20, "<< /Kids [21 0 R 22 0 R] >>"),
+                (21, "<< /Limits [3 9] /Nums [3 [] 9 []] >>"),
+                (22, "<< /Limits [0 0] /Nums [0 [10 0 R]] >>"),
+            ],
+        );
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "fixed");
+    }
+
+    /// #3660: only the page's own MCIDs index its parent tree entry. A form XObject's marked content
+    /// has MCIDs of its own, and without a `/StructParents` of its own they index nothing.
+    #[test]
+    fn structure_replacement_text_stays_out_of_form_xobjects() {
+        let page = "BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj ET /Fm0 Do";
+        let form = "/Span <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 100 100 Tm (zz) Tj ET EMC";
+        let pdf = tagged(page, form, "<< /Nums [0 [10 0 R]] >>", &[(10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (WRONG) >>")]);
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "a\nzz");
+    }
+
+    /// #3660 review: an element's text is given once, by one glyph over all its sequences, or not
+    /// at all. Sequences over several lines keep their own text, however they split between
+    /// sequences; an empty sequence draws nothing for the glyph to cover.
+    #[test]
+    fn structure_replacement_text_is_given_once_or_not_at_all() {
+        let parents = "<< /Nums [0 [10 0 R 10 0 R]] >>";
+        let element = [(10, "<< /Type /StructElem /S /P /P 5 0 R /K [0 1] /ActualText (FIXED) >>")];
+        let cases = [
+            (
+                "/P <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 250 Tm (ab) Tj 0 -40 Td (cd) Tj ET EMC /P <</MCID 1>> BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (ef) Tj ET EMC",
+                "ab\ncd\nef",
+            ),
+            ("/P <</MCID 0>> BDC q Q EMC /P <</MCID 1>> BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (xy) Tj ET EMC", "FIXED"),
+            (
+                "/P <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 250 Tm (ab) Tj ET EMC /P <</MCID 1>> BDC BT /F1 20 Tf 1 0 0 1 50 200 Tm (cd) Tj 0 -40 Td (ef) Tj ET EMC",
+                "ab\ncd\nef",
+            ),
+            (
+                "/P <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 250 Tm (ab) Tj ET EMC /P <</MCID 1>> BDC BT /F1 20 Tf 1 0 0 1 150 250 Tm (cd) Tj ET EMC",
+                "FIXED",
+            ),
+        ];
+        for (content, want) in cases {
+            assert_eq!(marked_text(&tagged(content, "", parents, &element), 0).plain_text(), want, "{content}");
+        }
+    }
+
+    /// #3660 review: a filter never counts an element's text for content it excludes. An element
+    /// with an excluded sequence (invisible OCR, or a Figure), before or after its visible ones,
+    /// keeps its visible sequences' own text.
+    #[test]
+    fn structure_replacement_text_never_stands_for_filtered_content() {
+        let parents = "<< /Nums [0 [10 0 R 10 0 R]] >>";
+        let element = [(10, "<< /Type /StructElem /S /P /P 5 0 R /K [0 1] /ActualText (one two three) >>")];
+        let visible = "/P <</MCID 1>> BDC BT 0 Tr /F1 20 Tf 1 0 0 1 150 150 Tm (Seen) Tj ET EMC";
+        let filter = || TextFilter { images: true, ..TextFilter::default() };
+        let count = |content: &str| extract_page_filtered(&tagged(content, "", parents, &element), 0, &InterpreterSettings::default(), filter());
+        for excluded in [
+            "/P <</MCID 0>> BDC BT 3 Tr /F1 20 Tf 1 0 0 1 50 150 Tm (ocr) Tj ET EMC",
+            "/Figure <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (fig) Tj ET EMC",
+        ] {
+            for content in [format!("{excluded} {visible}"), format!("{visible} {excluded}")] {
+                assert_eq!(count(&content).unwrap().plain_text(), "Seen", "{content}");
+                // Unfiltered, the element's text stands for both sequences, on one line.
+                assert_eq!(marked_text(&tagged(&content, "", parents, &element), 0).plain_text(), "one two three", "{content}");
+            }
+        }
+    }
+
+    /// #3660 review: what finds an element's text covers everything it replaces and nothing else,
+    /// so a redaction made by searching for it removes all of it, and only it. Over adjoining
+    /// sequences on one line the one glyph carrying it is boxed around them all; over several
+    /// lines, or around other text, the sequences keep their own text, found and redacted where
+    /// each is drawn.
+    #[test]
+    fn structure_replacement_text_covers_everything_it_replaces() {
+        let parents = "<< /Nums [0 [10 0 R 10 0 R]] >>";
+        let element = [(10, "<< /Type /StructElem /S /P /P 5 0 R /K [0 1] /ActualText (first second) >>")];
+        let one_line = "BT /F1 20 Tf 1 0 0 1 50 150 Tm /P <</MCID 0>> BDC (fir5t ) Tj EMC /P <</MCID 1>> BDC (5econd) Tj EMC ET";
+        let text = marked_text(&tagged(one_line, "", parents, &element), 0);
+        assert_eq!(text.plain_text(), "first second");
+        let found = text.find("second");
+        let rects: Vec<[f32; 4]> = found.iter().flat_map(|range| text.line_rects(range.clone())).collect();
+        let right = rects.iter().map(|r| r[2]).fold(f32::NEG_INFINITY, f32::max);
+        // "fir5t 5econd" is 5225/1000 em of Helvetica: at 20 pt from x = 50 it ends at 154.5 (the
+        // first sequence alone ends at 88.9).
+        assert!((right - 154.5).abs() < 0.5, "the match reaches the last sequence's glyphs: {rects:?}");
+        assert!(text.find("5econd").is_empty());
+
+        // Text between the sequences is neither swallowed by the match nor read out of order.
+        let around = "BT /F1 20 Tf 1 0 0 1 50 150 Tm /P <</MCID 0>> BDC (fir5t) Tj EMC ( and ) Tj /P <</MCID 1>> BDC (5econd) Tj EMC ET";
+        let text = marked_text(&tagged(around, "", parents, &element), 0);
+        assert_eq!(text.plain_text(), "fir5t and 5econd");
+        assert!(text.find("second").is_empty());
+
+        let two_lines = "/P <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 200 Tm (fir5t) Tj ET EMC /P <</MCID 1>> BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (5econd) Tj ET EMC";
+        let text = marked_text(&tagged(two_lines, "", parents, &element), 0);
+        assert_eq!(text.plain_text(), "fir5t\n5econd");
+        assert!(text.find("second").is_empty(), "no match is left standing for glyphs it doesn't cover");
+    }
+
+    /// #3660 review: placing an element's text at the page's end keeps everything else in place.
+    /// A marked-content replacement drawn after it still finds (and takes over) its unmarked
+    /// redraw; elements whose sequences interleave keep their own text, the one between them
+    /// still gives its; a sequence the content never closes is placed all the same.
+    #[test]
+    fn structure_replacement_text_keeps_the_rest_of_the_page_in_place() {
+        let span = |mcid: i32, x: i32, glyphs: &str| format!("/Span <</MCID {mcid}>> BDC BT /F1 20 Tf 1 0 0 1 {x} 150 Tm ({glyphs}) Tj ET EMC");
+        let elements = |texts: &[(i32, &str)]| -> Vec<(u32, String)> {
+            texts
+                .iter()
+                .map(|(mcid, text)| (10 + *mcid as u32, format!("<< /Type /StructElem /S /Span /P 5 0 R /K {mcid} /ActualText ({text}) >>")))
+                .collect()
+        };
+        let run = |content: &str, tree: &str, objects: Vec<(u32, String)>| {
+            let objects: Vec<(u32, &str)> = objects.iter().map(|(n, o)| (*n, o.as_str())).collect();
+            marked_text(&tagged(content, "", tree, &objects), 0).plain_text()
+        };
+
+        // The element's glyph goes in before the marked-content replacement's, whose index moves.
+        let fi = "/Span <</ActualText (FI)>> BDC BT /F1 20 Tf 1 0 0 1 80 150 Tm (fi) Tj ET EMC";
+        let redraw = "BT /F1 20 Tf 1 0 0 1 80 150 Tm (fi) Tj ET";
+        let content = format!("{} {fi} {redraw}", span(0, 50, "ab"));
+        // (Read once: the redraw is found as the replacement's, not read again as "fi".)
+        assert_eq!(run(&content, "<< /Nums [0 [10 0 R]] >>", elements(&[(0, "XY")])).replace(' ', ""), "XYFI");
+
+        // An element kept as drawn (over two lines) whose first sequence redraws a marked-content
+        // replacement drawn after it: its glyphs go in before the replacement's, and the redraw
+        // is still found as the replacement's.
+        let content = format!(
+            "{} /Span <</ActualText (FI)>> BDC BT /F1 20 Tf 1 0 0 1 80 150 Tm (fi) Tj ET EMC /Span <</MCID 1>> BDC BT /F1 20 Tf 1 0 0 1 80 200 Tm (zz) Tj ET EMC",
+            span(0, 80, "fi")
+        );
+        let objects = vec![(10, "<< /Type /StructElem /S /P /P 5 0 R /K [0 1] /ActualText (QQ) >>".to_string())];
+        assert_eq!(run(&content, "<< /Nums [0 [10 0 R 10 0 R]] >>", objects), "zz\nFI");
+
+        // A1 B1 A2: A is around B's text, so keeps its own; B gives its.
+        let content = format!("{} {} {}", span(0, 50, "a1"), span(1, 100, "b1"), span(2, 150, "a2"));
+        let objects = vec![
+            (10, "<< /Type /StructElem /S /Span /P 5 0 R /K [0 2] /ActualText (AAA) >>".to_string()),
+            (11, "<< /Type /StructElem /S /Span /P 5 0 R /K 1 /ActualText (BBB) >>".to_string()),
+        ];
+        assert_eq!(run(&content, "<< /Nums [0 [10 0 R 11 0 R 10 0 R]] >>", objects), "a1 BBB a2");
+
+        // No EMC: the sequence ends with the page.
+        assert_eq!(run("/Span <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (ab) Tj ET", "<< /Nums [0 [10 0 R]] >>", elements(&[(0, "XY")])), "XY");
+    }
+
+    /// Elements whose sequences nest inside each other's ranges, as a crafted page can draw them,
+    /// are checked against one count of the page's sequences rather than each scanning its range,
+    /// which took time in the elements times the sequences (an order of magnitude over the bound).
+    #[test]
+    fn structure_replacement_text_checks_nested_elements_in_one_pass() {
+        // An element draws a word first. Then element k (of N) holds sequences 1+k and 2N+M-k, so
+        // each range holds the inner elements'; between them another element holds M empty
+        // sequences (an MCID may be drawn more than once), which every range holds too. Nothing
+        // in the ranges draws, so a scan of them would read each one to the end.
+        const N: usize = 30_000;
+        const M: usize = 1_000_000;
+        let held = |text: &str, sequences: Vec<(usize, usize, Vec<Drawn>)>| Held { text: text.into(), sequences, filtered: false };
+        let glyph = TextGlyph {
+            text: "ok".into(),
+            rect: [50.0, 150.0, 70.0, 170.0],
+            quad: [[50.0, 170.0], [70.0, 170.0], [70.0, 150.0], [50.0, 150.0]],
+            direction: [1.0, 0.0],
+        };
+        let mut dev = TextDevice::new();
+        dev.held.push(held("OK", vec![(0, 0, vec![(0, [1.0, 0.0], glyph)])]));
+        dev.held.extend((0..N).map(|k| held("E", vec![(0, 1 + k, Vec::new()), (0, 2 * N + M - k, Vec::new())])));
+        dev.held.push(held("F", (0..M).map(|i| (0, 1 + N + i, Vec::new())).collect()));
+        dev.held_sequences = 2 * N + M + 1;
+        let started = std::time::Instant::now();
+        dev.finish();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert_eq!(dev.glyphs.iter().map(|g| g.2.text.as_str()).collect::<Vec<_>>(), ["OK"]);
+    }
+
+    /// #3660: an annotation's appearance has MCIDs of its own too, indexing nothing without a
+    /// `/StructParents` of its own.
+    #[test]
+    fn structure_replacement_text_stays_out_of_annotation_appearances() {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /StructParents 0 /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> >> /Annots [11 0 R] >>";
+        let ap = "/Span <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 5 5 Tm (zz) Tj ET EMC";
+        let appearance = format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 100 30] /Resources << /Font << /F1 6 0 R >> >> /Length {} >>\nstream\n{ap}\nendstream",
+            ap.len()
+        );
+        let pdf = tagged(
+            "BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj ET",
+            "",
+            "<< /Nums [0 [10 0 R]] >>",
+            &[
+                (3, page),
+                (10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (WRONG) >>"),
+                (11, "<< /Type /Annot /Subtype /FreeText /Rect [100 50 200 80] /AP << /N 7 0 R >> >>"),
+                (7, appearance.as_str()),
+            ],
+        );
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "a\nzz");
+    }
+
+    /// A form XObject drawn with `/Fm0 Do`, as object 7: `content`, then `dict` entries.
+    fn form(content: &str, dict: &str) -> String {
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> /XObject << /Fm1 8 0 R >> >> {dict} /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        )
+    }
+
+    /// #3732: a form XObject with its own `/StructParents` is structured content (ISO 32000-2
+    /// §14.7.5.4): its MCIDs index the parent tree under that key, so the elements over them
+    /// replace its text as they do the page's. Tagged generators put whole paragraphs in forms.
+    #[test]
+    fn structure_replacement_text_reaches_forms_with_struct_parents() {
+        let element = |n: u32, mcid: i32, text: &str| (n, format!("<< /Type /StructElem /S /Span /P 5 0 R /K {mcid} /ActualText ({text}) >>"));
+        let span = |mcid: i32, y: i32, glyphs: &str| format!("/Span <</MCID {mcid}>> BDC BT /F1 20 Tf 1 0 0 1 50 {y} Tm ({glyphs}) Tj ET EMC");
+        let run = |page: &str, tree: &str, objects: Vec<(u32, String)>| {
+            let objects: Vec<(u32, &str)> = objects.iter().map(|(n, o)| (*n, o.as_str())).collect();
+            marked_text(&tagged(page, "", tree, &objects), 0).plain_text()
+        };
+
+        // The issue's page: the element reaches the form's sequence through an MCR, and the page
+        // itself has no entries.
+        let fm0 = form(&span(0, 200, "f0rm"), "/StructParents 1");
+        assert_eq!(run("/Fm0 Do", "<< /Nums [0 [] 1 [10 0 R]] >>", vec![element(10, 0, "form"), (7, fm0)]), "form");
+
+        // The form's sequence names its property list in the form's own `/Properties`.
+        let content = "/Span /MC0 BDC BT /F1 20 Tf 1 0 0 1 50 200 Tm (f0rm) Tj ET EMC";
+        let fm0 = format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> /Properties << /MC0 << /MCID 0 >> >> >> /StructParents 1 /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        );
+        assert_eq!(run("/Fm0 Do", "<< /Nums [1 [10 0 R]] >>", vec![element(10, 0, "form"), (7, fm0)]), "form");
+
+        // A form with resources of its own doesn't look a name up in the page's `/Properties`;
+        // one without any inherits the page's (and its fonts), its MCIDs still under its own key.
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /StructParents 0 /Contents 4 0 R \
+                    /Resources << /Font << /F1 6 0 R >> /XObject << /Fm0 7 0 R >> /Properties << /MC0 << /MCID 0 >> >> >> >>";
+        let tree = "<< /Nums [0 [11 0 R] 1 [10 0 R]] >>";
+        let own = form(content, "/StructParents 1");
+        let objects = vec![(3, page.to_string()), element(10, 0, "form"), element(11, 0, "page"), (7, own)];
+        assert_eq!(run("/Fm0 Do", tree, objects), "f0rm");
+        let inherited = format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /StructParents 1 /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        );
+        let objects = vec![(3, page.to_string()), element(10, 0, "form"), element(11, 0, "page"), (7, inherited)];
+        assert_eq!(run("/Fm0 Do", tree, objects), "form");
+
+        // Page and form MCIDs are separate: the page's MCID 0 and the form's MCID 0 are two
+        // sequences of two elements, and the page's content after the form uses the page's key.
+        let fm0 = form(&span(0, 200, "f0rm"), "/StructParents 1");
+        let page = format!("{} /Fm0 Do {}", span(0, 250, "paqe"), span(1, 150, "a1so"));
+        let tree = "<< /Nums [0 [11 0 R 12 0 R] 1 [10 0 R]] >>";
+        let objects = vec![element(10, 0, "form"), element(11, 0, "page"), element(12, 1, "also"), (7, fm0)];
+        assert_eq!(
+            run(&page, tree, objects),
+            "page
+form
+also"
+        );
+
+        // A form drawn twice gives its element's text once.
+        let fm0 = form(&span(0, 200, "f0rm"), "/StructParents 1");
+        let objects = vec![element(10, 0, "form"), (7, fm0)];
+        assert_eq!(run("/Fm0 Do q 1 0 0 1 120 0 cm /Fm0 Do Q", "<< /Nums [1 [10 0 R]] >>", objects), "form");
+
+        // A nested form with its own key uses it; one without a key keeps its own text, even
+        // inside a form that has one.
+        let nested = |dict: &str| form(&span(0, 150, "inner"), dict);
+        let fm0 = form(&format!("{} /Fm1 Do", span(0, 200, "outer")), "/StructParents 1");
+        let tree = "<< /Nums [1 [10 0 R] 2 [11 0 R]] >>";
+        let objects = |fm1: String| vec![element(10, 0, "OUTER"), element(11, 0, "INNER"), (7, fm0.clone()), (8, fm1)];
+        assert_eq!(
+            run("/Fm0 Do", tree, objects(nested("/StructParents 2"))),
+            "OUTER
+INNER"
+        );
+        assert_eq!(
+            run("/Fm0 Do", tree, objects(nested(""))),
+            "OUTER
+inner"
+        );
+
+        // A form with a key drawn through a form without one still uses its key.
+        let fm0 = form("/Fm1 Do", "");
+        let objects = vec![element(10, 0, "INNER"), (7, fm0), (8, nested("/StructParents 1"))];
+        assert_eq!(run("/Fm0 Do", "<< /Nums [1 [10 0 R]] >>", objects), "INNER");
+
+        // A page whose own content has no marked content needs no /StructParents (§14.7.5.4);
+        // the forms it draws are structured all the same.
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /Fm0 7 0 R >> >> >>";
+        let fm0 = form(&span(0, 200, "f0rm"), "/StructParents 1");
+        let objects = vec![(3, page.to_string()), element(10, 0, "form"), (7, fm0)];
+        assert_eq!(run("/Fm0 Do", "<< /Nums [1 [10 0 R]] >>", objects), "form");
+
+        // One element over a sequence of the page and one of a form gives its text once, for
+        // both, when they adjoin on one line ("ab" ends at x = 72.24); over two lines each keeps
+        // its own.
+        let whole = "<< /Type /StructElem /S /P /P 5 0 R /K [0 << /Type /MCR /Stm 7 0 R /MCID 0 >>] /ActualText (WHOLE) >>";
+        let page = format!("{} /Fm0 Do", span(0, 200, "ab"));
+        for (cd, want) in [("1 0 0 1 73 200 Tm", "WHOLE"), ("1 0 0 1 50 150 Tm", "ab\ncd")] {
+            let fm0 = form(&format!("/Span <</MCID 0>> BDC BT /F1 20 Tf {cd} (cd) Tj ET EMC"), "/StructParents 1");
+            let objects = vec![(10, whole.to_string()), (7, fm0)];
+            assert_eq!(run(&page, "<< /Nums [0 [10 0 R] 1 [10 0 R]] >>", objects), want, "{cd}");
+        }
+
+        // An annotation's appearance with its own key is structured content too.
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /StructParents 0 /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> >> /Annots [11 0 R] >>";
+        let ap = form(&span(0, 5, "zz"), "/StructParents 1");
+        let objects = vec![
+            (3, page.to_string()),
+            element(10, 0, "note"),
+            (11, "<< /Type /Annot /Subtype /FreeText /Rect [100 50 200 80] /StructParent 2 /AP << /N 7 0 R >> >>".to_string()),
+            (7, ap),
+        ];
+        assert_eq!(run("BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj ET", "<< /Nums [1 [10 0 R]] >>", objects), "a\nnote");
+    }
+
+    /// #3732 review: every key reads its part of the parent tree, so the entries read are budgeted
+    /// for the whole page. A key looked up past the budget gets no replacements (its content keeps
+    /// its own text), while the ones looked up before it keep theirs.
+    #[test]
+    fn structure_lookups_share_one_budget_per_page() {
+        // 600 000 pairs before the two keys used: each lookup reads them all, and two lookups
+        // read more than the page may.
+        let mut nums = String::with_capacity(12 << 20);
+        for k in 2..600_002 {
+            nums.push_str(&format!("{k} [] "));
+        }
+        nums.push_str("0 [10 0 R] 1 [11 0 R]");
+        let tree = format!("<< /Nums [{nums}] >>");
+        let fm0 = form("/Span <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 150 Tm (f0rm) Tj ET EMC", "/StructParents 1");
+        let page = "/Span <</MCID 0>> BDC BT /F1 20 Tf 1 0 0 1 50 200 Tm (paqe) Tj ET EMC /Fm0 Do";
+        let objects = [
+            (10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (page) >>"),
+            (11, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (form) >>"),
+            (7, fm0.as_str()),
+        ];
+        assert_eq!(marked_text(&tagged(page, "", &tree, &objects), 0).plain_text(), "page\nf0rm");
+    }
+
+    /// An element under more ancestors than the walk follows gets no replacement.
+    #[test]
+    fn an_overlong_structure_chain_keeps_the_content_text() {
+        let line = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0>> BDC (x) Tj EMC ET";
+        let chain: Vec<(u32, String)> = (10..400u32)
+            .map(|n| {
+                let parent = if n == 399 { "5 0 R".to_string() } else { format!("{} 0 R", n + 1) };
+                let text = if n == 399 { "/ActualText (TOP)" } else { "" };
+                (n, format!("<< /Type /StructElem /S /Span /P {parent} /K 0 {text} >>"))
+            })
+            .collect();
+        let objects: Vec<(u32, &str)> = chain.iter().map(|(n, o)| (*n, o.as_str())).collect();
+        assert_eq!(marked_text(&tagged(line, "", "<< /Nums [0 [10 0 R]] >>", &objects), 0).plain_text(), "x");
+        // The same chain, short enough, is followed to the top.
+        let short: Vec<(u32, &str)> = objects.iter().copied().filter(|(n, _)| *n >= 300).collect();
+        assert_eq!(marked_text(&tagged(line, "", "<< /Nums [0 [300 0 R]] >>", &short), 0).plain_text(), "TOP");
+        // Measured whole, whatever order the MCIDs are read in: MCID 0's element (300) is 100
+        // below the top, and MCID 1's (100) 200 further below it, past the limit.
+        let two = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0>> BDC (x) Tj EMC 0 -40 Td /Span <</MCID 1>> BDC (y) Tj EMC ET";
+        let deep: Vec<(u32, &str)> = objects.iter().copied().filter(|(n, _)| *n >= 100).collect();
+        assert_eq!(marked_text(&tagged(two, "", "<< /Nums [0 [300 0 R 100 0 R]] >>", &deep), 0).plain_text(), "TOP\ny");
+    }
+
+    /// Malformed structure (cyclic ancestors, a parent tree that contains itself, no entry for
+    /// the page) leaves the content's own text and ends.
+    #[test]
+    fn malformed_structure_keeps_the_content_text() {
+        let line = "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</MCID 0>> BDC (x) Tj EMC ET";
+        let cycle = [
+            (10, "<< /Type /StructElem /S /Span /P 11 0 R /K 0 /ActualText (A) >>"),
+            (11, "<< /Type /StructElem /S /P /P 10 0 R /K [10 0 R] /ActualText (B) >>"),
+        ];
+        let cases = [
+            tagged(line, "", "<< /Nums [0 [10 0 R]] >>", &cycle),
+            tagged(line, "", "20 0 R", &[(10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (A) >>"), (20, "<< /Kids [20 0 R] >>")]),
+            tagged(line, "", "<< /Nums [5 [10 0 R]] >>", &[(10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText (A) >>")]),
+            tagged(line, "", "<< /Nums [0 [10 0 R]] >>", &[(10, "<< /Type /StructElem /S /Span /P 5 0 R /K 0 /ActualText 7 >>")]),
+        ];
+        for (i, pdf) in cases.iter().enumerate() {
+            assert_eq!(marked_text(pdf, 0).plain_text(), "x", "case {i}");
+        }
     }
 
     #[test]

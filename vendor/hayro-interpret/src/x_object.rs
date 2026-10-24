@@ -162,6 +162,12 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
             && state.soft_mask.is_none()
             && state.blend_mode == BlendMode::Normal
     };
+    // PdfCraft patch (53): the form's MCIDs index the parent tree under its own /StructParents
+    // (§14.7.5.4) when it is drawn from a page's content, directly or through other forms. One
+    // drawn from a soft mask, pattern or Type 3 glyph stays outside the structure. Entered
+    // before the knockout erase pass, which draws the same content.
+    let outer = context.enter_form_structure(x_object.dict.get::<i32>(STRUCT_PARENTS));
+
     // PdfCraft patch (39): a group drawn as an element of a knockout group replaces what that
     // group drew under its shape, the union of its own elements' shapes (#2971). The shape is
     // cleared by drawing the group's content once in the device's erase mode; the group then
@@ -231,6 +237,8 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         context,
         device,
     );
+
+    context.leave_structure(outer);
 
     device.pop_clip_path();
 
