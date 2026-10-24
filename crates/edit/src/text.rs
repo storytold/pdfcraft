@@ -24,7 +24,7 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
-use regions::{group_blocks, is_centred, rewrite_styled_block};
+use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
 
 /// One line of existing text.
@@ -2768,10 +2768,10 @@ fn paragraph_separator(c: char) -> bool {
 /// new line. A row may also end inside a word of Chinese or Japanese text ([`crate::linebreak`]);
 /// those pieces join without a space. Every white-space character is written as one space, so
 /// a run of spaces typed between, before or after words stays (#4199); only the spaces where a
-/// row wraps are dropped.
-fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
+/// row wraps are dropped. Each line comes with the `\n`-separated row it is from.
+fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<(String, usize)> {
     let mut out = Vec::new();
-    for row in text.split('\n') {
+    for (index, row) in text.split('\n').enumerate() {
         let mut line = String::new();
         let start = out.len();
         // The separators read since the last word: each one boundary between `split` pieces.
@@ -2788,7 +2788,7 @@ fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
                 let candidate = if i == 0 { format!("{line}{spaces}{piece}") } else { format!("{line}{piece}") };
                 // A row holding only the spaces that indent it doesn't wrap before its first word.
                 if line.chars().any(|c| c != ' ') && advance(&candidate) > width {
-                    out.push(std::mem::take(&mut line));
+                    out.push((std::mem::take(&mut line), index));
                     line = piece.to_string();
                 } else {
                     line = candidate;
@@ -2797,7 +2797,7 @@ fn wrap(text: &str, width: f64, advance: impl Fn(&str) -> f64) -> Vec<String> {
         }
         line.push_str(&" ".repeat(gap));
         if !line.is_empty() || out.len() == start {
-            out.push(line);
+            out.push((line, index));
         }
     }
     out
@@ -2826,6 +2826,9 @@ pub struct BlockStyle {
     /// Fill colour (RGB 0–1).
     pub color: Option<[f64; 3]>,
     pub align: Option<crate::added::Align>,
+    /// Rows (the text's lines between `\n`s) aligned other than the paragraph, by index; `None`
+    /// and rows past the end follow `align` ([`crate::paragraph_align`]).
+    pub aligns: Vec<Option<crate::added::Align>>,
     /// Draw a line under each line of text.
     pub underline: Option<bool>,
     /// Line spacing as a multiple of the font size (1.2 is ordinary).
@@ -2885,6 +2888,16 @@ fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    // An alignment for a one-row paragraph is laid out across the column it sits in, as a
+    // paragraph of that width moved to its left edge.
+    let framed;
+    let style = match alignment_frame(&lines, &b, style) {
+        Some([left, right]) => {
+            framed = BlockStyle { width: Some(right - left), offset: Some([left - b.rect[0], 0.0]), ..style.clone() };
+            &framed
+        }
+        None => style,
+    };
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
     let mut dropped = coincident_ops(&lines, &members);
@@ -3162,9 +3175,11 @@ fn rewrite_block_from(
     }
     block_ops.extend(state.ops());
     block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
+    // Each row's alignment: its own, or the paragraph's.
+    let align_of = |row: usize| style.aligns.get(row).copied().flatten().or(align);
     // Alignment: each line's offset from the left edge, in text space.
-    // `visible` is the width the line is aligned on (see the loop below).
-    let offset = |visible: f64| -> f64 {
+    // `visible` is the width the line is aligned on (see the loop below); `align` is its row's.
+    let offset = |visible: f64, align: Option<crate::added::Align>| -> f64 {
         let free = (width - visible).max(0.0) / k;
         match align {
             Some(crate::added::Align::Center) => free / 2.0,
@@ -3180,7 +3195,6 @@ fn rewrite_block_from(
     // (ISO 32000-1 §9.3.3), so where a space is shown with another code (a composite font, a
     // generated Type 3 font, a subset without a space) the extra space follows each space as a
     // TJ adjustment instead, and code 32, which may then be a letter, gets none.
-    let justify = align == Some(crate::added::Align::Justify);
     let word_spacing_reaches_spaces = match metrics.as_ref().filter(|_| reuse) {
         Some(m) => m.encode(" ").is_some_and(|b| m.codes(&b).iter().all(|(c, len)| m.is_space(*c, *len))),
         None => type3.is_none(),
@@ -3188,7 +3202,9 @@ fn rewrite_block_from(
     let mut x = 0.0;
     let mut tw_set = 0.0;
     let mut underlines: Vec<(f64, f64, f64)> = Vec::new(); // (x0, x1, y) in text space
-    for (i, line) in wrapped.iter().enumerate() {
+    for (i, (line, row)) in wrapped.iter().enumerate() {
+        let line_align = align_of(*row);
+        let justify = line_align == Some(crate::added::Align::Justify);
         // A stretched (justified) line shows only its words, as before #4199: word spacing would
         // reach the spaces before its first word and after its last, so they are left out, and
         // the line fills the width from the left edge. Nothing to stretch over, or a paragraph
@@ -3211,7 +3227,7 @@ fn rewrite_block_from(
         } else {
             (line.as_str(), advance(line.trim_end_matches(' ')))
         };
-        let dx = if tw > 0.0 { 0.0 } else { offset(visible) };
+        let dx = if tw > 0.0 { 0.0 } else { offset(visible, line_align) };
         if i > 0 || dx != 0.0 {
             block_ops.push(Op::new("Td", vec![n(dx - x), n(if i > 0 { -lead } else { 0.0 })]));
         }
@@ -3590,12 +3606,16 @@ mod tests {
         assert!(!same_base_font("Arial", ""));
     }
 
+    fn rows(lines: Vec<(String, usize)>) -> Vec<String> {
+        lines.into_iter().map(|(line, _)| line).collect()
+    }
+
     #[test]
     fn paragraph_wrapping_keeps_ideographic_spaces() {
         let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("A　　B C", 4.0, width), ["A　　B", "C"]);
-        assert_eq!(wrap("A\u{a0}B C", 3.0, width), ["A B", "C"]);
-        assert_eq!(wrap("A\u{2028}B C", 3.0, width), ["A B", "C"]);
+        assert_eq!(rows(wrap("A　　B C", 4.0, width)), ["A　　B", "C"]);
+        assert_eq!(rows(wrap("A\u{a0}B C", 3.0, width)), ["A B", "C"]);
+        assert_eq!(rows(wrap("A\u{2028}B C", 3.0, width)), ["A B", "C"]);
     }
 
     /// #4199: a run of spaces stays a run, before, between and after words; the spaces where a
@@ -3603,27 +3623,27 @@ mod tests {
     #[test]
     fn paragraph_wrapping_keeps_every_space_typed() {
         let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("a  b   c", 20.0, width), ["a  b   c"]);
-        assert_eq!(wrap("  a b  ", 20.0, width), ["  a b  "]);
-        assert_eq!(wrap("a\t\tb", 20.0, width), ["a  b"]);
-        assert_eq!(wrap("aa  bb  cc", 6.0, width), ["aa  bb", "cc"]);
+        assert_eq!(rows(wrap("a  b   c", 20.0, width)), ["a  b   c"]);
+        assert_eq!(rows(wrap("  a b  ", 20.0, width)), ["  a b  "]);
+        assert_eq!(rows(wrap("a\t\tb", 20.0, width)), ["a  b"]);
+        assert_eq!(rows(wrap("aa  bb  cc", 6.0, width)), ["aa  bb", "cc"]);
         // An indent alone on a row doesn't wrap before its first word.
-        assert_eq!(wrap("    abc", 3.0, width), ["    abc"]);
+        assert_eq!(rows(wrap("    abc", 3.0, width)), ["    abc"]);
         // The rewrite turns `\r\n` and `\r` into `\n` before wrapping.
-        assert_eq!(wrap(" \tA  B\nC ", 3.0, width), ["  A", "B", "C "]);
-        assert_eq!(wrap("   ", 3.0, width), ["   "]);
-        assert_eq!(wrap("", 3.0, width), [""]);
+        assert_eq!(rows(wrap(" \tA  B\nC ", 3.0, width)), ["  A", "B", "C "]);
+        assert_eq!(rows(wrap("   ", 3.0, width)), ["   "]);
+        assert_eq!(rows(wrap("", 3.0, width)), [""]);
     }
 
     #[test]
     fn japanese_text_wraps_between_characters_but_not_before_closing_marks() {
         let width = |s: &str| s.chars().count() as f64;
-        assert_eq!(wrap("日本語の文章です。", 3.0, width), ["日本語", "の文章", "です。"]);
+        assert_eq!(rows(wrap("日本語の文章です。", 3.0, width)), ["日本語", "の文章", "です。"]);
         // The comma can't begin a row, so the character before it moves down with it.
-        assert_eq!(wrap("あいう、えお", 3.0, width), ["あい", "う、え", "お"]);
+        assert_eq!(rows(wrap("あいう、えお", 3.0, width)), ["あい", "う、え", "お"]);
         // Pieces of one word join without a space; separate words keep theirs.
-        assert_eq!(wrap("Edit PDFを編集", 6.0, width), ["Edit", "PDFを編集"]);
-        assert_eq!(wrap("一行目　二行目", 4.0, width), ["一行目　", "二行目"]);
+        assert_eq!(rows(wrap("Edit PDFを編集", 6.0, width)), ["Edit", "PDFを編集"]);
+        assert_eq!(rows(wrap("一行目　二行目", 4.0, width)), ["一行目　", "二行目"]);
     }
 
     #[test]

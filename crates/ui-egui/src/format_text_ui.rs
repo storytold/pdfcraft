@@ -40,6 +40,44 @@ pub(crate) struct Fonts<'a> {
     pub shown: String,
 }
 
+/// Text being typed in, for the alignment buttons: with some of it selected, they show and set the
+/// alignment of the paragraphs (lines between `\n`s) the selection touches; with none, the box's.
+pub(crate) struct Paragraphs<'a> {
+    pub text: &'a str,
+    /// A byte range of `text`; empty or `None` is nothing selected.
+    pub selection: Option<std::ops::Range<usize>>,
+    /// The box's own alignment is known (added text), so a paragraph set to it keeps no entry of its
+    /// own. An edited paragraph's alignment is only guessed from where its rows sit: its rows keep
+    /// every alignment set.
+    pub tidy: bool,
+}
+
+impl Paragraphs<'_> {
+    /// The paragraphs a selection touches, or `None` with nothing selected.
+    fn selected(&self) -> Option<std::ops::RangeInclusive<usize>> {
+        self.selection.clone().filter(|r| !r.is_empty()).map(|r| pdfcraft_engine::paragraph_align::selected(self.text, r))
+    }
+
+    /// The alignment the buttons show: the first selected paragraph's, or the box's.
+    fn shown(&self, look: &AddedText) -> TextAlign {
+        self.selected().map_or(look.align, |which| look.paragraph_align(*which.start()))
+    }
+
+    /// `align` picked: for the selected paragraphs, or the whole box (dropping theirs).
+    fn choose(&self, look: &mut AddedText, align: TextAlign) {
+        match self.selected() {
+            Some(which) => {
+                let count = pdfcraft_engine::paragraph_align::count(self.text);
+                look.aligns = pdfcraft_engine::paragraph_align::set(&look.aligns, count, which, align, self.tidy.then_some(look.align));
+            }
+            None => {
+                look.align = align;
+                look.aligns.clear();
+            }
+        }
+    }
+}
+
 /// What the panel changed: the style (in place) and a font picked from the list.
 #[derive(Default)]
 pub(crate) struct Outcome {
@@ -71,7 +109,14 @@ fn number(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras: Option<&mut Extras>, fonts: Fonts) -> Outcome {
+pub(crate) fn panel(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    look: &mut AddedText,
+    extras: Option<&mut Extras>,
+    fonts: Fonts,
+    paragraphs: Option<Paragraphs>,
+) -> Outcome {
     let before = (look.clone(), extras.as_deref().copied());
     let mut out = Outcome::default();
     widgets::section_title(ui, tl!("Format text"));
@@ -149,7 +194,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
         ui.painter().vline(sep.center().x, sep.y_range().shrink(3.0), Stroke::new(1.0, t.divider));
         planned(ui, "list", tl!("Bulleted list"));
         planned(ui, "list-ordered", tl!("Numbered list"));
-        let current = match look.align {
+        let shown = paragraphs.as_ref().map_or(look.align, |p| p.shown(look));
+        let current = match shown {
             TextAlign::Left => "align-left",
             TextAlign::Center => "align-center",
             TextAlign::Right => "align-right",
@@ -165,8 +211,14 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                     (TextAlign::Right, "align-right", tl!("Align right")),
                     (TextAlign::Justify, "align-justify", tl!("Justify")),
                 ] {
-                    if icons::button(ui, icon, 30.0, look.align == a, tip).clicked() {
-                        look.align = a;
+                    if icons::button(ui, icon, 30.0, shown == a, tip).clicked() {
+                        match &paragraphs {
+                            Some(p) => p.choose(look, a),
+                            None => {
+                                look.align = a;
+                                look.aligns.clear();
+                            }
+                        }
                         ui.close();
                     }
                 }

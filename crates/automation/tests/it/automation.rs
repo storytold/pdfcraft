@@ -8911,6 +8911,49 @@ fn bookmark_list_reports_colour_and_style() {
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }
 
+/// `aligns` gives each line of added text an alignment of its own; `align` alone is the whole box
+/// again. Text edits take `aligns` for a paragraph's rows the same way.
+#[test]
+fn added_text_lines_take_their_own_alignments() {
+    let dir = workdir("paragraph-aligns");
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"Left line\nRight line","at":[40,50],"width":500,"size":12,"aligns":[null,"right"]}));
+    let rect = |a: &mut Automation, text: &str| -> Vec<f64> {
+        let lines = ok(a, "text_lines", json!({"doc":id,"page":1}));
+        let line = lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == text).cloned().unwrap();
+        line["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    assert!((rect(&mut a, "Left line")[0] - 40.0).abs() < 1.0);
+    assert!((rect(&mut a, "Right line")[2] - 540.0).abs() < 1.0, "{:?}", rect(&mut a, "Right line"));
+    // The whole box centred: the right-aligned line goes with it.
+    ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":1,"align":"center"}));
+    let right = rect(&mut a, "Right line");
+    assert!(((right[0] + right[2]) / 2.0 - 290.0).abs() < 1.0, "{right:?}");
+    assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":["sideways"]})).is_err());
+    assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":"right"})).is_err());
+}
+
+/// `aligns` alone on an existing paragraph aligns its rows by index, as the app does: the rows
+/// stay rows instead of being rewrapped into one, where only the first entry would count.
+#[test]
+fn text_edit_aligns_alone_aligns_the_paragraphs_rows() {
+    let dir = workdir("paragraph-row-aligns");
+    let body = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (The quick brown fox jumps over the lazy dog) Tj T* (and keeps running.) Tj ET";
+    std::fs::write(dir.join("rows.pdf"), win_ansi_paragraph_pdf(body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "rows.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "aligns": [null, "right"] }));
+    let lines = ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 }));
+    let rect = |t: &str| -> Vec<f64> {
+        let line = lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == t).unwrap_or_else(|| panic!("{t:?} is a row: {lines}"));
+        line["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    let (first, second) = (rect("The quick brown fox jumps over the lazy dog"), rect("and keeps running."));
+    assert!((first[0] - 72.0).abs() < 0.5, "the first row stays at the left: {first:?}");
+    assert!((second[2] - first[2]).abs() < 1.0 && second[0] > 100.0, "the second row is right-aligned: {second:?} vs {first:?}");
+}
+
 /// An editable combo box (ISO 32000-2 Table 233, Edit) takes a value that isn't one of its
 /// options, and its page appearance shows it, before and after a save; one without Edit takes
 /// only its options.

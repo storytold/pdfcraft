@@ -66,8 +66,21 @@ pub struct TextDraft {
     /// Display space.
     pub rect: [f64; 4],
     pub text: String,
+    /// The box's formatting; its `text` and `rect` are what the page has (empty for new text), and
+    /// its `aligns` follow `text` as it is typed.
     pub style: AddedText,
     pub focus: bool,
+    /// The selected bytes of `text` (empty: the caret), for aligning the lines it touches.
+    pub selection: Option<std::ops::Range<usize>>,
+    /// The text the box's own Undo history starts from ([`crate::edit_text_ui::forget_typing_before`]).
+    pub typing_from: Option<String>,
+}
+
+impl TextDraft {
+    /// Typing the page doesn't have yet: Undo takes it back in the box before touching the document.
+    pub(crate) fn has_unapplied_typing(&self) -> bool {
+        self.text != self.style.text
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -394,7 +407,7 @@ pub(crate) fn page_input(
             let page_width = info.pages.get(page).map_or(f64::INFINITY, |p| p.width as f64);
             let rect = [at[0], at[1] - style.size * 1.2, (at[0] + 200.0).min(page_width), at[1]];
             style.rect = rect;
-            cv.draft = Some(TextDraft { page, index: None, rect, text: String::new(), style, focus: true });
+            cv.draft = Some(TextDraft { page, index: None, rect, text: String::new(), style, focus: true, selection: None, typing_from: None });
             consumed = true;
             if typed.is_some() {
                 view.pending_edit = typed;
@@ -432,7 +445,16 @@ pub(crate) fn page_input(
         if let Some(edit) = cv.finish_draft(added) {
             view.pending_edit = Some(edit);
         }
-        cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true });
+        cv.draft = Some(TextDraft {
+            page,
+            index: Some(i),
+            rect: t.rect,
+            text: t.text.clone(),
+            style: t.clone(),
+            focus: true,
+            selection: None,
+            typing_from: None,
+        });
         cv.selected = Some((page, i));
         consumed = true;
         return consumed;
@@ -508,6 +530,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
 pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+    let doc_id = view.id;
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
     let zoom = xf.zoom();
@@ -540,11 +563,16 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     // At least 60 points wide, so a short box can still be clicked into. Where that is wider than
     // the box, the editor reaches past it away from the edge its text keeps (the right edge for
     // right-aligned text, both halves for centred), so the text stays where the page draws it.
+    // shortcut: lines aligned differently from each other in a box under 60 points keep the
+    // editor's left edge; anchor each line on its own if such boxes turn out to matter.
     let width = r.width().max(60.0);
-    let anchor = match draft.style.align {
-        pdfcraft_engine::TextAlign::Center => 0.5,
-        pdfcraft_engine::TextAlign::Right => 1.0,
-        pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify => 0.0,
+    // The alignment every line shares, its own or the box's.
+    let first = draft.style.paragraph_align(0);
+    let shared = (1..pdfcraft_engine::paragraph_align::count(&draft.text)).all(|i| draft.style.paragraph_align(i) == first).then_some(first);
+    let anchor = match shared {
+        Some(pdfcraft_engine::TextAlign::Center) => 0.5,
+        Some(pdfcraft_engine::TextAlign::Right) => 1.0,
+        _ => 0.0,
     };
     let at = r.min - egui::vec2((width - r.width()) * anchor, 0.0);
     let background_ready = draft.index.is_some_and(|index| view.text_background.ready_added(page, index));
@@ -552,6 +580,11 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     let (mut commit, mut cancel, mut done) = (false, false, false);
     let mut undrawable = None;
     let memo = &view.content.undrawable;
+    // Clicks outside the document (the Format text panel) keep the text open, as they keep a
+    // paragraph being edited open.
+    // Where the click that took the focus was: the pointer itself may be gone by then (a touch, a
+    // pen lifted away).
+    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it. Over
     // the page, so only where the document shows: text scrolled under the mode bar or a side
     // panel must leave them their pointer (#2755).
@@ -570,36 +603,46 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
             let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
-            // Laid out as the page draws it, so opening the box doesn't show it realigned.
-            // shortcut: justified text is shown left-aligned here (TextEdit can't justify), until the editor gets its own layouter.
-            let halign = match t.style.align {
-                pdfcraft_engine::TextAlign::Center => egui::Align::Center,
-                pdfcraft_engine::TextAlign::Right => egui::Align::Max,
-                pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify => egui::Align::Min,
-            };
+            let color = Color32::from_rgb(cr, cg, cb);
             // Character spacing shows as the page will draw it, scaled like the font.
             let letter_spacing = (t.style.char_spacing * f64::from(zoom)) as f32;
-            let mut spaced = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                let job = spaced_job(text.as_str(), &font, Color32::from_rgb(cr, cg, cb), letter_spacing, wrap_width, halign);
-                ui.fonts_mut(|f| f.layout_job(job))
+            // Laid out as the page draws it, each paragraph with its own alignment, so opening the
+            // box doesn't show it realigned.
+            let style = t.style.clone();
+            let line_font = font.clone();
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
+                aligned_galley(ui, text.as_str(), &style, &line_font, color, letter_spacing, wrap)
             };
+            let before = t.text.clone();
+            let input = input_id();
+            crate::edit_text_ui::forget_typing_before(ui.ctx(), input, doc_id, &mut t.typing_from, &t.style.text);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let mut edit = egui::TextEdit::multiline(&mut t.text)
-                    .font(font.clone())
+                let output = egui::TextEdit::multiline(&mut t.text)
+                    .font(font)
                     .desired_width(width)
                     .desired_rows(1)
-                    .horizontal_align(halign)
+                    .layouter(&mut layouter)
                     .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
-                    .text_color(Color32::from_rgb(cr, cg, cb))
+                    .text_color(color)
                     .hint_text(tl!("Type text"))
-                    .id_salt("added-text-edit");
-                if letter_spacing != 0.0 {
-                    edit = edit.layouter(&mut spaced);
+                    .id(input)
+                    .show(ui);
+                let resp = output.response;
+                if let Some(cursor) = output.cursor_range {
+                    let chars = cursor.as_sorted_char_range();
+                    let byte = |index: usize| t.text.char_indices().nth(index).map_or(t.text.len(), |(at, _)| at);
+                    t.selection = Some(byte(chars.start.into())..byte(chars.end.into()));
                 }
-                let resp = ui.add(edit);
+                // Each paragraph keeps its own alignment through the typing.
+                if t.text != before {
+                    t.style.aligns = pdfcraft_engine::paragraph_align::remap(&before, &t.text, &t.style.aligns);
+                }
                 if t.focus {
                     resp.request_focus();
+                    if let Some(range) = &t.selection {
+                        crate::edit_text_ui::reselect(ui.ctx(), input, &t.text, range);
+                    }
                     t.focus = false;
                 }
                 let buttons = egui::Frame::NONE
@@ -619,7 +662,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // Pressing a button takes the focus from the text: that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p));
                 cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-                commit = done || resp.lost_focus() && !on_buttons && !view.objects.hold_editor;
+                commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
             undrawable = self::undrawable(t, memo);
@@ -642,7 +685,17 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
 /// A finished draft as an edit: new text is added (and selected once it exists), retyped text
 /// updated, and text emptied by retyping removed. Empty new text adds nothing.
 fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
+    // Unchanged is no edit, even for text saved with trailing spaces the trim would drop.
+    if let Some(i) = d.index
+        && let Some((_, a)) = on_page(added, d.page).into_iter().find(|(k, _)| *k == i)
+        && let AddedContent::Text(old) = &a.content
+        && *old == (AddedText { text: d.text.clone(), rect: d.rect, ..d.style.clone() })
+    {
+        return None;
+    }
     let text = d.text.trim_end().to_string();
+    let aligns = pdfcraft_engine::paragraph_align::remap(&d.text, &text, &d.style.aligns);
+    let d = TextDraft { style: AddedText { aligns, ..d.style }, ..d };
     match d.index {
         None if text.trim().is_empty() => None,
         None => {
@@ -657,6 +710,63 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
             (*old != updated).then_some(Edit::UpdateContent { page: d.page, index: i, content: AddedContent::Text(updated) })
         }
     }
+}
+
+/// The added-text box's text field.
+pub(crate) fn input_id() -> egui::Id {
+    egui::Id::new("added-text-input")
+}
+
+/// `text` laid out as added text with `style` is drawn: each paragraph (line typed with Enter) wrapped
+/// to `wrap` and placed by its own alignment, a justified one with every row but its last
+/// stretched.
+fn aligned_galley(
+    ui: &egui::Ui,
+    text: &str,
+    style: &AddedText,
+    font: &egui::FontId,
+    color: Color32,
+    letter_spacing: f32,
+    wrap: f32,
+) -> std::sync::Arc<egui::Galley> {
+    use pdfcraft_engine::TextAlign;
+    let job = |text: &str, align: TextAlign| {
+        let mut job = spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min);
+        job.justify = align == TextAlign::Justify;
+        job
+    };
+    let uniform = text.split('\n').enumerate().all(|(i, _)| style.paragraph_align(i) == style.align);
+    if uniform && style.align != TextAlign::Center && style.align != TextAlign::Right {
+        return ui.fonts_mut(|f| f.layout_job(job(text, style.align)));
+    }
+    // Each paragraph on its own (egui aligns a whole job one way), its rows moved within the
+    // box's width, then joined in order: the caret and selection see one text.
+    let mut galleys = Vec::new();
+    let mut start = 0;
+    for (i, paragraph) in text.split('\n').enumerate() {
+        let end = start + paragraph.len();
+        // The last paragraph keeps a trailing break, as egui's own split does.
+        let last = end + 1 == text.len();
+        let piece = if last { text.get(start..).unwrap_or_default() } else { paragraph };
+        let mut galley = ui.fonts_mut(|f| f.layout_job(job(piece, style.paragraph_align(i))));
+        let g = std::sync::Arc::make_mut(&mut galley);
+        for placed in &mut g.rows {
+            let free = (wrap - placed.row.size.x).max(0.0);
+            placed.pos.x = match style.paragraph_align(i) {
+                TextAlign::Center => free / 2.0,
+                TextAlign::Right => free,
+                TextAlign::Left | TextAlign::Justify => 0.0,
+            };
+        }
+        g.rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(g.rect.width().max(wrap), g.rect.height()));
+        galleys.push(galley);
+        if last {
+            break;
+        }
+        start = end + 1;
+    }
+    let whole = std::sync::Arc::new(spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min));
+    std::sync::Arc::new(egui::Galley::concat(whole, &galleys, ui.ctx().pixels_per_point()))
 }
 
 /// How to use the tools, under the Add content list.

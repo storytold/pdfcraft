@@ -1031,6 +1031,7 @@ pub use images::{ImageChange, PageImage, change_image, page_images, reading_imag
 pub mod bidi;
 pub mod indic;
 mod linebreak;
+pub mod paragraph_align;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,

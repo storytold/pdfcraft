@@ -121,6 +121,16 @@ pub struct AddedText {
     pub align: Align,
     /// Extra space after every character, in points: the PDF's character spacing (`Tc`).
     pub char_spacing: f64,
+    /// Paragraphs (lines typed with Enter) aligned other than [`AddedText::align`], by index;
+    /// `None` and paragraphs past the end follow `align` ([`crate::paragraph_align`]).
+    pub aligns: Vec<Option<Align>>,
+}
+
+impl AddedText {
+    /// Paragraph `i`'s alignment.
+    pub fn paragraph_align(&self, i: usize) -> Align {
+        crate::paragraph_align::align_of(&self.aligns, i, self.align)
+    }
 }
 
 impl Default for AddedText {
@@ -134,6 +144,7 @@ impl Default for AddedText {
             size: 12.0,
             color: [0.0; 3],
             align: Align::Left,
+            aligns: Vec::new(),
             char_spacing: 0.0,
         }
     }
@@ -246,7 +257,7 @@ fn latin_width(t: &AddedText, s: &str) -> f64 {
 
 /// The lines of a text item after wrapping to its box width.
 pub fn lines(t: &AddedText) -> Vec<String> {
-    wrapped(t).into_iter().map(|(line, _)| line).collect()
+    wrapped(t).into_iter().map(|(line, ..)| line).collect()
 }
 
 #[cfg(test)]
@@ -256,13 +267,13 @@ thread_local! {
 }
 
 /// [`lines`], each with whether its paragraph runs right to left (its first strong character
-/// does).
-fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
+/// does) and which paragraph it is in.
+fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
-    for para in t.text.split('\n') {
+    for (index, para) in t.text.split('\n').enumerate() {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
@@ -270,7 +281,7 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
         {
-            out.extend(lines.into_iter().map(|line| (line, false)));
+            out.extend(lines.into_iter().map(|line| (line, false, index)));
             continue;
         }
         let rtl = rtl_script && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
@@ -286,7 +297,7 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
             let candidate_w =
                 if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
             if !line.is_empty() && candidate_w > width {
-                out.push((std::mem::take(&mut line), rtl));
+                out.push((std::mem::take(&mut line), rtl, index));
                 line = word.to_string();
                 line_w = measure(word);
             } else {
@@ -294,7 +305,7 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
                 line_w = candidate_w;
             }
         }
-        out.push((line, rtl));
+        out.push((line, rtl, index));
     }
     out
 }
@@ -368,7 +379,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
-    wrapped(t).into_iter().find_map(|(line, rtl)| {
+    wrapped(t).into_iter().find_map(|(line, rtl, _)| {
         let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
         pieces.iter().find_map(|p| match p {
             Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
@@ -593,8 +604,26 @@ fn font_name(base: &str) -> String {
 const GLYPHS_PER_FONT: usize = 240;
 
 /// A line of a shaped-text item after layout: its text, whether its paragraph runs right to left,
-/// its pieces in drawing order and its width at the item's size.
-type LaidLine = (String, bool, Vec<Piece>, f64);
+/// its paragraph, its pieces in drawing order and its width at the item's size.
+type LaidLine = (String, bool, usize, Vec<Piece>, f64);
+
+/// Where line `i` (`w` wide unstretched, with `spaces` spaces) starts in the box `r`, and its word
+/// spacing. `paragraphs` holds each line's paragraph: a line takes its paragraph's alignment, and
+/// every line of a justified paragraph but its last is stretched to the box's width.
+fn placed(t: &AddedText, r: [f64; 4], paragraphs: &[usize], i: usize, w: f64, spaces: usize, rtl: bool) -> (f64, f64) {
+    let paragraph = paragraphs.get(i).copied().unwrap_or(0);
+    let align = t.paragraph_align(paragraph);
+    let ends_paragraph = paragraphs.get(i + 1) != Some(&paragraph);
+    let tw = if align == Align::Justify && !ends_paragraph && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+    let x = match align {
+        // A right-to-left paragraph's unstretched last line ends at the right edge.
+        Align::Justify if rtl => r[2] - w - tw * spaces as f64,
+        Align::Left | Align::Justify => r[0],
+        Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
+        Align::Right => r[2] - w,
+    };
+    (x, tw)
+}
 
 /// Draw a text item that has Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
 /// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
@@ -602,7 +631,7 @@ type LaidLine = (String, bool, Vec<Piece>, f64);
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
     let laid = wrapped(t)
         .into_iter()
-        .map(|(line, rtl)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, pieces, w)))
+        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }
@@ -624,7 +653,7 @@ fn draw_laid_shaped(
     // one of the fonts, so copy and search get each character exactly once.
     let mut keys: Vec<&ShapedCluster> = Vec::new();
     let mut index: HashMap<ClusterKey, usize> = HashMap::new();
-    for c in laid.iter().flat_map(|(_, _, pieces, _)| pieces).flat_map(|p| match p {
+    for c in laid.iter().flat_map(|(_, _, _, pieces, _)| pieces).flat_map(|p| match p {
         Piece::Shaped(clusters) => clusters.as_slice(),
         Piece::Latin(_) => &[],
     }) {
@@ -669,21 +698,14 @@ fn draw_laid_shaped(
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
     }
-    for (i, (line, rtl, pieces, w)) in laid.iter().enumerate() {
+    let paragraphs: Vec<usize> = laid.iter().map(|(_, _, p, ..)| *p).collect();
+    for (i, (line, rtl, _, pieces, w)) in laid.iter().enumerate() {
         // Shaped glyphs are painted in visual order. Keep the original line's typing order
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
         let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
         out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
         let spaces = line.matches(' ').count();
-        // Justified: the spaces of every line but the last stretch to fill the box.
-        let tw = if t.align == Align::Justify && i + 1 < laid.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
-        let x = match t.align {
-            // A right-to-left paragraph's unstretched last line ends at the right edge.
-            Align::Justify if *rtl => r[2] - w - tw * spaces as f64,
-            Align::Left | Align::Justify => r[0],
-            Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
-            Align::Right => r[2] - w,
-        };
+        let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);
         let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
         let mut pen = x;
         let mut current: Option<&str> = None;
@@ -864,20 +886,14 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
             if t.char_spacing != 0.0 {
                 out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
             }
-            let all = lines(t);
-            for (i, line) in all.iter().enumerate() {
+            let all = wrapped(t);
+            let paragraphs: Vec<usize> = all.iter().map(|(_, _, p)| *p).collect();
+            for (i, (line, ..)) in all.iter().enumerate() {
                 let w = latin_width(t, line);
-                let x = match t.align {
-                    Align::Left | Align::Justify => r[0],
-                    Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
-                    Align::Right => r[2] - w,
-                };
                 // Baseline: 0.8 em below the line top.
                 let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
-                // Justified: word spacing makes every line but the last fill the box.
-                let spaces = line.matches(' ').count();
-                let tw =
-                    if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+                // Justified: word spacing makes every line of a paragraph but its last fill the box.
+                let (x, tw) = placed(t, r, &paragraphs, i, w, line.matches(' ').count(), false);
                 out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
                 out.extend(literal(&win_ansi(line)));
                 out.extend_from_slice(b" Tj\n");
@@ -927,15 +943,12 @@ fn params(c: &Content) -> Dict {
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
-            d.set(
-                b"Align".to_vec(),
-                Object::Int(match t.align {
-                    Align::Left => 0,
-                    Align::Center => 1,
-                    Align::Right => 2,
-                    Align::Justify => 3,
-                }),
-            );
+            d.set(b"Align".to_vec(), Object::Int(align_code(t.align)));
+            // Each paragraph's own alignment, or null where it follows /Align.
+            let aligns = crate::paragraph_align::tidy(t.aligns.clone(), t.align);
+            if !aligns.is_empty() {
+                d.set(b"Aligns".to_vec(), Object::Array(aligns.iter().map(|a| a.map_or(Object::Null, |a| Object::Int(align_code(a)))).collect()));
+            }
             d.set(b"Rect".to_vec(), arr(&text_rect(t)));
             if t.char_spacing != 0.0 {
                 d.set(b"CharSpacing".to_vec(), Object::Real(t.char_spacing));
@@ -962,6 +975,24 @@ fn params(c: &Content) -> Dict {
     d
 }
 
+fn align_code(a: Align) -> i64 {
+    match a {
+        Align::Left => 0,
+        Align::Center => 1,
+        Align::Right => 2,
+        Align::Justify => 3,
+    }
+}
+
+fn align_from(code: Option<i64>) -> Align {
+    match code {
+        Some(1) => Align::Center,
+        Some(2) => Align::Right,
+        Some(3) => Align::Justify,
+        _ => Align::Left,
+    }
+}
+
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
     let rect: [f64; 4] = r.try_into().ok()?;
@@ -969,20 +1000,27 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
         b"Text" => {
             let (family, bold, italic) = Family::from_base(d.name(b"Font").unwrap_or(b"Helvetica"));
             let c = nums(doc, d.get(b"Color"));
+            let text = d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
+            let align = align_from(d.int(b"Align"));
+            // At most one entry per paragraph, whatever the file says.
+            let aligns = d
+                .get(b"Aligns")
+                .and_then(|a| {
+                    doc.resolve(a)
+                        .as_array()
+                        .map(|a| a.iter().take(crate::paragraph_align::count(&text)).map(|v| v.as_int().map(|c| align_from(Some(c)))).collect())
+                })
+                .unwrap_or_default();
             Some(Content::Text(AddedText {
                 rect,
-                text: d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default(),
+                text,
                 family,
                 bold,
                 italic,
                 size: d.get(b"Size").and_then(Object::as_f64).unwrap_or(12.0),
                 color: if c.len() == 3 { [c[0], c[1], c[2]] } else { [0.0; 3] },
-                align: match d.int(b"Align") {
-                    Some(1) => Align::Center,
-                    Some(2) => Align::Right,
-                    Some(3) => Align::Justify,
-                    _ => Align::Left,
-                },
+                align,
+                aligns: crate::paragraph_align::tidy(aligns, align),
                 // Items written before character spacing have none.
                 char_spacing: d.get(b"CharSpacing").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
             }))

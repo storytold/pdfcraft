@@ -3333,6 +3333,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
         size: 12.0,
         color: [0.8, 0.1, 0.2],
         align: TextAlign::Center,
+        aligns: Vec::new(),
         char_spacing: 0.0,
     };
     s.apply(id, Edit::AddText { page: 0, text: text.clone() }).unwrap();
@@ -7041,6 +7042,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
         size: 12.0,
         color: [0.0, 0.0, 0.0],
         align: TextAlign::Left,
+        aligns: Vec::new(),
         char_spacing: 0.0,
     };
     session.apply(id, Edit::AddText { page: 1, text }).unwrap();
@@ -7081,6 +7083,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
                 size: 12.0,
                 color: [0.0, 0.0, 0.0],
                 align: TextAlign::Left,
+                aligns: Vec::new(),
                 char_spacing: 0.0,
             },
         },
