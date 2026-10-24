@@ -298,15 +298,19 @@ impl Window {
         match *window_target {
             #[cfg(wayland_platform)]
             ActiveEventLoop::Wayland(ref window_target) => {
-                attribs.platform_specific.activation_token =
-                    startup_token::for_new_window(given, startup_notify::WAYLAND_VAR);
-                wayland::Window::new(window_target, attribs).map(Window::Wayland)
+                let (token, reservation) = startup_token::for_new_window(given, startup_notify::WAYLAND_VAR);
+                attribs.platform_specific.activation_token = token;
+                let window = wayland::Window::new(window_target, attribs).map(Window::Wayland)?;
+                reservation.commit();
+                Ok(window)
             },
             #[cfg(x11_platform)]
             ActiveEventLoop::X(ref window_target) => {
-                attribs.platform_specific.activation_token =
-                    startup_token::for_new_window(given, startup_notify::X11_VAR);
-                x11::Window::new(window_target, attribs).map(Window::X)
+                let (token, reservation) = startup_token::for_new_window(given, startup_notify::X11_VAR);
+                attribs.platform_specific.activation_token = token;
+                let window = x11::Window::new(window_target, attribs).map(Window::X)?;
+                reservation.commit();
+                Ok(window)
             },
         }
     }
