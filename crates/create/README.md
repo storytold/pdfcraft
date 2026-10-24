@@ -6,7 +6,9 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 - `from_images(&[(name, bytes)])`: one page per image, sized from the image's resolution
   (PNG `pHYs`, JPEG JFIF density; 72 dpi when absent). JPEG data is embedded as is
   (`/DCTDecode`, grey, RGB or Adobe-inverted CMYK); PNG is decoded and stored with Flate,
-  with transparency as a soft mask. An ICC profile in the file (JPEG `APP2 ICC_PROFILE`, PNG
+  with transparency as a soft mask. A picture of only pure black and white (a 1-bit PNG or TIFF,
+  eight-bit grey, a two-colour palette, RGB without a profile) is stored at one bit per pixel, as
+  CCITT Group 4 or Flate, whichever is smaller as stored (`pdfcraft_filters::encode_g4`). An ICC profile in the file (JPEG `APP2 ICC_PROFILE`, PNG
   `iCCP`) that matches the image's colour space is kept as an `/ICCBased` colour space with
   the device space as `/Alternate`; images with the same profile share one profile object.
   JPEG metadata scanning skips marker fill bytes and reads application segments after the
@@ -29,3 +31,6 @@ Indexed Decode values select palette entries after rounding and clipping. Color-
 Missing, null or malformed Decode arrays keep the default mapping.
 The existing 16-bit path still uses each sample's high byte. JPEG and mask Decode handling remain limited.
 ICC transforms and calibrated color conversion remain outside this export path.
+CCITT fax images (Group 3 and 4) are decoded for export through `pdfcraft_cos::Document::decoded_image` with their
+`/DecodeParms` (`/Columns` has to be the image's width; up to `/Height` rows, whatever `/Rows` says), behind other filters such as
+`ASCII85Decode` too; JPEG 2000 and JBIG2 images are still reported, not exported.

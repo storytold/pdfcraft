@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
-use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
+use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
 const MAX_PIXELS: u64 = 80_000_000;
@@ -255,8 +255,10 @@ fn count_decoded(_n: u64) {
     DECODED_PIXELS.with(|c| c.set(c.get().saturating_add(_n)));
 }
 
-/// 8-bit samples of an image (`n` components), decoded.
-pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
+/// 8-bit samples of an image (`n` components), decoded, with `/DecodeParms` given by reference
+/// too ([`Document::with_direct_parms`]): read without them, a predictor's tag bytes would shift
+/// every row, and the image would be written back wrong.
+pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
     let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
@@ -276,7 +278,7 @@ pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
         let v = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
         (v.len() == bytes).then_some(v)
     } else {
-        let v = s.decoded().ok()?;
+        let v = doc.with_direct_parms(s).decoded().ok()?;
         Some(v.get(..bytes)?.to_vec())
     }
 }
@@ -374,7 +376,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     } else {
         (w, h)
     };
-    let px = pixels(s, n)?;
+    let px = pixels(doc, s, n)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
     // A soft mask must keep the image's dimensions: resample it with the image (lossless).
@@ -387,7 +389,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
                 return None;
             }
             let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
-            let mpx = pixels(m, 1)?;
+            let mpx = pixels(doc, m, 1)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
             smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
         }
@@ -399,6 +401,212 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         });
     let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());
     (after < before).then_some((new, smask))
+}
+
+/// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
+/// pixel: grey, a separation, an indexed space or a DeviceN of one colourant. Of names, only
+/// DeviceGray counts: another name is no colour space on its own (`/Indexed` and `/CalGray` need
+/// their parameters), so it can only name a resource, which might be RGB.
+fn one_component(doc: &Document, cs: &Object) -> bool {
+    let cs = doc.resolve(cs);
+    match &*cs {
+        Object::Name(n) => matches!(n.as_slice(), b"DeviceGray" | b"G"),
+        Object::Array(a) => match a.first().and_then(Object::as_name) {
+            Some(b"CalGray" | b"Separation" | b"Indexed" | b"I") => true,
+            Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(1))),
+            Some(b"DeviceN") => a.get(1).is_some_and(|names| doc.resolve(names).as_array().is_some_and(|n| n.len() == 1)),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The samples of a black-and-white image, as rows of 1-bit samples each starting on a new byte,
+/// with its width and height, and whether they were packed from eight bits. Two kinds count:
+/// - one bit per pixel in one colour component, or an image mask, stored with no filter, with
+///   general-purpose ones, or with CCITT fax last ([`Document::decoded_image`]);
+/// - with `eight_bit`, eight-bit grey whose every sample is 0 or 255. A decode array maps 0 and 255
+///   at eight bits as it maps 0 and 1 at one bit, so it stays. Left out: indexed images (their
+///   samples are palette indices) and a colour-key `/Mask` (its ranges are in eight-bit values).
+fn one_bit(doc: &Document, s: &Stream, eight_bit: bool) -> Option<(Vec<u8>, u32, u32, bool)> {
+    let d = &s.dict;
+    // Through u32 first, as everywhere here, so the product can't overflow.
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return None;
+    }
+    let (wu, hu) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
+    let stride = wu.div_ceil(8);
+    let bits = d.int(b"BitsPerComponent");
+    let mask = matches!(d.get(b"ImageMask"), Some(Object::Bool(true)));
+    if (mask && bits.is_none_or(|b| b == 1)) || (bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs))) {
+        let mut data = doc.decoded_image(s).ok()?;
+        let len = stride.checked_mul(hu)?;
+        if data.len() < len {
+            return None;
+        }
+        data.truncate(len);
+        return Some((data, w, h, false));
+    }
+    let indexed = |cs: &Object| match &*doc.resolve(cs) {
+        Object::Array(a) => matches!(a.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+        _ => false,
+    };
+    let colour_key = d.get(b"Mask").is_some_and(|m| doc.resolve(m).as_array().is_some());
+    if !eight_bit || bits != Some(8) || mask || colour_key || !d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs) && !indexed(cs)) {
+        return None;
+    }
+    // Through its parameters given by reference too: without a PNG predictor's tag bytes taken
+    // off, rows of 0 and 255 would still pass below, each shifted by a byte.
+    let samples = doc.with_direct_parms(s).decoded().ok()?;
+    let samples = samples.get(..wu.checked_mul(hu)?)?;
+    let mut packed = vec![0u8; stride.checked_mul(hu)?];
+    for (i, v) in samples.iter().enumerate() {
+        match v {
+            0 => {}
+            255 => {
+                if let Some(b) = packed.get_mut((i / wu) * stride + (i % wu) / 8) {
+                    *b |= 0x80 >> (i % wu % 8);
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some((packed, w, h, true))
+}
+
+/// Whether sample 1 is the dark one of the 1-bit image `d` describes, after its decode array
+/// (`[0 1]` when it has none of two numbers): the painted part of an image mask and black in grey
+/// decode to 0, and full ink in a separation (or a DeviceN of one colourant) to 1. An indexed image
+/// says 0, as its palette, not its decode array, says which entry is darker.
+fn dark_is_one(doc: &Document, d: &Dict) -> bool {
+    let number = |v: Option<&Object>| v.and_then(|v| doc.resolve(v).as_f64());
+    let (d0, d1) = match d.get(b"Decode").map(|v| doc.resolve(v)).as_deref() {
+        Some(Object::Array(a)) => number(a.first()).zip(number(a.get(1))).unwrap_or((0.0, 1.0)),
+        _ => (0.0, 1.0),
+    };
+    if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
+        return d1 < d0;
+    }
+    match d.get(b"ColorSpace").map(|cs| doc.resolve(cs)).as_deref() {
+        Some(Object::Array(a)) => match a.first().and_then(Object::as_name) {
+            Some(b"Indexed" | b"I") => false,
+            Some(b"Separation" | b"DeviceN") => d1 > d0,
+            _ => d1 < d0,
+        },
+        _ => d1 < d0,
+    }
+}
+
+/// `w` × `h` 1-bit rows (each starting on a new byte) averaged down to `nw` × `nh`, no larger:
+/// each new pixel takes the sample that covers more of its area, and the dark one when the two tie
+/// (1 if `dark_is_one`, see [`dark_is_one`]), so a dark line half a new pixel wide stays. `None`
+/// when the rows are short or the new size isn't smaller in both directions or empty.
+pub(crate) fn downsample_bits(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_is_one: bool) -> Option<Vec<u8>> {
+    if nw == 0 || nh == 0 || nw > w || nh > h {
+        return None;
+    }
+    let (stride, nstride) = (usize::try_from(w).ok()?.div_ceil(8), usize::try_from(nw).ok()?.div_ceil(8));
+    let data = data.get(..stride.checked_mul(usize::try_from(h).ok()?)?)?;
+    let mut out = vec![0u8; nstride.checked_mul(usize::try_from(nh).ok()?)?];
+    // In units of 1/nw of a source column, source column x spans [x·nw, (x+1)·nw) and new column i
+    // spans [i·w, (i+1)·w); rows likewise with h and nh. A new pixel's area is then w·h.
+    let (w, h, nw, nh) = (u64::from(w), u64::from(h), u64::from(nw), u64::from(nh));
+    let overlap = |a0: u64, a1: u64, b0: u64, b1: u64| a1.min(b1).saturating_sub(a0.max(b0));
+    // Per source column, the area its 1 samples cover in the new row.
+    let mut ones = vec![0u64; usize::try_from(w).ok()?];
+    for j in 0..nh {
+        ones.fill(0);
+        let (y0, y1) = (j * h, (j + 1) * h);
+        for y in y0 / nh..y1.div_ceil(nh).min(h) {
+            let weight = overlap(y0, y1, y * nh, (y + 1) * nh);
+            let row = data.get(usize::try_from(y).ok()? * stride..)?;
+            for (x, sum) in ones.iter_mut().enumerate() {
+                if row.get(x / 8).is_some_and(|b| b & (0x80 >> (x % 8)) != 0) {
+                    *sum += weight;
+                }
+            }
+        }
+        let out_row = out.get_mut(usize::try_from(j).ok()? * nstride..)?;
+        for i in 0..nw {
+            let (x0, x1) = (i * w, (i + 1) * w);
+            let covered: u64 = (x0 / nw..x1.div_ceil(nw).min(w))
+                .map(|x| overlap(x0, x1, x * nw, (x + 1) * nw) * usize::try_from(x).ok().and_then(|x| ones.get(x)).copied().unwrap_or(0))
+                .sum();
+            // Against what the 0 samples cover: covered is at most w·h, which can't overflow
+            // (w·h < 2^64 for u32 sizes).
+            let zeros = w * h - covered;
+            if covered > zeros || (dark_is_one && covered == zeros) {
+                let i = usize::try_from(i).ok()?;
+                *out_row.get_mut(i / 8)? |= 0x80 >> (i % 8);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// A black-and-white image (see [`one_bit`]) resampled and stored again per `settings`, if that is
+/// smaller as stored; `ppi` is its effective resolution. Also says whether it was resampled.
+///
+/// - **Resampled** ([`downsample_bits`]) when its resolution is above `above_ppi`, to `target_ppi`,
+///   unless it has a soft mask, whose own size would then have to follow.
+/// - **Stored** as CCITT Group 4 with `CcittG4`, or as 1-bit Flate when that is smaller, which only
+///   a resampled image or one packed from eight bits may be: a 1-bit image that is only stored again
+///   becomes Group 4 or stays. With `Retain`, a resampled image keeps its kind of compression
+///   (CCITT, or Flate), and nothing else changes: eight-bit grey stays a grey image like any
+///   other, which the grey settings handle.
+///
+/// The samples keep their meaning, so the colour space, decode array and `/Mask` stay as they are.
+fn mono(doc: &Document, s: &Stream, ppi: f64, settings: &MonoSettings) -> Option<(Stream, bool)> {
+    let d = &s.dict;
+    let downsample = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && !d.contains(b"SMask");
+    let retain = settings.compression == MonoCompression::Retain;
+    let chain = s.filters();
+    // Its kind of compression, which Retain keeps, behind any other filters.
+    let ccitt = matches!(chain.last(), Some((pdfcraft_filters::Filter::CcittFax, _)));
+    // A fax image is only worth decoding to resample it; behind ASCII85Decode, say, storing it
+    // again as Group 4 also drops that filter.
+    let fax_alone = ccitt && chain.len() == 1;
+    if (retain || fax_alone) && !downsample {
+        return None;
+    }
+    let (data, w, h, eight_bit) = one_bit(doc, s, !retain)?;
+    let k = settings.target_ppi / ppi;
+    // At most `w` × `h`, as k < 1: no overflow.
+    let (nw, nh) =
+        if downsample && k < 1.0 { (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1)) } else { (w, h) };
+    let resampled = (nw, nh) != (w, h);
+    if (retain || fax_alone) && !resampled {
+        return None;
+    }
+    let data = if resampled { downsample_bits(&data, w, h, nw, nh, dark_is_one(doc, d))? } else { data };
+    let mut dict = d.clone();
+    for key in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
+        dict.remove(key);
+    }
+    dict.set(b"Width".to_vec(), Object::Int(i64::from(nw)));
+    dict.set(b"Height".to_vec(), Object::Int(i64::from(nh)));
+    if eight_bit {
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    }
+    let g4 = if settings.compression == MonoCompression::CcittG4 || (retain && ccitt) {
+        pdfcraft_filters::encode_g4(&data, nw, nh).ok().map(|coded| {
+            let mut dict = dict.clone();
+            let mut parms = Dict::new();
+            parms.set(b"K".to_vec(), Object::Int(-1));
+            parms.set(b"Columns".to_vec(), Object::Int(i64::from(nw)));
+            parms.set(b"Rows".to_vec(), Object::Int(i64::from(nh)));
+            dict.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+            dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+            Stream::from_raw(dict, coded)
+        })
+    } else {
+        None
+    };
+    let flate = ((resampled || eight_bit) && !(retain && ccitt)).then(|| Stream::flate(dict, &data));
+    // Smaller as stored, counting the dictionary: a tiny image can lose by Group 4's parameters.
+    let best = [g4, flate].into_iter().flatten().filter_map(|c| Some((crate::stored_len(&c)?, c))).min_by_key(|(len, _)| *len)?;
+    (best.0 < crate::stored_len(s)?).then_some((best.1, resampled))
 }
 
 pub(crate) fn run(
@@ -427,6 +635,17 @@ pub(crate) fn run(
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
+        if let Some((new, resampled)) = mono(doc, s, ppi, &settings.mono) {
+            report.image_bytes_before += s.raw.len();
+            report.image_bytes_after += new.raw.len();
+            if resampled {
+                report.images_resampled += 1;
+            } else {
+                report.images_recompressed += 1;
+            }
+            doc.set(r, Object::Stream(new));
+            continue;
+        }
         let Some(n) = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs)) else { continue };
         let st = if n == 1 { &settings.gray } else { &settings.color };
         let Some((new, smask)) = process(doc, s, ppi, st, n) else { continue };
@@ -460,13 +679,13 @@ mod dimension_tests {
             dict.set(b"Width".to_vec(), Object::Int(width));
             dict.set(b"Height".to_vec(), Object::Int(height));
             let stream = Stream::from_raw(dict, vec![0; 4]);
-            assert!(pixels(&stream, channels).is_none(), "{width} x {height} x {channels}");
+            assert!(pixels(&Document::new_empty(), &stream, channels).is_none(), "{width} x {height} x {channels}");
         }
         let mut dict = Dict::new();
         dict.set(b"Width".to_vec(), Object::Int(2));
         dict.set(b"Height".to_vec(), Object::Int(2));
         let stream = Stream::from_raw(dict, vec![1, 2, 3, 4, 5]);
-        assert_eq!(pixels(&stream, 1), Some(vec![1, 2, 3, 4]));
+        assert_eq!(pixels(&Document::new_empty(), &stream, 1), Some(vec![1, 2, 3, 4]));
     }
 
     /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
@@ -481,9 +700,9 @@ mod dimension_tests {
             Stream::from_raw(dict, data.clone())
         };
         DECODED_PIXELS.with(|c| c.set(0));
-        assert!(pixels(&stream(10, 10), 1).is_none());
+        assert!(pixels(&Document::new_empty(), &stream(10, 10), 1).is_none());
         assert_eq!(DECODED_PIXELS.with(|c| c.get()), 0, "pixels decoded");
-        assert_eq!(pixels(&stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
+        assert_eq!(pixels(&Document::new_empty(), &stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
     }
 }
 
@@ -498,5 +717,117 @@ mod tests {
         let contents = Object::Array(vec![Object::Ref(stream); 300]);
         let data = super::content_bytes(&doc, &contents, &mut DecodeBudget::page());
         assert!(data.is_none_or(|d| d.len() <= MAX_PAGE_DECODED + 300));
+    }
+}
+
+#[cfg(test)]
+mod downsample_tests {
+    use super::{dark_is_one, downsample_bits};
+    use pdfcraft_cos::{Dict, Document, Object};
+
+    /// [`downsample_bits`] the slow way: each new pixel's area against every source pixel's.
+    fn naive(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_one: bool) -> Vec<u8> {
+        let (stride, nstride) = ((w as usize).div_ceil(8), (nw as usize).div_ceil(8));
+        let (w, h, nw, nh) = (u64::from(w), u64::from(h), u64::from(nw), u64::from(nh));
+        let mut out = vec![0u8; nstride * nh as usize];
+        for j in 0..nh {
+            for i in 0..nw {
+                let mut ones = 0;
+                for y in 0..h {
+                    for x in 0..w {
+                        let across = ((i + 1) * w).min((x + 1) * nw).saturating_sub((i * w).max(x * nw));
+                        let down = ((j + 1) * h).min((y + 1) * nh).saturating_sub((j * h).max(y * nh));
+                        if data[y as usize * stride + x as usize / 8] & (0x80 >> (x % 8)) != 0 {
+                            ones += across * down;
+                        }
+                    }
+                }
+                if 2 * ones > w * h || (dark_one && 2 * ones == w * h) {
+                    out[j as usize * nstride + i as usize / 8] |= 0x80 >> (i % 8);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn each_new_pixel_takes_the_sample_covering_more_of_it() {
+        // 4 × 2 to 2 × 1: three 1s of four on the left, none on the right.
+        assert_eq!(downsample_bits(&[0b1100_0000, 0b1000_0000], 4, 2, 2, 1, false), Some(vec![0b1000_0000]));
+        // A tie gives the dark sample: 0, black in grey, so a black line half a new pixel wide
+        // stays (the second of four white columns is black); a white one that thin on black doesn't.
+        assert_eq!(downsample_bits(&[0b1011_0000, 0b1011_0000], 4, 2, 2, 1, false), Some(vec![0b0100_0000]));
+        assert_eq!(downsample_bits(&[0b0100_0000, 0b0100_0000], 4, 2, 2, 1, false), Some(vec![0]));
+        // With 1 the dark sample (an inverting decode array, a separation), that line is a 1.
+        assert_eq!(downsample_bits(&[0b0100_0000, 0b0100_0000], 4, 2, 2, 1, true), Some(vec![0b1000_0000]));
+        assert_eq!(downsample_bits(&[0b1011_0000, 0b1011_0000], 4, 2, 2, 1, true), Some(vec![0b1100_0000]));
+        // The same size gives the same bits; padding bits are 0.
+        assert_eq!(downsample_bits(&[0b1010_1111], 3, 1, 3, 1, false), Some(vec![0b1010_0000]));
+        // 3 to 2 across: the middle column counts half to each new one.
+        assert_eq!(downsample_bits(&[0b1100_0000], 3, 1, 2, 1, false), Some(vec![0b1000_0000]));
+    }
+
+    /// The dark sample: 0 in grey and of an image mask, 1 in a separation, each the other way round
+    /// with an inverting decode array; 0 for an indexed image, whatever its decode array.
+    #[test]
+    fn the_dark_sample_follows_the_colour_space_and_decode_array() {
+        let doc = Document::new_empty();
+        let image = |entries: &[(&str, Object)]| {
+            let mut d = Dict::new();
+            for (k, v) in entries {
+                d.set(k.as_bytes().to_vec(), v.clone());
+            }
+            d
+        };
+        let inverted = ("Decode", Object::Array(vec![1.into(), 0.into()]));
+        let grey = ("ColorSpace", Object::name("DeviceGray"));
+        let mask = ("ImageMask", Object::Bool(true));
+        let separation =
+            ("ColorSpace", Object::Array(vec![Object::name("Separation"), Object::name("Spot"), Object::name("DeviceCMYK"), Object::Null]));
+        let indexed = ("ColorSpace", Object::Array(vec![Object::name("Indexed"), Object::name("DeviceGray"), 1.into(), Object::Null]));
+        for (entries, dark_one) in [
+            (vec![grey.clone()], false),
+            (vec![grey, inverted.clone()], true),
+            (vec![mask.clone()], false),
+            (vec![mask, inverted.clone()], true),
+            (vec![separation.clone()], true),
+            (vec![separation, inverted.clone()], false),
+            (vec![indexed.clone()], false),
+            (vec![indexed, inverted], false),
+            (vec![("ColorSpace", Object::name("DeviceGray")), ("Decode", Object::Array(vec![Object::name("x"), 0.into()]))], false),
+        ] {
+            assert_eq!(dark_is_one(&doc, &image(&entries)), dark_one, "{entries:?}");
+        }
+    }
+
+    #[test]
+    fn what_it_cannot_resample_is_none() {
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 5, 1, false), None, "wider");
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 2, 3, false), None, "taller");
+        assert_eq!(downsample_bits(&[0; 2], 4, 2, 0, 1, false), None);
+        assert_eq!(downsample_bits(&[0; 1], 4, 2, 2, 1, false), None, "short rows");
+        assert_eq!(downsample_bits(&[], u32::MAX, u32::MAX, 1, 1, true), None);
+    }
+
+    proptest::proptest! {
+        /// Any bitmap, to any size no larger, with either sample the dark one, gives what the slow
+        /// way gives; all 1s stay all 1s.
+        #[test]
+        fn it_matches_the_slow_way(
+            w in 1u32..40,
+            h in 1u32..16,
+            nw_part in 0.0f64..1.0,
+            nh_part in 0.0f64..1.0,
+            seed in proptest::collection::vec(0u8..=255, 1..64),
+            dark_one: bool,
+        ) {
+            let (nw, nh) = (1 + (f64::from(w - 1) * nw_part) as u32, 1 + (f64::from(h - 1) * nh_part) as u32);
+            let len = (w as usize).div_ceil(8) * h as usize;
+            let data: Vec<u8> = seed.iter().cycle().take(len).copied().collect();
+            proptest::prop_assert_eq!(downsample_bits(&data, w, h, nw, nh, dark_one), Some(naive(&data, w, h, nw, nh, dark_one)));
+            let white = downsample_bits(&vec![0xFF; len], w, h, nw, nh, dark_one).unwrap();
+            proptest::prop_assert_eq!(white, naive(&vec![0xFF; len], w, h, nw, nh, dark_one));
+            proptest::prop_assert!(naive(&vec![0xFF; len], w, h, nw, nh, dark_one).iter().any(|b| *b != 0));
+        }
     }
 }

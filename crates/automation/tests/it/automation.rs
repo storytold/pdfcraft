@@ -5725,6 +5725,183 @@ fn optimizing_through_tools() {
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "discard": ["everything"] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A one-page PDF drawing a 1-bit scan of text (glyph strokes with ragged edges, as a scanner
+/// leaves them) of 1000 × 400 samples, stored with Flate.
+fn scanned_page() -> Vec<u8> {
+    scan_drawn(b"q 500 0 0 200 50 500 cm /Scan Do Q")
+}
+
+/// [`scanned_page`]'s scan, drawn by `content` (which names it `/Scan`).
+fn scan_drawn(content: &[u8]) -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let (w, h) = (1000usize, 400usize);
+    let stride = w.div_ceil(8);
+    let mut data = vec![0xFFu8; stride * h];
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for line in (4..h - 20).step_by(24) {
+        let mut x = 8;
+        while x + 12 < w {
+            let wide = 3 + (next() % 5) as usize;
+            let (top, bottom) = (line + (next() % 4) as usize, line + 14);
+            for y in top..bottom {
+                let left = x + usize::from(next() % 8 == 0);
+                let right = x + wide - usize::from(next() % 8 == 0);
+                for xx in left..right {
+                    data[y * stride + xx / 8] &= !(0x80 >> (xx % 8));
+                }
+            }
+            x += wide + 2 + (next() % 4) as usize;
+        }
+    }
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let image = doc.add(Object::Stream(Stream::flate(d, &data)));
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let mut x = Dict::new();
+    x.set(b"Scan".to_vec(), Object::Ref(image));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(x));
+    let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), content.to_vec())));
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Page"));
+    p.set(b"Parent".to_vec(), Object::Ref(pages));
+    p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+    p.set(b"Resources".to_vec(), Object::Dict(res));
+    p.set(b"Contents".to_vec(), Object::Ref(content));
+    let page = doc.add(Object::Dict(p));
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+/// A scan saved as a 1-bit PNG becomes a page whose picture stays one bit per pixel (not the eight
+/// bits the PNG decodes to), and Export all images gives the picture back.
+#[test]
+fn a_one_bit_scan_stays_one_bit_and_exports() {
+    let dir = workdir("bilevel");
+    let (w, h) = (800u32, 200u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut bits = vec![0xFFu8; stride * h as usize];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            if y % 25 >= 6 && y % 25 < 18 && (x * 7 + y / 25 * 13) % 11 < 4 {
+                bits[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+    }
+    let mut png_bytes = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png_bytes, w, h);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::One);
+        enc.write_header().unwrap().write_image_data(&bits).unwrap();
+    }
+    std::fs::write(dir.join("scan.png"), &png_bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "scan.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("scan.pdf")).unwrap())).unwrap();
+    let images: Vec<Option<i64>> = saved
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*saved.get(pdfcraft_cos::ObjRef { num, generation: saved.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => Some(s.dict.int(b"BitsPerComponent")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, [Some(1)]);
+    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": doc, "folder": "out" }));
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{r}");
+    let exported = std::fs::read(files[0]["path"].as_str().unwrap()).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(exported)).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut buf).unwrap();
+    let white: Vec<bool> = buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect();
+    let expected: Vec<bool> =
+        (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
+    assert_eq!(white, expected);
+}
+
+/// A scan's black-and-white image is stored as CCITT Group 4 by default, and kept as it is with
+/// `mono: { compression: retain }`.
+#[test]
+fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
+    let dir = workdir("optimize-mono");
+    std::fs::write(dir.join("scan.pdf"), scanned_page()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "compression": "retain" } }));
+    assert_eq!((kept["images"].as_u64(), kept["images_recompressed"].as_u64()), (Some(1), Some(0)), "{kept}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(1), Some(1)), "{r}");
+    assert!(r["image_bytes_after"].as_u64() < r["image_bytes_before"].as_u64(), "{r}");
+    // The copy written stores the image as Group 4.
+    let small = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("small.pdf")).unwrap())).unwrap();
+    let filters: Vec<Vec<u8>> = small
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*small.get(pdfcraft_cos::ObjRef { num, generation: small.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => s.dict.name(b"Filter").map(<[u8]>::to_vec),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filters, [b"CCITTFaxDecode".to_vec()]);
+    // An unknown compression, one that isn't a name, a misspelled key, or a mono that isn't an
+    // object is refused, not read as the default.
+    for mono in [json!({ "compression": "jbig2" }), json!({ "compression": false }), json!({ "compresson": "retain" }), json!("retain")] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
+}
+
+/// A scan drawn at 600 ppi is averaged down to 300 ppi by default. `mono: { downsample: false }`
+/// keeps its size, `ppi` and `above_ppi` choose others, and values of the wrong type are refused.
+#[test]
+fn doc_optimize_averages_black_and_white_scans_down() {
+    let dir = workdir("optimize-mono-downsample");
+    // 1000 × 400 samples on 120 × 48 pt: 600 ppi.
+    std::fs::write(dir.join("scan.pdf"), scan_drawn(b"q 120 0 0 48 50 500 cm /Scan Do Q")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let sizes = |name: &str| -> Vec<(Option<i64>, Option<i64>)> {
+        let written = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        written
+            .object_numbers()
+            .into_iter()
+            .filter_map(|num| match &*written.get(pdfcraft_cos::ObjRef { num, generation: written.generation(num) }) {
+                pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => Some((s.dict.int(b"Width"), s.dict.int(b"Height"))),
+                _ => None,
+            })
+            .collect()
+    };
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!(r["images_resampled"].as_u64(), Some(1), "{r}");
+    assert_eq!(sizes("small.pdf"), [(Some(500), Some(200))]);
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "downsample": false } }));
+    assert_eq!(r["images_resampled"].as_u64(), Some(0), "{r}");
+    assert_eq!(sizes("kept.pdf"), [(Some(1000), Some(400))]);
+    ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "200.pdf", "mono": { "ppi": 200, "above_ppi": 250 } }));
+    assert_eq!(sizes("200.pdf"), [(Some(333), Some(133))]);
+    for mono in [json!({ "downsample": "yes" }), json!({ "ppi": "300" }), json!({ "above": 450 })] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
+}
+
 /// A one-page PDF whose page picture is drawn as `rows` grey images one pixel row high, 600 px
 /// wide on a 72 pt square (600 ppi), as some PDF printers write it.
 fn printed_in_strips(rows: usize) -> Vec<u8> {

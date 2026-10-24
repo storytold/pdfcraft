@@ -588,6 +588,8 @@
 	Clean Up	تنظيف
 	Color Images	الصور الملونة
 	Grayscale Images	الصور الرمادية
+	Monochrome Images	الصور أحادية اللون
+	CCITT Group 4	CCITT المجموعة 4
 	Bicubic downsampling to	تقليل العينات بطريقة Bicubic إلى
 	for images above	للصور التي تتجاوز
 	Compression	الضغط

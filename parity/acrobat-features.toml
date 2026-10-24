@@ -130,8 +130,8 @@ milestone = "M1"
 status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = "decoded through the hayro bootstrap for display; own codecs are M1.1/M1.2"
+evidence = ["crates/filters/src/ccitt.rs::decoding_gives_the_rows_back", "crates/cos/src/document.rs::fax_images_decode_with_their_parameters"]
+notes = "decoded through the hayro bootstrap for display; own codecs are M1.1/M1.2. CCITT fax decoding is in filters (decode_ccitt, through hayro-ccitt), which Document::decoded_image uses for Export ▸ Images and the optimizer"
 
 [[feature]]
 id = "core.decompression-limits"
@@ -6825,8 +6825,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
+evidence = ["crates/create/src/tests.rs::black_and_white_images_are_stored_at_one_bit", "crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet. A picture of only pure black and white (a 1-bit PNG or TIFF, eight-bit grey, a two-colour palette, RGB without a profile) is stored at one bit per pixel, as CCITT Group 4 or Flate, whichever is smaller"
 
 [[feature]]
 id = "create.from-multipage-tiff"
@@ -7105,8 +7105,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.all_images"]
 tools = ["doc_export_all_images"]
-evidence = ["crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/automation/tests/it/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps"]
-notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2/CCITT masks are left out (image exported opaque); JPX/JBIG2/CCITT/separations reported as skipped; minimum size filter. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Still limited: 16-bit samples use high bytes; general JPEG and mask Decode, ICC transforms, and calibrated colors remain unsupported."
+evidence = ["crates/create/src/tests.rs::ccitt_fax_images_export_as_their_picture", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::indexed_and_one_bit_images_decode", "crates/create/src/tests.rs::jpeg_images_with_a_soft_mask_export_as_png_with_alpha", "crates/create/src/tests.rs::soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha", "crates/automation/tests/it/automation.rs::exporting_all_images_through_tools", "crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/create/src/tests.rs::lossless_decode_maps_each_component_before_colour_conversion", "crates/create/src/tests.rs::lossless_indexed_decode_rounds_in_index_units_then_clamps"]
+notes = "each image once (page resources and nested forms); JPEG unchanged unless it has transparency, others PNG (gray/RGB/CMYK/ICC/Indexed, 1–16 bpc, stencil masks); transparency as PNG alpha: /SMask (scaled to the image size, /Matte un-blended), stencil /Mask and colour-key /Mask, JPEG images included (#645); JPX/JBIG2 masks are left out (image exported opaque); JPX/JBIG2/separations reported as skipped; minimum size filter. Lossless images apply per-component Decode; Indexed values round and clip before palette lookup. Missing, null or malformed Decode arrays keep the default mapping. Still limited: 16-bit samples use high bytes; general JPEG and mask Decode, ICC transforms, and calibrated colors remain unsupported.. CCITT fax images (Group 3 and 4, with their /DecodeParms, behind other filters too) export as their picture, masks included"
 
 [[feature]]
 id = "create.export-html"
@@ -7266,7 +7266,7 @@ status = "shipped"
 commands = ["optimize.reduce"]
 tools = ["doc_reduce"]
 evidence = ["crates/ui-egui/tests/it/create.rs::reduce_file_size_writes_a_compact_copy", "crates/ui-egui/tests/it/create.rs::reduce_file_size_saves_nothing_when_the_file_is_already_small", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::an_identity_decode_array_does_not_stop_reduce"]
-notes = "images above 225 ppi to 150 ppi JPEG medium (after merging page pictures printed as one-pixel strips into one image), thumbnails dropped, resources merged, object streams; scanner images with the default decode array are included; a copy that isn't smaller is not saved (\"already as small as it can be made\"); runs in the background with a progress bar and Cancel"
+notes = "images above 225 ppi to 150 ppi JPEG medium (after merging page pictures printed as one-pixel strips into one image), black-and-white images to CCITT Group 4 when that is smaller, thumbnails dropped, resources merged, object streams; scanner images with the default decode array are included; a copy that isn't smaller is not saved (\"already as small as it can be made\"); runs in the background with a progress bar and Cancel"
 
 [[feature]]
 id = "optimize.compatibility-level"
@@ -7301,8 +7301,8 @@ milestone = "M11"
 status = "partial"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
-evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image", "crates/optimize/tests/optimize.rs::images_that_do_not_tile_a_picture_are_left_alone", "crates/optimize/tests/optimize.rs::a_deeply_nested_form_is_measured_at_its_largest_use", "crates/optimize/tests/optimize.rs::images_are_not_resampled_when_some_uses_could_not_be_measured"]
-notes = "colour and grayscale, bicubic, effective resolution measured where drawn (every use, through nested forms up to 12 deep; when a use can't be measured, nothing is resampled); image fragments stacked edge to edge are merged first (side-by-side tiles not yet); monochrome not yet"
+evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled", "crates/optimize/tests/optimize.rs::settings_choose_what_happens", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::a_page_picture_printed_as_one_pixel_strips_is_merged_into_one_image", "crates/optimize/tests/optimize.rs::images_that_do_not_tile_a_picture_are_left_alone", "crates/optimize/tests/optimize.rs::a_deeply_nested_form_is_measured_at_its_largest_use", "crates/optimize/tests/optimize.rs::images_are_not_resampled_when_some_uses_could_not_be_measured", "crates/optimize/tests/optimize.rs::black_and_white_images_above_450_ppi_are_averaged_down_to_300", "crates/optimize/src/images.rs::it_matches_the_slow_way", "crates/automation/tests/it/automation.rs::doc_optimize_averages_black_and_white_scans_down", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy"]
+notes = "colour and grayscale, bicubic, effective resolution measured where drawn (every use, through nested forms up to 12 deep; when a use can't be measured, nothing is resampled); image fragments stacked edge to edge are merged first (side-by-side tiles not yet); monochrome (1-bit, CCITT fax and eight-bit black-and-white grey) averaged by area to 300 ppi above 450 ppi by default, a tie to the dark sample (black in grey, painted in a mask, ink in a separation, after the decode array), then stored as Group 4 or 1-bit Flate (Monochrome Images ▸ Downsample to; doc_optimize mono); not monochrome images with a soft mask, and Acrobat's bicubic and subsampling choices for monochrome aren't offered"
 
 [[feature]]
 id = "optimize.recompress-images"
@@ -7322,11 +7322,11 @@ title = "Monochrome compression (JBIG2, CCITT G4)"
 area = "K"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["optimize.advanced", "optimize.reduce"]
+tools = ["doc_optimize", "doc_reduce"]
+evidence = ["crates/optimize/tests/optimize.rs::eight_bit_black_and_white_images_become_one_bit", "crates/filters/src/ccitt.rs::bitmaps_round_trip", "crates/filters/src/ccitt.rs::a_page_of_text_like_marks_round_trips_and_shrinks", "crates/filters/src/ccitt.rs::what_it_cannot_encode_is_an_error", "crates/optimize/tests/optimize.rs::black_and_white_images_become_ccitt_group_4", "crates/automation/tests/it/automation.rs::doc_optimize_stores_black_and_white_images_as_ccitt_group_4", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy"]
+notes = "CCITT Group 4, lossless: PDF Optimizer ▸ Images ▸ Monochrome Images (on by default, so Reduce File Size does it too; doc_optimize mono) stores a 1-bit image of one colour component (grey, indexed, a separation) or an image mask, kept with no filter or general-purpose ones, as Group 4 when that is smaller as stored; the samples decode to the same bits, so colour space, decode array and masks stay. An eight-bit grey image of only black and white is packed to one bit first, then stored the same way (indexed images and colour-key masks aside). Group 4 wins on scans; on clean computer-drawn 1-bit art Flate can be smaller, and the image then stays. CCITT fax images are decoded to be downsampled (optimize.downsample-images), and a resampled image is stored as Group 4 or 1-bit Flate, whichever is smaller. Not yet: JBIG2 (lossless or lossy, which Adobe's help says beats CCITT for monochrome), Group 3 to Group 4 without resampling, inline images, soft masks and /Mask images, rows wider than 32,767 samples."
 
 [[feature]]
 id = "optimize.only-if-smaller"

@@ -265,6 +265,8 @@
 	Clean Up	清理
 	Color Images	彩色图像
 	Grayscale Images	灰度图像
+	Monochrome Images	单色图像
+	CCITT Group 4	CCITT 第 4 组
 	Bicubic downsampling to	双三次降采样至
 	for images above	（高于此分辨率的图像）
 	Compression	压缩

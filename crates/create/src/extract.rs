@@ -1,7 +1,7 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images, and JPEG images with
 //! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, CCITT, separations) are
+//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, JBIG2, separations) are
 //! reported, never silently left out.
 
 use std::collections::HashSet;
@@ -109,7 +109,6 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     match f.last().map(Vec::as_slice) {
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
         Some(b"JBIG2Decode") => return Err("JBIG2 images can't be exported yet".into()),
-        Some(b"CCITTFaxDecode" | b"CCF") => return Err("CCITT fax images can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
@@ -148,7 +147,7 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
         space = decoded;
         (samples, 8)
     } else {
-        let data = s.decoded().map_err(|e| e.to_string())?;
+        let data = doc.decoded_image(s).map_err(|e| e.to_string())?;
         let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
@@ -466,7 +465,7 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8
 }
 
 /// A one-component mask image as 8-bit values (its `/Decode` inversion applied), scaled to
-/// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
+/// `w` × `h`. `None` when it can't be decoded (JPEG 2000 and JBIG2 masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
     let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
@@ -476,7 +475,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
             let img = image::load_from_memory_with_format(&m.raw, image::ImageFormat::Jpeg).ok()?.into_luma8();
             (img.width() as usize == mw && img.height() as usize == mh).then(|| img.into_raw())?
         }
-        Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode" | b"CCITTFaxDecode" | b"CCF") => return None,
+        Some(b"DCTDecode" | b"DCT" | b"JPXDecode" | b"JBIG2Decode") => return None,
         _ => {
             let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
@@ -488,7 +487,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&m.decoded().ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&doc.decoded_image(m).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     let invert = m

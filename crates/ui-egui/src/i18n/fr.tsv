@@ -561,6 +561,8 @@
 	Clean Up	Nettoyer
 	Color Images	Images couleur
 	Grayscale Images	Images en niveaux de gris
+	Monochrome Images	Images monochromes
+	CCITT Group 4	CCITT groupe 4
 	Bicubic downsampling to	Sous-échantillonnage bicubique à
 	for images above	pour les images au-dessus de
 	Compression	Compression
