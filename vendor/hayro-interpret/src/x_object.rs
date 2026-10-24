@@ -1321,14 +1321,14 @@ fn get_components(
             buf
         }
         8 => data.iter().map(|v| *v as u16).collect(),
-        // PdfCraft patch (68): a last sample with only its first byte is missing, as an
-        // incomplete 1-, 2- or 4-bit sample is (its second byte was read past the end).
-        16 => data
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&pair| u16::from_be_bytes(pair))
-            .collect(),
+        // PdfCraft patch (68): a last sample with only its first byte reads as 0, as an
+        // incomplete 1-, 2- or 4-bit sample does (`BitReader::read` gives `None`, read as 0).
+        // Its second byte was read past the end of the data.
+        16 => {
+            let (pairs, rest) = data.as_chunks::<2>();
+            let incomplete = (!rest.is_empty()).then_some(0);
+            pairs.iter().map(|&pair| u16::from_be_bytes(pair)).chain(incomplete).collect()
+        }
         _ => {
             warn!("unsupported bits per component: {bits_per_component}");
             return None;
