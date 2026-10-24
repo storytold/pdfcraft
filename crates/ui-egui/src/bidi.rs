@@ -130,6 +130,112 @@ pub fn visual_auto(text: &str) -> Cow<'_, str> {
     Cow::Owned(lines.join("\n"))
 }
 
+/// `text` in display order with the source index of every character of it: the string the line
+/// editor shows and the map its edits read back through, so a click in the middle of a
+/// right-to-left sentence still inserts there once the sentence is written to the PDF (#2101).
+///
+/// The order is [`visual_auto`]'s: every paragraph takes its direction from its first strong
+/// character, lines keep their order, and the stretches of right-to-left script stay in typing
+/// order inside themselves for the shaper (see [`visual`]). Unlike [`visual`] the result is a
+/// strict permutation of `text` — bidi controls are kept (the shaper draws them as nothing),
+/// brackets in right-to-left runs are mirrored as UAX #9 L4 has them on display, and no line
+/// gains or loses a character — so `order[i]` names the character of `text` that `i` shows.
+///
+/// Text without right-to-left script comes back as the identity, and so does text over the
+/// same 4 MB that `TextBlock::edited_spans` gives up on: a block that size is beyond editing
+/// here anyway.
+pub(crate) fn visual_with_order(text: &str) -> (String, Vec<usize>) {
+    if text.len() > 4_000_000 || !has_rtl(text) {
+        return (text.to_owned(), (0..text.chars().count()).collect());
+    }
+    let info = BidiInfo::new(text, None);
+    let mut out = String::with_capacity(text.len());
+    let mut order = Vec::with_capacity(text.chars().count());
+    // Characters handed out so far, in logical order: paragraph ranges follow the text, so at
+    // the start of a paragraph this is the index of its first character.
+    let mut at = 0usize;
+    for para in &info.paragraphs {
+        // Paragraph separators end the paragraph and are not reordered: the next paragraph
+        // follows them, so every line stays where the logical text has it.
+        let whole = text.get(para.range.clone()).unwrap_or_default();
+        let content_end = para.range.start.saturating_add(whole.trim_end_matches(is_paragraph_separator).len());
+        // Paragraph ranges lie on character boundaries by construction; a stray one would
+        // lose characters, which the permutation tests would catch at once.
+        if whole.is_empty() {
+            at = at.saturating_add(whole.chars().count());
+            continue;
+        }
+        let content = para.range.start..content_end;
+        let base = at;
+        if content.is_empty() {
+            for (k, c) in whole.chars().enumerate() {
+                out.push(c);
+                order.push(base + k);
+            }
+            at = base.saturating_add(whole.chars().count());
+            continue;
+        }
+        // The content's characters with their logical index, in logical order.
+        let entries: Vec<(usize, usize, char)> =
+            text.get(content.clone()).unwrap_or_default().char_indices().enumerate().map(|(k, (b, c))| (content.start + b, base + k, c)).collect();
+        // First the true display order, every character left to right as it appears on screen.
+        let mut shown: Vec<(char, usize)> = Vec::with_capacity(entries.len());
+        let mut placed = vec![false; entries.len()];
+        let (levels, runs) = info.visual_runs(para, content.clone());
+        for run in runs {
+            let rtl = levels.get(run.start).is_some_and(Level::is_rtl);
+            let lo = entries.partition_point(|e| e.0 < run.start);
+            let hi = entries.partition_point(|e| e.0 < run.end);
+            if lo == hi {
+                continue;
+            }
+            if rtl {
+                for e in entries[lo..hi].iter().rev() {
+                    shown.push((mirrored(e.2), e.1));
+                }
+            } else {
+                for e in &entries[lo..hi] {
+                    shown.push((e.2, e.1));
+                }
+            }
+            placed[lo..hi].fill(true);
+        }
+        // A character no run claimed stays in place: the order must remain a permutation.
+        for (e, claimed) in entries.iter().zip(&placed) {
+            if !claimed {
+                shown.push((e.2, e.1));
+            }
+        }
+        // Then as egui gets it: each stretch of right-to-left script goes back to logical
+        // order inside itself — egui shapes such a run right to left (see [`visual`]) — while
+        // the stretches keep the display order they were given.
+        let mut stretch: Vec<(char, usize)> = Vec::new();
+        for (c, i) in shown {
+            if is_rtl_script(c) || is_joiner(c) || is_bidi_control(c) {
+                stretch.push((c, i));
+            } else {
+                for (c, i) in stretch.drain(..).rev() {
+                    out.push(c);
+                    order.push(i);
+                }
+                out.push(c);
+                order.push(i);
+            }
+        }
+        for (c, i) in stretch.into_iter().rev() {
+            out.push(c);
+            order.push(i);
+        }
+        at = base.saturating_add(entries.len());
+        for (k, c) in whole[content_end.saturating_sub(para.range.start)..].chars().enumerate() {
+            out.push(c);
+            order.push(at + k);
+        }
+        at = at.saturating_add(whole[content_end.saturating_sub(para.range.start)..].chars().count());
+    }
+    (out, order)
+}
+
 /// The byte ranges of the lines `range` of `text` breaks into: as many words as `fits` accepts
 /// per line, a word too wide for any line split between characters. Always at least one line.
 fn break_lines(text: &str, range: Range<usize>, fits: &mut impl FnMut(&str) -> bool) -> Vec<Range<usize>> {
@@ -348,6 +454,72 @@ fn mirrored(c: char) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every character of the display string is its source character (mirrored where UAX #9
+    /// mirrors it), each source used exactly once.
+    fn assert_permutation(logical: &str, vis: &str, order: &[usize]) {
+        let source: Vec<char> = logical.chars().collect();
+        let shown: Vec<char> = vis.chars().collect();
+        assert_eq!(order.len(), shown.len(), "one index per shown character: {logical:?}");
+        let mut seen = order.to_vec();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..source.len()).collect::<Vec<usize>>(), "every source once: {logical:?}");
+        for (i, &at) in order.iter().enumerate() {
+            let from = source.get(at).copied().expect("index inside the text");
+            let got = shown.get(i).copied().expect("index inside the display");
+            assert!(from == got || mirrored(from) == got, "{logical:?}: {i} shows {got:?}, source {from:?}");
+        }
+    }
+
+    #[test]
+    fn visual_with_order_is_the_identity_without_rtl() {
+        for s in ["", "report.pdf", "日本語の文字.pdf", "line one\nline two", "a (b) 12"] {
+            let (vis, order) = visual_with_order(s);
+            assert_eq!(vis, s);
+            assert_eq!(order, (0..s.chars().count()).collect::<Vec<usize>>());
+        }
+    }
+
+    #[test]
+    fn visual_with_order_puts_rtl_words_in_display_order() {
+        // An Arabic sentence: the first word reads at the right edge.
+        let (vis, order) = visual_with_order("مرحبا سلام");
+        assert_eq!(vis, "سلام مرحبا");
+        assert_permutation("مرحبا سلام", &vis, &order);
+        // An RTL paragraph with Latin at its end shows the Latin first, on the left.
+        let (vis, order) = visual_with_order("שדה abc");
+        assert_eq!(vis, "abc שדה");
+        assert_permutation("שדה abc", &vis, &order);
+    }
+
+    #[test]
+    fn visual_with_order_is_a_permutation_of_any_text() {
+        for s in [
+            "مرحبا بالعالم 123",
+            "abc 12 םולש",
+            "שורה אחת\nשורה שתיים\nthird",
+            "\u{200F}שלום world\u{200E}",
+            "نیم‌فاصله (با) [پرانتز]",
+            "mixed مرحبا text with שלום inside",
+        ] {
+            let (vis, order) = visual_with_order(s);
+            assert_permutation(s, &vis, &order);
+        }
+    }
+
+    #[test]
+    fn visual_with_order_keeps_every_line_where_it_was() {
+        let (vis, order) = visual_with_order("שורה ראשונה\nשורה שנייה\n");
+        assert_eq!(vis.split('\n').count(), 3, "the lines and the trailing newline stay");
+        assert_permutation("שורה ראשונה\nשורה שנייה\n", &vis, &order);
+        // The newline of the logical text maps to the newline of the display text.
+        let source: Vec<char> = "שורה ראשונה\nשורה שנייה\n".chars().collect();
+        for (i, &at) in order.iter().enumerate() {
+            if source[at] == '\n' {
+                assert_eq!(vis.chars().nth(i), Some('\n'));
+            }
+        }
+    }
 
     #[test]
     fn text_without_rtl_is_borrowed_unchanged() {

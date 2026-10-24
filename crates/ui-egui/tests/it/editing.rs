@@ -3708,7 +3708,7 @@ fn selected_text_formatting_keeps_the_rest_of_the_paragraph_and_reopens() {
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().selection, Some(5..6));
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().selection, std::iter::once(5..6).collect::<Vec<_>>());
     h.get_by_label("Bold").click();
     h.run_steps(5);
     let id = h.state().views[0].id;

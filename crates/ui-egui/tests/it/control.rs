@@ -1890,3 +1890,143 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
 }
+
+/// Issue #2101: the editor shows right-to-left text in display order while the paragraph keeps
+/// reading order, and the caret a click places inserts where it sits on screen.
+#[test]
+fn typing_right_to_left_keeps_the_text_where_the_caret_clicked() {
+    let (mut h, c) = harness_pages(1);
+    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+    // Click clear of the fixture's own line ("Page 1" sits at the page's left middle). The
+    // rect is the whole page; at this zoom the window shows only its top, so aim at the
+    // centre of what is inside the window.
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    let page = state["active"]["pages_on_screen"][0]["rect"].clone();
+    let left = page[0].as_f64().unwrap();
+    let right = page[2].as_f64().unwrap();
+    let top = page[1].as_f64().unwrap();
+    let bottom = page[3].as_f64().unwrap().min(state["window"]["height"].as_f64().unwrap() - 200.0);
+    let x = (left + right) / 2.0;
+    let y = (top + bottom) / 2.0;
+    ok(&mut h, &c, "ui.click", json!({"x": x, "y": y}));
+    h.run_steps(2);
+    // The sentence is stored exactly as typed, in reading order.
+    const SENTENCE: &str = "مرحبا سلام";
+    ok(&mut h, &c, "ui.type", json!({"text": SENTENCE}));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some(SENTENCE));
+    // Home puts the caret at the start of what is on screen — the logical end of the
+    // sentence, after the space — and text typed there lands between the two words, where
+    // the caret sits.
+    ok(&mut h, &c, "ui.key", json!({"key": "Home"}));
+    h.run_steps(1);
+    ok(&mut h, &c, "ui.type", json!({"text": "Z"}));
+    h.run_steps(2);
+    let (head, tail) = SENTENCE.split_once(' ').expect("two words");
+    assert_eq!(
+        h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()),
+        Some(format!("{head} Z{tail}").as_str()),
+        "the caret's place on screen keeps the text where it was clicked"
+    );
+}
+
+/// Issue #2101, Fill & Sign half: the type box shows display order and hands the engine the
+/// reading order.
+#[test]
+fn fill_and_sign_stores_typed_text_in_reading_order() {
+    let (mut h, c) = harness_pages(1);
+    ok(&mut h, &c, "ui.command", json!({"id": "sign.panel"}));
+    ok(&mut h, &c, "ui.command", json!({"id": "sign.fill.text"}));
+    let page = ok(&mut h, &c, "ui.state", json!({}))["active"]["pages_on_screen"][0]["rect"].clone();
+    let x = page[0].as_f64().unwrap() + (page[2].as_f64().unwrap() - page[0].as_f64().unwrap()) * 0.75;
+    let y = page[1].as_f64().unwrap() + (page[3].as_f64().unwrap() - page[1].as_f64().unwrap()) * 0.75;
+    ok(&mut h, &c, "ui.click", json!({"x": x, "y": y}));
+    h.run_steps(2);
+    ok(&mut h, &c, "ui.type", json!({"text": "ا ببببب"}));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.text.as_str()), Some("ا ببببب"));
+}
+
+/// Type `keys` into whatever has focus, one control call (one frame's events) per key, as a
+/// person types; `\u{8}` presses Backspace.
+fn type_each(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, keys: &str) {
+    for key in keys.chars() {
+        if key == '\u{8}' {
+            ok(h, c, "ui.key", json!({"key": "Backspace"}));
+        } else {
+            ok(h, c, "ui.type", json!({"text": key.to_string()}));
+        }
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+}
+
+/// Review of #2233: Backspace right after typing right-to-left text removes the last character
+/// typed, and typing goes on where it stopped, in the Add text box and in Fill & Sign.
+#[test]
+fn backspace_after_typing_right_to_left_removes_the_last_typed_character() {
+    let draft = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
+    let fill = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].fill_text.as_ref().map(|t| t.text.clone());
+    for add_text in [true, false] {
+        let (mut h, c) = harness_pages(1);
+        let place = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient| {
+            let state = ok(h, c, "ui.state", json!({}));
+            let page = state["active"]["pages_on_screen"][0]["rect"].clone();
+            let (left, right, top) = (page[0].as_f64().unwrap(), page[2].as_f64().unwrap(), page[1].as_f64().unwrap());
+            let bottom = page[3].as_f64().unwrap().min(state["window"]["height"].as_f64().unwrap() - 200.0);
+            ok(h, c, "ui.click", json!({"x": left + (right - left) * 0.6, "y": top + (bottom - top) * 0.6}));
+            h.run_steps(2);
+        };
+        if add_text {
+            ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+        } else {
+            ok(&mut h, &c, "ui.command", json!({"id": "sign.panel"}));
+            ok(&mut h, &c, "ui.command", json!({"id": "sign.fill.text"}));
+        }
+        place(&mut h, &c);
+        let text = |h: &Harness<'static, PdfCraftApp>| if add_text { draft(h) } else { fill(h) };
+        let what = if add_text { "Add text" } else { "Fill & Sign" };
+        // The reviewer's case: a whole sentence in one go, then Backspace.
+        ok(&mut h, &c, "ui.type", json!({"text": "مرحبا سلام"}));
+        h.run_steps(2);
+        ok(&mut h, &c, "ui.key", json!({"key": "Backspace"}));
+        h.run_steps(2);
+        assert_eq!(text(&h).as_deref(), Some("مرحبا سلا"), "{what}: Backspace removes the last letter typed");
+        // Clear it, then type Hebrew key by key, with Backspaces and retyping along the way.
+        type_each(&mut h, &c, &"\u{8}".repeat(9));
+        assert_eq!(text(&h).as_deref(), Some(""), "{what}");
+        type_each(&mut h, &c, "שלום עולם");
+        assert_eq!(text(&h).as_deref(), Some("שלום עולם"), "{what}: typed key by key, in typing order");
+        type_each(&mut h, &c, "\u{8}\u{8}\u{8}\u{8}חבר");
+        assert_eq!(text(&h).as_deref(), Some("שלום חבר"), "{what}: Backspace then more typing continue at the end");
+        type_each(&mut h, &c, " 120 ₪");
+        assert_eq!(text(&h).as_deref(), Some("שלום חבר 120 ₪"), "{what}: digits and symbols inside Hebrew keep typing order");
+    }
+}
+
+/// CodeRabbit on #3890: egui's Undo hands back display-order snapshots; Undo and Redo in the Add
+/// text box restore the typed (logical) text, not its words swapped.
+#[test]
+fn undo_and_redo_of_right_to_left_typing_keep_typing_order() {
+    let (mut h, c) = harness_pages(1);
+    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    let page = state["active"]["pages_on_screen"][0]["rect"].clone();
+    let (left, right, top) = (page[0].as_f64().unwrap(), page[2].as_f64().unwrap(), page[1].as_f64().unwrap());
+    let bottom = page[3].as_f64().unwrap().min(state["window"]["height"].as_f64().unwrap() - 200.0);
+    ok(&mut h, &c, "ui.click", json!({"x": left + (right - left) * 0.6, "y": top + (bottom - top) * 0.6}));
+    h.run_steps(2);
+    let draft = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].content.draft.as_ref().map(|d| d.text.clone());
+    ok(&mut h, &c, "ui.type", json!({"text": "مرحبا سلام"}));
+    // egui's undo takes a snapshot once the text has been still for a second.
+    h.run_steps(120);
+    ok(&mut h, &c, "ui.type", json!({"text": " שלום"}));
+    h.run_steps(120);
+    assert_eq!(draft(&h).as_deref(), Some("مرحبا سلام שלום"));
+    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": ["command"]}));
+    h.run_steps(2);
+    assert_eq!(draft(&h).as_deref(), Some("مرحبا سلام"), "Undo restores the text as typed");
+    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": ["command", "shift"]}));
+    h.run_steps(2);
+    assert_eq!(draft(&h).as_deref(), Some("مرحبا سلام שלום"), "Redo too");
+}
