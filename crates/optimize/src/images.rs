@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
-use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
+use crate::{Compression, ImageSettings, MonoCompression, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
 const MAX_PIXELS: u64 = 80_000_000;
@@ -255,8 +255,10 @@ fn count_decoded(_n: u64) {
     DECODED_PIXELS.with(|c| c.set(c.get().saturating_add(_n)));
 }
 
-/// 8-bit samples of an image (`n` components), decoded.
-pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
+/// 8-bit samples of an image (`n` components), decoded, with `/DecodeParms` given by reference
+/// too ([`Document::with_direct_parms`]): read without them, a predictor's tag bytes would shift
+/// every row, and the image would be written back wrong.
+pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
     let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
@@ -276,7 +278,7 @@ pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
         let v = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
         (v.len() == bytes).then_some(v)
     } else {
-        let v = s.decoded().ok()?;
+        let v = doc.with_direct_parms(s).decoded().ok()?;
         Some(v.get(..bytes)?.to_vec())
     }
 }
@@ -374,7 +376,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     } else {
         (w, h)
     };
-    let px = pixels(s, n)?;
+    let px = pixels(doc, s, n)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
     // A soft mask must keep the image's dimensions: resample it with the image (lossless).
@@ -387,7 +389,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
                 return None;
             }
             let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
-            let mpx = pixels(m, 1)?;
+            let mpx = pixels(doc, m, 1)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
             smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
         }
@@ -399,6 +401,64 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
         });
     let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());
     (after < before).then_some((new, smask))
+}
+
+/// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
+/// pixel: grey, a separation, an indexed space or a DeviceN of one colourant. Of names, only
+/// DeviceGray counts: another name is no colour space on its own (`/Indexed` and `/CalGray` need
+/// their parameters), so it can only name a resource, which might be RGB.
+fn one_component(doc: &Document, cs: &Object) -> bool {
+    let cs = doc.resolve(cs);
+    match &*cs {
+        Object::Name(n) => matches!(n.as_slice(), b"DeviceGray" | b"G"),
+        Object::Array(a) => match a.first().and_then(Object::as_name) {
+            Some(b"CalGray" | b"Separation" | b"Indexed" | b"I") => true,
+            Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(1))),
+            Some(b"DeviceN") => a.get(1).is_some_and(|names| doc.resolve(names).as_array().is_some_and(|n| n.len() == 1)),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// A black-and-white image (one bit per pixel, or an image mask) stored again as CCITT Group 4,
+/// if `compression` asks for that and the result is smaller as stored. Only images whose samples
+/// PdfCraft decodes (no filter, or general-purpose filters: image codecs don't decode here)
+/// qualify. The samples decode to the same bits, so the colour space, decode array and masks stay
+/// as they are.
+fn mono(doc: &Document, s: &Stream, compression: MonoCompression) -> Option<Stream> {
+    if compression != MonoCompression::CcittG4 {
+        return None;
+    }
+    let d = &s.dict;
+    let bits = d.int(b"BitsPerComponent");
+    let qualifies = if matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) {
+        bits.is_none_or(|b| b == 1)
+    } else {
+        bits == Some(1) && d.get(b"ColorSpace").is_some_and(|cs| one_component(doc, cs))
+    };
+    if !qualifies {
+        return None;
+    }
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || w > pdfcraft_filters::MAX_G4_COLUMNS || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return None;
+    }
+    // Through its parameters given by reference too, as `pixels` reads.
+    let g4 = pdfcraft_filters::encode_g4(&doc.with_direct_parms(s).decoded().ok()?, w, h).ok()?;
+    let mut new = d.clone();
+    for k in [&b"Filter"[..], b"DecodeParms", b"Length", b"DL"] {
+        new.remove(k);
+    }
+    let mut parms = Dict::new();
+    parms.set(b"K".to_vec(), Object::Int(-1));
+    parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
+    parms.set(b"Rows".to_vec(), Object::Int(i64::from(h)));
+    new.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+    new.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    let new = Stream::from_raw(new, g4);
+    // Smaller as stored, counting the larger dictionary: a tiny image can lose by it.
+    (crate::stored_len(&new)? < crate::stored_len(s)?).then_some(new)
 }
 
 pub(crate) fn run(
@@ -427,6 +487,13 @@ pub(crate) fn run(
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
+        if let Some(new) = mono(doc, s, settings.mono) {
+            report.image_bytes_before += s.raw.len();
+            report.image_bytes_after += new.raw.len();
+            report.images_recompressed += 1;
+            doc.set(r, Object::Stream(new));
+            continue;
+        }
         let Some(n) = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs)) else { continue };
         let st = if n == 1 { &settings.gray } else { &settings.color };
         let Some((new, smask)) = process(doc, s, ppi, st, n) else { continue };
@@ -460,13 +527,13 @@ mod dimension_tests {
             dict.set(b"Width".to_vec(), Object::Int(width));
             dict.set(b"Height".to_vec(), Object::Int(height));
             let stream = Stream::from_raw(dict, vec![0; 4]);
-            assert!(pixels(&stream, channels).is_none(), "{width} x {height} x {channels}");
+            assert!(pixels(&Document::new_empty(), &stream, channels).is_none(), "{width} x {height} x {channels}");
         }
         let mut dict = Dict::new();
         dict.set(b"Width".to_vec(), Object::Int(2));
         dict.set(b"Height".to_vec(), Object::Int(2));
         let stream = Stream::from_raw(dict, vec![1, 2, 3, 4, 5]);
-        assert_eq!(pixels(&stream, 1), Some(vec![1, 2, 3, 4]));
+        assert_eq!(pixels(&Document::new_empty(), &stream, 1), Some(vec![1, 2, 3, 4]));
     }
 
     /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
@@ -481,9 +548,9 @@ mod dimension_tests {
             Stream::from_raw(dict, data.clone())
         };
         DECODED_PIXELS.with(|c| c.set(0));
-        assert!(pixels(&stream(10, 10), 1).is_none());
+        assert!(pixels(&Document::new_empty(), &stream(10, 10), 1).is_none());
         assert_eq!(DECODED_PIXELS.with(|c| c.get()), 0, "pixels decoded");
-        assert_eq!(pixels(&stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
+        assert_eq!(pixels(&Document::new_empty(), &stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
     }
 }
 

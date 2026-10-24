@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset, QUALITIES, Settings};
+use pdfcraft_engine::optimize::{Compression, ImageSettings, MonoCompression, Preset, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -143,6 +143,23 @@ fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
     ui.add_space(8.0);
 }
 
+/// Monochrome Images: how 1-bit images and image masks are stored.
+fn mono_row(ui: &mut egui::Ui, m: &mut MonoCompression) {
+    ui.label(egui::RichText::new(tl!("Monochrome Images")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        ui.label(tl!("Compression"));
+        let label = match m {
+            MonoCompression::CcittG4 => tl!("CCITT Group 4"),
+            MonoCompression::Retain => tl!("Retain existing"),
+        };
+        egui::ComboBox::from_id_salt(("mono", "compression")).selected_text(label).show_ui(ui, |ui| {
+            ui.selectable_value(m, MonoCompression::CcittG4, tl!("CCITT Group 4"));
+            ui.selectable_value(m, MonoCompression::Retain, tl!("Retain existing"));
+        });
+    });
+    ui.add_space(8.0);
+}
+
 fn discard_box(ui: &mut egui::Ui, list: &mut Vec<Hidden>, h: Hidden, label: &str) {
     let mut on = list.contains(&h);
     if ui.add(widgets::checkbox(&mut on, tl!(label))).changed() {
@@ -194,6 +211,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.merge_fragments, tl!("Merge image fragments")));
             image_row(ui, "color", "Color Images", &mut s.color);
             image_row(ui, "gray", "Grayscale Images", &mut s.gray);
+            mono_row(ui, &mut s.mono);
             ui.label(
                 egui::RichText::new(tl!("Each image is measured where pages draw it; an image is replaced only if the result is smaller."))
                     .small()

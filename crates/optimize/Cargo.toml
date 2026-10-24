@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-annot = { workspace = true }

@@ -215,6 +215,8 @@
 	Clean Up	Limpar
 	Color Images	Imagens coloridas
 	Grayscale Images	Imagens em escala de cinza
+	Monochrome Images	Imagens monocromáticas
+	CCITT Group 4	CCITT grupo 4
 	Bicubic downsampling to	Redução bicúbica de amostragem para
 	for images above	para imagens acima de
 	Compression	Compactação
