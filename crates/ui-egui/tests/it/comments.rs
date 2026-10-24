@@ -2560,3 +2560,32 @@ fn no_zoom_highlights_are_picked_where_their_quads_are_drawn() {
     assert_eq!(select(&mut h, (70.0, 150.0)), None, "inside the quad, outside where it is drawn at 400%");
     assert_eq!(select(&mut h, (45.0, 175.0)), Some((0, 0)), "picked where it is drawn");
 }
+
+/// A snapshot copies the area as the page view shows it: at 400% a NoZoom comment covers a
+/// sixteenth of its `/Rect`, not all of it (ISO 32000-2 §12.5.3).
+#[test]
+fn a_snapshot_keeps_no_zoom_comments_at_their_on_screen_size() {
+    // A NoZoom square whose red appearance fills its /Rect, [40 140 80 180].
+    let ap = "1 0 0 rg 0 0 40 40 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /F 12 /Rect [40 140 80 180] /AP << /N 5 0 R >> >> endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length {} >> stream\n{ap}\nendstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        ap.len()
+    );
+    let mut h = harness_with_bytes(pdf.into_bytes(), |app| {
+        app.set_option("zoom", "400").unwrap();
+        app.system_clipboard = false;
+    });
+    // The /Rect in page view points (y down from the top of the 200 pt page).
+    let (w, hgt) = h.state_mut().snapshot(0, 0, [40.0, 20.0, 80.0, 60.0]).expect("a snapshot");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("kept");
+    let red = px.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+    let share = red as f64 / (f64::from(w) * f64::from(hgt));
+    assert!((share - 1.0 / 16.0).abs() < 0.03, "{w} × {hgt}: red covers {share:.3} of the area");
+}

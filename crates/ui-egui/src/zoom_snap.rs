@@ -140,7 +140,10 @@ impl PdfCraftApp {
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
-        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false, magnification: None });
+        // The area as the page view shows it: NoZoom comments and notes at the size they have
+        // on screen (ISO 32000-2 §12.5.3), not grown with the page.
+        let magnification = Some(view.zoom);
+        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false, magnification });
         if let Some(e) = out.error {
             return Err(e);
         }
