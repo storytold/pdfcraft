@@ -120,6 +120,8 @@ the app logs the failure and continues using the original preferences folder.
 The existing PrintCraft-to-PdfCraft migration runs first. macOS, Windows and portable
 copies retain their current preferences locations.
 
+On GNOME/Wayland, winit's font-free Adwaita controls are available when the system title bar is selected; the existing integrated header behavior and `PDFCRAFT_TITLEBAR` defaults remain unchanged.
+
 ## Environment variables
 
 | Variable | Effect |
