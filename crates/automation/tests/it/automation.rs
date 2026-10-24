@@ -7289,6 +7289,8 @@ fn doc_info_describes_set_layer_links() {
         })
     );
     assert_eq!(info["layers"], json!([{ "name": "Red", "visible": true, "initial": true }, { "name": "Green", "visible": false, "initial": false }]));
+    // No /Order: the Layers panel presents none (ISO 32000-2 Table 99), though both are layers.
+    assert_eq!(info["layer_order"], json!([]));
 }
 
 mod close_argument_tests {
