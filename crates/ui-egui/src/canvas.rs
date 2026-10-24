@@ -488,8 +488,8 @@ pub struct DocView {
     viewport_w: f32,
     viewport_h: f32,
     page_count: usize,
-    /// Page heights in points (view space), for mapping text positions to scroll offsets.
-    page_heights: Vec<f32>,
+    /// Page sizes (width, height) in points (view space), for mapping text positions to scroll offsets.
+    page_sizes: Vec<(f32, f32)>,
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
@@ -497,6 +497,11 @@ pub struct DocView {
     viewport_screen: Rect,
     /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
+    /// The match a find step just went to: its page and its centre as fractions of the displayed
+    /// page. A zoom before the step has been laid out, or the rest of an eased ⌘-wheel zoom
+    /// still arriving, keeps it at the window's centre instead of the point under the pointer
+    /// (#3530). Let go in the first frame without a zoom gesture once the step is laid out.
+    find_hold: Option<(usize, f32, f32)>,
     /// The page view has been shown, so its scroll offset in egui's memory is this document's.
     shown: bool,
     /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
@@ -797,11 +802,12 @@ impl DocView {
             viewport_w: 800.0,
             viewport_h: 600.0,
             page_count: info.pages.len(),
-            page_heights: info.pages.iter().map(|p| p.height).collect(),
+            page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
+            find_hold: None,
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
@@ -874,7 +880,7 @@ impl DocView {
         self.invalidate_content();
         self.frame_geometry_changed = true;
         self.page_count = info.pages.len();
-        self.page_heights = info.pages.iter().map(|p| p.height).collect();
+        self.page_sizes = info.pages.iter().map(|p| (p.width, p.height)).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
         self.selected.retain(|p| *p <= last);
@@ -888,6 +894,7 @@ impl DocView {
         self.goto = None;
         self.goto_point = None;
         self.zoom_anchor = None;
+        self.find_hold = None;
         self.flash = None;
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
@@ -1294,16 +1301,48 @@ impl DocView {
         self.flash_match(p);
     }
 
+    /// The centre of the current match as a fraction of its displayed page `[x, y]` (0..1 from
+    /// the top-left corner, after the view rotation, as [`Self::goto_point`] takes it).
+    fn match_centre(&self) -> Option<[f32; 2]> {
+        let f = self.find.as_ref()?;
+        let (p, r) = f.matches.get(f.current?)?;
+        let glyphs = self.texts.get(p)?.glyphs.get(r.clone())?;
+        let [x0, y0, x1, y1] = glyphs.iter().map(|g| g.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
+        let &(w, h) = self.page_sizes.get(*p).filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
+        let (u, v) = ((((x0 + x1) / 2.0) / w).clamp(0.0, 1.0), (((y0 + y1) / 2.0) / h).clamp(0.0, 1.0));
+        // Turned clockwise by the view rotation, as `PageInfo::dest_fraction` does.
+        Some(match self.rotation % 360 {
+            90 => [1.0 - v, u],
+            180 => [1.0 - u, 1.0 - v],
+            270 => [v, 1.0 - u],
+            _ => [u, v],
+        })
+    }
+
     fn flash_match(&mut self, page: usize) {
         let frac = self
             .find
             .as_ref()
             .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
             .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
-            .zip(self.page_heights.get(page).copied())
+            .zip(self.page_sizes.get(page).map(|&(_, h)| h))
             .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
             .unwrap_or(0.0);
         self.goto = Some((page, frac));
+        self.find_hold = None;
+        // Then put the match's centre at the window's centre, as Acrobat does (#3530) and as a
+        // /FitR destination's rectangle is: a page wider or taller than the window no longer
+        // leaves it off to one side or near an edge.
+        // Finite only: a hostile page's glyphs can span -inf..inf, and NaN survives `clamp`.
+        if let Some([fx, fy]) = self.match_centre().filter(|c| c.iter().all(|v| v.is_finite())) {
+            self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
+            // The point alone, both axes in one frame. A pending zoom anchor would hold the old
+            // place for that frame and put `goto` off to the next, where its page-top offset
+            // undid the centring; a zoom after the step anchors on the match instead.
+            self.goto = None;
+            self.zoom_anchor = None;
+            self.find_hold = Some((page, fx, fy));
+        }
         self.current = page;
         self.reset_coarse_state();
     }
@@ -1352,8 +1391,9 @@ impl DocView {
             }
             self.forward.clear();
         }
-        // Partial wheel motion belongs to the old place.
+        // Partial wheel motion belongs to the old place, and so does a find step's match.
         self.reset_coarse_state();
+        self.find_hold = None;
         self.goto = Some((page, 0.0));
         self.current = page;
     }
@@ -1510,6 +1550,8 @@ impl DocView {
         self.goto = Some((page, 0.0));
         self.current = page;
         self.reset_coarse_state();
+        // A find step's match belongs to the place left, as for any other jump.
+        self.find_hold = None;
         true
     }
 
@@ -1815,15 +1857,18 @@ impl DocView {
         if zoom == self.zoom && self.fit == Fit::None {
             return;
         }
+        // Just after a find step, around the match at the window's centre (#3530).
+        let held = self.find_hold.map(|(p, fx, fy)| (p, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
         // In gutters/gaps, anchor relative to the nearest page rather than jumping to its top.
         // Fractions outside 0..1 preserve the pointer's position outside the page as well.
-        let anchor =
+        let anchor = held.or_else(|| {
             self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
                 |(p, r)| {
                     let f = (screen_pos - r.min) / r.size();
                     (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
                 },
-            );
+            )
+        });
         self.zoom = zoom;
         self.fit = Fit::None;
         match anchor {
@@ -2820,7 +2865,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             })
             .or_else(|| view.screen_rects.iter().find(|(_, r)| r.min.y >= top_y).map(|(p, r)| (*p, 0.0f32, (r.min.y - top_y).max(0.0))))
             .or_else(|| view.screen_rects.last().map(|(p, r)| (*p, 1.0f32, (r.max.y - top_y).max(0.0))));
-        if let Some((page, fy, rel_y)) = anchor {
+        if let Some((page, fx, fy)) = view.find_hold {
+            // A fit zoom that changes just after a find step keeps the match in the middle too.
+            view.zoom_anchor = Some((page, fx, fy, avail.size() / 2.0));
+        } else if let Some((page, fy, rel_y)) = anchor {
             view.zoom_anchor = Some((page, 0.5, fy, vec2(avail.width() / 2.0, rel_y)));
         } else {
             view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail.width() / 2.0, MARGIN)));
@@ -2854,6 +2902,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             Some(p) => view.zoom_at(z, p),
             None => view.set_zoom(z),
         }
+    } else if view.goto_point.is_none() {
+        // The find step has been laid out and no zoom is easing on: zoom at the pointer again.
+        view.find_hold = None;
     }
     view.viewport_screen = avail;
     let auto_delta = if unobstructed {
@@ -6105,13 +6156,14 @@ trailer << /Root 1 0 R >>
                 v.go_to_match(0);
             }
             assert_eq!(v.back, vec![0], "explicit search jump must remember its origin");
-            assert_eq!(v.goto, Some((3, 0.5)), "keep the match offset instead of the page top");
+            assert_eq!(v.goto, None, "the match's point alone: a zoom that frame cannot put a page-top offset off to the next");
             assert_eq!(v.current, 3);
             assert_eq!(v.current_page_label(None), "4");
             // Chrome refreshes the idle page box; navigation must not overwrite a draft
             // that may still be focused. DocView does not own the editor's focus state.
             assert_eq!(v.page_input, "draft in progress");
-            assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+            let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+            assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
             v.go_to_match(1);
             assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
             assert!(v.view_history(false));
@@ -6126,13 +6178,75 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn search_centres_the_match_on_a_rotated_view() {
+        // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+        for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+            let mut v = history_search_view();
+            v.rotation = rotation;
+            v.find_step(true);
+            let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+            assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
+        }
+    }
+
+    #[test]
+    fn a_zoom_just_after_a_find_step_keeps_the_match_in_the_middle() {
+        let mut v = history_search_view();
+        v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 20.0), vec2(300.0, 400.0)))];
+        // A zoom anchored at the pointer was pending when the step came: the step drops it.
+        v.zoom_at(2.0, pos2(150.0, 50.0));
+        assert!(v.zoom_anchor.is_some());
+        v.find_step(true);
+        assert_eq!((v.goto, v.zoom_anchor), (None, None), "the step alone decides where the view goes");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        let target = Some((3, Some(40.0 / 300.0), Some(0.675), middle));
+        assert_eq!(v.goto_point, target);
+        // The rest of an eased wheel zoom, or a zoom in the same frame, anchors on the match
+        // at the window's centre, not on the pointer.
+        v.zoom_at(3.0, pos2(150.0, 50.0));
+        assert_eq!(v.zoom_anchor, Some((3, 40.0 / 300.0, 0.675, middle)));
+        // Another jump lets go of the match: the next zoom is at the pointer again.
+        v.go_to_page(1);
+        v.zoom_at(4.0, pos2(150.0, 50.0));
+        assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
+    }
+
+    #[test]
+    fn previous_view_after_a_find_step_lets_go_of_the_match() {
+        let mut v = history_search_view();
+        v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 20.0), vec2(300.0, 400.0)))];
+        v.find_step(true);
+        // Previous view while a wheel zoom is still easing: the zoom must not hold the old match
+        // and put the history jump off until it stops.
+        assert!(v.view_history(false));
+        assert_eq!(v.goto, Some((0, 0.0)));
+        v.zoom_at(2.0, pos2(150.0, 50.0));
+        assert_eq!(v.zoom_anchor.map(|a| a.0), Some(0), "anchored on the page under the pointer");
+    }
+
+    #[test]
+    fn a_match_with_unbounded_glyphs_falls_back_to_its_page() {
+        let mut v = history_search_view();
+        // A hostile page: a glyph from -inf to inf, whose centre is NaN.
+        if let Some(text) = v.texts.get_mut(&3).and_then(Arc::get_mut) {
+            text.glyphs[0].rect = [f32::NEG_INFINITY, 260.0, f32::INFINITY, 280.0];
+        }
+        v.zoom_at(2.0, pos2(150.0, 50.0));
+        v.find_step(true);
+        assert!(v.goto_point.is_none(), "no NaN scroll target");
+        assert_eq!(v.goto.map(|g| g.0), Some(3), "the match's page instead");
+        v.zoom_at(3.0, pos2(150.0, 50.0));
+        assert!(v.zoom_anchor.is_none_or(|a| a.1.is_finite() && a.2.is_finite()), "no NaN zoom anchor");
+    }
+
+    #[test]
     fn automatic_search_updates_do_not_record_history_or_discard_forward() {
         let mut v = history_search_view();
         v.forward = vec![4];
         v.find = Some(Find { query: "match".into(), ..Default::default() });
         v.rerun_find();
         assert_eq!(v.current, 3);
-        assert_eq!(v.goto, Some((3, 0.5)));
+        assert_eq!((v.goto, v.goto_point.map(|g| g.0)), (None, Some(3)), "the match's point on its page");
         assert!(v.back.is_empty());
         assert_eq!(v.forward, vec![4]);
         v.current = 0;
