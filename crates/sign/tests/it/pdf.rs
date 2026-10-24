@@ -761,6 +761,112 @@ fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
 }
 
 #[test]
+fn a_signature_stays_valid_through_a_dss_then_an_esic_declaration_then_a_second_signature() {
+    use pdfcraft_sign::dss::{self, Evidence};
+    // The shape of an Indonesian VIDA signature followed by an e-Meterai stamp: the first signer's
+    // file gains the DSS with `/Extensions /ADBE` and `/Version`, then a second signature whose
+    // revision declares `/Extensions /ESIC`, then a last DSS update.
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let id2 = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone(), id2.certificate.clone()] };
+    let first = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let declaration = |level: i64, base: &str| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"BaseVersion".to_vec(), Object::name(base));
+        d.set(b"ExtensionLevel".to_vec(), Object::Int(level));
+        Object::Dict(d)
+    };
+    let ev = |blob: &[u8]| Evidence { certs: vec![blob.to_vec()], ocsps: Vec::new(), crls: Vec::new() };
+    // Revision 5: the DSS, the ADBE extension level 5 and the catalog's /Version.
+    let with_dss = dss::embed(&open(&first), &ev(&id.certificate.raw)).unwrap();
+    let with_adbe = edit_after(&with_dss, |doc| {
+        let root = doc.root().unwrap();
+        let mut e = pdfcraft_cos::Dict::new();
+        e.set(b"ADBE".to_vec(), declaration(5, "1.7"));
+        doc.update_dict(root, |c| {
+            c.set(b"Extensions".to_vec(), Object::Dict(e));
+            c.set(b"Version".to_vec(), Object::name("1.7"));
+        })
+        .unwrap();
+    });
+    // Revision 6: the second signer adds its ESIC declaration beside the ADBE one.
+    let with_esic = edit_after(&with_adbe, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(e)) = c.get_mut(b"Extensions") {
+                e.set(b"ESIC".to_vec(), declaration(1, "1.7"));
+            }
+        })
+        .unwrap();
+    });
+    let second = pdfcraft_sign::sign(&open(&with_esic), &id2, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() }).unwrap();
+    // Revision 7: the DSS is extended once more.
+    let last = dss::embed(&open(&second), &ev(&id2.certificate.raw)).unwrap();
+    let doc = open(&last);
+    let sigs = signatures(&doc, &last, &trust);
+    let a = sigs.iter().find(|s| s.field == "Approval").unwrap();
+    assert_eq!(a.status, Status::Valid, "{:?}", a.details);
+    assert!(matches!(&a.modification, Modification::Allowed(k) if !k.contains(&kind::STRUCTURE)), "{:?}", a.modification);
+}
+
+#[test]
+fn a_writer_may_raise_the_catalog_version_after_signing_but_not_lower_or_drop_it() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let version = |base: &[u8], v: Option<&str>| {
+        edit_after(base, |doc| {
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| match v {
+                Some(v) => c.set(b"Version".to_vec(), Object::name(v)),
+                None => {
+                    c.remove(b"Version");
+                }
+            })
+            .unwrap();
+        })
+    };
+    let disallowed = (Status::Invalid, Modification::Disallowed(vec![kind::STRUCTURE]));
+    // Signed without a version: any may be declared afterwards.
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let s = check(&version(&signed, Some("1.7")));
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if !k.contains(&kind::STRUCTURE)), "{:?}", s.modification);
+    // Signed at 1.5: it may rise (also across a digit, 1.10 > 1.9) but not fall, vanish or be rewritten.
+    let at = |v: &str| pdfcraft_sign::sign(&open(&version(&fixture(), Some(v))), &id, &opts()).unwrap();
+    let signed = at("1.5");
+    assert_eq!(check(&version(&signed, Some("1.5"))).status, Status::Valid);
+    assert_eq!(check(&version(&signed, Some("1.7"))).status, Status::Valid);
+    assert_eq!(check(&version(&signed, Some("2.0"))).status, Status::Valid);
+    assert_eq!(
+        {
+            let s = check(&version(&signed, Some("1.4")));
+            (s.status, s.modification)
+        },
+        disallowed
+    );
+    assert_eq!(
+        {
+            let s = check(&version(&signed, None));
+            (s.status, s.modification)
+        },
+        disallowed
+    );
+    let signed = at("1.9");
+    assert_eq!(check(&version(&signed, Some("1.10"))).status, Status::Valid);
+    // A signed version that is not a number may not change.
+    let signed = at("Draft");
+    assert_eq!(check(&version(&signed, Some("Draft"))).status, Status::Valid);
+    assert_eq!(
+        {
+            let s = check(&version(&signed, Some("1.7")));
+            (s.status, s.modification)
+        },
+        disallowed
+    );
+}
+
+#[test]
 fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
     use pdfcraft_sign::dss::{self, Evidence};
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
