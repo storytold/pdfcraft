@@ -190,7 +190,10 @@ impl Automation {
                 "color": c.color.map(hex),
             });
             // How opaque it is drawn: as a whole, or its fill and text each at their own.
-            if let Some(p) = doc.comment_props(c.page, c.index).filter(|_| c.in_reply_to.is_none()) {
+            // Not for replies, which are drawn with the comment they answer.
+            if c.in_reply_to.is_none()
+                && let Some(p) = doc.comment_props(c.page, c.index)
+            {
                 v["opacity"] = json!(p.opacity);
                 if let Some(f) = p.fill_opacity {
                     v["fill_opacity"] = json!(f);

@@ -1314,6 +1314,8 @@ fn comment_properties_set_each_parts_opacity() {
     h.run_steps(3);
     h.state_mut().open_comment_props(0, 2);
     h.run_steps(2);
+    let shown = egui_kittest::kittest::NodeT::accesskit_node(&h.get_by_role_and_label(egui::accesskit::Role::Slider, "Text opacity")).numeric_value();
+    assert_eq!(shown, Some(100.0), "the text's slider shows the opacity it is drawn at, not the border's half");
     h.state_mut().comment_props.as_mut().expect("open").edited.opacity = 0.4;
     h.get_by_label("OK").click();
     h.run_steps(3);
