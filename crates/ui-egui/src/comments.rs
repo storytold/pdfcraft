@@ -1915,7 +1915,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
         }
         None => {
             if let Some((page, at)) = view.comments.context_at
-                && ui.add_enabled(allowed, egui::Button::new(tl!("Add a sticky note here"))).clicked()
+                && ui.add_enabled(allowed, egui::Button::new(tl!("Add comment"))).clicked()
             {
                 view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
                 ui.close();
@@ -1932,7 +1932,9 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
 /// What the canvas asks the app to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CanvasAction {
+    /// An edit to apply to the active document.
     Edit(Box<Edit>),
+    /// Open the comments panel on the right.
     OpenComments,
     /// Comment Properties for (page, index).
     Properties(usize, usize),
@@ -1940,6 +1942,22 @@ pub enum CanvasAction {
     CopyImage(usize, usize),
     /// Copy Image in Original Format: the same image as a file (JPEG as stored, else PNG).
     CopyImageFile(usize, usize),
+    /// Save the active document in place.
+    Save,
+    /// Open the print dialog.
+    Print,
+    /// Switch the active quick tool.
+    SetQuickTool(crate::QuickTool),
+    /// Switch to Edit PDF mode.
+    EditPdf,
+    /// Open the Add Image file picker dialog.
+    AddImage,
+    /// Toggle the command palette / tool search.
+    FindTools,
+    /// Rotate the view 90° clockwise.
+    RotateViewClockwise,
+    /// Open the Document properties dialog.
+    DocumentProperties,
 }
 
 /// How many custom colours the "Recent colours" row keeps.

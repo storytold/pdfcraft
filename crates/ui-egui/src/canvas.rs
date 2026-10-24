@@ -3995,44 +3995,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
-            if view.comments.selected.is_none() {
-                let selected = view.selected_text().is_some_and(|t| !t.is_empty());
-                let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
-                if ui.add_enabled(can_copy && selected, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
-                    copy_selected = true;
-                    ui.close();
-                }
-                ui.separator();
+            if view.comments.selected.is_some() {
+                canvas_action = comments::context_menu(ui, view, info, prefs, allowed);
+            } else {
+                canvas_action = page_context_menu(ui, view, doc, tool, &mut copy_selected);
             }
-            // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
-            let mut copy_image = None;
-            if view.comments.selected.is_none()
-                && let Some((page, at)) = view.comments.context_at
-            {
-                // The page's content is parsed once per right-click, not on every frame the menu is open.
-                let key = egui::Id::new("copy-image-under-menu");
-                let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
-                let hit = match cached {
-                    Some(c) => c.2,
-                    None => {
-                        let hit = doc.page_image_at(page, at);
-                        ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
-                        hit
-                    }
-                };
-                if let Some(image) = hit {
-                    if ui.button(tl!("Copy Image")).clicked() {
-                        copy_image = Some(comments::CanvasAction::CopyImage(page, image));
-                        ui.close();
-                    }
-                    if ui.button(tl!("Copy Image in Original Format")).clicked() {
-                        copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
-                        ui.close();
-                    }
-                    ui.separator();
-                }
-            }
-            canvas_action = comments::context_menu(ui, view, info, prefs, allowed).or(copy_image);
         });
         (wanted, visible_now)
     });
@@ -4248,17 +4215,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         field_props = true;
     }
     let field_props = field_props.then(|| view.prepare.selected.clone()).flatten();
-    match canvas_action {
-        Some(comments::CanvasAction::Edit(e)) => view.pending_edit = Some(*e),
+    match canvas_action.as_ref() {
+        Some(comments::CanvasAction::Edit(e)) => view.pending_edit = Some((**e).clone()),
         // `choose_right_panel` would borrow all of `app` while `view` is held; same effect.
         Some(comments::CanvasAction::OpenComments) => {
             app.right = Some(RightPanel::Comments);
             app.comments_panel_closed = false;
         }
-        Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
-        Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
-        Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
-        None => {}
+        Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((*p, *i)),
+        Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(*p, *i)),
+        Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(*p, *i)),
+        Some(comments::CanvasAction::RotateViewClockwise) => view.rotate_view(true),
+        _ => {}
     }
     // Full screen: the click turns the page unless it did something else first. It waits out the
     // double-click time: turning on the first click's release sent a double-click's second click,
@@ -4312,6 +4280,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let page = app.views[index].current;
             app.start_signing(page, None, Some(field), None);
         }
+    }
+    if let Some(comments::CanvasAction::SetQuickTool(new_tool)) = canvas_action {
+        tool = new_tool;
     }
     app.quick_tool = tool;
     if let Some((page, at)) = app.views[index].comments.attach_at.take() {
@@ -4406,6 +4377,35 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if copy_selected {
         app.execute("edit.copy");
     }
+    match canvas_action {
+        Some(comments::CanvasAction::Save) => {
+            app.save_active(crate::SaveTarget::InPlace);
+        }
+        Some(comments::CanvasAction::Print) => {
+            app.open_print();
+        }
+        Some(comments::CanvasAction::SetQuickTool(QuickTool::Snapshot)) => {
+            app.notify_tr("Drag a rectangle around the area to copy");
+        }
+        Some(comments::CanvasAction::SetQuickTool(QuickTool::AddText)) => {
+            app.left = crate::LeftPanel::Tool("edit");
+            app.reveal_tools();
+        }
+        Some(comments::CanvasAction::EditPdf) => {
+            app.select_mode(crate::Mode::Edit);
+            app.notify_tr("Click text or an image to edit it");
+        }
+        Some(comments::CanvasAction::AddImage) => {
+            app.add_image_dialog();
+        }
+        Some(comments::CanvasAction::FindTools) => {
+            app.palette_open = !app.palette_open;
+        }
+        Some(comments::CanvasAction::DocumentProperties) => {
+            app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Description));
+        }
+        _ => {}
+    }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
@@ -4414,6 +4414,144 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
     }
+}
+
+/// Renders the Acrobat-parity page context menu when right-clicking on the canvas.
+///
+/// Includes the quick-action icon bar (Save, Print, Select, Hand, Zoom), comment and snapshot
+/// options, copy and image actions if available, Edit PDF tools, panels, search, view rotation,
+/// and document properties.
+fn page_context_menu(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    tool: QuickTool,
+    copy_selected: &mut bool,
+) -> Option<comments::CanvasAction> {
+    let mut action = None;
+    let allowed = doc.allows_annotation();
+    let can_copy = doc.allows_copying();
+    let can_modify = doc.allows_modification();
+
+    // 1. Quick-action icon bar at top (Save, Print, Select, Hand, Marquee zoom).
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if icons::button(ui, "save", 26.0, false, tl!("Save")).clicked() {
+            action = Some(comments::CanvasAction::Save);
+            ui.close();
+        }
+        if ui.add_enabled_ui(doc.allows_printing(), |ui| icons::button(ui, "printer", 26.0, false, tl!("Print"))).inner.clicked() {
+            action = Some(comments::CanvasAction::Print);
+            ui.close();
+        }
+        if icons::button(ui, "mouse-pointer-2", 26.0, tool == QuickTool::Select, tl!("Select (V)")).clicked() {
+            action = Some(comments::CanvasAction::SetQuickTool(QuickTool::Select));
+            ui.close();
+        }
+        if icons::button(ui, "hand", 26.0, tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
+            action = Some(comments::CanvasAction::SetQuickTool(QuickTool::Hand));
+            ui.close();
+        }
+        if icons::button(ui, "zoom-in", 26.0, tool == QuickTool::MarqueeZoom, tl!("Marquee zoom")).clicked() {
+            action = Some(comments::CanvasAction::SetQuickTool(QuickTool::MarqueeZoom));
+            ui.close();
+        }
+    });
+    ui.separator();
+
+    // 2. Add comment & Snapshot.
+    let can_add_comment = allowed && view.comments.context_at.is_some();
+    if ui.add_enabled(can_add_comment, egui::Button::new(tl!("Add comment"))).clicked() {
+        if let Some((page, at)) = view.comments.context_at {
+            view.comments.composer = Some(comments::Composer { page, at, kind: comments::ComposerKind::Note, text: String::new(), focus: true });
+        }
+        ui.close();
+    }
+    if ui.add_enabled(can_copy, egui::Button::new(tl!("Take a snapshot"))).clicked() {
+        action = Some(comments::CanvasAction::SetQuickTool(QuickTool::Snapshot));
+        ui.close();
+    }
+
+    // 3. Selection / Image options (if text selected or image under pointer).
+    let selected_text = view.selected_text().is_some_and(|t| !t.is_empty());
+    let mut image_hit = None;
+    if let Some((page, at)) = view.comments.context_at {
+        let key = egui::Id::new(("copy-image-under-menu", view.id.0, doc.edit_generation()));
+        let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
+        let hit = match cached {
+            Some(c) => c.2,
+            None => {
+                let hit = doc.page_image_at(page, at);
+                ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
+                hit
+            }
+        };
+        image_hit = hit.map(|i| (page, i));
+    }
+
+    if selected_text || image_hit.is_some() {
+        ui.separator();
+    }
+    if selected_text {
+        let key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
+        if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy")).shortcut_text(key)).clicked() {
+            *copy_selected = true;
+            ui.close();
+        }
+    }
+    if let Some((page, image)) = image_hit {
+        if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy Image"))).clicked() {
+            action = Some(comments::CanvasAction::CopyImage(page, image));
+            ui.close();
+        }
+        if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy Image in Original Format"))).clicked() {
+            action = Some(comments::CanvasAction::CopyImageFile(page, image));
+            ui.close();
+        }
+    }
+
+    ui.separator();
+
+    // 4. Edit PDF options.
+    if ui.add_enabled(can_modify, egui::Button::new(tl!("Edit a PDF"))).clicked() {
+        action = Some(comments::CanvasAction::EditPdf);
+        ui.close();
+    }
+    if ui.add_enabled(can_modify, egui::Button::new(tl!("Add text"))).clicked() {
+        action = Some(comments::CanvasAction::SetQuickTool(QuickTool::AddText));
+        ui.close();
+    }
+    if ui.add_enabled(can_modify, egui::Button::new(tl!("Add image…"))).clicked() {
+        action = Some(comments::CanvasAction::AddImage);
+        ui.close();
+    }
+
+    ui.separator();
+
+    // 5. Panels & Navigation.
+    if ui.button(tl!("Comments panel")).clicked() {
+        action = Some(comments::CanvasAction::OpenComments);
+        ui.close();
+    }
+    ui.separator();
+    if ui.button(tl!("Find tools and commands…")).clicked() {
+        action = Some(comments::CanvasAction::FindTools);
+        ui.close();
+    }
+    if ui.button(tl!("Rotate view clockwise")).clicked() {
+        action = Some(comments::CanvasAction::RotateViewClockwise);
+        ui.close();
+    }
+
+    ui.separator();
+
+    // 6. Document Properties.
+    if ui.button(tl!("Document properties…")).clicked() {
+        action = Some(comments::CanvasAction::DocumentProperties);
+        ui.close();
+    }
+
+    action
 }
 
 #[derive(Clone, Copy)]
