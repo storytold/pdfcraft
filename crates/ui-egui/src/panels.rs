@@ -638,24 +638,24 @@ fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine:
         Some(crate::format_text_ui::FontChoice::Thai(entry)) => {
             if pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok() {
                 ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
+                    style.family = pdfcraft_engine::FontFamily::Courier;
+                } else {
+                    style.family = pdfcraft_engine::FontFamily::Helvetica;
+                }
+                ui.data_mut(|d| d.insert_temp(font_choice_id, entry.name.clone()));
+                font_changed = true;
             }
-            if entry.family.eq_ignore_ascii_case("Courier MonoThai") {
-                style.family = pdfcraft_engine::FontFamily::Courier;
-            } else {
-                style.family = pdfcraft_engine::FontFamily::Helvetica;
-            }
-            ui.data_mut(|d| d.insert_temp(font_choice_id, entry.name.clone()));
-            font_changed = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
         Some(crate::format_text_ui::FontChoice::Installed(path)) => {
             if pdfcraft_fonts::set_active_thai_font_by_path(&path).is_ok() {
                 ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                if let Some(entry) = pdfcraft_fonts::active_thai_font_entry() {
+                    ui.data_mut(|d| d.insert_temp(font_choice_id, entry.name.clone()));
+                }
+                font_changed = true;
             }
-            if let Some(entry) = pdfcraft_fonts::active_thai_font_entry() {
-                ui.data_mut(|d| d.insert_temp(font_choice_id, entry.name.clone()));
-            }
-            font_changed = true;
         }
         _ => {}
     }
