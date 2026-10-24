@@ -2081,6 +2081,65 @@ fn a_subset_keeps_its_font_for_glyphs_left_to_the_default_width() {
     assert!(text::replace_block(&mut doc, 0, 0, "Graz").unwrap().substituted.is_some());
 }
 
+/// Inter with the glyphs of `dropped` (Inter's glyph ids) left empty, as a subsetter leaves the
+/// glyphs it drops: their `loca` entries start where the next glyph does.
+fn inter_without(dropped: &[usize]) -> Vec<u8> {
+    let mut bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let be16 = |b: &[u8], at: usize| usize::from(u16::from_be_bytes([b[at], b[at + 1]]));
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize;
+    let table = |b: &[u8], tag: &[u8]| (0..be16(b, 4)).map(|i| 12 + i * 16).find(|at| &b[*at..*at + 4] == tag).map(|at| be32(b, at + 8)).unwrap();
+    let (head, loca) = (table(&bytes, b"head"), table(&bytes, b"loca"));
+    assert_eq!(be16(&bytes, head + 50), 1, "long loca offsets");
+    for &gid in dropped {
+        let next = loca + (gid + 1) * 4;
+        let end: [u8; 4] = bytes[next..next + 4].try_into().unwrap();
+        bytes[loca + gid * 4..loca + gid * 4 + 4].copy_from_slice(&end);
+    }
+    bytes
+}
+
+/// A subset simple TrueType font whose `/Widths` gives every code from 32 to 126 a width, the
+/// dropped glyphs' too (#4038): only its program says which glyphs it kept.
+fn subset_with_full_widths_page() -> Document {
+    // Inter's glyph ids: w 984, e 614.
+    let mut doc = text_page("BT /F3 20 Tf 72 700 Td (20) Tj ET");
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &inter_without(&[984, 614]))));
+    let descriptor = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("FontDescriptor")),
+        (b"FontName".to_vec(), Object::name("ABCDEF+SampleSans")),
+        (b"Flags".to_vec(), Object::Int(32)),
+        (b"FontFile2".to_vec(), Object::Ref(program)),
+    ]);
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("TrueType")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+SampleSans")),
+        (b"FirstChar".to_vec(), Object::Int(32)),
+        (b"LastChar".to_vec(), Object::Int(126)),
+        (b"Widths".to_vec(), Object::Array(vec![Object::Int(600); 95])),
+        (b"Encoding".to_vec(), Object::name("WinAnsiEncoding")),
+        (b"FontDescriptor".to_vec(), Object::Dict(descriptor)),
+    ]);
+    let p = pdfcraft_model::pages(&doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F3".to_vec(), Object::Dict(font))]);
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    doc
+}
+
+#[test]
+fn letters_a_subset_dropped_take_another_font_whatever_its_widths_say() {
+    let doc = subset_with_full_widths_page();
+    // Glyphs the subset has: the font stays.
+    let mut kept = doc.clone();
+    assert_eq!(text::replace_block(&mut kept, 0, 0, "2020").unwrap().substituted, None);
+    assert_eq!(text::text_lines(&reopen(&kept), 0).unwrap().iter().find(|l| l.text == "2020").unwrap().font, "F3");
+    // `w` and `e` have widths but no glyphs: written in the subset, they would draw as boxes.
+    let mut grown = doc.clone();
+    assert!(text::replace_block(&mut grown, 0, 0, "20wwewewe").unwrap().substituted.is_some(), "the new letters need another font");
+    let lines = text::text_lines(&reopen(&grown), 0).unwrap();
+    assert!(lines.iter().filter(|l| !l.text.trim().is_empty()).all(|l| l.font != "F3"), "{lines:?}");
+}
+
 #[test]
 fn spaces_in_another_subset_do_not_split_a_line() {
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello) Tj /F2 12 Tf ( ) Tj /F1 12 Tf (world) Tj ET");
