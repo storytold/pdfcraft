@@ -144,6 +144,8 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
+    pub highlight: bool,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
 }
@@ -164,6 +166,8 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `app.runtimeHighlight = on`: highlight the form's fields, or stop.
+    Highlight(bool),
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }
@@ -671,6 +675,26 @@ fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> 
 /// `app.beep()`: queues a request to beep.
 fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     host(ctx)?.borrow_mut().request(Request::Beep);
+    Ok(JsValue::undefined())
+}
+
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop. Later reads
+/// in the script see the new setting.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.highlight != on {
+        h.doc.highlight = on;
+        // Only the setting the script ends with matters: one request, the latest, under the
+        // host's request cap like any other.
+        h.requests.retain(|r| !matches!(r, Request::Highlight(_)));
+        h.request(Request::Highlight(on));
+    }
     Ok(JsValue::undefined())
 }
 
@@ -1409,7 +1433,10 @@ fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)

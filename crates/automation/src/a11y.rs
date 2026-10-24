@@ -713,6 +713,7 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Submit(u) => json!({ "submit": u }),
         R::Focus(f) => json!({ "focus": f }),
         R::Beep => json!({ "beep": true }),
+        R::Highlight(on) => json!({ "highlight": on }),
         R::SaveAs => json!({ "save_as": true }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
     }

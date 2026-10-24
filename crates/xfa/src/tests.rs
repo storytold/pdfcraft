@@ -3283,6 +3283,28 @@ fn trailing_spaces_do_not_shift_centered_or_right_aligned_text() {
     assert!((left_edge("right", "TITLE   ") - (36.0 + w - ink)).abs() < 1e-6);
 }
 
+/// `ready` is two events: `ref="$layout"` is layout:ready (`layoutReady`), anything else stays
+/// form:ready (`ready`), in the template and in the live form; page numbering is recognized.
+#[test]
+fn a_layout_ready_event_is_told_apart_from_form_ready() {
+    let (tpl, _) = parse(&crate::fixtures::layout_ready_template()).unwrap();
+    assert_eq!(tpl.root.scripts.iter().map(|s| s.activity.as_str()).collect::<Vec<_>>(), ["layoutReady"]);
+    let Node::Subform(page) = &tpl.root.children[0] else { panic!() };
+    let activity = |name: &str| match page.children.iter().find(|n| n.common().name.as_deref() == Some(name)) {
+        Some(Node::Field(f)) => f.scripts.iter().map(|s| s.activity.clone()).collect::<Vec<_>>(),
+        _ => panic!("no field {name}"),
+    };
+    assert_eq!(activity("stamp"), ["layoutReady"]);
+    assert_eq!(activity("note"), ["ready"], "form:ready keeps its name");
+    // The live form's events carry the same names.
+    let live = form_tree(&tpl, None, &Overrides::default());
+    assert!(live.events.iter().any(|e| e.som == "form[0]" && e.activity == "layoutReady"), "{:?}", live.events);
+    // Page numbering is what the layout does itself.
+    assert!(crate::numbers_pages("this.rawValue = xfa.layout.page(this);"));
+    assert!(crate::numbers_pages("this.rawValue = xfa.layout.pageCount();"));
+    assert!(!crate::numbers_pages("this.rawValue = \"laid out\";"));
+}
+
 /// `typed_date` rewrites a date typed by another of a field's edit-picture patterns in the first
 /// one, and leaves alone a date the first pattern reads, text no pattern reads, a field with one
 /// pattern and a field that isn't a date.

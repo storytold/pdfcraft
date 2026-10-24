@@ -87,6 +87,8 @@ pub struct XfaDoc {
     /// The current page, 0-based.
     pub page: usize,
     pub page_count: usize,
+    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
+    pub highlight: bool,
 }
 
 /// Something a script changed or asked for.
@@ -126,6 +128,8 @@ pub enum XfaEffect {
     Recalculate,
     /// `xfa.form.remerge()`, `xfa.layout.relayout()`.
     Relayout,
+    /// `app.runtimeHighlight = on`.
+    Highlight(bool),
 }
 
 /// What running a script did.
@@ -221,7 +225,13 @@ fn payload(e: &XfaEffect) -> usize {
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
         XfaEffect::MessageBox(s) | XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
-        XfaEffect::Print | XfaEffect::SaveAs | XfaEffect::Beep | XfaEffect::Recalculate | XfaEffect::Relayout | XfaEffect::ShowPanel(_) => 0,
+        XfaEffect::Print
+        | XfaEffect::SaveAs
+        | XfaEffect::Beep
+        | XfaEffect::Recalculate
+        | XfaEffect::Relayout
+        | XfaEffect::Highlight(_)
+        | XfaEffect::ShowPanel(_) => 0,
     }
 }
 
@@ -1133,10 +1143,27 @@ fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<JsValue> {
 
 // ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
 
-/// Records effect `e` on the host, as [`XHost::push`] does.
+/// Records effect `e` (a value set, a message, a request) on the host for the engine to apply after
+/// the script, as [`XHost::push`] does.
 fn effect(ctx: &mut Context, e: XfaEffect) -> JsResult<()> {
     host(ctx)?.borrow_mut().push(e);
     Ok(())
+}
+
+/// `app.runtimeHighlight`: whether the viewer highlights form fields.
+fn runtime_highlight(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.highlight))
+}
+
+/// `app.runtimeHighlight = on`: asks the viewer to highlight form fields, or to stop.
+fn set_runtime_highlight(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let on = arg(args, 0).to_boolean();
+    let mut h = host(ctx)?.borrow_mut();
+    if h.doc.highlight != on {
+        h.doc.highlight = on;
+        h.push(XfaEffect::Highlight(on));
+    }
+    Ok(JsValue::undefined())
 }
 
 /// `xfa.host.messageBox(message)`: records the message, cut to [`MAX_LINE`] characters, and
@@ -1334,7 +1361,10 @@ fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize) ->
     ctx.register_global_property(js_string!("xfa"), xfa, rw)?;
     ctx.register_global_property(js_string!("event"), ev, rw)?;
     ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
+    let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
+    let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(message_box), js_string!("alert"), 4)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 1)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)

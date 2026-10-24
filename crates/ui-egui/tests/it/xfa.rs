@@ -210,6 +210,8 @@ fn scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back() {
     assert!(!says_scripts_are_off(&h.state().toast), "{:?}", h.state().toast);
 }
 
+/// On an encrypted dynamic XFA form that allows filling, the notice bar shows the layout note and
+/// the security sentence together, with both the field-highlight and Security settings buttons.
 #[test]
 fn a_secured_dynamic_xfa_form_shows_its_layout_and_its_security() {
     // Changing and assembling withheld, filling allowed.
@@ -227,4 +229,16 @@ fn a_secured_dynamic_xfa_form_shows_its_layout_and_its_security() {
     h.get_by_label_contains("laid out from its template: 2 pages, 11 fields. This document is secured.");
     h.get_by_label("Hide field highlights");
     h.get_by_label("Security settings");
+}
+
+/// A form that turns field highlighting on (`app.runtimeHighlight = true` in a `layout:ready`
+/// script) gets it, and so does the next document, as with the Highlight fields button.
+#[test]
+fn a_form_that_turns_field_highlighting_on_gets_it() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
+    h.run_steps(4);
+    assert!(h.state().views[0].highlight_fields, "the form's fields are highlighted");
+    h.state_mut().open_bytes("next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
+    h.run_steps(4);
+    assert!(h.state().views[1].highlight_fields, "the next document opens highlighted");
 }

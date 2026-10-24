@@ -557,6 +557,9 @@ fn parse_events(n: XmlNode) -> Vec<Script> {
     for ev in children(n, "event").take(64) {
         if let Some(s) = child(ev, "script") {
             let activity = ev.attribute("activity").unwrap_or("click");
+            // `ready` is two events, told apart by `ref`: layout:ready (`$layout`, once the form
+            // is laid out) and form:ready (`$form`).
+            let activity = if activity == "ready" && ev.attribute("ref").is_some_and(|r| r.trim() == "$layout") { "layoutReady" } else { activity };
             scripts.push(parse_script(s, activity));
         }
     }
@@ -673,15 +676,23 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
     })
 }
 
+/// Whether a `layout:ready` script uses page numbers (`xfa.layout.page(this)`, `pageCount()`): on a
+/// field, it makes the field one the layout numbers itself. It looks for the names in the
+/// script's text and doesn't parse it, so a script that only mentions one (in a comment or a
+/// string) counts too, and its writes to its field are dropped like a page number's.
+pub fn numbers_pages(script: &str) -> bool {
+    script.contains("pageCount") || script.contains("layout.page(") || script.contains("layout.absPage(")
+}
+
 /// Which page-number role a field with a layout:ready script plays, if any.
 fn page_role(f: &Field) -> Option<PageRole> {
     let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    if script.text.contains("pageCount") {
-        Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") {
-        Some(PageRole::Number)
-    } else {
+    if !numbers_pages(&script.text) {
         None
+    } else if script.text.contains("pageCount") {
+        Some(PageRole::Count)
+    } else {
+        Some(PageRole::Number)
     }
 }
 

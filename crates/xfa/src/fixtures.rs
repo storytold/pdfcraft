@@ -164,6 +164,30 @@ fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
     out
 }
 
+/// A form with `layout:ready` scripts: the root subform reads the page count and turns field
+/// highlighting on (as forms do with `app.runtimeHighlight`), `stamp` takes a value, `seen` records the highlight its script
+/// reads after the root's, and `pageNo` numbers its page (left to the layout). `note` has a
+/// `form:ready` script, a different event.
+pub fn layout_ready_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <event activity="ready" ref="$layout"><script contentType="application/x-javascript">var pages = xfa.layout.pageCount(); if (!app.runtimeHighlight) { app.runtimeHighlight = true; }</script></event>
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="stamp" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = "laid out";</script></event></field>
+  <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = String(app.runtimeHighlight);</script></event></field>
+  <field name="pageNo" w="1in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.page(this);</script></event></field>
+  <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = "form ready";</script></event></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A hidden subform `details` a script may show, holding a named field and three unnamed
 /// objects: a caption, an old caption the form keeps hidden, and a hidden subform. Unnamed
 /// objects have no SOM name of their own, so showing `details` must leave the hidden ones hidden.
