@@ -305,13 +305,21 @@ impl PageText {
     /// turned by `/Rotate`) rows mean nothing, and the lines come out one per row in reading order
     /// instead.
     pub fn column_text(&self, glyphs: &[usize]) -> String {
-        // The selected glyphs of each line, with their box: (glyphs, bbox).
+        // The selected glyphs of each line, with their box: (glyphs, bbox). A line is cut where a gap wider than one run
+        // of text can hold separates two glyphs (`arrange` joins runs on one baseline into a line, as table cells are), so
+        // cells keep their tab.
         let mut lines: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
         let mut line_ids: Vec<u32> = Vec::new();
+        let mut previous: Option<&TextGlyph> = None;
         for &i in glyphs {
             let (Some(g), Some(&line)) = (self.glyphs.get(i), self.line_of.get(i)) else { continue };
+            let apart = previous.is_some_and(|p| {
+                let h = (p.rect[3] - p.rect[1]).max(g.rect[3] - g.rect[1]);
+                g.rect[0] - p.rect[2] >= CELL_GAP * h
+            });
+            previous = Some(g);
             match (lines.last_mut(), line_ids.last()) {
-                (Some((members, bb)), Some(&l)) if l == line => {
+                (Some((members, bb)), Some(&l)) if l == line && !apart => {
                     members.push(i);
                     union(bb, &g.rect);
                 }
@@ -378,6 +386,10 @@ const DIRECTION_TOLERANCE: f64 = WORD_GAP as f64;
 
 /// A word gap is wider than the line's typical letter gap by this fraction of the line height.
 const WORD_GAP: f32 = 0.15;
+
+/// A gap of this many heights between two glyphs of a line is wider than one run of text holds (`arrange` continues
+/// a run across less than three heights), so it separates cells that share a baseline.
+const CELL_GAP: f32 = 3.0;
 
 /// A glyph with its writing direction to the nearest quarter turn (right, down, left, up) and as
 /// a unit vector.
@@ -605,6 +617,35 @@ impl TextDevice {
     }
 }
 
+/// `text` with each Latin compatibility ligature (U+FB00–U+FB06: ff, fi, fl, ffi, ffl, long s t,
+/// st) written as the letters it stands for, their compatibility decomposition. A font whose
+/// encoding names a ligature glyph (`/fi`) reads as the ligature character, and copied or searched
+/// text wants the letters, as a ToUnicode map gives them (ISO 32000-2 §9.10.3 maps the ff, fi and
+/// ffl glyphs to "LATIN SMALL LETTER F … I"). Nothing else is normalised. The glyph keeps its one
+/// box: the PDF gives no position for the letters inside it.
+fn ligature_letters(text: String) -> String {
+    let letters = |c: char| match c {
+        '\u{FB00}' => Some("ff"),
+        '\u{FB01}' => Some("fi"),
+        '\u{FB02}' => Some("fl"),
+        '\u{FB03}' => Some("ffi"),
+        '\u{FB04}' => Some("ffl"),
+        '\u{FB05}' | '\u{FB06}' => Some("st"),
+        _ => None,
+    };
+    if !text.chars().any(|c| letters(c).is_some()) {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match letters(c) {
+            Some(s) => out.push_str(s),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 /// Whether `PDFCRAFT_TEXT_DEBUG` is set. `draw_glyph` runs once per glyph and `getenv` scans the
 /// whole environment under a lock, so read it once.
 fn text_debug() -> bool {
@@ -643,6 +684,7 @@ impl<'a> Device<'a> for TextDevice {
         if !replaced && text.chars().all(char::is_control) {
             return;
         }
+        let text = ligature_letters(text);
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
         // box spans descender (−200) to ascender (800), the advance gives the width.
         let t = transform * glyph_transform;
@@ -801,7 +843,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         flows.sort_by(|a, b| a.top.total_cmp(&b.top));
         flows
     };
-    let flows = upright(quarters);
+    let mut flows = upright(quarters);
+    let (main, mut inline, place) = turned_lines_in_place(&glyphs, &mut flows);
     let mut extra: Vec<Flow> = curves
         .into_iter()
         .map(|ids| (None, ids))
@@ -847,7 +890,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             text.space_before.push(space);
         }
     };
-    for flow in flows {
+    let placed = |ids: &[usize]| ids.iter().filter_map(|&i| place.get(i).copied()).min().unwrap_or(usize::MAX);
+    for (fi, flow) in flows.into_iter().enumerate() {
         let mut k = 0;
         while k < flow.ids.len() {
             let line = flow.line_of[k];
@@ -856,14 +900,99 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             while let Some(f) = extra.next_if(|f| first(&f.ids) < before) {
                 emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
             }
+            if Some(fi) == main {
+                let at = placed(&flow.ids[k..end]);
+                while let Some(l) = inline.next_if(|l| l.at < at) {
+                    emit(&mut text, &l.ids, &vec![0; l.ids.len()], &l.space_before, l.quarter);
+                }
+            }
             emit(&mut text, &flow.ids[k..end], &vec![0; end - k], &flow.space_before[k..end], flow.quarter);
             k = end;
+        }
+        if Some(fi) == main {
+            for l in inline.by_ref() {
+                emit(&mut text, &l.ids, &vec![0; l.ids.len()], &l.space_before, l.quarter);
+            }
         }
     }
     for f in extra {
         emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
     }
     Ok(text)
+}
+
+/// A line turned a quarter from the page's main text, read in place among it.
+struct InPlace {
+    /// Where laying it out with the main text puts its first glyph.
+    at: usize,
+    ids: Vec<usize>,
+    space_before: Vec<bool>,
+    /// The quarter turn of the flow it came from.
+    quarter: Option<u8>,
+}
+
+/// Takes out of `flows` the lines that are turned a quarter from the page's main text (the unturned flow, when it
+/// holds more glyphs than any other) and sit inside that text's area: a label set upwards beside a row, a turned
+/// table heading. Each is placed where laying it out among the main text, by its box on the page, puts its first
+/// glyph, rather than after all the main text. Lines outside the area (a stamp in the margin) and every other flow
+/// keep their place, as does a page whose main text is vertical.
+///
+/// Returns the main flow's index, the lines in place order, and each glyph's place in that layout.
+fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>, std::iter::Peekable<std::vec::IntoIter<InPlace>>, Vec<usize>) {
+    let nothing = || (None, Vec::new().into_iter().peekable(), Vec::new());
+    let Some((main, size)) = flows.iter().enumerate().find(|(_, f)| f.quarter == Some(0)).map(|(i, f)| (i, f.ids.len())) else { return nothing() };
+    if flows.iter().enumerate().any(|(i, f)| i != main && f.ids.len() >= size) {
+        return nothing();
+    }
+    let rect = |i: usize| glyphs.get(i).map_or([0.0; 4], |g| g.2.rect);
+    let bounds = |ids: &[usize]| {
+        let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for &i in ids {
+            union(&mut b, &rect(i));
+        }
+        b
+    };
+    let Some(area) = flows.get(main).map(|f| bounds(&f.ids)) else { return nothing() };
+    let mut lines = Vec::new();
+    for (fi, flow) in flows.iter_mut().enumerate() {
+        if fi == main {
+            continue;
+        }
+        let (mut ids, mut line_of, mut space_before) = (Vec::new(), Vec::new(), Vec::new());
+        let mut k = 0;
+        while let Some(&line) = flow.line_of.get(k) {
+            let end = flow.line_of.get(k..).and_then(|rest| rest.iter().position(|l| *l != line)).map_or(flow.line_of.len(), |n| k + n);
+            let (Some(line_ids), Some(line_spaces)) = (flow.ids.get(k..end), flow.space_before.get(k..end)) else { break };
+            let b = bounds(line_ids);
+            let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+            if (area[0]..=area[2]).contains(&cx) && (area[1]..=area[3]).contains(&cy) {
+                lines.push(InPlace { at: usize::MAX, ids: line_ids.to_vec(), space_before: line_spaces.to_vec(), quarter: flow.quarter });
+            } else {
+                ids.extend_from_slice(line_ids);
+                line_of.extend(std::iter::repeat_n(line, line_ids.len()));
+                space_before.extend_from_slice(line_spaces);
+            }
+            k = end;
+        }
+        (flow.ids, flow.line_of, flow.space_before) = (ids, line_of, space_before);
+    }
+    if lines.is_empty() {
+        return nothing();
+    }
+    let ids: Vec<usize> =
+        flows.get(main).map_or(&[][..], |f| &f.ids[..]).iter().copied().chain(lines.iter().flat_map(|l| l.ids.iter().copied())).collect();
+    let rects = ids.iter().map(|&i| rect(i)).collect();
+    let mut place = vec![usize::MAX; glyphs.len()];
+    for (r, i) in arrange_flow(glyphs, ids, rects, Some(0)).ids.into_iter().enumerate() {
+        if let Some(p) = place.get_mut(i) {
+            *p = r;
+        }
+    }
+    for l in &mut lines {
+        l.at = l.ids.iter().filter_map(|&i| place.get(i).copied()).min().unwrap_or(usize::MAX);
+    }
+    lines.sort_by_key(|l| l.at);
+    (Some(main), lines.into_iter().peekable(), place)
 }
 
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
@@ -1452,6 +1581,22 @@ fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut [bool]) {
     }
 }
 
+/// Most space between two runs on one baseline that still reads as one line, in heights of the
+/// taller run: a label and its value or table cells, and not two column lines that happen to share
+/// a baseline (a single-line paragraph in each column), whose gap spans most of a column.
+const SAME_LINE_GAP: f32 = 8.0;
+
+/// Whether segment `s` continues the line of segment `p` to its right: their baselines (a fifth of
+/// the em box above its bottom, as `draw_glyph` builds it) lie within a fifth of the smaller
+/// height, whatever their sizes, and `s` starts no earlier than `p` ends and less than
+/// [`SAME_LINE_GAP`] heights after it.
+fn same_line(p: &Seg, s: &Seg) -> bool {
+    let h = p.h.min(s.h);
+    let baseline = |seg: &Seg| seg.bbox[3] - 0.2 * seg.h;
+    let gap = s.bbox[0] - p.bbox[2];
+    (baseline(p) - baseline(s)).abs() < 0.2 * h && gap > -WORD_GAP * h && gap < SAME_LINE_GAP * p.h.max(s.h)
+}
+
 fn union(a: &mut [f32; 4], b: &[f32; 4]) {
     a[0] = a[0].min(b[0]);
     a[1] = a[1].min(b[1]);
@@ -1478,7 +1623,9 @@ fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    (text on a baseline grid), it counts as a row and the top-most rule applies, so the column
 ///    order of #3658 is lost there. Telling prose from a row in that case needs more evidence.
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
-///    text comes out in logical order.
+///    text comes out in logical order. A block whose first line sits on the baseline of the line read
+///    just before it, to its right and less than [`SAME_LINE_GAP`] heights away, continues that line
+///    after a space (a label and its value, words drawn out of order or in another size).
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let (order, line_of, space_before) = arrange(&glyphs);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
@@ -1713,8 +1860,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // `spaces[w]`: a word gap left of the w-th glyph of the segment, by position on the line, not by drawing order
     // (#1062). Reused by every segment.
     let mut spaces: Vec<bool> = Vec::new();
+    // The segment emitted last, and whether it had right-to-left text.
+    let mut last: Option<(usize, bool)> = None;
     for b in block_order {
-        for &si in &blocks[b].0 {
+        for (k, &si) in blocks[b].0.iter().enumerate() {
             place_glyphs(&glyphs, &height, &segs[si], &mut sc);
             let h = segs[si].h;
             // Word gaps relative to this line's typical letter gap (handles tracking).
@@ -1761,12 +1910,31 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 reverse_rtl(&glyphs, &mut sc.logical, &mut spaces);
             }
             let idx: &[usize] = if has_rtl { &sc.logical } else { &sc.placed };
+            // A block whose first line sits on the baseline of the line just read, to its right, goes on that line
+            // (a label and its value, a word drawn out of order or set in another size). Same-baseline segments
+            // are always in different blocks. A column of several lines is read after the column to its left
+            // ends, so their lines don't meet, and one-line paragraphs of two columns that share a baseline are
+            // further apart than `same_line` allows. Right-to-left lines are left alone: their blocks still read
+            // left first.
+            let joined = match last {
+                Some((p, p_rtl)) if k == 0 && !p_rtl && !has_rtl => segs.get(p).filter(|p| same_line(p, &segs[si])),
+                _ => None,
+            };
+            let start = order.len();
             order.extend_from_slice(idx);
-            line_of.resize(order.len(), line);
-            // `spaces[0]` stays false: the first glyph of a segment never takes a space.
+            line_of.resize(order.len(), if joined.is_some() { line.saturating_sub(1) } else { line });
+            // `spaces[0]` stays false: the first glyph of a segment never takes a space, unless it joins a line.
             space_before.extend(spaces.iter().take(idx.len()));
             space_before.resize(order.len(), false);
-            line += 1;
+            if let Some(p) = joined {
+                let gap = segs[si].bbox[0] - p.bbox[2];
+                if let Some(space) = space_before.get_mut(start) {
+                    *space = gap > WORD_GAP * p.h.min(segs[si].h);
+                }
+            } else {
+                line += 1;
+            }
+            last = Some((si, has_rtl));
         }
     }
     (order.into_iter().map(|i| kept[i]).collect(), line_of, space_before)
@@ -2622,6 +2790,173 @@ mod tests {
         assert_eq!(t.plain_text(), "Left1\nLeft2\nRight1\nRight2");
     }
 
+    /// Runs on one baseline read as one line, left to right, with a space at the gap between them, however they were
+    /// drawn and whatever their sizes. Columns of several lines still read one after the other.
+    #[test]
+    fn runs_on_one_baseline_read_as_one_line_in_any_drawing_order() {
+        // Glyphs of `h` pt on the baseline `base`, 0.6 em apart.
+        let sized = |v: &mut Vec<TextGlyph>, s: &str, x: f32, base: f32, h: f32| {
+            for (i, c) in s.chars().enumerate() {
+                let x0 = x + i as f32 * h * 0.6;
+                v.push(em_box(&c.to_string(), x0, base - 0.8 * h, x0 + h * 0.6, base + 0.2 * h));
+            }
+        };
+        // The second word drawn first, three and a half heights to the right of the first.
+        let mut v = Vec::new();
+        sized(&mut v, "second", 160.0, 100.0, 14.0);
+        sized(&mut v, "first", 90.0, 100.0, 14.0);
+        let t = layout(v);
+        assert_eq!(t.plain_text(), "first second");
+        assert_eq!(t.line_rects(0..t.glyphs.len()).len(), 1, "one line, one highlight");
+        // A 9 pt label, a 14 pt word and a 9 pt note on one baseline.
+        let mut v = Vec::new();
+        sized(&mut v, "11", 40.0, 100.0, 9.0);
+        sized(&mut v, "hidden", 90.0, 100.0, 14.0);
+        sized(&mut v, "note", 170.0, 100.0, 9.0);
+        assert_eq!(layout(v).plain_text(), "11 hidden note");
+        // A label beside two columns of two lines: the label joins the first line of the left column, and the
+        // columns keep their own lines.
+        let mut v = Vec::new();
+        sized(&mut v, "07", 40.0, 100.0, 9.0);
+        sized(&mut v, "leftone", 90.0, 100.0, 12.0);
+        sized(&mut v, "lefttwo", 90.0, 114.0, 12.0);
+        sized(&mut v, "rightone", 300.0, 100.0, 12.0);
+        sized(&mut v, "righttwo", 300.0, 114.0, 12.0);
+        assert_eq!(layout(v).plain_text(), "07 leftone\nlefttwo\nrightone\nrighttwo");
+        // Half a height lower is another line.
+        let mut v = Vec::new();
+        sized(&mut v, "first", 90.0, 100.0, 14.0);
+        sized(&mut v, "lower", 160.0, 107.0, 14.0);
+        assert_eq!(layout(v).plain_text(), "first\nlower");
+        // Right-to-left runs on one baseline keep their lines: their blocks read left first.
+        let mut v = Vec::new();
+        sized(&mut v, "שלום", 90.0, 100.0, 14.0);
+        sized(&mut v, "עולם", 200.0, 100.0, 14.0);
+        assert_eq!(layout(v).plain_text().lines().count(), 2);
+    }
+
+    /// A page of fourteen labelled rows, each a case of text copy: a `/fi` glyph by name, a ToUnicode map, an
+    /// `/ActualText` span, word gaps by `TJ` and `Td`, a hyphen at a line end, two columns, words drawn out of order,
+    /// fake bold, invisible text, letter spacing and a line turned upwards.
+    fn copy_test_page() -> Pdf {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let rows: [(&str, &str); 14] = [
+            ("01", "BT /F2 14 Tf 90 {Y} Td (of\\200ce) Tj ET"),
+            ("02", "BT /F3 14 Tf 90 {Y} Td (XEY) Tj ET"),
+            ("03", "/Span << /ActualText (replaced) >> BDC BT /F1 14 Tf 90 {Y} Td (shown) Tj ET EMC"),
+            ("04", "BT /F1 14 Tf 90 {Y} Td [(Hello) -400 (world)] TJ ET"),
+            ("05", "BT /F1 14 Tf 90 {Y} Td [(W) 80 (ave)] TJ ET"),
+            ("06", "BT /F1 14 Tf 90 {Y} Td (exam-) Tj 0 -16 Td (ple) Tj ET"),
+            (
+                "07",
+                "BT /F1 12 Tf 90 {Y} Td (left one) Tj 0 -14 Td (left two) Tj ET BT /F1 12 Tf 300 {Y} Td (right one) Tj 0 -14 Td (right two) Tj ET",
+            ),
+            ("08", "BT /F1 14 Tf 160 {Y} Td (second) Tj ET BT /F1 14 Tf 90 {Y} Td (first) Tj ET"),
+            ("09", "BT /F1 14 Tf 90 {Y} Td (caf\\351 na\\357ve) Tj ET"),
+            ("10", "BT /F1 14 Tf 90 {Y} Td (Bold) Tj ET BT /F1 14 Tf 90.4 {Y} Td (Bold) Tj ET"),
+            ("11", "BT /F1 14 Tf 3 Tr 90 {Y} Td (hidden) Tj ET BT /F1 9 Tf 0.5 g 160 {Y} Td (<- invisible word here) Tj ET"),
+            ("12", "BT /F1 14 Tf 8 Tc 90 {Y} Td (SPACED) Tj ET"),
+            ("13", "BT /F1 14 Tf 0 1 -1 0 110 {Y} Tm (up) Tj ET"),
+            ("14", "BT /F1 14 Tf 90 {Y} Td (split) Tj 40 0 Td (words) Tj ET"),
+        ];
+        let mut content = String::from("BT /F1 9 Tf 40 770 Td (Text copy and search test) Tj ET\n");
+        let mut y = 740;
+        for (tag, body) in rows {
+            content += &format!("BT /F1 9 Tf 0.4 g 40 {y} Td ({tag}) Tj ET 0 g\nq {} Q\n", body.replace("{Y}", &y.to_string()));
+            y -= 38
+                + match tag {
+                    "06" | "13" => 10,
+                    "07" => 6,
+                    _ => 0,
+                };
+        }
+        let mut doc = Document::with_version("1.7");
+        let helvetica = || dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding" };
+        let f1 = doc.add_object(helvetica());
+        let differences = dictionary! { "Type" => "Encoding", "BaseEncoding" => "WinAnsiEncoding", "Differences" => vec![Object::Integer(128), Object::Name(b"fi".to_vec())] };
+        let f2 = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => differences });
+        let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Test-UCS def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <58> <004B> <45> <0045> <59> <0059> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+        let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.as_bytes().to_vec()));
+        let mut f3 = helvetica();
+        f3.set("ToUnicode", to_unicode);
+        let f3 = doc.add_object(f3);
+        let contents = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => f1, "F2" => f2, "F3" => f3 } }, "Contents" => contents
+        });
+        doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// Copy of the whole page: one line per baseline in left-to-right order whatever the drawing order, the `/fi`
+    /// glyph as its letters, and the line turned upwards in its row, not after the page. `/ActualText` replaces what
+    /// is drawn (ISO 32000-2 §14.9.4), a hard hyphen at a line end stays (§14.8.2.3: an incidental one is U+00AD),
+    /// fake bold reads once, and letter spacing that is the same between every letter is tracking, not word gaps.
+    #[test]
+    fn a_copied_page_reads_one_line_per_baseline_in_reading_order() {
+        let text = extract_page(&copy_test_page(), 0, &InterpreterSettings::default()).unwrap();
+        assert_eq!(
+            text.plain_text(),
+            "Text copy and search test\n01 office\n02 KEY\n03 replaced\n04 Hello world\n05 Wave\n06 exam-\nple\n07 left one\nleft two\n\
+             right one\nright two\n08 first second\n09 café naïve\n10 Bold\n11 hidden <- invisible word here\n12 SPACED\n13\nup\n14 split words"
+        );
+        assert_eq!(text.find("first second").len(), 1);
+        assert_eq!(text.find("office").len(), 1);
+    }
+
+    /// A turned line inside the page's text reads where it stands; one in the margin, beside every line (a stamp
+    /// set up the edge of the page), still reads after the text instead of splitting a paragraph.
+    #[test]
+    fn a_turned_line_reads_in_place_inside_the_text_and_after_it_in_the_margin() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let page = |before: &str, after: &str| {
+            let mut doc = Document::with_version("1.7");
+            let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+            let mut content = before.to_owned();
+            for (k, word) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+                content += &format!("BT /F1 12 Tf 72 {} Td ({word}) Tj ET\n", 700 - 30 * k);
+            }
+            content += after;
+            let contents = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+            let pages = doc.new_object_id();
+            let page = doc.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } }, "Contents" => contents
+            });
+            doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+            let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+            doc.trailer.set("Root", catalog);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+            extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+        };
+        // "up", set upwards from the baseline of "Beta" beside it, and "dn", set downwards in the space under it.
+        let up = "BT /F1 12 Tf 0 1 -1 0 110 670 Tm (up) Tj ET\n";
+        let down = "BT /F1 8 Tf 0 -1 1 0 100 662 Tm (dn) Tj ET\n";
+        assert_eq!(page("", up), "Alpha\nBeta\nup\nGamma\nDelta");
+        assert_eq!(page(up, ""), "Alpha\nBeta\nup\nGamma\nDelta", "drawn before the text");
+        assert_eq!(page("", down), "Alpha\nBeta\ndn\nGamma\nDelta");
+        // A stamp up the left margin, beside "Beta" and "Gamma": laid out with the text, it would read after "Alpha".
+        let stamp = "BT /F1 10 Tf 0 1 -1 0 30 640 Tm (arXiv stamp) Tj ET\n";
+        assert_eq!(page("", stamp), "Alpha\nBeta\nGamma\nDelta\narXiv stamp");
+    }
+
+    #[test]
+    fn ligature_characters_read_as_their_letters() {
+        assert_eq!(ligature_letters("o\u{FB01}ce".into()), "ofice");
+        assert_eq!(ligature_letters("\u{FB00}\u{FB02}\u{FB03}\u{FB04}\u{FB05}\u{FB06}".into()), "ffflffifflstst");
+        // Only those seven: other compatibility characters stay as they are.
+        assert_eq!(ligature_letters("\u{FB13}\u{FF21}\u{2460}é".into()), "\u{FB13}\u{FF21}\u{2460}é");
+        assert_eq!(ligature_letters(String::new()), "");
+    }
+
     /// Lays out one-word lines, each `(text, x, y)`, 10 pt high: 14 pt apart is a line in a paragraph, 24 pt a
     /// paragraph gap.
     fn lines(at: &[(&str, f32, f32)]) -> String {
@@ -2719,7 +3054,15 @@ mod tests {
     fn table_rows_apart_still_read_across() {
         // Rows a paragraph gap apart whose cells start level read row by row, as before #3658.
         let rows = [("Name", 10.0, 10.0), ("Qty", 100.0, 10.0), ("Apple", 10.0, 34.0), ("12", 100.0, 34.0), ("Pear", 10.0, 58.0), ("7", 100.0, 58.0)];
-        assert_eq!(lines(&rows), "Name\nQty\nApple\n12\nPear\n7");
+        // The cells of a row share its baseline, so they share a line too.
+        assert_eq!(lines(&rows), "Name Qty\nApple 12\nPear 7");
+        // Column select still separates them with a tab.
+        let mut v = Vec::new();
+        for &(s, x, y) in &rows {
+            word(&mut v, s, x, y, 6.0);
+        }
+        let t = layout(v);
+        assert_eq!(t.column_text(&t.glyphs_in([0.0, 0.0, 300.0, 300.0])), "Name\tQty\nApple\t12\nPear\t7");
     }
 
     #[test]
@@ -2738,7 +3081,7 @@ mod tests {
             sized(&mut v, label, 10.0, base, 8.0);
             sized(&mut v, value, 100.0, base, 12.0);
         }
-        assert_eq!(layout(v).plain_text(), "Name\nAlice\nStreet\nMain\nCity\nOslo");
+        assert_eq!(layout(v).plain_text(), "Name Alice\nStreet Main\nCity Oslo");
         // Values drawn 6 pt below their labels, rows a paragraph gap apart.
         let offset =
             [("Name", 10.0, 10.0), ("Val1", 100.0, 16.0), ("Addr", 10.0, 40.0), ("Val2", 100.0, 46.0), ("City", 10.0, 70.0), ("Val3", 100.0, 76.0)];
@@ -2747,7 +3090,8 @@ mod tests {
 
     #[test]
     fn a_column_does_not_jump_to_a_distant_footer_footnote_or_caption() {
-        // A page number far below the left column reads after the right column.
+        // A page number far below the left column reads after the right column. L3 and R3, one-line paragraphs
+        // on one baseline a column apart, keep their own lines.
         let footer = [
             ("L1", 10.0, 10.0),
             ("L2", 10.0, 24.0),
