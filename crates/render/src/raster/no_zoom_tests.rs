@@ -202,3 +202,24 @@ fn a_real_flags_value_is_read_as_its_integer() {
     let got = drawn_at_400(one_annotation("/Subtype /Square /F 12.0 /AP << /N 4 0 R >>"));
     assert!(close(got, expected(LEFT[2], 4.0, SIDE)), "drawn at {got:?}");
 }
+
+/// A NoZoom highlight without an appearance whose `/Rect` corners overflow to infinity (read as
+/// `f32`) has no finite pivot to keep its size about: the scale is dropped and the highlight is
+/// drawn from its `/QuadPoints` at the page's scale instead of through a NaN transform that
+/// painted nothing.
+#[test]
+fn a_no_zoom_highlight_whose_rect_overflows_is_drawn_unscaled() {
+    let m = 4.0;
+    let (x0, x1, y0, y1) = (LEFT[2], LEFT[2] + SIDE, TOP - SIDE, TOP);
+    let body = format!("/Subtype /Highlight /F 12 /C [0 0 0] /QuadPoints [{x0} {y1} {x1} {y1} {x0} {y0} {x1} {y0}]");
+    let pdf = String::from_utf8(one_annotation(&body)).expect("the fixture is ASCII");
+    let huge = format!("1{}.0", "0".repeat(40));
+    let rect = format!("/Rect [{x0} {y0} {x1} {y1}]");
+    assert!(pdf.contains(&rect), "{pdf}");
+    let pdf = pdf.replace(&rect, &format!("/Rect [-{huge} {y0} {x1} {huge}]"));
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { scale: m, magnification: Some(m), ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let got = ink_box(&page, LEFT[2], m, top_row(m));
+    assert!(close(got, expected(LEFT[2], m, SIDE * m)), "drawn at {got:?}");
+}

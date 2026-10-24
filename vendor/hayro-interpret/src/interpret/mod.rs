@@ -393,7 +393,8 @@ fn no_rotate_turn(rotation: Rotation, rect: &kurbo::Rect) -> Affine {
 /// behave as if the NoZoom and NoRotate annotation flags … were always set" (§12.5.6.4). Form
 /// fields and links are left in `/Rect`: PdfCraft takes their click targets from it. `None` when
 /// there is no on-screen magnification (print, export, thumbnails), when it isn't finite and
-/// greater than zero, or when the annotation keeps scaling with the page. The scale is uniform
+/// greater than zero, when the annotation keeps scaling with the page, or when the scale is not
+/// finite (a `/Rect` corner overflowed `f32`). The scale is uniform
 /// and has the same pivot as the NoRotate turn, so the two commute.
 fn no_zoom_scale(annot: &Dict<'_>, flags: u32, magnification: Option<f32>, rect: &kurbo::Rect) -> Option<Affine> {
     let m = f64::from(magnification?);
@@ -408,7 +409,9 @@ fn no_zoom_scale(annot: &Dict<'_>, flags: u32, magnification: Option<f32>, rect:
         return None;
     }
     let (x, y) = (rect.x0.min(rect.x1), rect.y0.max(rect.y1));
-    Some(Affine::new([s, 0.0, 0.0, s, x - s * x, y - s * y]))
+    // A `/Rect` corner read as infinite (a coordinate past `f32`) makes the pivot `x - s * x`
+    // NaN; with no scale the annotation is drawn as the page scales it instead.
+    Some(Affine::new([s, 0.0, 0.0, s, x - s * x, y - s * y])).filter(|scale| scale.is_finite())
 }
 
 /// PdfCraft patch: the normal appearance of a Highlight annotation that has none (ISO 32000-2
