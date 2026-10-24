@@ -2597,3 +2597,7 @@ animation effects	Off	Joaktiv
 	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
 	Pinned {tool} to Home	{tool} u fiksua te Kreu
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
+	Text opacity	Tejdukshmëria e tekstit
+	Border opacity	Tejdukshmëria e kornizës
+	Line opacity	Tejdukshmëria e vijës
+	Fill opacity	Tejdukshmëria e mbushjes

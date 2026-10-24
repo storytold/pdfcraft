@@ -2609,3 +2609,7 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+	Text opacity	Metin opaklığı
+	Border opacity	Kenarlık opaklığı
+	Line opacity	Çizgi opaklığı
+	Fill opacity	Dolgu opaklığı

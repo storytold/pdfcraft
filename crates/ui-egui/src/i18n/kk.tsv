@@ -2611,3 +2611,7 @@ animation effects	Off	Өшірулі
 	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
 	Pinned {tool} to Home	{tool} басты бетке бекітілді
 	Unpinned {tool} from Home	{tool} басты беттен ажыратылды
+	Text opacity	Мәтін мөлдірсіздігі
+	Border opacity	Жиек мөлдірсіздігі
+	Line opacity	Сызық мөлдірсіздігі
+	Fill opacity	Толтыру мөлдірсіздігі

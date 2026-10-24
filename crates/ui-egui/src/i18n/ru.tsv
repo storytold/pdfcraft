@@ -2526,3 +2526,7 @@ animation effects	Off	Выкл
 	No image on clipboard to paste	В буфере обмена нет изображения для вставки
 	Pinned {tool} to Home	{tool} закреплён на главной
 	Unpinned {tool} from Home	{tool} откреплён от главной
+	Text opacity	Непрозрачность текста
+	Border opacity	Непрозрачность рамки
+	Line opacity	Непрозрачность линии
+	Fill opacity	Непрозрачность заливки

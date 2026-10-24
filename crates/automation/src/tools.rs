@@ -773,7 +773,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "icon": { "type": "string", "description": "note: Comment, Note, Help, Insert, Key, NewParagraph, Paragraph (the standard names), Check, Circle, Cross, CrossHairs, Star, RightArrow, UpArrow; attachment: PushPin, Paperclip, Graph, Tag." },
                 "color": color(),
                 "fill": color(),
-                "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+                "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The whole comment's opacity (its line or border's, where its fill or text has its own)." },
+                "fill_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The fill's own opacity: rectangle, oval, polygon, cloud, text box, typewriter text or callout." },
+                "text_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The text's own opacity: text box, typewriter text or callout." },
                 "width": { "type": "number", "minimum": 0, "description": "Line width in points." },
                 "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
@@ -906,11 +908,13 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
-                "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+                "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The whole comment's opacity: its fill and text drop opacities of their own." },
+                "fill_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The fill's own opacity (rectangle, oval, polygon, cloud, text box, typewriter text, callout); the line or border keeps the comment's." },
+                "text_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The text's own opacity (text box, typewriter text, callout)." },
                 "width": { "type": "number", "minimum": 0 },
                 "fill": { "type": "string", "description": "Interior colour of a rectangle, oval, polygon, text box or callout: #RRGGBB, a colour name, or \"none\" for no fill." },
                 "font_size": { "type": "number", "minimum": 1, "maximum": 400, "description": "Font size in points of a text box, typewriter text or callout; the box grows to hold the text." },

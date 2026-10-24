@@ -262,19 +262,47 @@ pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     (col.map(|x| x.clamp(0.0, 1.0)), size.min(400.0))
 }
 
-fn ext_gstate(opacity: f64, multiply: bool) -> Option<Dict> {
-    if opacity >= 1.0 && !multiply {
+/// How opaque a comment's parts are drawn, 0–1: its line or border (`/CA`); its fill or
+/// background (`/ca`, which PDF 2.0 gives the non-stroking operations; without it, as the line);
+/// and a text box's text (`/PCTextOpacity`, PdfCraft's own; without it, as the fill, since text
+/// is filled too). A comment with only `/CA` is drawn at that opacity throughout, as before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartOpacity {
+    pub line: f64,
+    pub fill: f64,
+    pub text: f64,
+}
+
+/// The parts' opacities of the comment `d` (see [`PartOpacity`]).
+pub fn part_opacity(d: &Dict) -> PartOpacity {
+    let get = |key: &[u8]| d.get(key).and_then(|o| o.as_f64()).filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0));
+    let line = get(b"CA").unwrap_or(1.0);
+    let fill = get(b"ca").unwrap_or(line);
+    let text = get(b"PCTextOpacity").unwrap_or(fill);
+    PartOpacity { line, fill, text }
+}
+
+/// `/GS0`: the line's opacity for strokes and the fill's for everything filled; `/GS1`, where the
+/// text's differs from the fill's: the text's for its glyphs.
+fn ext_gstate(parts: PartOpacity, multiply: bool) -> Option<Dict> {
+    if parts.line >= 1.0 && parts.fill >= 1.0 && parts.text >= 1.0 && !multiply {
         return None;
     }
-    let mut gs = Dict::new();
-    gs.set(b"Type".to_vec(), Object::name("ExtGState"));
-    if multiply {
-        gs.set(b"BM".to_vec(), Object::name("Multiply"));
-    }
-    gs.set(b"CA".to_vec(), Object::Real(opacity));
-    gs.set(b"ca".to_vec(), Object::Real(opacity));
+    let gs = |stroke: f64, fill: f64| {
+        let mut gs = Dict::new();
+        gs.set(b"Type".to_vec(), Object::name("ExtGState"));
+        if multiply {
+            gs.set(b"BM".to_vec(), Object::name("Multiply"));
+        }
+        gs.set(b"CA".to_vec(), Object::Real(stroke));
+        gs.set(b"ca".to_vec(), Object::Real(fill));
+        Object::Dict(gs)
+    };
     let mut res = Dict::new();
-    res.set(b"GS0".to_vec(), Object::Dict(gs));
+    res.set(b"GS0".to_vec(), gs(parts.line, parts.fill));
+    if parts.text != parts.fill {
+        res.set(b"GS1".to_vec(), gs(parts.line, parts.text));
+    }
     Some(res)
 }
 
@@ -379,7 +407,9 @@ struct AppearanceContext<'a> {
     subtype: &'a [u8],
     rect: [f64; 4],
     cloudy: bool,
+    /// The line's opacity (`parts.line`).
     opacity: f64,
+    parts: PartOpacity,
     stroke: Option<Rgb>,
     width: f64,
 }
@@ -394,7 +424,7 @@ struct AppearanceDrawing {
 impl AppearanceDrawing {
     fn new(context: &AppearanceContext<'_>) -> Self {
         let mut drawing = Self::default();
-        if let Some(gs) = ext_gstate(context.opacity, context.subtype == b"Highlight") {
+        if let Some(gs) = ext_gstate(context.parts, context.subtype == b"Highlight") {
             drawing.resources.set(b"ExtGState".to_vec(), Object::Dict(gs));
             drawing.content.push_str("/GS0 gs\n");
         }
@@ -439,7 +469,8 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         subtype,
         rect,
         cloudy,
-        opacity: d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0),
+        opacity: part_opacity(d).line,
+        parts: part_opacity(d),
         stroke: color(d, b"C")?,
         width: border_width(d),
     })
@@ -964,6 +995,10 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
+    // The text at its own opacity, where it has one.
+    if parts.text != parts.fill {
+        c.push_str("/GS1 gs\n");
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),

@@ -2518,3 +2518,7 @@ animation effects	Off	ປິດ
 	Export this PDF	ສົ່ງອອກ PDF ນີ້
 	Find text or tools	ຊອກຫາຂໍ້ຄວາມ ຫຼື ເຄື່ອງມື
 	Crop image	ຕັດຂອບຮູບພາບ
+	Text opacity	ຄວາມໂປ່ງແສງຂອງຂໍ້ຄວາມ
+	Border opacity	ຄວາມໂປ່ງແສງຂອງຂອບ
+	Line opacity	ຄວາມໂປ່ງແສງຂອງເສັ້ນ
+	Fill opacity	ຄວາມໂປ່ງແສງຂອງສີຕື່ມ

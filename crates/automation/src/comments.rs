@@ -189,6 +189,16 @@ impl Automation {
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
             });
+            // How opaque it is drawn: as a whole, or its fill and text each at their own.
+            if let Some(p) = doc.comment_props(c.page, c.index).filter(|_| c.in_reply_to.is_none()) {
+                v["opacity"] = json!(p.opacity);
+                if let Some(f) = p.fill_opacity {
+                    v["fill_opacity"] = json!(f);
+                }
+                if let Some(t) = p.text_opacity {
+                    v["text_opacity"] = json!(t);
+                }
+            }
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.
             // Unchanged on a page the viewer could not read, as `rect` is.
@@ -424,6 +434,19 @@ impl Automation {
         if let Some(o) = a.opt_num("opacity")? {
             style.opacity = o.clamp(0.0, 1.0);
         }
+        // The fill's and a text box's text's own opacities (the line keeps `opacity`).
+        let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
+        let texts = matches!(shape, Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. });
+        if fill_opacity.is_some() && !(texts || matches!(shape, Shape::Rectangle { .. } | Shape::Oval { .. } | Shape::Polygon { .. })) {
+            return Err(ToolError::InvalidArgs(
+                "fill_opacity applies to a rectangle, oval, polygon, cloud, text box, typewriter text or callout".into(),
+            ));
+        }
+        if text_opacity.is_some() && !texts {
+            return Err(ToolError::InvalidArgs("text_opacity applies to a text box, typewriter text or callout".into()));
+        }
+        style.fill_opacity = fill_opacity.map(|o| o.clamp(0.0, 1.0));
+        style.text_opacity = text_opacity.map(|o| o.clamp(0.0, 1.0));
         if let Some(w) = a.opt_num("width")? {
             style.width = w.max(0.0);
         }
@@ -653,6 +676,14 @@ impl Automation {
             let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
             edits.push(Edit::FillAnnotation { page, index, fill });
         }
+        // After `opacity`, which sets the whole comment's.
+        let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
+        if fill_opacity.into_iter().chain(text_opacity).any(|o| !(0.0..=1.0).contains(&o)) {
+            return Err(ToolError::InvalidArgs("fill_opacity and text_opacity are 0–1".into()));
+        }
+        if fill_opacity.is_some() || text_opacity.is_some() {
+            edits.push(Edit::PartOpacity { page, index, fill: fill_opacity, text: text_opacity });
+        }
         if let Some(size) = a.opt_num("font_size")? {
             if !(1.0..=400.0).contains(&size) {
                 return Err(ToolError::InvalidArgs("font_size must be 1–400 pt".into()));
@@ -686,7 +717,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

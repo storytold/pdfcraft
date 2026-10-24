@@ -2873,3 +2873,7 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+	Text opacity	Teksto nepermatomumas
+	Border opacity	Rėmelio nepermatomumas
+	Line opacity	Linijos nepermatomumas
+	Fill opacity	Užpildo nepermatomumas

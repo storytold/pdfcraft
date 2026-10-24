@@ -110,6 +110,10 @@ impl PdfCraftApp {
         self.comment_prefs.set_style(tool, style);
         // Keep invisible defaults out of tools where a zero stroke would make them disappear.
         self.comment_prefs.set_opacity(tool, p.opacity);
+        // The fill's and text's own opacities where they show (else the opacity is the whole
+        // comment's).
+        let (fill, text) = parts_shown(p);
+        self.comment_prefs.set_part_opacity(tool, p.fill_opacity.filter(|_| fill), p.text_opacity.filter(|_| text));
         if let Some(w) = p.width {
             self.comment_prefs.set_width(tool, w);
         }
@@ -123,6 +127,20 @@ impl PdfCraftApp {
         self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false });
         self.dialog = Some(crate::Dialog::CommentProps);
     }
+}
+
+/// Which of the comment's parts show an opacity of their own: (its fill, its text). A text box's
+/// text, border and fill each do once it has a border or a fill; a filled shape's line and fill
+/// do; anything else has one opacity for the whole comment.
+pub fn parts_shown(p: &CommentProps) -> (bool, bool) {
+    let fill = p.fill_opacity.is_some() && p.fill.is_some();
+    let text = p.text_opacity.is_some() && (fill || has_border(p));
+    (fill, text)
+}
+
+/// A text box's, typewriter text's or callout's border is drawn.
+fn has_border(p: &CommentProps) -> bool {
+    p.font_size.is_some() && p.width.is_some_and(|w| w > 0.0)
 }
 
 /// The edits that make the comment match the draft (empty when nothing changed).
@@ -142,6 +160,15 @@ pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     }
     if e.restylable && e.fillable && e.fill != o.fill {
         out.push(Edit::FillAnnotation { page: d.page, index: d.index, fill: e.fill });
+    }
+    // After the opacity, which is the whole comment's: the parts shown are set again.
+    let (fill, text) = parts_shown(e);
+    let moved = |a: Option<f64>, b: Option<f64>| a.zip(b).is_some_and(|(a, b)| (a - b).abs() > 1e-6);
+    if e.restylable
+        && (fill || text)
+        && (opacity.is_some() || fill && moved(e.fill_opacity, o.fill_opacity) || text && moved(e.text_opacity, o.text_opacity))
+    {
+        out.push(Edit::PartOpacity { page: d.page, index: d.index, fill: e.fill_opacity.filter(|_| fill), text: e.text_opacity.filter(|_| text) });
     }
     if e.restylable
         && let Some(size) = e.font_size.filter(|s| Some(*s) != o.font_size)
@@ -231,12 +258,39 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         ui.add(egui::DragValue::new(size).range(1.0..=400.0).speed(0.5).suffix(" pt"));
                         ui.end_row();
                     }
-                    ui.label(tl!("Opacity"));
-                    let mut pct = e.opacity * 100.0;
-                    if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
-                        e.opacity = pct / 100.0;
+                    // One opacity for the whole comment, or each part's of its own: a text box's
+                    // text, border and fill, a shape's line and fill. The rows stay put; a part
+                    // not drawn (no fill, no border) is greyed.
+                    let percent = |ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: bool| {
+                        ui.add_enabled(enabled, egui::Label::new(label));
+                        let mut pct = *value * 100.0;
+                        if ui.add_enabled(enabled, egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
+                            *value = pct / 100.0;
+                        }
+                        ui.end_row();
+                    };
+                    let (fill, text) = parts_shown(e);
+                    let border = has_border(e);
+                    match (e.text_opacity.is_some(), e.fill_opacity.is_some()) {
+                        (true, _) => {
+                            // With neither a border nor a fill, the text is the whole comment.
+                            match e.text_opacity.as_mut() {
+                                Some(t) if text => percent(ui, tl!("Text opacity"), t, true),
+                                _ => percent(ui, tl!("Text opacity"), &mut e.opacity, true),
+                            }
+                            if text {
+                                percent(ui, tl!("Border opacity"), &mut e.opacity, border);
+                            } else {
+                                let mut whole = e.opacity;
+                                percent(ui, tl!("Border opacity"), &mut whole, false);
+                            }
+                        }
+                        (false, true) => percent(ui, tl!("Line opacity"), &mut e.opacity, true),
+                        (false, false) => percent(ui, tl!("Opacity"), &mut e.opacity, true),
                     }
-                    ui.end_row();
+                    if let Some(f) = e.fill_opacity.as_mut() {
+                        percent(ui, tl!("Fill opacity"), f, fill);
+                    }
                     let min_width = if e.font_size.is_some() { 0.0 } else { 0.5 };
                     if let Some(w) = e.width.as_mut() {
                         ui.label(tl!("Thickness"));

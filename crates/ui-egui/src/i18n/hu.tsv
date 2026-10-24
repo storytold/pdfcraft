@@ -2612,3 +2612,7 @@ animation effects	Off	Ki
 	No image on clipboard to paste	Nincs beilleszthető kép a vágólapon
 	Pinned {tool} to Home	{tool} rögzítve a kezdőlapra
 	Unpinned {tool} from Home	{tool} leválasztva a kezdőlapról
+	Text opacity	Szöveg átlátszatlansága
+	Border opacity	Szegély átlátszatlansága
+	Line opacity	Vonal átlátszatlansága
+	Fill opacity	Kitöltés átlátszatlansága

@@ -2878,3 +2878,7 @@ certificate	Version	Version
 	No image on clipboard to paste	Aucune image à coller dans le presse-papiers
 	Pinned {tool} to Home	{tool} épinglé à l’Accueil
 	Unpinned {tool} from Home	{tool} désépinglé de l’Accueil
+	Text opacity	Opacité du texte
+	Border opacity	Opacité de la bordure
+	Line opacity	Opacité de la ligne
+	Fill opacity	Opacité du fond

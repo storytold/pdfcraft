@@ -2635,3 +2635,7 @@ animation effects	Off	Вимкнено
 	No image on clipboard to paste	У буфері обміну немає зображення для вставлення
 	Pinned {tool} to Home	{tool} закріплено на головній
 	Unpinned {tool} from Home	{tool} відкріплено від головної
+	Text opacity	Непрозорість тексту
+	Border opacity	Непрозорість рамки
+	Line opacity	Непрозорість лінії
+	Fill opacity	Непрозорість заливки

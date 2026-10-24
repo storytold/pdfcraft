@@ -2898,3 +2898,7 @@ theme	Appearance	Aparência
 	No image on clipboard to paste	Nenhuma imagem na área de transferência para colar
 	Pinned {tool} to Home	{tool} fixado no Início
 	Unpinned {tool} from Home	{tool} desafixado do Início
+	Text opacity	Opacidade do texto
+	Border opacity	Opacidade da borda
+	Line opacity	Opacidade da linha
+	Fill opacity	Opacidade do preenchimento

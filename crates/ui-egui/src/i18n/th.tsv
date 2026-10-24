@@ -2772,3 +2772,7 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Export this PDF	ส่งออก PDF นี้
 	Find text or tools	ค้นหาข้อความหรือเครื่องมือ
 	Crop image	ครอบตัดรูปภาพ
+	Text opacity	ความทึบของข้อความ
+	Border opacity	ความทึบของขอบ
+	Line opacity	ความทึบของเส้น
+	Fill opacity	ความทึบของสีเติม

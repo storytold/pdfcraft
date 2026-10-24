@@ -2563,3 +2563,7 @@ animation effects	Off	關
 	No image on clipboard to paste	剪貼簿中沒有可貼上的影像
 	Pinned {tool} to Home	已將 {tool} 釘選至首頁
 	Unpinned {tool} from Home	已從首頁取消釘選 {tool}
+	Text opacity	文字不透明度
+	Border opacity	邊框不透明度
+	Line opacity	線條不透明度
+	Fill opacity	填充不透明度
