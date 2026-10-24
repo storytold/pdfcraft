@@ -99,8 +99,9 @@ mod tests {
 
     #[test]
     fn shared_catalog_preserves_existing_icons_and_fallback_uri() {
-        assert_eq!(ICONS.len(), 190);
+        assert_eq!(ICONS.len(), 191);
         assert!(exists("minimize-2"));
+        assert!(exists("menu"));
         for (name, original) in ICONS {
             let expected =
                 String::from_utf8_lossy(original).replace("currentColor", "#ffffff").replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");

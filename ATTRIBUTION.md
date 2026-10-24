@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset but the translation catalogs, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (288)
+## In this repository (289)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -140,6 +140,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/lock.svg` | Lucide icon "lock" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/lock.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/maximize-2.svg` | Lucide icon "maximize-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/maximize-2.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/maximize.svg` | Lucide icon "maximize" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/maximize.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/menu.svg` | Lucide icon "menu" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/menu.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/message-circle-reply.svg` | Lucide icon "message-circle-reply" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/message-circle-reply.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/message-square-text.svg` | Lucide icon "message-square-text" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/message-square-text.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/message-square.svg` | Lucide icon "message-square" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/message-square.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |

@@ -1437,6 +1437,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "f55ca094be0970b29367eb285ec640360402ae73a19894f0d59ebd4873df75e4"
 
 [[asset]]
+path = "assets/icons/menu.svg"
+title = "Lucide icon \"menu\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/menu.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "59b215b53a6d34117d3c2f096ff439f4dde7180f850a76fecdaab099749ff337"
+
+[[asset]]
 path = "assets/icons/message-circle-reply.svg"
 title = "Lucide icon \"message-circle-reply\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

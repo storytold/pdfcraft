@@ -1681,7 +1681,10 @@ fn mode_tab_cursors(
     h.run_steps(4);
     let under = what(h);
     ["All tools", "Edit", "Convert", "E-Sign"].map(|label| {
-        let at = mode_tab(h, label).center();
+        let tab = mode_tab(h, label);
+        // Over the part of the tab the item lies under: the Menu icon button leaves the tabs
+        // starting further left, so the item can start inside All tools.
+        let at = egui::pos2((tab.left().max(under.left()) + tab.right().min(under.right())) / 2.0, tab.center().y);
         assert!(under.contains(at), "{under:?} lies under {label} at {at:?}");
         h.hover_at(at);
         h.run_steps(2);
