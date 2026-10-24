@@ -2774,3 +2774,7 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# AI-assisted additions for ungrouping Form artwork (#3067); not reviewed by a native speaker.
+	Ungroup artwork	Desagrupa la il·lustració
+	Ungroup	Desagrupa

@@ -2751,3 +2751,6 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+
+# AI-assisted addition for ungrouping Form artwork (#3067); not reviewed by a native speaker.
+	Ungroup	Pisahkan grup

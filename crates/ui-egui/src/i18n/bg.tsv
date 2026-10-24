@@ -2001,6 +2001,7 @@
 	Delete document JavaScript	Изтрий JavaScript на документа
 	Delete field	Изтрий полето
 	Delete image	Изтрий изображението
+	Ungroup artwork	Разгрупиране на графиката
 	Delete link	Изтрий връзката
 	Delete page	Изтрий страницата
 	Device colour is used, but there is no PDF/A output intent	Използва се цвят, зависим от устройството, но няма изходно намерение за PDF/A
@@ -2435,6 +2436,7 @@ animation effects	Off	Изключени
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Използвайте го, когато принтерът пропуска текст, сенки или прозрачност. Отпечатаното вече не е текст за търсене; с печат в сиво изображенията са сиви.
 	Crop Image	Изрязване на изображението
 	Remove Crop	Премахване на изрязването
+	Ungroup	Разгрупиране
 	Trim the picture with its handles; Enter or Done applies	Изрежете картината чрез дръжките; Enter или Готово прилага
 	Redaction mark appearance	Вид на маркировката за заличаване
 	Outline colour:	Цвят на контура:

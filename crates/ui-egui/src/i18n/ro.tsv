@@ -2774,3 +2774,7 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# AI-assisted additions for ungrouping Form artwork (#3067); not reviewed by a native speaker.
+	Ungroup artwork	Degrupare grafică
+	Ungroup	Degrupare

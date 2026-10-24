@@ -1112,6 +1112,13 @@ fn image_menu(
         ui.close();
     }
     let raster = images.get(hit).is_some_and(|image| !image.is_form);
+    // Grouped Form artwork: draw its content in place, so its text and pictures edit one by
+    // one (#2964, #3005).
+    if images.get(hit).is_some_and(|image| image.is_form) && ui.button(tl!("Ungroup")).clicked() {
+        view.image_selection = None;
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Ungroup });
+        ui.close();
+    }
     if ui.add_enabled(raster, egui::Button::new(tl!("Replace Image…"))).clicked() {
         *action = Some(ImageAction::Replace(page, hit));
         ui.close();

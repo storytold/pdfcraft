@@ -1972,6 +1972,7 @@
 	Rotate image	Obróć obraz
 	Flip image	Odbij obraz
 	Delete image	Usuń obraz
+	Ungroup artwork	Rozgrupuj grafikę
 	Add header & footer	Dodaj nagłówek i stopkę
 	Update header & footer	Zaktualizuj nagłówek i stopkę
 	Update watermark	Zaktualizuj znak wodny
@@ -2448,6 +2449,7 @@ animation effects	Off	Wyłączone
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Użyj, gdy drukarka pomija tekst, cieniowanie lub przezroczystość. Wydruk nie jest już tekstem do przeszukiwania; przy druku w skali szarości obrazy są szare.
 	Crop Image	Przytnij obraz
 	Remove Crop	Usuń przycięcie
+	Ungroup	Rozgrupuj
 	Trim the picture with its handles; Enter or Done applies	Przytnij obraz uchwytami; Enter lub Gotowe stosuje
 	Redaction mark appearance	Wygląd znacznika redakcji
 	Outline colour:	Kolor obrysu:

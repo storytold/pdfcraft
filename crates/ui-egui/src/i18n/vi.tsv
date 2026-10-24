@@ -2020,6 +2020,7 @@ comment menu	Edit	Sửa
 	Delete document JavaScript	Xóa JavaScript của tài liệu
 	Delete field	Xóa trường
 	Delete image	Xóa hình ảnh
+	Ungroup artwork	Rã nhóm hình vẽ
 	Delete link	Xóa liên kết
 	Delete page	Xóa trang
 	Delete selected fields	Xóa các trường đã chọn
@@ -2711,6 +2712,7 @@ key	Space	Space
 	Reason: 	Lý do: 
 	Redaction mark appearance	Hình thức dấu xóa nội dung nhạy cảm
 	Remove Crop	Bỏ xén
+	Ungroup	Rã nhóm
 	Remove this leaf tag from reading order and mark its direct content as an artifact	Xóa thẻ lá này khỏi thứ tự đọc và đánh dấu nội dung trực tiếp của nó là thành phần trang trí
 	Remove {standard} identification	Gỡ thông tin nhận dạng {standard}
 	Resolution:	Độ phân giải:

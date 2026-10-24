@@ -1993,6 +1993,7 @@ action wizard	Start	Iniciar
 	Rotate image	Girar imagen
 	Flip image	Voltear imagen
 	Delete image	Eliminar imagen
+	Ungroup artwork	Desagrupar ilustración
 	Add header & footer	Añadir encabezado y pie de página
 	Update header & footer	Actualizar encabezado y pie de página
 	Update watermark	Actualizar marca de agua
@@ -2615,6 +2616,7 @@ animation effects	Off	Desactivados
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Úsalo cuando una impresora omite texto, sombreados o transparencias. La impresión deja de ser texto que se puede buscar; con Imprimir en escala de grises, las imágenes son grises.
 	Crop Image	Recortar imagen
 	Remove Crop	Quitar recorte
+	Ungroup	Desagrupar
 	Trim the picture with its handles; Enter or Done applies	Recorta la imagen con sus tiradores; Intro o Hecho lo aplica
 	Redaction mark appearance	Aspecto de la marca de censura
 	Outline colour:	Color del contorno:
