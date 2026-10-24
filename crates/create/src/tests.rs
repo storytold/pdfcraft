@@ -737,6 +737,25 @@ fn soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha() {
 }
 
 #[test]
+fn undecodable_masks_are_an_error_not_silently_dropped() {
+    // Issue #1814: a JPEG whose CCITT stencil /Mask can't be decoded was exported as an opaque JPEG.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut md = image_dict(4, 2, "DeviceGray", 1);
+        md.set(b"ImageMask".to_vec(), Object::Bool(true));
+        md.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        let m = doc.add(Object::Stream(Stream::from_raw(md, vec![0; 4])));
+        let mut d = image_dict(4, 2, "DeviceGray", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        d.set(b"Mask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, real_jpeg())
+    });
+    let out = extract_images(&doc, &[0], 0);
+    assert!(out.images.is_empty(), "the opaque image must not be exported");
+    assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+}
+
+#[test]
 fn damaged_masks_and_sizes_never_panic() {
     for (w, h, mw, mh, data) in [(4, 2, -3, 1, vec![]), (4, 2, i64::MAX, 2, vec![0; 8]), (-4, 2, 4, 2, vec![0; 8]), (4, 2, 4, 2, vec![])] {
         let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
