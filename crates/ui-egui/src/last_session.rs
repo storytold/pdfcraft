@@ -52,7 +52,7 @@ impl LastSession {
 /// `path` made absolute against the current directory, without resolving links (and without
 /// Windows' `\\?\` prefix, which `canonicalize` adds).
 #[cfg(not(target_arch = "wasm32"))]
-fn absolute(path: &str) -> String {
+pub(crate) fn absolute(path: &str) -> String {
     std::path::absolute(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned())
 }
 

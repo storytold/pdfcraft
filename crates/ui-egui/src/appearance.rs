@@ -139,6 +139,9 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
             app.execute(mode_command(ThemePreference::Dark));
         }
     });
+    ui.add_space(4.0);
+    // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
+    ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
 }
 
 #[cfg(test)]
@@ -175,6 +178,12 @@ mod tests {
         if let Ok(path) = std::env::var("PDFCRAFT_APPEARANCE_SHOT") {
             h.render().unwrap().save(path).unwrap();
         }
+
+        // The field-highlight preference is on for new settings, and the box turns it off.
+        assert!(h.state().view_defaults.highlight_fields);
+        h.get_by_label("Highlight fields").click();
+        h.run();
+        assert!(!h.state().view_defaults.highlight_fields);
 
         let combo = egui::accesskit::Role::ComboBox;
         h.get_by_role(combo).click();

@@ -1,6 +1,6 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (§12.4.4: page transitions and display times read) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (§14.3: custom properties edited in Document Properties) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -44,7 +44,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §12.9 | Measurement and geospatial | full | 2D measuring with viewports and calibration; no geospatial | `comment.geospatial` planned |
 | §12.10 | Document requirements | yes | none | |
 | §13 | Multimedia: sound, movies, screen, rich media, 3D (U3D, PRC) | yes | preserved untouched; not played or shown | `misc.rich-media-*`, `misc.3d-view` planned (P3) |
-| §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited, with its XMP counterparts (title, author, subject, keywords, creator tool, producer) kept in step; XMP written for PDF/A; no XMP editor or custom properties | `organize.xmp-editor` planned |
+| §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited, with its XMP counterparts (title, author, subject, keywords, creator tool, producer) kept in step; XMP written for PDF/A; custom properties listed, added, changed and deleted (Document Properties ▸ Custom, `doc_info`, `doc_set_info`); no XMP editor | `organize.custom-properties` partial, `organize.xmp-editor` planned |
 | §14.6–14.8 | Marked content, logical structure, tagged PDF | full, with editing tools | read (checker, bookmarks from structure, redaction of tags); no tag editing or autotag | gap 11 |
 | §14.9 | Accessibility support: alt text, ActualText, language | full | alt text figure by figure, language, title | `a11y.alt-text-workflow` |
 | §14.10 | Web capture | yes | none | |
@@ -52,7 +52,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §14.12 | Document parts (DPart) | yes | none | `core.pdf20-dpart` planned |
 | §14.13 | Associated files (`/AF`) | yes | none | `core.pdf20-associated-files` planned |
 | — | Structural validation (Arlington PDF model) | yes (Preflight syntax checks) | none | `core.arlington-validation` planned |
-| — | Optional content (layers) | full | **own** toggle and default state; set-OCG-state actions; no layer editing | `view.layers-panel` |
+| — | Optional content (layers) | full | **own** toggle and default state, reset to the default state; set-OCG-state actions; no layer editing | `view.layers-panel`, `view.layers-reset` |
 | — | Redaction (`/Redact` annotations, applying) | full | **own**: removes glyphs, image pixels, vectors, XObject content, annotations, fields and tags; verifies no residue | `protect.redact-*`, `protect.redaction-verification` |
 
 ## Annotations (§12.5.6)

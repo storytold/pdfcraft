@@ -1,8 +1,9 @@
 //! One script engine for a whole form event. Every script of the event runs on one thread
 //! (with the script stack), each in a fresh JavaScript context on a fresh copy of the form as
 //! the caller holds it, so scripts can't see each other's variables or objects and a script
-//! that failed halfway leaves nothing behind; what a script changed reaches the next one only
-//! through the caller, which applies the effects and sends the form as it then is. Before,
+//! that failed halfway leaves no state behind in the engine; what a script changed (up to its
+//! error, when it failed) reaches the next one only through the caller, which applies the
+//! effects and sends the form as it then is. Before,
 //! every script also got a thread of its own and the caller rebuilt the form for each: a form
 //! with hundreds of calculations spent its open-time budget on that.
 //!

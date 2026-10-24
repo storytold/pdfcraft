@@ -442,6 +442,8 @@
 	Content copying for accessibility	Kopiranje vsebine za dostopnost
 	Continue	Nadaljuj
 	Continuous scrolling	Neprekinjeno pomikanje
+	Show gaps between pages	Pokaži razmike med stranmi
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skrijte razmike, da združite robove strani. Robovi znotraj PDF-ja ostanejo nespremenjeni.
 	Contributors	Sodelavci
 	Convert	Pretvori
 	Convert colors	Pretvori barve
@@ -652,6 +654,10 @@
 	Draw your {what} below.	Spodaj narišite: {what}.
 	Drawing	Risba
 	Drawing scale	Merilo risbe
+	Scale	Merilo
+	Common scales	Pogosta merila
+	Enter a scale such as 1:50.	Vnesite merilo, na primer 1:50.
+	Applying a scale switches units to m / mm.	Z uporabo merila se enote preklopijo na m / mm.
 	Drop PDFs or folders here, or choose them.	Spustite datoteke PDF ali mape sem ali jih izberite.
 	Drop-down list	Spustni seznam
 	Dropdown Properties	Lastnosti spustnega seznama
@@ -839,6 +845,7 @@
 	Flip image	Prezrcali sliko
 	Flip on long edge	Obrni po dolgem robu
 	Flip on short edge	Obrni po kratkem robu
+	Printer default	Privzeto tiskalnika
 	Flip vertical	Prezrcali navpično
 	Folders	Mape
 	Font Size:	Velikost pisave:
@@ -902,6 +909,8 @@
 	Hide all comments	Skrij vse komentarje
 	Hide field highlights	Skrij osvetlitev polj
 	Hide layer	Skrij plast
+	Layer options	Možnosti plasti
+	Reset to Initial Visibility	Ponastavi na začetno vidnost
 	Hide menu bar	Skrij menijsko vrstico
 	Hide password	Skrij geslo
 	Hide toolbars	Skrij orodne vrstice
@@ -1007,6 +1016,36 @@
 	Last commit	Zadnji commit
 	Later	Prekliči
 	Later in tab order	Pozneje v vrstnem redu tabulatorja
+	Calculation order	Vrstni red izračunov
+	Fix order	Popravi vrstni red
+	Move only what must move, so every field calculates after the fields it reads.	Premakne le tisto, kar se mora premakniti, da se vsako polje izračuna po poljih, ki jih bere.
+	Earlier in calculation order	Prej v vrstnem redu izračunov
+	Later in calculation order	Pozneje v vrstnem redu izračunov
+	Too early	Prezgodaj
+	Reads {name}, which calculates later, so it shows an old value.	Bere {name}, ki se izračuna pozneje, zato prikazuje staro vrednost.
+	Loop	Zanka
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Bere {names}, ki ga berejo nazaj. Noben vrstni red ne popravi zanke: spremenite eno od formul.
+	Not in order	Ni v vrstnem redu
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Manjka v vrstnem redu izračunov, shranjenem v PDF-ju: drugi pregledovalniki PDF ga morda ne izračunajo.
+	Back to Prepare a form	Nazaj na Pripravi obrazec
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nobeno polje tega obrazca še ne izračuna svoje vrednosti. Polju dodelite izračun na zavihku Izračunaj v njegovih lastnostih in prikazalo se bo tukaj.
+	{names} and {last}	{names} in {last}
+	{field} reads no other field	{field} ne bere nobenega drugega polja
+	{field} reads {fields}	{field} bere {fields}
+	No field reads it	Nobeno polje ga ne bere
+	The order saved in the PDF needs tidying	Vrstni red, shranjen v PDF-ju, je treba urediti
+	Moves only what must move	Premakne le, kar je treba
+	Every field calculates after the fields it reads.	Vsako polje se izračuna po poljih, ki jih bere.
+	Every field outside a loop calculates after the fields it reads.	Vsako polje zunaj zanke se izračuna po poljih, ki jih bere.
+	{field} reads its own value	{field} bere svojo lastno vrednost
+	{fields} read each other	{fields} se berejo med seboj
+	No order can fix a loop. Change one of the formulas.	Noben vrstni red ne popravi zanke. Spremenite eno od formul.
+	Edit {field}'s formula	Uredi formulo polja {field}
+	Order · top calculates first	Vrstni red · zgornje se izračuna prvo
+	Script	Skript
+	Links on page	Povezave na strani
+	Show on the page which fields each field reads	Na strani pokaži, katera polja bere posamezno polje
+	Drag a field to move it, or select it and press {up} or {down}.	Polje premaknete tako, da ga povlečete, ali pa ga izberite in pritisnite {up} ali {down}.
 	Layers	Plasti
 	Layers Panel and Page	Razdelek in stran s plastmi
 	Layout and Magnification	Postavitev in povečava
@@ -1471,6 +1510,7 @@
 	Rename bookmark	Preimenuj zaznamek
 	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	Izris: hayro (bootstrap) · Vmesnik: egui · Ikone: Lucide (ISC) · Pisave: Inter, JetBrains Mono, Dancing Script (OFL)
 	Reopen the files that were open when PdfCraft last closed	Ponovno odpri datoteke, ki so bile odprte ob zadnjem zaprtju PdfCrafta
+	Restore the last view (page, zoom and page display) when a document is opened again	Ob ponovnem odprtju dokumenta obnovi zadnji pogled (stran, povečavo in prikaz strani)
 	Repair log	Dnevnik popravil
 	Repairs	Popravila
 	Repeat overlay text	Ponovi besedilo prekrivanja
@@ -1651,6 +1691,7 @@
 	Set status Rejected	Nastavi status Zavrnjeno
 	Set status Unmarked	Nastavi status Neoznačeno
 	Set tab order	Nastavi vrstni red tabulatorja
+	Set calculation order	Nastavi vrstni red izračunov
 	Set the image of {name}	Nastavi sliko za {name}
 	Set to current page ({n})	Nastavi na trenutno stran ({n})
 	Set to zero	Nastavi na nič
@@ -1733,6 +1774,7 @@
 	Start	Začetek
 	Start Checking	Začni preverjanje
 	Start page number	Številka začetne strani
+	Shrink the page content to make room for the header and footer	Pomanjšaj vsebino strani, da bo prostor za glavo in nogo
 	Status	Stanje
 	Steps	Koraki
 	Sticky note	Opomba
@@ -1927,6 +1969,7 @@
 	Update watermark…	Posodobi vodni žig…
 	Use 72 DPI (one point per pixel)	Uporabi 72 DPI (ena točka na slikovno piko)
 	Use Flate to encode streams that are not encoded	Za kodiranje nekodiranih tokov uporabi Flate
+	In streams that use LZW encoding, use Flate instead	V tokovih s kodiranjem LZW uporabi Flate
 	Use JavaScript	Uporabi JavaScript
 	Use a Digital ID from a file	Uporabi digitalno identiteto iz datoteke
 	Use a certificate	Uporabi potrdilo
@@ -2234,6 +2277,7 @@ key	Space	Preslednica
 	Looking for printers…	Iskanje tiskalnikov…
 	Sending sheet {s} of {n} to {printer}…	Pošiljanje lista {s} od {n} na {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Ni najdenih tiskalnikov. Preverite, ali je tiskalnik nameščen in ali tiskalna vrsta deluje, nato znova odprite Natisni.
+	Reading the printer's settings…	Branje nastavitev tiskalnika…
 	Sending to {printer}…	Pošiljanje na {printer}…
 	Float panel	Odtrgaj razdelek
 	Inspector	Inšpektor
@@ -2268,6 +2312,7 @@ key	Space	Preslednica
 	Couldn't unlock {name}: {e}	Dokumenta {name} ni bilo mogoče odkleniti: {e}
 	This document has no restrictions to lift	Ta dokument nima omejitev, ki bi jih bilo treba odpraviti
 	The document's security settings don't allow copying text and images	Varnostne nastavitve dokumenta ne dovolijo kopiranja besedila in slik
+	The document's security settings don't allow printing	Varnostne nastavitve dokumenta ne dovolijo tiskanja
 	Add the files to combine	Dodajte datoteke za združevanje
 	Leave out files that can't be read?	Izpustim datoteke, ki jih ni mogoče prebrati?
 	These files can't be read, so they won't be in the combined PDF:	Teh datotek ni mogoče prebrati, zato ne bodo v združenem PDF-ju:
@@ -2286,6 +2331,9 @@ key	Space	Preslednica
 	Printer paper and scaling may differ. Check driver settings.	Papir in merilo tiskalnika se lahko razlikujeta. Preverite nastavitve gonilnika.
 	Drawing scale changes. Use Actual size for full-scale plans.	Merilo risbe se spremeni. Za načrte v polnem merilu uporabite Dejansko velikost.
 	Reload documents when their files change on disk	Znova naloži dokumente, ko se njihove datoteke na disku spremenijo
+	Don't show again	Ne prikaži več
+	Show a notice when a document is secured	Prikaži obvestilo, ko je dokument zaščiten
+	Always use my default zoom and page layout	Vedno uporabi moje privzeto povečanje in postavitev strani
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži
 	Couldn't reload {name}: {e}	Datoteke {name} ni bilo mogoče znova naložiti: {e}
@@ -2345,6 +2393,13 @@ animation effects	Off	Izklopljeni
 	no unused output name	ni prostega izhodnega imena
 	no output folder was chosen	izhodna mapa ni bila izbrana
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Prenesen {n} PDF|Prenesena {n} PDF-ja|Preneseni {n} PDF-ji|Prenesenih {n} PDF-jev
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} izračun zdaj uporablja novo ime.|{n} izračuna zdaj uporabljata novo ime.|{n} izračuni zdaj uporabljajo novo ime.|{n} izračunov zdaj uporablja novo ime.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Vrstni red izračunov ima {n} vnos, ki ne izračuna ničesar. »Popravi vrstni red« ga odstrani.|Vrstni red izračunov ima {n} vnosa, ki ne izračunata ničesar. »Popravi vrstni red« ju odstrani.|Vrstni red izračunov ima {n} vnose, ki ne izračunajo ničesar. »Popravi vrstni red« jih odstrani.|Vrstni red izračunov ima {n} vnosov, ki ne izračunajo ničesar. »Popravi vrstni red« jih odstrani.
+@plural	{fields} reads it|{fields} read it	{fields} ga bere|{fields} ga bereta|{fields} ga berejo|{fields} ga berejo
+@plural	{n} field shows an old value|{n} fields show old values	{n} polje kaže staro vrednost|{n} polji kažeta stari vrednosti|{n} polja kažejo stare vrednosti|{n} polj kaže stare vrednosti
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se izračuna pred {fields}, ki ga bere.|{field} se izračuna pred {fields}, ki ju bere.|{field} se izračuna pred {fields}, ki jih bere.|{field} se izračuna pred {fields}, ki jih bere.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Še {n} polje se izračuna prezgodaj.|Še {n} polji se izračunata prezgodaj.|Še {n} polja se izračunajo prezgodaj.|Še {n} polj se izračuna prezgodaj.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manjka v vrstnem redu, shranjenem v PDF-ju, zato ga drugi pregledovalniki PDF morda ne bodo izračunali.|{fields} manjkata v vrstnem redu, shranjenem v PDF-ju, zato ju drugi pregledovalniki PDF morda ne bodo izračunali.|{fields} manjkajo v vrstnem redu, shranjenem v PDF-ju, zato jih drugi pregledovalniki PDF morda ne bodo izračunali.|{fields} manjkajo v vrstnem redu, shranjenem v PDF-ju, zato jih drugi pregledovalniki PDF morda ne bodo izračunali.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} ime polja se ujema z imeni iz prejšnjih datotek in bo preimenovano: {list}|{n} imeni polj se ujemata z imeni iz prejšnjih datotek in bosta preimenovani: {list}|{n} imena polj se ujemajo z imeni iz prejšnjih datotek in bodo preimenovana: {list}|{n} imen polj se ujema z imeni iz prejšnjih datotek in bo preimenovanih: {list}
 	Scan	Skeniraj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpišite se na list belega papirja in ga fotografirajte v močni, enakomerni svetlobi (uporabite bliskavico). Izberite fotografijo ali jo spustite sem: PdfCraft poišče podpis in odstrani papir.
@@ -2439,3 +2494,45 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Attach a file…	Priloži datoteko…
+	Delete attachment	Izbriši prilogo
+	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo
+	Attach {name}	Priloži {name}
+	Delete attachment {key}	Izbriši prilogo {key}
+	Font	Pisava
+	Bulleted list	Označen seznam
+	Numbered list	Oštevilčen seznam
+	Alignment	Poravnava
+	Superscript	Nadpisano
+	Subscript	Podpisano
+	Paragraph spacing	Razmik med odstavki
+	Less	Manj
+	Other options	Druge možnosti
+	Thumbnail size	Velikost sličic
+	Smaller thumbnails	Manjše sličice
+	Larger thumbnails	Večje sličice
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Spremeni obliko komentarja
+
+# Prepare a form ▸ Text field table
+	Add text field table	Dodaj tabelo besedilnih polj
+	Text field table	Tabela besedilnih polj
+	Text Field Table	Tabela besedilnih polj
+	Columns	Stolpci
+	Row spacing	Razmik med vrsticami
+	Column spacing	Razmik med stolpci
+	First row number	Številka prve vrstice
+	Column widths	Širine stolpcev
+	Distribute evenly	Enakomerno porazdeli
+	Field names	Imena polj
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N ali {row} je številka vrstice, {col} številka stolpca in {seq} številka celice. Brez njih se številka vrstice doda na konec.
+	Column {n}	Stolpec {n}
+	Add fields	Dodaj polja
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	vrstice so prenizke: povečajte višino območja ali uporabite manj vrstic ali manjši razmik med vrsticami
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	stolpec je preozek: razširite območje, stolpcu dajte več širine ali uporabite manj stolpcev ali manjši razmik med stolpci
+	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
+	two cells would both be named {name}	dve celici bi imeli enako ime {name}
+	a field named {name} already exists	polje z imenom {name} že obstaja
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Danes

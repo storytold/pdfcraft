@@ -197,6 +197,36 @@
 	Could not save: {e}	无法保存：{e}
 	Earlier in tab order	在 Tab 顺序中前移
 	Later in tab order	在 Tab 顺序中后移
+	Calculation order	计算顺序
+	Fix order	修正顺序
+	Move only what must move, so every field calculates after the fields it reads.	只移动必须移动的字段，使每个字段都在它读取的字段之后计算。
+	Earlier in calculation order	在计算顺序中前移
+	Later in calculation order	在计算顺序中后移
+	Too early	过早
+	Reads {name}, which calculates later, so it shows an old value.	读取 {name}，而它在之后才计算，因此显示的是旧值。
+	Loop	循环
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
+	Not in order	不在顺序中
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Back to Prepare a form	返回准备表单
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
+	{names} and {last}	{names}和{last}
+	{field} reads no other field	{field} 不读取其他字段
+	{field} reads {fields}	{field} 读取 {fields}
+	No field reads it	没有字段读取它
+	The order saved in the PDF needs tidying	PDF 中保存的顺序需要整理
+	Moves only what must move	只移动必须移动的
+	Every field calculates after the fields it reads.	每个字段都在它读取的字段之后计算。
+	Every field outside a loop calculates after the fields it reads.	循环之外的每个字段都在它读取的字段之后计算。
+	{field} reads its own value	{field} 读取自身的值
+	{fields} read each other	{fields} 相互读取
+	No order can fix a loop. Change one of the formulas.	任何顺序都无法修复循环。请修改其中一个公式。
+	Edit {field}'s formula	编辑 {field} 的公式
+	Order · top calculates first	顺序 · 上方的先计算
+	Script	脚本
+	Links on page	页面上的关联
+	Show on the page which fields each field reads	在页面上显示每个字段读取哪些字段
+	Drag a field to move it, or select it and press {up} or {down}.	拖动字段以移动它，或选中它后按 {up} 或 {down}。
 	From:	从：
 	To:	至：
 	High Resolution	高分辨率
@@ -258,6 +288,7 @@
 	Discard private data of other applications	丢弃其他应用程序的私有数据
 	Discard hidden text	丢弃隐藏文本
 	Use Flate to encode streams that are not encoded	使用 Flate 编码未编码的流
+	In streams that use LZW encoding, use Flate instead	在使用 LZW 编码的流中改用 Flate
 	Remove invalid links and bookmarks	删除无效链接和书签
 	Remove unreferenced named destinations	删除未引用的命名目标
 	Compress document structure (object streams)	压缩文档结构（对象流）
@@ -491,6 +522,7 @@
 	Insert Page Number	插入页码
 	Insert Date	插入日期
 	Start page number	起始页码
+	Shrink the page content to make room for the header and footer	缩小页面内容，为页眉和页脚留出空间
 	Source	来源
 	Fit to page	适合页面
 	Rotation	旋转
@@ -876,6 +908,7 @@
 	Off	关
 	Flip on long edge	沿长边翻转
 	Flip on short edge	沿短边翻转
+	Printer default	打印机默认
 	Paper:	纸张：
 	Pages to Print	要打印的页面
 	More options:	更多选项：
@@ -943,6 +976,8 @@
 	Next view	下一个视图
 	Page display	页面显示
 	Continuous scrolling	连续滚动
+	Show gaps between pages	显示页面间距
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隐藏间距以连接页面边缘。PDF 内的页边距保持不变。
 	Two-page view	双页视图
 	Single page	单页
 	Show cover page in two-page view	在双页视图中显示封面页
@@ -1281,6 +1316,8 @@
 	This document has no layers.	本文档没有图层。
 	This document has no attachments.	本文档没有附件。
 	Hide layer	隐藏图层
+	Layer options	图层选项
+	Reset to Initial Visibility	重置为初始可见性
 	Show layer	显示图层
 	Set layer visibility	设置图层可见性
 	on page {label}	第 {label} 页
@@ -1588,6 +1625,7 @@
 	Looking for printers…	正在查找打印机…
 	Sending sheet {s} of {n} to {printer}…	正在将第 {s} 张（共 {n} 张）发送到{printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	未找到打印机。请检查打印机是否已安装、打印后台处理程序是否在运行，然后重新打开“打印”。
+	Reading the printer's settings…	正在读取打印机设置…
 	Sending to {printer}…	正在发送到{printer}…
 	Choose a folder for the searchable files	选择可搜索文件的文件夹
 	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
@@ -1734,6 +1772,7 @@
 	This document has no restrictions to lift	此文档没有可解除的限制
 	The document's security settings don't allow this change	文档安全设置不允许此更改
 	The document's security settings don't allow copying text and images	文档安全设置不允许复制文本和图像
+	The document's security settings don't allow printing	文档安全设置不允许打印
 	Open a document first	请先打开文档
 	Security will be removed when you save	保存时将删除安全性设置
 	Click text or an image to edit it	单击文本或图像进行编辑
@@ -1872,6 +1911,10 @@
 	Perimeter	周长
 	Area	面积
 	Drawing scale	图面比例
+	Scale	比例
+	Common scales	常用比例
+	Enter a scale such as 1:50.	请输入比例，例如 1:50。
+	Applying a scale switches units to m / mm.	应用比例会将单位切换为 m / mm。
 	Snapping	吸附
 	Export measurements	导出测量结果
 	Open a PDF to measure it.	打开 PDF 以进行测量。
@@ -2053,6 +2096,7 @@
 	Set status Rejected	将状态设为已拒绝
 	Set status Unmarked	将状态设为未标记
 	Set tab order	设置 Tab 键顺序
+	Set calculation order	设置计算顺序
 	Set the image of {name}	设置 {name} 的图像
 	Spreadsheet (.xlsx)	电子表格（.xlsx）
 	Square	正方形
@@ -2103,7 +2147,11 @@
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
+	Restore the last view (page, zoom and page display) when a document is opened again	再次打开文档时恢复上次的视图（页面、缩放和页面显示）
 	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
+	Don't show again	不再显示
+	Show a notice when a document is secured	文档已加密时显示通知
+	Always use my default zoom and page layout	始终使用我的默认缩放和页面布局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此文件已在磁盘上更改。“重新加载”显示新版本并放弃未保存的更改；“保存”则用此版本替换它。
 	Reload	重新加载
 	Couldn't reload {name}: {e}	无法重新加载{name}：{e}
@@ -2305,6 +2353,13 @@ animation effects	Off	关
 	no unused output name	没有可用的输出文件名
 	no output folder was chosen	未选择输出文件夹
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下载 {n} 个 PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 个计算已改用新名称。
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	计算顺序中有 {n} 个不计算任何内容的条目。“修正顺序”会将其删除。
+@plural	{fields} reads it|{fields} read it	{fields} 读取它
+@plural	{n} field shows an old value|{n} fields show old values	{n} 个字段显示旧值
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…
@@ -2398,3 +2453,45 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Attach a file…	附加文件…
+	Delete attachment	删除附件
+	Attaching files is not available on the web yet	网页版尚不支持附加文件
+	Attach {name}	附加 {name}
+	Delete attachment {key}	删除附件 {key}
+	Font	字体
+	Bulleted list	项目符号列表
+	Numbered list	编号列表
+	Alignment	对齐
+	Superscript	上标
+	Subscript	下标
+	Paragraph spacing	段落间距
+	Less	收起
+	Other options	其他选项
+	Thumbnail size	缩略图大小
+	Smaller thumbnails	缩小缩略图
+	Larger thumbnails	放大缩略图
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	更改注释形状
+
+# Prepare a form ▸ Text field table
+	Add text field table	添加文本字段表格
+	Text field table	文本字段表格
+	Text Field Table	文本字段表格
+	Columns	列
+	Row spacing	行间距
+	Column spacing	列间距
+	First row number	起始行号
+	Column widths	列宽
+	Distribute evenly	平均分布
+	Field names	字段名称
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 表示行号，{col} 表示列号，{seq} 表示单元格序号。如果都没有，行号加在末尾。
+	Column {n}	第 {n} 列
+	Add fields	添加字段
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	行太矮：请增加区域高度，或减少行数或行间距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某列太窄：请加宽区域、给该列更多宽度，或减少列数或列间距
+	field names can't contain a period: {name}	字段名称不能包含句点：{name}
+	two cells would both be named {name}	两个单元格的名称都会是 {name}
+	a field named {name} already exists	已存在名为 {name} 的字段
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	今天

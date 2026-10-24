@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
-use pdfcraft_optimize::{Compression, ImageSettings, Settings, SpaceCategory, audit_space, effective_resolutions, optimize};
+use pdfcraft_filters::{Filter, Params};
+use pdfcraft_optimize::{
+    Compatibility, Compression, ImageSettings, OptimizeError, Settings, SpaceCategory, audit_space, effective_resolutions, optimize,
+};
 
 fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
     // A smooth gradient with a little texture (photo-like).
@@ -72,6 +75,57 @@ fn stream(doc: &Document, r: ObjRef) -> Stream {
         Object::Stream(s) => s.clone(),
         _ => panic!("not a stream"),
     }
+}
+
+#[test]
+fn image_resolution_uses_the_pages_physical_unit() {
+    for (unit, scale) in [
+        (None, 1.0),
+        (Some(Object::Int(10)), 10.0),
+        (Some(Object::Real(2.5)), 2.5),
+        (Some(Object::Int(0)), 1.0),
+        (Some(Object::Int(-10)), 1.0),
+        (Some(Object::Real(0.5)), 1.0),
+        (Some(Object::name("Ten")), 1.0),
+        (Some(Object::Int(100_000)), pdfcraft_model::MAX_USER_UNIT),
+    ] {
+        for indirect in [false, true] {
+            let mut doc = Document::new_empty();
+            let img = image(&mut doc, 720, 720, 1, false, None);
+            let p = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+            let parent = doc.get(p).as_dict().unwrap().reference(b"Parent").unwrap();
+            // UserUnit is page-local, unlike Resources and MediaBox.
+            doc.update_dict(parent, |d| d.set(b"UserUnit".to_vec(), Object::Int(10))).unwrap();
+            if let Some(unit) = unit.clone() {
+                let unit = if indirect { Object::Ref(doc.add(unit)) } else { unit };
+                doc.update_dict(p, |d| d.set(b"UserUnit".to_vec(), unit)).unwrap();
+            }
+            let ppi = effective_resolutions(&doc, &[p])[&img];
+            assert!((ppi - 720.0 / scale).abs() < 1e-9, "unit={unit:?}, indirect={indirect}: {ppi}");
+        }
+    }
+}
+
+#[test]
+fn optimization_retains_an_image_below_threshold_on_a_scaled_page() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 720, 720, 3, false, None);
+    let p = page(&mut doc, &[("Im", img)], "q 72 0 0 72 0 0 cm /Im Do Q");
+    doc.update_dict(p, |d| d.set(b"UserUnit".to_vec(), Object::Int(10))).unwrap();
+    // 720 pixels across ten inches is 72 ppi, already below the 225 ppi threshold.
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    let image = stream(&doc, img);
+    assert_eq!((image.dict.int(b"Width"), image.dict.int(b"Height")), (Some(720), Some(720)));
+    let reopened = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let dimensions: Vec<_> = reopened
+        .scan_objects()
+        .filter_map(|(_, object)| match &*object {
+            Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => Some((s.dict.int(b"Width"), s.dict.int(b"Height"))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dimensions, [(Some(720), Some(720))]);
 }
 
 #[test]
@@ -926,6 +980,23 @@ fn nested_forms(doc: &mut Document, img: ObjRef, levels: usize) -> ObjRef {
 }
 
 #[test]
+fn shared_forms_are_measured_in_each_pages_physical_units() {
+    for reverse in [false, true] {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 720, 720, 3, false, None);
+        let outer = nested_forms(&mut doc, img, 3);
+        let normal = page(&mut doc, &[("F", outer)], "q 72 0 0 72 0 0 cm /F Do Q");
+        let scaled = page(&mut doc, &[("F", outer)], "q 72 0 0 72 0 0 cm /F Do Q");
+        doc.update_dict(scaled, |d| d.set(b"UserUnit".to_vec(), Object::Int(10))).unwrap();
+        let pages = if reverse { [scaled, normal] } else { [normal, scaled] };
+        assert_eq!(effective_resolutions(&doc, &pages)[&img], 72.0, "reverse={reverse}");
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled, 0, "{report:?}");
+        assert_eq!(stream(&doc, img).dict.int(b"Width"), Some(720));
+    }
+}
+
+#[test]
 fn a_deeply_nested_form_is_measured_at_its_largest_use() {
     // 1200 px drawn 1 in wide (1200 ppi) and then 8 in wide (150 ppi): 150 ppi, so it isn't resampled.
     let small = "q 72 0 0 72 36 36 cm /F Do Q";
@@ -1021,4 +1092,447 @@ fn images_are_not_resampled_when_some_uses_could_not_be_measured() {
     page(&mut doc, &names, "q 72 0 0 72 36 36 cm /F1 Do Q");
     let refs = pdfcraft_annot::page_refs(&doc).unwrap();
     assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
+}
+
+/// Each form entry counts against the page's form allowance, even for a form that decodes to
+/// nothing and so costs no decoded bytes.
+#[test]
+fn images_are_not_resampled_when_a_page_enters_more_forms_than_allowed() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let empty = form(&mut doc, None, "");
+    let draws = "/E Do ".repeat(pdfcraft_cos::MAX_PAGE_FORMS + 1);
+    page(&mut doc, &[("E", empty), ("Im", img)], &format!("q 72 0 0 72 36 36 cm /Im Do Q {draws}"));
+    let refs = pdfcraft_annot::page_refs(&doc).unwrap();
+    assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
+}
+
+#[test]
+fn compatibility_level_sets_version_unpacks_for_1_4_and_checks_encryption() {
+    let mut base = Document::new_empty();
+    page(&mut base, &[], "BT /F1 12 Tf 72 720 Td (Compatibility test) Tj ET");
+    let root = base.root().unwrap();
+    base.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name("1.6"))).unwrap();
+
+    for (compat, expected) in [
+        (Compatibility::Pdf1_4, "1.4"),
+        (Compatibility::Pdf1_5, "1.5"),
+        (Compatibility::Pdf1_6, "1.6"),
+        (Compatibility::Pdf1_7, "1.7"),
+        (Compatibility::Pdf2_0, "2.0"),
+    ] {
+        let mut doc = base.clone();
+        let settings = Settings { compatibility: compat, ..Settings::default() };
+        optimize(&mut doc, &settings).unwrap();
+        assert_eq!(doc.version(), expected);
+        assert!(!doc.get(root).as_dict().unwrap().contains(b"Version"), "overriding catalog /Version is cleared");
+        let bytes = write_full(&doc, &SaveOptions { object_streams: settings.effective_object_streams(), ..SaveOptions::default() }).unwrap();
+        assert!(bytes.starts_with(format!("%PDF-{expected}\n").as_bytes()), "{expected}");
+        let has_objstm = bytes.windows(7).any(|w| w == b"/ObjStm");
+        assert_eq!(has_objstm, compat != Compatibility::Pdf1_4, "{compat:?}");
+        let info = pdfcraft_render::inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(info.pdf_version, expected);
+    }
+
+    // Disabling object_streams on PDF 1.7 writes a classic cross-reference table.
+    let mut doc = base.clone();
+    let settings = Settings { compatibility: Compatibility::Pdf1_7, object_streams: false, ..Settings::default() };
+    optimize(&mut doc, &settings).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: settings.effective_object_streams(), ..SaveOptions::default() }).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1.7\n") && !bytes.windows(7).any(|w| w == b"/ObjStm"));
+
+    // Encryption that requires a newer PDF version than the chosen compatibility is refused.
+    let mut aes256 = base.clone();
+    aes256
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "u",
+            owner_password: "o",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [1; 32],
+        })
+        .unwrap();
+    assert!(matches!(
+        optimize(&mut aes256, &Settings { compatibility: Compatibility::Pdf1_6, ..Settings::default() }),
+        Err(OptimizeError::IncompatibleEncryption { required: "1.7", chosen: "1.6" })
+    ));
+    optimize(&mut aes256, &Settings { compatibility: Compatibility::Pdf2_0, ..Settings::default() }).unwrap();
+    assert_eq!(aes256.version(), "2.0");
+
+    let mut aes128 = base;
+    aes128
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes128,
+            user_password: "u",
+            owner_password: "o",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [1; 32],
+        })
+        .unwrap();
+    assert!(matches!(
+        optimize(&mut aes128, &Settings { compatibility: Compatibility::Pdf1_5, ..Settings::default() }),
+        Err(OptimizeError::IncompatibleEncryption { required: "1.6", chosen: "1.5" })
+    ));
+    optimize(&mut aes128, &Settings { compatibility: Compatibility::Pdf1_6, ..Settings::default() }).unwrap();
+}
+
+#[test]
+fn image_resolution_keeps_comments_across_content_pieces() {
+    for ending in ["", "\n", "\r", "\r\n"] {
+        let mut doc = Document::new_empty();
+        let visible = image(&mut doc, 20, 20, 3, false, None);
+        let hidden = image(&mut doc, 20, 20, 3, false, None);
+        let page = page(&mut doc, &[("Visible", visible), ("Hidden", hidden)], "");
+        let first = doc
+            .add(Object::Stream(Stream::from_raw(Dict::new(), format!("q 72 0 0 72 0 0 cm /Visible Do Q\n% trailing comment{ending}").into_bytes())));
+        let second = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 144 0 0 144 0 0 cm /Hidden Do Q\n".to_vec())));
+        doc.update_dict(page, |dict| {
+            dict.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Int(17), Object::Ref(second)]));
+        })
+        .unwrap();
+        let measured = effective_resolutions(&doc, &[page]);
+        assert_eq!(measured.get(&visible), Some(&20.0));
+        if ending.is_empty() {
+            assert_eq!(measured.len(), 1);
+            assert_eq!(measured.get(&hidden), None, "a comment must hide the next piece's first line");
+        } else {
+            assert_eq!(measured.len(), 2);
+            assert_eq!(measured.get(&hidden), Some(&10.0), "a real line ending exposes the image");
+        }
+    }
+}
+
+#[test]
+fn a_hostile_image_size_is_left_alone_not_multiplied_into_overflow() {
+    // /Width and /Height are file-controlled: 2^32 + 100 wraps to 100 when read as u32, while the
+    // real values overflow `w * h * n`. The image must be skipped, not sized by a wrapped product.
+    let mut doc = Document::new_empty();
+    let side = i64::from(u32::MAX) + 101;
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(side));
+    d.set(b"Height".to_vec(), Object::Int(side));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let hostile = doc.add(Object::Stream(Stream::flate(d, &[7u8; 256])));
+    page(&mut doc, &[("Im", hostile)], "q 1 0 0 1 10 10 cm /Im Do Q");
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    assert_eq!(stream(&doc, hostile).dict.int(b"Width"), Some(side), "the image is left as it was");
+}
+
+#[test]
+fn a_hostile_soft_mask_leaves_its_image_unchanged() {
+    let mut doc = Document::new_empty();
+    let mask = image(&mut doc, 400, 400, 1, false, None);
+    let mut hostile = stream(&doc, mask);
+    hostile.dict.set(b"Width".to_vec(), Object::Int(i64::from(u32::MAX) + 401));
+    doc.set(mask, Object::Stream(hostile.clone()));
+    let photo = image(&mut doc, 400, 400, 3, false, Some(mask));
+    let before = stream(&doc, photo);
+    page(&mut doc, &[("Photo", photo)], "q 72 0 0 72 10 10 cm /Photo Do Q");
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 0, "{report:?}");
+    assert_eq!(stream(&doc, photo), before);
+    assert_eq!(stream(&doc, mask), hostile);
+}
+
+#[test]
+fn indirectly_referenced_destination_is_kept() {
+    // A link's /Dest can be an indirect reference to the name string, not the string itself. Reduce
+    // File Size read the name only from a direct string, so it deleted a destination the link still
+    // used, silently breaking the link.
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    // A link whose /Dest is `ref -> "target"`, and an unused destination for contrast.
+    let name_ref = Object::Ref(doc.add(s("target")));
+    let mut link = Dict::new();
+    link.set(b"Type".to_vec(), Object::name("Annot"));
+    link.set(b"Subtype".to_vec(), Object::name("Link"));
+    link.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+    link.set(b"Dest".to_vec(), name_ref);
+    let link = Object::Ref(doc.add(Object::Dict(link)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![link]))).unwrap();
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("target"), fit.clone(), s("unused"), fit]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    // Only "unused" is removed; the indirectly-referenced "target" is kept.
+    assert_eq!(report.unreferenced_dests, 1);
+    let left = named_dest_keys(&doc);
+    assert!(left.contains(&b"target".to_vec()), "indirectly referenced destination was kept: {left:?}");
+    assert!(!left.contains(&b"unused".to_vec()));
+}
+
+#[test]
+fn a_destination_named_only_by_a_remote_or_embedded_go_to_is_removed() {
+    // The /D of a GoToR or GoToE action names a destination in another document. A local
+    // destination of the same name that nothing else uses is unreferenced.
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let link = |doc: &mut Document, action: Dict| {
+        let mut link = Dict::new();
+        link.set(b"Type".to_vec(), Object::name("Annot"));
+        link.set(b"Subtype".to_vec(), Object::name("Link"));
+        link.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        link.set(b"A".to_vec(), Object::Dict(action));
+        Object::Ref(doc.add(Object::Dict(link)))
+    };
+    let mut go_to = Dict::new();
+    go_to.set(b"S".to_vec(), Object::name("GoTo"));
+    go_to.set(b"D".to_vec(), s("local"));
+    let mut remote = Dict::new();
+    remote.set(b"S".to_vec(), Object::name("GoToR"));
+    remote.set(b"F".to_vec(), s("other.pdf"));
+    remote.set(b"D".to_vec(), s("remote"));
+    let mut target = Dict::new();
+    target.set(b"R".to_vec(), Object::name("C"));
+    target.set(b"N".to_vec(), s("attached.pdf"));
+    let mut embedded = Dict::new();
+    embedded.set(b"S".to_vec(), Object::name("GoToE"));
+    embedded.set(b"T".to_vec(), Object::Dict(target));
+    embedded.set(b"D".to_vec(), s("embedded"));
+    let links = vec![link(&mut doc, go_to), link(&mut doc, remote), link(&mut doc, embedded)];
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(links))).unwrap();
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("embedded"), fit.clone(), s("local"), fit.clone(), s("remote"), fit]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.unreferenced_dests, 2);
+    assert_eq!(named_dest_keys(&doc), vec![b"local".to_vec()]);
+}
+
+/// The keys in the catalog's /Names /Dests name tree (one level, as the optimizer writes it).
+fn named_dest_keys(doc: &Document) -> Vec<Vec<u8>> {
+    let cat = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let names = doc.resolve(cat.get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let tree = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    let arr = doc.resolve(tree.get(b"Names").unwrap()).as_array().cloned().unwrap();
+    arr.chunks(2).filter_map(|c| doc.resolve(&c[0]).as_string().map(|s| s.bytes.clone())).collect()
+}
+
+/// Page content long enough for LZW codes to grow past 9 bits, where `EarlyChange` matters.
+fn lzw_ops() -> Vec<u8> {
+    (0..300).flat_map(|i| format!("{} {} m {} {} l S\n", i % 97, i * 7 % 389, i * 13 % 612, i * 31 % 792).into_bytes()).collect()
+}
+
+fn lzw(data: &[u8], params: &Params) -> Vec<u8> {
+    pdfcraft_filters::encode(&Filter::Lzw, params, data).unwrap()
+}
+
+/// `params` as a `/DecodeParms` dictionary, only the entries that differ from the defaults.
+fn decode_parms(p: &Params) -> Dict {
+    let mut d = Dict::new();
+    for (k, v, default) in [
+        (&b"Predictor"[..], p.predictor, 1),
+        (b"Colors", p.colors, 1),
+        (b"BitsPerComponent", p.bits_per_component, 8),
+        (b"Columns", p.columns, 1),
+        (b"EarlyChange", p.early_change, 1),
+    ] {
+        if v != default {
+            d.set(k.to_vec(), Object::Int(v));
+        }
+    }
+    d
+}
+
+/// A 64 × 48 RGB image, LZW-encoded with `params`.
+fn lzw_image(doc: &mut Document, params: &Params) -> (ObjRef, Vec<u8>) {
+    let (w, h) = (64u32, 48u32);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 4) as u8, (i / w * 5) as u8, ((i % w + i / w) * 2) as u8]).collect();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w.into()));
+    d.set(b"Height".to_vec(), Object::Int(h.into()));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(decode_parms(params)));
+    (doc.add(Object::Stream(Stream::from_raw(d, lzw(&px, params)))), px)
+}
+
+/// Settings that leave images to the clean-up: no resampling, no recompression.
+fn clean_up_only() -> Settings {
+    let keep = ImageSettings { downsample: false, compression: Compression::Retain, ..ImageSettings::REDUCE };
+    Settings { color: keep, gray: keep, ..Settings::default() }
+}
+
+#[test]
+fn lzw_streams_become_flate_and_decode_to_the_same_bytes() {
+    let ops = lzw_ops();
+    let early = Params::default();
+    let late = Params { early_change: 0, ..Params::default() };
+    let png = Params { predictor: 15, colors: 3, columns: 64, ..Params::default() };
+    let png_late = Params { early_change: 0, ..png.clone() };
+    let mut doc = Document::new_empty();
+    let content = |doc: &mut Document, p: &Params| {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        if *p != Params::default() {
+            d.set(b"DecodeParms".to_vec(), Object::Dict(decode_parms(p)));
+        }
+        doc.add(Object::Stream(Stream::from_raw(d, lzw(&ops, p))))
+    };
+    let c_early = content(&mut doc, &early);
+    let c_late = content(&mut doc, &late);
+    let (img, px) = lzw_image(&mut doc, &png);
+    let (img_late, _) = lzw_image(&mut doc, &png_late);
+    page(&mut doc, &[("Im", img), ("Im2", img_late)], "q 64 0 0 48 72 600 cm /Im Do Q q 64 0 0 48 172 600 cm /Im2 Do Q");
+    let pg = pdfcraft_annot::page_refs(&doc).unwrap()[0];
+    doc.update_dict(pg, |d| {
+        d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(c_early), Object::Ref(c_late), d.get(b"Contents").unwrap().clone()]))
+    })
+    .unwrap();
+    // Each LZW stream reads as its own data before, so a decoder ignoring EarlyChange fails here.
+    assert_eq!((stream(&doc, c_early).decoded_strict().unwrap(), stream(&doc, c_late).decoded_strict().unwrap()), (ops.clone(), ops.clone()));
+    assert!(lzw(&ops, &early) != lzw(&ops, &late), "the two code widths differ on this data");
+
+    let r = optimize(&mut doc, &clean_up_only()).unwrap();
+    assert_eq!(r.lzw_streams, 4, "{r:?}");
+    for (label, at, data) in
+        [("content", c_early, &ops), ("content, EarlyChange 0", c_late, &ops), ("image", img, &px), ("image, EarlyChange 0", img_late, &px)]
+    {
+        let after = stream(&doc, at);
+        assert_eq!(after.dict.get(b"Filter"), Some(&Object::name("FlateDecode")), "{label}");
+        assert_eq!(&after.decoded_strict().unwrap(), data, "{label}");
+        let parms = after.dict.get(b"DecodeParms").and_then(Object::as_dict);
+        assert!(parms.is_none_or(|p| !p.contains(b"EarlyChange")), "{label}: EarlyChange is LZW's alone");
+    }
+    // The image keeps its PNG predictor, now applied under Flate.
+    let parms = stream(&doc, img).dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!((parms.int(b"Predictor"), parms.int(b"Colors"), parms.int(b"Columns")), (Some(15), Some(3), Some(64)));
+    assert!(!stream(&doc, c_late).dict.contains(b"DecodeParms"), "nothing left to say for the content stream");
+}
+
+#[test]
+fn a_page_drawn_from_lzw_streams_renders_the_same_after_conversion() {
+    let png = Params { predictor: 12, colors: 3, columns: 64, early_change: 0, ..Params::default() };
+    let mut doc = Document::new_empty();
+    let (img, _) = lzw_image(&mut doc, &png);
+    let pg = page(&mut doc, &[("Im", img)], "");
+    let ops = b"0.2 0.5 0.8 rg 36 36 300 200 re f q 256 0 0 192 72 400 cm /Im Do Q\n".repeat(4);
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+    d.set(b"DecodeParms".to_vec(), Object::Dict(decode_parms(&Params { early_change: 0, ..Params::default() })));
+    let c = doc.add(Object::Stream(Stream::from_raw(d, lzw(&ops, &Params { early_change: 0, ..Params::default() }))));
+    doc.update_dict(pg, |p| p.set(b"Contents".to_vec(), Object::Ref(c))).unwrap();
+    let render = |doc: &Document| {
+        let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        out.rgba
+    };
+    let before = render(&doc);
+    // The picture and the rectangle are drawn: the page is not blank.
+    assert!(before.chunks(4).any(|p| p[..3] != [255, 255, 255]));
+    let r = optimize(&mut doc, &clean_up_only()).unwrap();
+    assert_eq!(r.lzw_streams, 2, "{r:?}");
+    assert_eq!(stream(&doc, c).dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
+    assert!(render(&doc) == before, "the page renders pixel for pixel as before");
+}
+
+#[test]
+fn lzw_inside_a_filter_chain_is_replaced_and_the_other_stages_kept() {
+    let ops = lzw_ops();
+    let inner = lzw(&ops, &Params::default());
+    // An ASCII85 layer outside the LZW goes with it; a JPEG inside it stays encoded as it was.
+    let (mut doc, c) = with_content(filtered(&["ASCII85Decode", "LZWDecode"], ascii85(&inner)));
+    let photo = image(&mut doc, 40, 30, 3, true, None);
+    let jpeg = stream(&doc, photo).raw.to_vec();
+    let mut picture = filtered(&["LZWDecode", "DCTDecode"], lzw(&jpeg, &Params::default()));
+    picture.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Null]));
+    let pic = doc.add(Object::Stream(picture));
+    // An ASCII85 layer over LZW with a PNG predictor: the predictor's parameters move to the one
+    // Flate filter left, without EarlyChange.
+    let rows: Vec<u8> = (0..40 * 30).map(|i| (i % 40 * 3 + i / 40) as u8).collect();
+    let png = Params { predictor: 12, columns: 40, early_change: 0, ..Params::default() };
+    let mut predicted = filtered(&["ASCII85Decode", "LZWDecode"], ascii85(&lzw(&rows, &png)));
+    predicted.dict.set(b"DecodeParms".to_vec(), Object::Array(vec![Object::Null, Object::Dict(decode_parms(&png))]));
+    let pred = doc.add(Object::Stream(predicted));
+    let r = optimize(&mut doc, &clean_up_only()).unwrap();
+    assert_eq!(r.lzw_streams, 3, "{r:?}");
+    let after = stream(&doc, pred);
+    assert_eq!(after.dict.get(b"Filter"), Some(&Object::name("FlateDecode")));
+    let parms = after.dict.get(b"DecodeParms").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!((parms.int(b"Predictor"), parms.int(b"Columns"), parms.contains(b"EarlyChange")), (Some(12), Some(40), false));
+    assert_eq!(after.decoded_strict().unwrap(), rows);
+    let after = stream(&doc, c);
+    assert_eq!(after.dict.get(b"Filter"), Some(&Object::name("FlateDecode")));
+    assert_eq!(after.decoded_strict().unwrap(), ops);
+    let after = stream(&doc, pic);
+    assert_eq!(after.dict.get(b"Filter"), Some(&Object::Array(vec![Object::name("FlateDecode"), Object::name("DCTDecode")])));
+    assert!(!after.dict.contains(b"DecodeParms"), "all null: dropped");
+    let inside = pdfcraft_filters::decode(&[(Filter::Flate, Params::default())], &after.raw, 1 << 20).unwrap();
+    assert_eq!(inside, jpeg, "the JPEG bytes are kept exactly");
+}
+
+#[test]
+fn lzw_streams_that_cannot_be_read_or_are_not_asked_for_stay_unchanged() {
+    let ops = lzw_ops();
+    let good = lzw(&ops, &Params::default());
+    // 9-bit codes 511 after a literal: past the table, corrupt.
+    let corrupt = vec![0x80, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    assert!(filtered(&["LZWDecode"], corrupt.clone()).decoded_strict().is_err());
+    let mut bad_predictor = filtered(&["LZWDecode"], good.clone());
+    let mut parms = Dict::new();
+    parms.set(b"Predictor".to_vec(), Object::Int(12));
+    parms.set(b"Columns".to_vec(), Object::Int(7));
+    bad_predictor.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+    let mut indirect_parms = filtered(&["LZWDecode"], good.clone());
+    indirect_parms.dict.set(b"DecodeParms".to_vec(), Object::Ref(ObjRef { num: 999, generation: 0 }));
+    // Columns the reader can't take as an integer: read as the default 1 here, so the data is
+    // predicted with one column and decodes, but a viewer resolving the value would use another.
+    let one_column = Params { predictor: 12, ..Params::default() };
+    let odd_columns = |columns: Object| {
+        let mut s = filtered(&["LZWDecode"], lzw(&ops, &one_column));
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(12));
+        parms.set(b"Columns".to_vec(), columns);
+        s.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        s
+    };
+    assert_eq!(odd_columns(Object::Real(12.5)).decoded_strict().unwrap(), ops, "read with one column");
+    let mut objstm = filtered(&["LZWDecode"], good.clone());
+    objstm.dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    let mut external = filtered(&["LZWDecode"], good.clone());
+    external.dict.set(b"F".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"data.bin".to_vec())));
+    let cases = [
+        ("corrupt LZW", filtered(&["LZWDecode"], corrupt), Settings::default()),
+        ("corrupt under a PNG predictor", bad_predictor, Settings::default()),
+        ("indirect DecodeParms", indirect_parms, Settings::default()),
+        ("external file", external, Settings::default()),
+        ("object stream, rewritten on save", objstm, Settings::default()),
+        ("Columns by reference", odd_columns(Object::Ref(ObjRef { num: 9, generation: 0 })), Settings::default()),
+        ("Columns not an integer", odd_columns(Object::Real(12.5)), Settings::default()),
+        ("crypt filter", filtered(&["Crypt", "LZWDecode"], good.clone()), Settings::default()),
+        ("option off", filtered(&["LZWDecode"], good.clone()), Settings { lzw_to_flate: false, ..Settings::default() }),
+    ];
+    for (label, s, settings) in cases {
+        let (mut doc, c) = with_content(s.clone());
+        let r = optimize(&mut doc, &settings).unwrap();
+        assert_eq!(r.lzw_streams, 0, "{label}");
+        assert_eq!(stream(&doc, c), s, "{label}");
+    }
+    // The same data, readable and asked for, is converted: the cases above fail for their reason.
+    let (mut doc, c) = with_content(filtered(&["LZWDecode"], good));
+    assert_eq!(optimize(&mut doc, &Settings::default()).unwrap().lzw_streams, 1);
+    assert_eq!(stream(&doc, c).decoded_strict().unwrap(), ops);
 }

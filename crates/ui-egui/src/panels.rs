@@ -2,7 +2,7 @@
 //! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
-use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup};
+use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
 use pdfcraft_render::{DocInfo, FieldKind, OutlineItem};
 
 use crate::theme::{self, Tokens};
@@ -31,15 +31,20 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 Some(g) => tool_detail(app, ui, &t, g),
                 None => app.left = LeftPanel::AllTools,
             },
+            LeftPanel::CalculationOrder => crate::calc_order_ui::panel(app, ui, &t),
         },
     );
 }
 
-fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool, bool) {
+/// A panel's title row: Back (with `back` as its tooltip) when given, the title and Close.
+/// Returns whether Back and Close were clicked.
+pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Option<&str>) -> (bool, bool) {
     let mut go_back = false;
     let mut close = false;
     ui.horizontal(|ui| {
-        if back && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
+        if let Some(tip) = back
+            && icons::button(ui, "chevron-left", 26.0, false, tip).clicked()
+        {
             go_back = true;
         }
         // Reserve space for Close before laying out the translated title. Long tool names
@@ -51,18 +56,19 @@ fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: bool) -> (bool
             close = true;
         }
     });
-    ui.add_space(2.0);
-    ui.separator();
     ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(6.0);
     (go_back, close)
 }
 
 fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    let (_, close) = panel_header(ui, t, "All tools", false);
+    let (_, close) = panel_header(ui, t, "All tools", None);
     if close {
         app.left_open = false;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.add_space(2.0);
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {
             if tool_row(ui, t, g).clicked() {
@@ -144,10 +150,14 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup) -> egui::Response {
 }
 
 fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
-    let (back, close) = panel_header(ui, t, g.label, true);
+    if g.id == "edit" {
+        edit_panel(app, ui, t, g);
+        return;
+    }
+    let (back, close) = panel_header(ui, t, g.label, Some(tl!("Back to all tools")));
     if back {
         app.left = LeftPanel::AllTools;
-        app.mode = crate::Mode::AllTools;
+        app.enter_mode(crate::Mode::AllTools);
     }
     if close {
         app.left_open = false;
@@ -185,26 +195,13 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         });
         ui.add_space(6.0);
     }
-    // Edit a PDF shows Format text at the top while text is selected or being added.
-    if g.id == "edit" {
-        if app.quick_tool == crate::QuickTool::EditText {
-            let count = app.active_ids().map_or(0, |(i, _)| app.views[i].objects.count());
-            if count > 0 {
-                ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
-                ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
-            } else {
-                ui.label(tl!("Shift-click to select several objects. Drag empty space to select an area."));
-            }
-            ui.add_space(6.0);
-        }
-        format_section(app, ui, t);
-    }
     let mut run = None;
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
+        ui.add_space(2.0);
         for s in g.sections {
             widgets::section_title(ui, tl!(s.title));
             for item in s.items {
@@ -238,31 +235,13 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 ui.painter().rect_filled(r, CornerRadius::same(4), fill);
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
                 let resp = theme::hand(resp).on_hover_text(format!("{} — {}", tl!(item.label), item.command));
+                // An entry with further commands opens a menu; its caret goes before the chip.
                 if item.actions.is_empty() {
                     if resp.clicked() {
                         run = Some(item.command);
                     }
-                } else {
-                    // A caret before the chip says the entry opens a menu (Add / Update / Remove).
-                    let c = r.left_center() - vec2(10.0, 0.0);
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        vec![c + vec2(-3.5, -2.0), c + vec2(3.5, -2.0), c + vec2(0.0, 2.5)],
-                        fg,
-                        egui::Stroke::NONE,
-                    ));
-                    egui::Popup::menu(&resp).show(|ui| {
-                        ui.set_min_width(180.0);
-                        for (n, id) in item.actions.iter().enumerate() {
-                            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
-                            // Add stays usable with no document open: it asks for a file first.
-                            let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
-                            let label = crate::i18n::menu_label(spec.id, spec.label);
-                            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                                run = Some(spec.id);
-                                ui.close();
-                            }
-                        }
-                    });
+                } else if let Some(cmd) = actions_menu(app, ui, &resp, item, r.left_center() - vec2(10.0, 0.0), fg) {
+                    run = Some(cmd);
                 }
             }
         }
@@ -298,6 +277,172 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     }
     if let Some(cmd) = run {
         app.run_command(cmd);
+    }
+}
+
+/// The page operations Edit shows as a row of icon buttons, as Acrobat's Edit panel does.
+const EDIT_PAGE_BUTTONS: [&str; 4] = ["page.rotate", "page.insert", "page.delete", "page.extract"];
+/// Add content items shown before More.
+const EDIT_CONTENT_SHOWN: usize = 5;
+/// Other options: the tools Acrobat's Edit panel links to.
+const EDIT_OTHER_TOOLS: [&str; 3] = ["combine", "redact", "form"];
+
+/// Edit a PDF, laid out as Acrobat's Edit panel: the title with Preferences and Close; Format text
+/// while text is being edited or added; Modify page as a row of icon buttons and Organize pages;
+/// Add content with the rarer items under More; and Other options, the neighbouring tools.
+/// Edit text & images itself is on the floating toolbar, and on from the moment Edit opens.
+/// Every item comes from the catalogue, so its label, icon and availability have one source.
+fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+    let items = || g.sections.iter().flat_map(|s| s.items.iter());
+    let item = |command: &str| items().find(|i| i.command == command);
+    let mut run = None;
+    let mut tool = None;
+    // Back to All tools only when Edit was opened from there; the Edit tab is its own way back.
+    let from_all_tools = app.mode != crate::Mode::Edit;
+    ui.horizontal(|ui| {
+        if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
+            app.left = LeftPanel::AllTools;
+            app.enter_mode(crate::Mode::AllTools);
+        }
+        // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
+        let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
+        let title_width = (ui.available_width() - 2.0 * (26.0 + ui.spacing().item_spacing.x)).max(1.0);
+        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(title).font(theme::semibold(15.5)).color(t.text)).truncate())
+            .on_hover_text(title);
+        if icons::button(ui, "settings", 26.0, false, tl!("Preferences")).clicked() {
+            run = Some("app.preferences");
+        }
+        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
+            app.left_open = false;
+        }
+    });
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(6.0);
+    // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
+    let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
+    if count > 0 {
+        ui.label(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected"));
+        ui.label(tl!("Drag the selection to move it. Esc clears the selection."));
+        ui.add_space(6.0);
+    }
+    // Format text at the top while text is selected or being added.
+    format_section(app, ui, t);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        widgets::section_title(ui, tl!("Modify page"));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for i in EDIT_PAGE_BUTTONS.iter().filter_map(|c| item(c)) {
+                // Enabled as the command itself is: a document that forbids page assembly refuses these.
+                let enabled = pdfcraft_engine::commands::command(i.command).is_some_and(|spec| app.command_enabled(spec));
+                let resp = ui.add_enabled_ui(enabled, |ui| icons::button(ui, i.icon, 34.0, false, tl!(i.label))).inner;
+                if resp.clicked() {
+                    run = Some(i.command);
+                }
+            }
+        });
+        ui.add_space(2.0);
+        // Organize pages is a workspace of its own: its panel replaces this one, with the grid.
+        if let Some(i) = item("page.organize")
+            && edit_row(ui, t, i.icon, tl!(i.label), i.availability).clicked()
+        {
+            // With no document there is no grid to open: the command asks for a file first.
+            if app.active.is_some() {
+                tool = Some("organize");
+            } else {
+                run = Some("page.organize");
+            }
+        }
+
+        widgets::section_title(ui, tl!("Add content"));
+        let content: Vec<_> =
+            g.sections.iter().filter(|s| s.title == "Add content").flat_map(|s| s.items.iter()).filter(|i| i.command != "edit.edit_text").collect();
+        let more_id = egui::Id::new("edit_panel_more");
+        let more = ui.data(|d| d.get_temp::<bool>(more_id)).unwrap_or(false);
+        let shown = if more { content.len() } else { EDIT_CONTENT_SHOWN.min(content.len()) };
+        for i in content.iter().take(shown) {
+            let resp = edit_row(ui, t, i.icon, tl!(i.label), i.availability);
+            // Header and footer, Watermark and Background open their Add / Update / Remove menu.
+            if i.actions.is_empty() {
+                if resp.clicked() {
+                    run = Some(i.command);
+                }
+            } else if let Some(cmd) = actions_menu(app, ui, &resp, i, resp.rect.right_center() - vec2(14.0, 0.0), t.text) {
+                run = Some(cmd);
+            }
+        }
+        if content.len() > EDIT_CONTENT_SHOWN {
+            ui.add_space(4.0);
+            let label = if more { tl!("Less") } else { tl!("More") };
+            let resp = ui
+                .add(
+                    egui::Label::new(egui::RichText::new(label).color(t.accent_text).font(theme::medium(13.0)))
+                        .selectable(false)
+                        .sense(Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if resp.clicked() {
+                ui.data_mut(|d| d.insert_temp(more_id, !more));
+            }
+        }
+
+        widgets::section_title(ui, tl!("Other options"));
+        for other in EDIT_OTHER_TOOLS.iter().filter_map(|id| catalog::group(id)) {
+            if edit_row(ui, t, other.icon, tl!(other.label), other.availability).clicked() {
+                tool = Some(other.id);
+            }
+        }
+    });
+    if let Some(id) = tool {
+        app.select_tool(id);
+    }
+    if let Some(cmd) = run {
+        app.run_command(cmd);
+    }
+}
+
+/// A tool entry with further commands (Add / Update / Remove): a caret at `caret` says it opens a
+/// menu, and each command is enabled by its own needs. Returns the command chosen.
+fn actions_menu(app: &PdfCraftApp, ui: &egui::Ui, resp: &egui::Response, item: &ToolItem, caret: egui::Pos2, color: Color32) -> Option<&'static str> {
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![caret + vec2(-3.5, -2.0), caret + vec2(3.5, -2.0), caret + vec2(0.0, 2.5)],
+        color,
+        egui::Stroke::NONE,
+    ));
+    let mut run = None;
+    egui::Popup::menu(resp).show(|ui| {
+        ui.set_min_width(180.0);
+        for (n, id) in item.actions.iter().enumerate() {
+            let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+            // Add stays usable with no document open: it asks for a file first.
+            let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
+            let label = crate::i18n::menu_label(spec.id, spec.label);
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                run = Some(spec.id);
+                ui.close();
+            }
+        }
+    });
+    run
+}
+
+/// One row of the Edit panel: a monochrome icon and the label, as Acrobat draws them. A planned
+/// item is muted and says when it ships when hovered.
+fn edit_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let press = theme::Press::track(ui, &resp);
+    press.wash(ui, rect, 6, false);
+    let body = rect.translate(press.offset());
+    let ready = availability == Availability::Ready;
+    let fg = if ready { t.text } else { t.text_muted };
+    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)), icon, 17.0, if ready { t.text } else { t.text_faint });
+    row_label(ui, label, theme::regular(13.5), fg, body.left_center() + vec2(34.0, 0.0), rect.width() - 42.0);
+    let resp = theme::hand(resp);
+    match availability {
+        Availability::Ready => resp,
+        Availability::Planned(m) => resp.on_hover_text(format!("{} {m}", tl!("Planned for milestone"))),
+        Availability::Provider => resp.on_hover_text(tl!("Optional: needs an AI provider you configure")),
     }
 }
 
@@ -378,50 +523,42 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some((i, _)) = app.active_ids()
         && let Some(ed) = app.views[i].line_editor.clone()
     {
+        use crate::format_text_ui::{FontChoice, Fonts};
         let mut ed = ed;
-        let mut changed = false;
-        let font_choices = app.session.get(app.views[i].id).map(|d| d.text_editor_fonts(ed.page)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("document-font-resource")
-            .selected_text(
-                ed.font_resource
-                    .as_ref()
-                    .and_then(|r| font_choices.iter().find(|f| &f.resource == r))
-                    .map_or(tl!("Keep source fonts"), |f| f.face.as_str()),
-            )
-            .show_ui(ui, |ui| {
-                changed |= ui.selectable_value(&mut ed.font_resource, None, tl!("Keep source fonts")).changed();
-                for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
-                    changed |= ui.selectable_value(&mut ed.font_resource, Some(font.resource.clone()), &font.face).changed();
-                }
-            });
-        if ui.button(tl!("Load font…")).clicked() {
-            app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        egui::ComboBox::from_id_salt("installed-document-font").selected_text(tl!("Installed fonts…")).show_ui(ui, |ui| {
-            if let Some(fonts) = crate::files::installed_font_files(ui.ctx()) {
-                if fonts.is_empty() {
-                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                }
-                for font in fonts {
-                    if ui.selectable_label(false, &font.face).clicked() {
-                        app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[font.path]);
-                    }
-                }
-            } else {
-                ui.label(tl!("Finding document fonts…"));
+        let sources: Vec<(String, String)> = app
+            .session
+            .get(app.views[i].id)
+            .map(|d| d.text_editor_fonts(ed.page))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| (f.resource, f.face))
+            .collect();
+        let shown = ed.font_shown(&sources);
+        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
+        let mut changed = out.changed;
+        match out.font {
+            Some(FontChoice::KeepSource) => {
+                ed.keep_source_font();
+                changed = true;
             }
-        });
-        if let Some(look) = crate::content_ui::format_panel(ui, t, &ed.look) {
-            ed.look = look;
-            changed = true;
+            Some(FontChoice::Resource(resource)) => {
+                ed.font_resource = Some(resource);
+                changed = true;
+            }
+            Some(FontChoice::Family(family)) => {
+                ed.choose_family(family);
+                changed = true;
+            }
+            Some(FontChoice::Load) => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(FontChoice::Installed(path)) => app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[path]),
+            #[cfg(target_arch = "wasm32")]
+            Some(FontChoice::Installed(_)) => {}
+            None => {}
         }
-        changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
         if changed {
             app.apply_line_format(i, ed, Some(ui.ctx()));
         }
-        ui.add_space(6.0);
-        ui.separator();
         return;
     }
     let image = app.active_ids().and_then(|(i, id)| {
@@ -455,21 +592,32 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     match selected {
         Some((page, index, text)) => {
-            if let Some(style) = crate::content_ui::format_panel(ui, t, &text) {
-                app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style.clone() };
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style) });
+            let mut style = text.clone();
+            added_text_format(ui, t, &mut style);
+            if style != text {
+                // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
+                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
+                    app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style };
+                }
             }
         }
         None if app.quick_tool == crate::QuickTool::AddText => {
             crate::content_ui::hint(ui, t);
-            if let Some(style) = crate::content_ui::format_panel(ui, t, &app.text_style) {
-                app.text_style = style;
-            }
+            let mut style = app.text_style.clone();
+            added_text_format(ui, t, &mut style);
+            app.text_style = style;
         }
-        None => return,
+        None => {}
     }
-    ui.add_space(6.0);
-    ui.separator();
+}
+
+/// Format text for added text: the standard families, size, colour, style and alignment.
+fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText) {
+    let shown = style.family.label().to_string();
+    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
+    if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
+        style.family = family;
+    }
 }
 
 impl PdfCraftApp {
@@ -507,6 +655,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut nav: Option<Nav> = None;
     let mut close = false;
     let mut toggle_layer: Option<(usize, bool)> = None;
+    let mut reset_layers = false;
     let mut attachment_action: Option<(usize, bool)> = None; // (index, open instead of save)
     let mut bm_action: Option<BmAction> = None;
     let mut bm_expand: Option<usize> = None;
@@ -599,6 +748,16 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                             });
                         }
+                        if panel == RightPanel::Layers && !info.layers.is_empty() {
+                            let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Layer options"));
+                            egui::Popup::menu(&more).show(|ui| {
+                                ui.set_min_width(200.0);
+                                if ui.button(tl!("Reset to Initial Visibility")).clicked() {
+                                    reset_layers = true;
+                                    ui.close();
+                                }
+                            });
+                        }
                         let new_tip = crate::commands::command_tip(ui.ctx(), tl!("New bookmark ({key})"), "bookmark.add");
                         if panel == RightPanel::Bookmarks && bm_editable && icons::button(ui, "bookmark-plus", 26.0, false, &new_tip).clicked() {
                             bm_action = Some(BmAction::New);
@@ -639,6 +798,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         bookmark_matches.insert(ancestor.clone());
                         ancestor.pop();
                     }
+                }
+                if panel == RightPanel::Pages {
+                    let enabled = !modal && view.panel_drag.is_none();
+                    thumbnail_size(ui, &t, view, enabled);
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
                     RightPanel::Comments => {
@@ -721,6 +884,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
                     RightPanel::Attachments => {
+                        let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
+                        if attachable {
+                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
+                                    panel_command = Some("edit.attach");
+                                }
+                            });
+                        }
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
@@ -752,6 +923,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                             && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
                                         {
                                             attachment_action = Some((ai, true));
+                                        }
+                                        if let pdfcraft_render::AttachmentSource::Document { key } = &a.source
+                                            && attachable
+                                            && icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment")).clicked()
+                                        {
+                                            panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
                                         }
                                     });
                                 });
@@ -818,6 +995,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     {
         app.views[index].invalidate_content();
     }
+    if reset_layers && app.session.reset_layers(id) {
+        app.views[index].invalidate_content();
+    }
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),
         Some(Nav::Dest(p, dest)) => match app.session.get(id) {
@@ -826,7 +1006,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         },
         Some(Nav::Flash(p, r)) => {
             let v = &mut app.views[index];
-            v.go_to_page(p);
+            if let Some(doc) = app.session.get(id) {
+                v.reveal_rect(p, r, &doc.info);
+            } else {
+                v.go_to_page(p);
+            }
             v.flash = Some((p, r, 0.0));
         }
         None => {}
@@ -851,6 +1035,10 @@ pub enum BmAction {
     StartRename(Vec<usize>),
     Rename(Vec<usize>, String),
     SetToCurrentPage(Vec<usize>),
+    /// Make the title bold or italic or not (`None` keeps that one).
+    SetStyle(Vec<usize>, Option<bool>, Option<bool>),
+    /// Colour the title; black is the default.
+    SetColor(Vec<usize>, [f64; 3]),
     Delete(Vec<usize>),
     MoveUp(Vec<usize>),
     MoveDown(Vec<usize>),
@@ -924,6 +1112,23 @@ pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) 
     }
 }
 
+/// How a bookmark's title is drawn: in its own style and colour (ISO 32000-2 §12.3.3, Tables 151
+/// and 152), bold in the heavier face and italic slanted, its colour kept readable on the panel.
+/// Top-level bookmarks without a style keep the medium face.
+fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextFormat {
+    let font_id = match (item.bold, depth) {
+        (true, _) => theme::semibold(13.0),
+        (false, 0) => theme::medium(13.0),
+        (false, _) => theme::regular(13.0),
+    };
+    let color = item.color.map_or(t.text, |rgb| {
+        // Each component is within 0–1, so the rounded value fits a byte.
+        let [r, g, b] = rgb.map(|c| (c * 255.0).round() as u8);
+        theme::readable(egui::Color32::from_rgb(r, g, b), t.panel, t.text)
+    });
+    egui::TextFormat { font_id, color, italics: item.italic, ..Default::default() }
+}
+
 fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineItem, path: &[usize], siblings: usize, cx: &mut OutlineCtx<'_>) {
     if cx.searching && !cx.matches.contains(path) {
         return;
@@ -934,7 +1139,10 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
     if let Some(levels) = cx.expand {
         ui.data_mut(|d| d.insert_temp(id, depth < levels));
     }
-    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open || depth == 0);
+    // A bookmark opens as the file says at every level: a positive /Count is open, a negative
+    // one (or none) closed (ISO 32000-2 §12.3.3, Table 151). The reader's own toggles and a
+    // search override it.
+    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open);
     let x_text = indent + 20.0;
     if let Some((rpath, text)) = cx.rename.as_mut()
         && rpath.as_slice() == path
@@ -977,9 +1185,10 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
             })
         });
         let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
-        let font = if depth == 0 { theme::medium(13.0) } else { theme::regular(13.0) };
         let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
-        let galley = ui.fonts_mut(|f| f.layout(item.title.clone(), font, t.text, wrap_w));
+        let mut job = egui::text::LayoutJob::single_section(item.title.clone(), title_format(item, depth, t));
+        job.wrap.max_width = wrap_w;
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.title));
@@ -1022,6 +1231,26 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
                 pick(ui, tl!("Rename"), true, BmAction::StartRename(path.to_vec()));
                 let set_page = crate::i18n::fmt(tl!("Set to current page ({n})"), &[("n", &(current + 1).to_string())]);
                 pick(ui, &set_page, true, BmAction::SetToCurrentPage(path.to_vec()));
+                // The title's style and colour (ISO 32000-2 §12.3.3, Tables 151 and 152).
+                let mut styled = None;
+                ui.menu_button(tl!("Style"), |ui| {
+                    let (mut bold, mut italic) = (item.bold, item.italic);
+                    if ui.add(crate::widgets::checkbox(&mut bold, tl!("Bold"))).clicked() {
+                        styled = Some(BmAction::SetStyle(path.to_vec(), Some(bold), None));
+                    }
+                    if ui.add(crate::widgets::checkbox(&mut italic, tl!("Italic"))).clicked() {
+                        styled = Some(BmAction::SetStyle(path.to_vec(), None, Some(italic)));
+                    }
+                });
+                ui.menu_button(tl!("Colour"), |ui| {
+                    let current = item.color.map_or([0.0; 3], |c| c.map(f64::from));
+                    if let Some(c) = crate::comments::swatch_grid(ui, Some(current)) {
+                        styled = Some(BmAction::SetColor(path.to_vec(), c));
+                    }
+                });
+                if styled.is_some() {
+                    ui.close();
+                }
                 ui.separator();
                 pick(ui, tl!("Move up"), i > 0, BmAction::MoveUp(path.to_vec()));
                 pick(ui, tl!("Move down"), i + 1 < siblings, BmAction::MoveDown(path.to_vec()));
@@ -1029,6 +1258,9 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
                 pick(ui, tl!("Outdent"), depth > 0, BmAction::Outdent(path.to_vec()));
                 ui.separator();
                 pick(ui, tl!("Delete"), true, BmAction::Delete(path.to_vec()));
+                if let Some(a) = styled {
+                    *cx.action = Some(a);
+                }
             });
         }
     }
@@ -1039,6 +1271,57 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
             outline_item(ui, t, info, c, &p, item.children.len(), cx);
         }
     }
+}
+
+/// Size controls stay above the scroll area, so they remain reachable on long documents.
+fn thumbnail_size(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, enabled: bool) {
+    let before = view.thumbnail_zoom();
+    let mut zoom = before;
+    let label = ui
+        .horizontal(|ui| {
+            let label = ui.label(egui::RichText::new(tl!("Thumbnail size")).small().color(t.text_muted));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(egui::RichText::new(format!("{:.0}%", before * 100.0)).small().color(t.text_muted));
+            });
+            label
+        })
+        .inner;
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.spacing_mut().slider_width = (ui.available_width() - 52.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled_ui(zoom > *crate::canvas::THUMBNAIL_ZOOM_RANGE.start(), |ui| {
+                    icons::button(ui, "zoom-out", 26.0, false, tl!("Smaller thumbnails"))
+                })
+                .inner
+                .clicked()
+            {
+                zoom -= 0.25;
+            }
+            let mut percent = zoom * 100.0;
+            let range = (*crate::canvas::THUMBNAIL_ZOOM_RANGE.start() * 100.0)..=(*crate::canvas::THUMBNAIL_ZOOM_RANGE.end() * 100.0);
+            ui.scope(|ui| {
+                // The regular field fill blends into this panel; keep the slider's full rail visible.
+                ui.visuals_mut().widgets.inactive.bg_fill = t.border;
+                let slider = ui.add(egui::Slider::new(&mut percent, range).step_by(1.0).show_value(false).trailing_fill(true)).labelled_by(label.id);
+                slider.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(percent), tl!("Thumbnail size")));
+            });
+            zoom = percent / 100.0;
+            if ui
+                .add_enabled_ui(zoom < *crate::canvas::THUMBNAIL_ZOOM_RANGE.end(), |ui| {
+                    icons::button(ui, "zoom-in", 26.0, false, tl!("Larger thumbnails"))
+                })
+                .inner
+                .clicked()
+            {
+                zoom += 0.25;
+            }
+        });
+    });
+    if zoom != before {
+        view.set_thumbnail_zoom(zoom);
+    }
+    ui.add_space(6.0);
 }
 
 /// The page thumbnails. A click goes to the page; ⌘/Ctrl-click and ⇧-click pick several pages
@@ -1069,7 +1352,9 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
     // scroll bar dragged by the user already wins over a scroll to a place in egui.
     let follow = view.panel_followed != Some(view.current) && view.panel_drag.is_none();
     view.panel_followed = Some(view.current);
-    let w = (ui.available_width() - 40.0).min(150.0);
+    let available = (ui.available_width() - 16.0).max(1.0);
+    let usual = (ui.available_width() - 40.0).clamp(1.0, 150.0);
+    let w = (usual * view.thumbnail_zoom()).min(available);
     let count = info.pages.len();
     let mut rows: Vec<Rect> = Vec::with_capacity(info.pages.len());
     let mut dropped = false;
@@ -1140,6 +1425,13 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
                 }
                 if ui.button(tl!("Extract pages")).clicked() {
                     view.pending_action = Some(crate::canvas::ViewAction::Extract);
+                    ui.close();
+                }
+                if ui.button(tl!("Split document…")).clicked() {
+                    if view.selected.is_empty() {
+                        view.select_pages(&[i]);
+                    }
+                    view.pending_action = Some(crate::canvas::ViewAction::SplitBeforeSelected);
                     ui.close();
                 }
                 if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
@@ -1642,11 +1934,39 @@ mod label_column {
 
 #[cfg(test)]
 mod bookmark_filter {
-    use super::outline_matches;
+    use super::{outline_matches, title_format};
+    use crate::theme::{self, Tokens};
     use pdfcraft_render::OutlineItem;
 
+    /// #3193: a bookmark's title is drawn in its own style and colour.
+    #[test]
+    fn bookmark_titles_take_their_style_and_colour() {
+        let t = Tokens::for_kind(crate::theme::ThemeKind::Light);
+        let plain = item("Plain", Vec::new());
+        assert_eq!(title_format(&plain, 0, &t).font_id, theme::medium(13.0));
+        assert_eq!(title_format(&plain, 1, &t).font_id, theme::regular(13.0));
+        assert_eq!(title_format(&plain, 1, &t).color, t.text);
+        assert!(!title_format(&plain, 1, &t).italics);
+        let styled = OutlineItem { color: Some([1.0, 0.0, 0.0]), italic: true, bold: true, ..item("Styled", Vec::new()) };
+        let f = title_format(&styled, 1, &t);
+        assert_eq!(f.font_id, theme::semibold(13.0));
+        assert!(f.italics);
+        assert_eq!(f.color, egui::Color32::from_rgb(255, 0, 0));
+        let half = OutlineItem { color: Some([0.0, 0.5, 0.0]), ..item("Green", Vec::new()) };
+        assert_eq!(title_format(&half, 1, &t).color, egui::Color32::from_rgb(0, 128, 0));
+    }
+
     fn item(title: &str, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page: Some(0), view: pdfcraft_render::DestView::Top, children, open: true }
+        OutlineItem {
+            title: title.into(),
+            page: Some(0),
+            view: pdfcraft_render::DestView::Top,
+            children,
+            open: true,
+            color: None,
+            italic: false,
+            bold: false,
+        }
     }
 
     /// Turkish dotted and dotless i match in any case, as in Find (#892).

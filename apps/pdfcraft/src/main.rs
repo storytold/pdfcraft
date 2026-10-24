@@ -1,13 +1,14 @@
 //! PdfCraft desktop app.
 //!
-//! Usage: `pdfcraft [options] [files…]`
+//! Usage: `pdfcraft [options] [files…]` (`-h` / `--help` prints a short version of this, [`USAGE`]).
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
 //!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
-//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>
+//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
+//!  --page-gaps on|off  --default-page-gaps on|off
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
@@ -54,6 +55,32 @@ const APP_ID: &str = "ai.storyteller.pdfcraft";
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft-1024.png");
 #[cfg(not(target_os = "macos"))]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
+
+/// What `-h` / `--help` prints (#4076): a hint, not the full option list (that is this file's
+/// doc comment and the README). Scripts want `pdfcraft-cli`, which never opens a window.
+const USAGE: &str = "\
+Usage: pdfcraft [options] [files…]
+
+Opens the files in the PdfCraft desktop app.
+
+Options:
+  --new-window                open a window of its own instead of passing the files to a running PdfCraft
+  --create-images [images…]   put the images in one PDF and ask for the page DPI
+  --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
+  --page N, --zoom 150, --layout continuous, --theme dark, …
+                              view settings applied once the files are open
+  -h, --help                  print this and exit
+  --version                   print the version and exit
+
+To inspect, convert or edit PDFs from a script, use pdfcraft-cli (pdfcraft-cli --help).";
+
+/// Print `text` for `--help` and `--version`. `println!` would panic on a full or closed
+/// standard output; this exits normally instead.
+fn print_and_exit(text: &str) -> eframe::Result {
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout().lock(), "{text}");
+    Ok(())
+}
 
 /// The app was called PrintCraft before; settings saved then are under this key.
 const LEGACY_STORAGE_KEY: &str = "printcraft";
@@ -195,10 +222,9 @@ fn main() -> eframe::Result {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--version" => {
-                println!("pdfcraft {}", pdfcraft_engine::build_info::version());
-                return Ok(());
-            }
+            "--version" => return print_and_exit(&format!("pdfcraft {}", pdfcraft_engine::build_info::version())),
+            // Before any window or log file, so a scripted call returns (#4076).
+            "-h" | "--help" => return print_and_exit(USAGE),
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
             "--new-window" => new_window = true,
@@ -557,6 +583,11 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   `WGPU_BACKEND` asks for them. Creating a Vulkan instance loads every installed Vulkan driver
 ///   into the process, and a faulty one (an Intel driver in issue #37) crashed PdfCraft before
 ///   its window appeared. D3D12 is the native, best-supported backend there.
+/// - On Windows, Direct3D 12 presents through a DirectComposition visual rather than a swap chain
+///   on the window itself, unless `WGPU_DX12_PRESENTATION_SYSTEM` says otherwise. While the window
+///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
+///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
+///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
@@ -604,6 +635,15 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     if cfg!(target_os = "windows") && std::env::var_os("WGPU_BACKEND").is_none() {
         setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12 | eframe::wgpu::Backends::GL;
     }
+    if cfg!(target_os = "windows") {
+        setup.instance_descriptor.backend_options.dx12.presentation_system = dx12_presentation(eframe::wgpu::Dx12SwapchainKind::from_env());
+    }
+}
+
+/// How Direct3D 12 presents on Windows: through a DirectComposition visual (issue #2738), unless
+/// `WGPU_DX12_PRESENTATION_SYSTEM` asked for something else (`asked`).
+fn dx12_presentation(asked: Option<eframe::wgpu::Dx12SwapchainKind>) -> eframe::wgpu::Dx12SwapchainKind {
+    asked.unwrap_or(eframe::wgpu::Dx12SwapchainKind::DxgiFromVisual)
 }
 
 /// Surface textures must fit the device's enabled limits, not just the physical GPU's limits.
@@ -765,7 +805,7 @@ mod tests {
     /// graphics libraries at a time. The test threads otherwise run them together, and on
     /// FreeBSD's CI machine the test process then died with SIGSEGV, in about half the runs:
     /// the first device was still being set up when the second test began its own. The UI
-    /// tests take turns the same way (`crates/ui-egui/tests/view.rs`). Hold it for the whole
+    /// tests take turns the same way (`crates/ui-egui/tests/it/main.rs`). Hold it for the whole
     /// test (declared before the instance, so it's released after the device is dropped).
     static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -878,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_backends_avoid_vulkan_on_windows_and_prefer_low_power() {
+    fn gpu_setup_avoids_vulkan_and_stretched_resizes_on_windows_and_prefers_low_power() {
         let mut native = eframe::NativeOptions::default();
         super::configure_gpu(&mut native);
         let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else {
@@ -895,6 +935,18 @@ mod tests {
             let backends = setup.instance_descriptor.backends;
             assert!(backends.contains(eframe::wgpu::Backends::DX12), "{backends:?}");
             assert!(!backends.contains(eframe::wgpu::Backends::VULKAN), "issue #37: {backends:?}");
+        }
+        use eframe::wgpu::Dx12SwapchainKind::{DxgiFromHwnd, DxgiFromVisual};
+        assert_eq!(super::dx12_presentation(None), DxgiFromVisual);
+        assert_eq!(super::dx12_presentation(Some(DxgiFromHwnd)), DxgiFromHwnd, "WGPU_DX12_PRESENTATION_SYSTEM still decides");
+        assert_eq!(super::dx12_presentation(Some(DxgiFromVisual)), DxgiFromVisual);
+        let presentation = setup.instance_descriptor.backend_options.dx12.presentation_system;
+        if cfg!(target_os = "windows") {
+            // A composition visual unless WGPU_DX12_PRESENTATION_SYSTEM asks otherwise.
+            let asked = eframe::wgpu::Dx12SwapchainKind::from_env();
+            assert_eq!(presentation, asked.unwrap_or(DxgiFromVisual), "issue #2738: resizing stretches a window swap chain");
+        } else {
+            assert_eq!(presentation, eframe::wgpu::Dx12SwapchainKind::default().with_env(), "only Windows changes it");
         }
     }
 
@@ -1386,5 +1438,27 @@ mod tests {
         let entry = include_str!("../../../packaging/linux/ai.storyteller.pdfcraft.desktop");
         let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
         assert_eq!(class, Some(super::APP_ID));
+    }
+
+    // Regression test for #246: `eprintln!` panics when standard error is a broken pipe (a GUI
+    // launch on Windows), and a panic inside the panic hook aborts the process. The start-up
+    // path and the hook must write to standard error without it.
+    #[test]
+    fn start_up_and_the_panic_hook_never_use_eprintln() {
+        let source = include_str!("main.rs");
+        // Everything before the top-level test module is product code.
+        let product = source.split("\n#[cfg(test)]\nmod tests {").next().unwrap_or(source);
+        assert!(product.len() < source.len(), "found the end of the product code");
+        let offenders: Vec<_> = product
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with("//") && line.contains("eprintln!"))
+            .map(|(n, line)| format!("main.rs:{}: {}", n + 1, line.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "`eprintln!` panics on a broken standard error pipe; use `log::warn!` or `write_fmt` on `stderr()` and ignore the error:\n{}",
+            offenders.join("\n")
+        );
     }
 }

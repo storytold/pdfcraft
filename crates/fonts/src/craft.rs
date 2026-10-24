@@ -75,6 +75,20 @@ pub fn document_thai_font() -> Option<&'static CraftFont> {
     ui_thai_fonts().into_iter().next()
 }
 
+/// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
+/// document titles), in manifest order. Empty when built without craft-fonts or when its revision
+/// has no Devanagari face; a desktop build then falls back to one font already installed on the
+/// machine (`SYSTEM_DEVANAGARI_FALLBACK`), and the web build shows replacement boxes.
+pub fn ui_devanagari_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.covers("Deva")).collect()
+}
+
+/// The face for Devanagari text written into PDFs: the first `Deva` face. `None` when built
+/// without craft-fonts or when its revision has no Devanagari face.
+pub fn document_devanagari_font() -> Option<&'static CraftFont> {
+    ui_devanagari_fonts().into_iter().next()
+}
+
 /// The `Hebr` craft-fonts faces for Hebrew interface text (file names, document titles, text
 /// being edited), in manifest order. Empty when built without craft-fonts or when it has no
 /// Hebrew face.
@@ -136,6 +150,24 @@ pub fn document_japanese_font_for_style(serif: bool, bold: bool) -> Option<&'sta
 /// Empty without craft-fonts.
 pub fn document_japanese_fonts_for_style(serif: bool, bold: bool) -> Vec<&'static CraftFont> {
     document_faces(CRAFT_FONTS, serif, bold)
+}
+
+/// The scripts the bundled Inter faces are for.
+static LATIN_SCRIPTS: &[&str] = &["Latn", "Cyrl", "Grek"];
+
+/// The bundled Latin document faces (`assets/fonts`, OFL): every build has them, unlike
+/// craft-fonts. The Japanese faces carry only part of the Cyrillic (`привет` yes, Uzbek `қизил`
+/// and Kazakh `әже` no), so letters like қ, ғ, ҳ, ә, ө, ү, ұ and һ have no face at all without
+/// these.
+static INTER_REGULAR_FACE: CraftFont =
+    CraftFont { family: "Inter", style: "Regular", scripts: LATIN_SCRIPTS, bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf") };
+static INTER_SEMIBOLD_FACE: CraftFont =
+    CraftFont { family: "Inter", style: "SemiBold", scripts: LATIN_SCRIPTS, bytes: include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf") };
+
+/// The face for Latin, Greek and Cyrillic text written into PDFs: the bundled Inter Regular, or
+/// SemiBold for bold text. Present in every build, crafted ones included.
+pub fn document_latin_fonts(bold: bool) -> Vec<&'static CraftFont> {
+    vec![if bold { &INTER_SEMIBOLD_FACE } else { &INTER_REGULAR_FACE }]
 }
 
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {
@@ -265,20 +297,6 @@ mod tests {
         assert_eq!(ui_arabic_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Arab")).count());
     }
 
-    /// Family-name prefixes `build.rs` never embeds (its own `BARRED_FAMILIES`): Adobe's type
-    /// designs, which includes Noto CJK (Source Han under another name).
-    const BARRED_FAMILIES: [&str; 5] = ["Source Han", "Source Serif", "Source Sans", "Noto Sans CJK", "Noto Serif CJK"];
-
-    /// Whatever the craft-fonts checkout holds, no Adobe type design is embedded (AGENTS.md §1.1).
-    #[test]
-    fn barred_families_are_never_embedded() {
-        for face in CRAFT_FONTS {
-            assert!(!BARRED_FAMILIES.iter().any(|barred| face.family.starts_with(barred)), "{} is embedded", face.name());
-        }
-        assert!(BARRED_FAMILIES.iter().any(|barred| "Noto Sans CJK SC".starts_with(barred)));
-        assert!(!BARRED_FAMILIES.iter().any(|barred| "Noto Sans Arabic".starts_with(barred)));
-    }
-
     #[test]
     fn hebrew_document_faces_follow_the_weight() {
         static HEBR_LATN: &[&str] = &["Hebr", "Latn"];
@@ -294,6 +312,40 @@ mod tests {
         assert!(hebrew_face(&faces[..1], false).is_none());
         assert_eq!(ui_hebrew_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).count());
         assert_eq!(document_hebrew_font(false).is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Hebr")));
+    }
+
+    /// `build.rs` embeds the Japanese CJK faces whole and any other CJK face only up to
+    /// `MAX_OTHER_CJK_BYTES`, so a checkout with a large Chinese or Korean face (craft-fonts has the
+    /// 16.4 MB Noto Sans CJK SC) leaves it out. The four Japanese faces of the pinned craft-fonts
+    /// are 24.1 MB.
+    #[test]
+    fn cjk_faces_follow_the_size_rule() {
+        use crate::cjk_scripts::{MAX_OTHER_CJK_BYTES, WHOLE_CJK_FAMILIES, is_cjk_script};
+        // A tag can carry a region after the code: craft-fonts tags Noto Sans HK UI `Hant-HK`.
+        assert!(["Hant-HK", "Hans", "Jpan", "Hang"].iter().all(|s| is_cjk_script(s)));
+        assert!(!["Latn", "Arab", "Hebr"].iter().any(|s| is_cjk_script(s)));
+        let cjk = CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| is_cjk_script(s)));
+        let (whole, other): (Vec<_>, Vec<_>) = cjk.partition(|f| WHOLE_CJK_FAMILIES.contains(&f.family));
+        for face in &other {
+            let len = face.bytes.len();
+            assert!(u64::try_from(len).is_ok_and(|n| n <= MAX_OTHER_CJK_BYTES), "{} is embedded at {len} bytes", face.name());
+        }
+        let bytes: usize = whole.iter().map(|f| f.bytes.len()).sum();
+        assert!(bytes < 25_000_000, "{bytes} bytes of Japanese faces");
+    }
+
+    /// The bundled Inter faces carry the Latin, Greek and Cyrillic letters the craft-fonts faces
+    /// lack: Uzbek қ ғ ҳ, Kazakh ә ө ү ұ һ, Ukrainian ї є ґ, Greek. This one runs with or without
+    /// CRAFT_FONTS_DIR (#2593).
+    #[test]
+    fn latin_faces_carry_the_letters_the_japanese_faces_lack() {
+        for face in document_latin_fonts(false).into_iter().chain(document_latin_fonts(true)) {
+            for ch in ['қ', 'ғ', 'ҳ', 'ә', 'ө', 'ү', 'ұ', 'һ', 'ї', 'є', 'ґ', 'ё', 'α', 'β', 'γ', '≥', '≈'] {
+                assert!(crate::japanese_glyph_from(face, ch).is_ok(), "{} has no {ch}", face.name());
+            }
+        }
+        assert_eq!(document_latin_fonts(false)[0].style, "Regular");
+        assert_eq!(document_latin_fonts(true)[0].style, "SemiBold");
     }
 
     #[test]

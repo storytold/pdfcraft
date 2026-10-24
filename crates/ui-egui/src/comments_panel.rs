@@ -4,6 +4,8 @@
 //! current page; cards grouped by page. Selecting a card selects the comment on the page and
 //! opens its reply box and "…" menu (Edit, Set status, Delete). Status replies show as a badge.
 
+use std::collections::HashMap;
+
 use egui::{Align, Color32, CornerRadius, Layout, Sense, Stroke, vec2};
 use pdfcraft_engine::{Edit, NoteIcon, ReviewState, Shape};
 use pdfcraft_render::{Annotation, DocInfo};
@@ -33,9 +35,10 @@ pub fn subtype_label(s: &str) -> &str {
     }
 }
 
-/// The comment type as the panel names it, telling callouts and clouds apart by `/IT`.
+/// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
+        Some("StrikeOutTextEdit") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -154,12 +157,18 @@ pub(crate) fn show(
         return edit;
     }
     let query = view.comments.search.clone().filter(|q| !q.trim().is_empty());
-    let replies_of = |a: &Annotation| -> Vec<&Annotation> {
-        match &a.name {
-            Some(nm) => info.annotations.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).collect(),
-            None => Vec::new(),
+    let mut replies: HashMap<&str, Vec<&Annotation>> = HashMap::new();
+    let mut page_counts: HashMap<usize, usize> = HashMap::new();
+    // Keep global name matching and source reply order. Page badges count roots before filtering.
+    for a in &info.annotations {
+        if let Some(parent) = a.in_reply_to.as_deref() {
+            replies.entry(parent).or_default().push(a);
+        } else {
+            let count = page_counts.entry(a.page).or_default();
+            *count = count.saturating_add(1);
         }
-    };
+    }
+    let replies_of = |a: &Annotation| -> &[&Annotation] { a.name.as_deref().and_then(|name| replies.get(name)).map(Vec::as_slice).unwrap_or(&[]) };
     let cv = &view.comments;
     let status_of =
         |a: &Annotation| replies_of(a).iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()).unwrap_or_else(|| "None".into());
@@ -172,7 +181,7 @@ pub(crate) fn show(
         .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))
         .filter(|a| !cv.hidden_statuses.contains(&status_of(a)))
         .filter(|a| !cv.hidden_colors.contains(&color_key(a)))
-        .filter(|a| !cv.hidden_checks.contains(&check_label(is_marked(&replies_of(a))).to_string()))
+        .filter(|a| !cv.hidden_checks.contains(&check_label(is_marked(replies_of(a))).to_string()))
         .collect();
     let sort = cv.sort;
     match sort {
@@ -221,7 +230,7 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let n = info.annotations.iter().filter(|x| x.page == page && x.in_reply_to.is_none()).count();
+            let n = page_counts.get(&page).copied().unwrap_or_default();
             let open = !view.comments.collapsed_pages.contains(&page);
             ui.add_space(6.0);
             let clicked = ui
@@ -255,7 +264,8 @@ pub(crate) fn show(
             continue;
         }
         let thread = replies_of(a);
-        if let Some(e) = card(ui, t, a, &thread, info, view, prefs, allowed, nav) {
+        let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
+        if let Some(e) = card(ui, t, a, rotation, thread, info, view, prefs, allowed, nav) {
             edit = Some(e);
         }
     }
@@ -267,6 +277,8 @@ fn card(
     ui: &mut egui::Ui,
     t: &Tokens,
     a: &Annotation,
+    // The clockwise `/Rotate` of the comment's page.
+    rotation: u16,
     thread: &[&Annotation],
     info: &DocInfo,
     view: &mut DocView,
@@ -324,8 +336,10 @@ fn card(
                 ui.set_width(ui.available_width());
                 if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
                     let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
-                    if !r.has_focus() && !ui.memory(|m| m.focused().is_some()) {
-                        r.request_focus();
+                    match view.comments.editor_focus.take() {
+                        Some(crate::comments::EditorFocus::Take) => r.request_focus(),
+                        Some(crate::comments::EditorFocus::Release) => r.surrender_focus(),
+                        None => {}
                     }
                     let submit = crate::comments::submit_key(ui, &r, false);
                     ui.horizontal(|ui| {
@@ -431,10 +445,10 @@ fn card(
     if click.clicked() {
         view.comments.selected = Some(key);
         view.comments.reply.clear();
-        *nav = Some(Nav::Flash(a.page, a.rect));
+        *nav = Some(Nav::Flash(a.page, a.shown_rect(rotation)));
     }
     if click.double_clicked() && allowed {
-        view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
+        view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
     }
     let menu_id = ui.id().with(("card-menu", key));
     if open_menu {
@@ -450,7 +464,7 @@ fn card(
             ui.set_min_width(160.0);
             crate::comments::attachment_items(ui, view, info, a);
             if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
-                view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
+                view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
                 ui.close();
             }
             ui.menu_button(tl!("Set status"), |ui| {
@@ -573,6 +587,12 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
                 command = Some(id);
                 ui.close();
             }
+        }
+        // Into the pages, for good once saved: apart from the list's other commands.
+        ui.separator();
+        if ui.button(tl!("Flatten comments")).clicked() {
+            command = Some("comment.flatten");
+            ui.close();
         }
     });
     let filter = icons::button(ui, "filter", 26.0, active, tl!("Filter comments"));

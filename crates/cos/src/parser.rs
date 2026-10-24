@@ -10,6 +10,9 @@ use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 use crate::{Bytes, CosError};
 
 const MAX_DEPTH: usize = 128;
+/// Objects one top-level [`Lexer::object`] call may build. Real arrays (page trees, parent
+/// trees, widths) stay far below; a decompressed object stream of `0 0 0 ...` does not.
+const MAX_NODES: usize = 1 << 22;
 
 /// One of the six PDF whitespace characters (ISO 32000-2 §7.2.3, Table 1).
 pub fn is_whitespace(b: u8) -> bool {
@@ -28,11 +31,13 @@ fn is_regular(b: u8) -> bool {
 pub struct Lexer<'a> {
     pub data: &'a [u8],
     pub pos: usize,
+    /// Objects built by the current top-level [`Lexer::object`] call.
+    nodes: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos: pos.min(data.len()) }
+        Self { data, pos: pos.min(data.len()), nodes: 0 }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -84,12 +89,21 @@ impl<'a> Lexer<'a> {
 
     /// Parse one direct object. References `N G R` are recognised.
     pub fn object(&mut self) -> Result<Object, CosError> {
+        self.nodes = 0;
         self.object_depth(0)
+    }
+
+    fn over_budget(&self) -> bool {
+        self.nodes > MAX_NODES
     }
 
     fn object_depth(&mut self, depth: usize) -> Result<Object, CosError> {
         if depth > MAX_DEPTH {
             return Err(self.err("nesting too deep"));
+        }
+        self.nodes = self.nodes.saturating_add(1);
+        if self.over_budget() {
+            return Err(self.err("object too large"));
         }
         self.skip_ws();
         let Some(b) = self.peek() else { return Err(self.err("unexpected end of data")) };
@@ -125,6 +139,7 @@ impl<'a> Lexer<'a> {
                             let before = self.pos;
                             match self.object_depth(depth + 1) {
                                 Ok(o) => items.push(o),
+                                Err(e) if self.over_budget() => return Err(e),
                                 // Tolerate junk inside arrays by skipping one byte.
                                 Err(_) if self.pos == before => self.pos += 1,
                                 Err(e) => return Err(e),
@@ -283,6 +298,9 @@ impl<'a> Lexer<'a> {
                     // Tolerate garbage between entries (seen in damaged files): skip a token.
                     let before = self.pos;
                     let _ = self.object_depth(depth + 1);
+                    if self.over_budget() {
+                        return Err(self.err("object too large"));
+                    }
                     if self.pos == before {
                         self.pos += 1;
                     }
@@ -324,18 +342,8 @@ impl<'a> Lexer<'a> {
         if s.contains('.') {
             // Tolerate forms like "--5", "5-" or "1.2.3" by parsing the longest valid prefix.
             let cleaned: String = s.trim_start_matches('+').replacen("--", "-", 1);
-            let mut end = cleaned.len();
-            while end > 0 {
-                // Only cut at character boundaries: a token can hold multi-byte UTF-8 (fuzzing
-                // found ".—", which panicked here).
-                if cleaned.is_char_boundary(end)
-                    && let Ok(v) = cleaned[..end].parse::<f64>()
-                {
-                    return Ok(Object::Real(v));
-                }
-                end -= 1;
-            }
-            return Ok(Object::Real(0.0));
+            let v = cleaned.get(..real_prefix_len(cleaned.as_bytes())).and_then(|p| parse_counted::<f64>(p).ok());
+            return Ok(Object::Real(v.unwrap_or(0.0)));
         }
         // Tolerate a doubled sign ("--280") like the real branch does.
         let t = s.trim_start_matches('+');
@@ -350,6 +358,46 @@ impl<'a> Lexer<'a> {
     }
 }
 
+/// Length of the longest prefix of `s` that reads as a decimal number: a sign, digits with at
+/// most one `.`, and an exponent with digits. Zero when that prefix has no digit. Found in one
+/// pass so a long damaged token is converted once, not once per shorter prefix.
+fn real_prefix_len(s: &[u8]) -> usize {
+    let digits = |from: usize| s.get(from..).map_or(0, |r| r.iter().take_while(|b| b.is_ascii_digit()).count());
+    let mut at = usize::from(matches!(s.first(), Some(b'+' | b'-')));
+    let int = digits(at);
+    at += int;
+    let mut frac = 0;
+    if s.get(at) == Some(&b'.') {
+        frac = digits(at + 1);
+        at += 1 + frac;
+    }
+    if int + frac == 0 {
+        return 0;
+    }
+    if matches!(s.get(at), Some(b'e' | b'E')) {
+        let sign = usize::from(matches!(s.get(at + 1), Some(b'+' | b'-')));
+        let exp = digits(at + 1 + sign);
+        if exp > 0 {
+            at += 1 + sign + exp;
+        }
+    }
+    at
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes searched for `endstream` on this thread.
+    pub(crate) static ENDSTREAM_SCAN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Bytes handed to number conversion on this thread.
+    static NUMBER_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn parse_counted<T: std::str::FromStr>(s: &str) -> Result<T, T::Err> {
+    #[cfg(test)]
+    NUMBER_BYTES.with(|c| c.set(c.get() + s.len()));
+    s.parse()
+}
+
 fn hexval(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -362,17 +410,30 @@ fn hexval(b: u8) -> Option<u8> {
 /// Parse an indirect object at `offset`: `N G obj <object> [stream…endstream] endobj`.
 /// `resolve_length` resolves an indirect `/Length`. Returns the object and its (num, gen).
 pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef) -> Option<i64>) -> Result<(ObjRef, Object), CosError> {
-    parse_indirect_in(data, None, offset, resolve_length)
+    parse_indirect_in(data, None, offset, resolve_length, None)
 }
 
 /// [`parse_indirect`] for a document's own bytes: stream data points into `data` instead of
 /// being copied out of it.
+/// `endstreams` is the document's [`EndstreamIndex`] for `data`.
 pub(crate) fn parse_indirect_shared(
     data: &Arc<Vec<u8>>,
     offset: usize,
     resolve_length: &dyn Fn(ObjRef) -> Option<i64>,
+    endstreams: &EndstreamIndex,
 ) -> Result<(ObjRef, Object), CosError> {
-    parse_indirect_in(data, Some(data), offset, resolve_length)
+    parse_indirect_in(data, Some(data), offset, resolve_length, Some(endstreams))
+}
+
+/// Where `endstream` occurs in a document's bytes, found once, the first time a stream's
+/// /Length is wrong or missing. Searching the rest of the file for each such stream instead
+/// makes many of them ending at one late `endstream` quadratic to read.
+pub(crate) type EndstreamIndex = std::sync::OnceLock<Vec<usize>>;
+
+fn endstream_offsets(data: &[u8]) -> Vec<usize> {
+    #[cfg(test)]
+    ENDSTREAM_SCAN.with(|c| c.set(c.get() + data.len()));
+    data.windows(9).enumerate().filter(|(_, w)| *w == b"endstream").map(|(i, _)| i).collect()
 }
 
 fn parse_indirect_in(
@@ -380,6 +441,7 @@ fn parse_indirect_in(
     shared: Option<&Arc<Vec<u8>>>,
     offset: usize,
     resolve_length: &dyn Fn(ObjRef) -> Option<i64>,
+    endstreams: Option<&EndstreamIndex>,
 ) -> Result<(ObjRef, Object), CosError> {
     let mut lx = Lexer::new(data, offset);
     lx.skip_ws();
@@ -404,7 +466,16 @@ fn parse_indirect_in(
     if let Object::Dict(dict) = &obj
         && lx.eat_keyword(b"stream")
     {
-        // The keyword is followed by CRLF or LF (a lone CR is tolerated).
+        // The keyword is followed by CRLF or LF (a lone CR is tolerated). Microsoft Reporting
+        // Services writes a space first (`stream \r\n`); spaces and tabs count only when a line
+        // break follows, so they are never taken from the data.
+        let mut eol = lx.pos;
+        while matches!(data.get(eol), Some(b' ' | b'\t')) {
+            eol += 1;
+        }
+        if matches!(data.get(eol), Some(b'\r' | b'\n')) {
+            lx.pos = eol;
+        }
         match (data.get(lx.pos), data.get(lx.pos + 1)) {
             (Some(b'\r'), Some(b'\n')) => lx.pos += 2,
             (Some(b'\n'), _) | (Some(b'\r'), _) => lx.pos += 1,
@@ -430,7 +501,11 @@ fn parse_indirect_in(
         let len = match declared {
             Some(l) if valid(l) => l as usize,
             // Wrong or missing /Length: search for "endstream" (§7.3.8.1 recovery).
-            _ => find_endstream(data, start).ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })? - start,
+            _ => {
+                find_endstream(data, start, endstreams)
+                    .ok_or_else(|| CosError::Syntax { offset: start, detail: "stream without endstream".into() })?
+                    - start
+            }
         };
         let range = start..start + len;
         let raw = match shared {
@@ -446,9 +521,20 @@ fn parse_indirect_in(
 }
 
 /// Offset where stream data ends (before the EOL preceding "endstream").
-fn find_endstream(data: &[u8], from: usize) -> Option<usize> {
-    let hay = data.get(from..)?;
-    let at = hay.windows(9).position(|w| w == b"endstream")? + from;
+fn find_endstream(data: &[u8], from: usize, endstreams: Option<&EndstreamIndex>) -> Option<usize> {
+    let at = match endstreams {
+        Some(index) => {
+            let index = index.get_or_init(|| endstream_offsets(data));
+            index.get(index.partition_point(|&p| p < from)).copied()?
+        }
+        None => {
+            let hay = data.get(from..)?;
+            let found = hay.windows(9).position(|w| w == b"endstream");
+            #[cfg(test)]
+            ENDSTREAM_SCAN.with(|c| c.set(c.get() + found.map_or(hay.len(), |p| p + 9)));
+            found? + from
+        }
+    };
     let mut end = at;
     if end > from && data[end - 1] == b'\n' {
         end -= 1;
@@ -472,6 +558,22 @@ mod tests {
             let _ = Lexer::new(t.as_bytes(), 0).object();
         }
         assert_eq!(Lexer::new("1.5\u{2014}".as_bytes(), 0).object().unwrap(), Object::Real(1.5));
+    }
+
+    #[test]
+    fn a_damaged_real_is_converted_once() {
+        let token = format!("1.{}{}", "5".repeat(2_000), "x".repeat(20_000));
+        NUMBER_BYTES.with(|c| c.set(0));
+        let Ok(Object::Real(v)) = Lexer::new(token.as_bytes(), 0).object() else { panic!("not a real") };
+        let converted = NUMBER_BYTES.with(|c| c.get());
+        assert!(converted <= token.len(), "{converted} bytes converted for a {}-byte token", token.len());
+        assert!((v - 1.5555).abs() < 1e-3);
+        // The longest numeric prefix wins, as before.
+        for (t, want) in
+            [("1.2.3", 1.2), ("--5.", -5.0), ("+.5x", 0.5), ("5.-", 5.0), ("1.5e3", 1500.0), ("1.5e+", 1.5), ("-.x", 0.0), (".", 0.0), ("-inf.", 0.0)]
+        {
+            assert_eq!(Lexer::new(t.as_bytes(), 0).object().ok(), Some(Object::Real(want)), "{t}");
+        }
     }
 
     fn obj(s: &str) -> Object {
@@ -555,6 +657,25 @@ mod tests {
     }
 
     #[test]
+    fn indirect_stream_with_a_space_before_the_line_break() {
+        // `stream \r\n` as Microsoft Reporting Services writes it: the data starts after the
+        // line break, so the /Length is still right and the data keeps no leading space.
+        for eol in [&b" \r\n"[..], b" \n", b"\t \r"] {
+            let mut data = b"7 0 obj\n<< /Length 5 >>\nstream".to_vec();
+            data.extend_from_slice(eol);
+            data.extend_from_slice(b"HELLO\r\nendstream\nendobj\n");
+            let (_, o) = parse_indirect(&data, 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(&s.raw[..], b"HELLO", "{eol:?}");
+        }
+        // Spaces with no line break after them are data, not a keyword terminator.
+        let data = b"7 0 obj\n<< /Length 7 >>\nstream   HELLO\nendstream\nendobj\n";
+        let (_, o) = parse_indirect(data, 0, &|_| None).unwrap();
+        let Object::Stream(s) = o else { panic!("stream expected") };
+        assert_eq!(&s.raw[..], b"   HELLO");
+    }
+
+    #[test]
     fn indirect_length_is_resolved() {
         let data = b"7 0 obj\n<< /Length 8 0 R >>\nstream\r\nAB\r\nendstream\nendobj\n";
         let (_, o) = parse_indirect(data, 0, &|r| (r.num == 8).then_some(2)).unwrap();
@@ -569,5 +690,21 @@ mod tests {
         }
         let deep = "[".repeat(10_000);
         assert!(Lexer::new(deep.as_bytes(), 0).object().is_err());
+    }
+
+    #[test]
+    fn one_object_has_a_node_budget() {
+        // A wide array (from a tiny compressed object stream) must not grow without bound.
+        let wide = |n: usize| format!("[{}]", "0 ".repeat(n));
+        let at_cap = Lexer::new(wide(MAX_NODES - 1).as_bytes(), 0).object();
+        assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == MAX_NODES - 1));
+        assert!(Lexer::new(wide(MAX_NODES).as_bytes(), 0).object().is_err());
+        // The same inside a dictionary value and behind tolerated junk.
+        assert!(Lexer::new(format!("<< /A {} >>", wide(MAX_NODES)).as_bytes(), 0).object().is_err());
+        assert!(Lexer::new(format!("[[{}] ]", "0 ".repeat(MAX_NODES)).as_bytes(), 0).object().is_err());
+        // The budget is per top-level object: a lexer reused for many operands keeps working.
+        let two = wide(MAX_NODES - 1).repeat(2);
+        let mut lx = Lexer::new(two.as_bytes(), 0);
+        assert!(lx.object().is_ok() && lx.object().is_ok());
     }
 }

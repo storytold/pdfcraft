@@ -153,6 +153,36 @@
 	Could not save: {e}	無法儲存：{e}
 	Earlier in tab order	在 Tab 順序中前移
 	Later in tab order	在 Tab 順序中後移
+	Calculation order	計算順序
+	Fix order	修正順序
+	Move only what must move, so every field calculates after the fields it reads.	只移動必須移動的欄位，讓每個欄位都在它讀取的欄位之後計算。
+	Earlier in calculation order	在計算順序中前移
+	Later in calculation order	在計算順序中後移
+	Too early	過早
+	Reads {name}, which calculates later, so it shows an old value.	讀取 {name}，而它之後才計算，因此顯示的是舊值。
+	Loop	迴圈
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	讀取 {names}，而它們又讀取此欄位。任何順序都無法修正迴圈：請修改其中一個公式。
+	Not in order	不在順序中
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中儲存的計算順序缺少此欄位：其他 PDF 檢視器可能不會計算它。
+	Back to Prepare a form	返回準備表單
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表單中還沒有計算自身值的欄位。在欄位內容的「計算」索引標籤中為欄位設定計算後，它會顯示在這裡。
+	{names} and {last}	{names}和{last}
+	{field} reads no other field	{field} 不讀取其他欄位
+	{field} reads {fields}	{field} 讀取 {fields}
+	No field reads it	沒有欄位讀取它
+	The order saved in the PDF needs tidying	PDF 中儲存的順序需要整理
+	Moves only what must move	只移動必須移動的
+	Every field calculates after the fields it reads.	每個欄位都在它讀取的欄位之後計算。
+	Every field outside a loop calculates after the fields it reads.	迴圈之外的每個欄位都在它讀取的欄位之後計算。
+	{field} reads its own value	{field} 讀取自身的值
+	{fields} read each other	{fields} 互相讀取
+	No order can fix a loop. Change one of the formulas.	任何順序都無法修正迴圈。請修改其中一個公式。
+	Edit {field}'s formula	編輯 {field} 的公式
+	Order · top calculates first	順序 · 上方的先計算
+	Script	指令碼
+	Links on page	頁面上的關聯
+	Show on the page which fields each field reads	在頁面上顯示每個欄位讀取哪些欄位
+	Drag a field to move it, or select it and press {up} or {down}.	拖曳欄位即可移動，或選取後按 {up} 或 {down}。
 	From:	從：
 	To:	至：
 	High Resolution	高解析度
@@ -214,6 +244,7 @@
 	Discard private data of other applications	捨棄其他應用程式的私有資料
 	Discard hidden text	捨棄隱藏文字
 	Use Flate to encode streams that are not encoded	使用 Flate 編碼未編碼的流
+	In streams that use LZW encoding, use Flate instead	在使用 LZW 編碼的流中改用 Flate
 	Remove invalid links and bookmarks	刪除無效連結和書籤
 	Remove unreferenced named destinations	刪除未引用的命名目標
 	Compress document structure (object streams)	壓縮文件結構（物件流）
@@ -444,6 +475,7 @@
 	Insert Page Number	插入頁碼
 	Insert Date	插入日期
 	Start page number	起始頁碼
+	Shrink the page content to make room for the header and footer	縮小頁面內容，為頁首和頁尾留出空間
 	Source	來源
 	Fit to page	適合頁面
 	Rotation	旋轉
@@ -820,6 +852,7 @@
 	Off	關
 	Flip on long edge	沿長邊翻轉
 	Flip on short edge	沿短邊翻轉
+	Printer default	印表機預設
 	Paper:	紙張：
 	Pages to Print	要列印的頁面
 	More options:	更多選項：
@@ -887,6 +920,8 @@
 	Next view	下一個檢視
 	Page display	頁面顯示
 	Continuous scrolling	連續捲動
+	Show gaps between pages	顯示頁面間距
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隱藏間距以連接頁面邊緣。PDF 內的頁邊距保持不變。
 	Two-page view	雙頁檢視
 	Single page	單頁
 	Show cover page in two-page view	在雙頁檢視中顯示封面
@@ -1225,6 +1260,8 @@
 	This document has no layers.	本文件沒有圖層。
 	This document has no attachments.	本文件沒有附件。
 	Hide layer	隱藏圖層
+	Layer options	圖層選項
+	Reset to Initial Visibility	重設為初始可見性
 	Show layer	顯示圖層
 	Set layer visibility	設定圖層可見性
 	on page {label}	第 {label} 頁
@@ -1532,6 +1569,7 @@
 	Looking for printers…	正在尋找印表機…
 	Sending sheet {s} of {n} to {printer}…	正在將第 {s} 張（共 {n} 張）傳送到{printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	找不到印表機。請確認印表機已安裝、列印多工緩衝處理器正在執行，然後重新開啟「列印」。
+	Reading the printer's settings…	正在讀取印表機設定…
 	Sending to {printer}…	正在傳送到{printer}…
 	Choose a folder for the searchable files	選擇可搜尋檔案的資料夾
 	Files are combined from top to bottom. Leave Pages empty to take every page.	檔案將按從上到下的順序合併。頁碼留空表示取全部頁面。
@@ -1677,6 +1715,7 @@
 	This document has no restrictions to lift	此文件沒有可解除的限制
 	The document's security settings don't allow this change	文件安全設定不允許此更改
 	The document's security settings don't allow copying text and images	文件安全設定不允許複製文字和圖片
+	The document's security settings don't allow printing	文件安全設定不允許列印
 	Open a document first	請先開啟文件
 	Security will be removed when you save	儲存時將刪除安全性設定
 	Click text or an image to edit it	按一下文字或圖片進行編輯
@@ -1927,6 +1966,7 @@
 	Delete field	刪除欄位
 	Duplicate field	複製欄位
 	Set tab order	設定 Tab 順序
+	Set calculation order	設定計算順序
 	Change initial view	變更初始檢視
 	Set alternate text	設定替代文字
 	Mark figure as decorative	將圖片標記為裝飾用途
@@ -2002,6 +2042,10 @@
 	Perimeter	周長
 	Area	面積
 	Drawing scale	圖面比例
+	Scale	比例
+	Common scales	常用比例
+	Enter a scale such as 1:50.	請輸入比例，例如 1:50。
+	Applying a scale switches units to m / mm.	套用比例會將單位切換為 m / mm。
 	Snapping	吸附
 	Export measurements	匯出測量結果
 	Open a PDF to measure it.	開啟 PDF 以進行測量。
@@ -2054,6 +2098,7 @@
 	Go to page…	轉到頁面…
 	For page sizes and margins.	用於頁面尺寸和邊距。
 	Reopen the files that were open when PdfCraft last closed	重新開啟上次關閉 PdfCraft 時開啟的檔案
+	Restore the last view (page, zoom and page display) when a document is opened again	再次開啟文件時還原上次的檢視（頁面、縮放與頁面顯示）
 	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文字字型無法顯示「{c}」（{code}）。請選擇支援的文字。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準字型無法顯示「{c}」（{code}）。目前只能新增西歐字元作為文字。
 	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	此欄位的字型無法顯示「{c}」（{code}），PdfCraft 會在該處顯示 ?。值已儲存，其他 PDF 閱讀器會依據該值重新繪製此欄位。
@@ -2154,6 +2199,9 @@ key	Space	空格
 	Tools	工具
 	Inspector	檢查器
 	Reload documents when their files change on disk	檔案在磁碟上變更時重新載入對應的文件
+	Don't show again	不再顯示
+	Show a notice when a document is secured	文件已加密時顯示通知
+	Always use my default zoom and page layout	一律使用我的預設縮放與頁面佈局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此檔案已在磁碟上變更。「重新載入」會顯示新版本並捨棄未儲存的變更；「儲存」則會以此版本取代它。
 	Reload	重新載入
 	Couldn't reload {name}: {e}	無法重新載入{name}：{e}
@@ -2204,6 +2252,13 @@ animation effects	Off	關
 	no unused output name	沒有可用的輸出檔名
 	no output folder was chosen	未選擇輸出資料夾
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下載 {n} 個 PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 個計算已改用新名稱。
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	計算順序中有 {n} 個不計算任何內容的項目。「修正順序」會將其刪除。
+@plural	{fields} reads it|{fields} read it	{fields} 讀取它
+@plural	{n} field shows an old value|{n} fields show old values	{n} 個欄位顯示舊值
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它讀取的 {fields} 之前計算。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 個欄位計算過早。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中儲存的順序裡，其他 PDF 檢視器可能不會計算。
 	Scan	掃描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白紙上簽名，並在明亮、均勻的光線下拍照（使用閃光燈）。選擇相片或將其拖放到此處：PdfCraft 會找到簽名並去除紙張背景。
 	Choose photo…	選擇相片…
@@ -2384,3 +2439,45 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Attach a file…	附加檔案…
+	Delete attachment	刪除附件
+	Attaching files is not available on the web yet	網頁版尚不支援附加檔案
+	Attach {name}	附加 {name}
+	Delete attachment {key}	刪除附件 {key}
+	Font	字型
+	Bulleted list	項目符號清單
+	Numbered list	編號清單
+	Alignment	對齊
+	Superscript	上標
+	Subscript	下標
+	Paragraph spacing	段落間距
+	Less	收起
+	Other options	其他選項
+	Thumbnail size	縮圖大小
+	Smaller thumbnails	縮小縮圖
+	Larger thumbnails	放大縮圖
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	變更註解形狀
+
+# Prepare a form ▸ Text field table
+	Add text field table	新增文字欄位表格
+	Text field table	文字欄位表格
+	Text Field Table	文字欄位表格
+	Columns	欄
+	Row spacing	列間距
+	Column spacing	欄間距
+	First row number	起始列號
+	Column widths	欄寬
+	Distribute evenly	平均分配
+	Field names	欄位名稱
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 代表列號，{col} 代表欄號，{seq} 代表儲存格序號。若都沒有，列號會加在結尾。
+	Column {n}	第 {n} 欄
+	Add fields	新增欄位
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	列太矮：請加高區域，或減少列數或列間距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某欄太窄：請加寬區域、給該欄更多寬度，或減少欄數或欄間距
+	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
+	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
+	a field named {name} already exists	已有名為 {name} 的欄位
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	今天

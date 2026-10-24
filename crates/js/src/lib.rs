@@ -13,8 +13,8 @@
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
 //!   `setFocus`.
-//! - `app` (`alert`, `beep`, `response`, `launchURL`, `viewerType`, `viewerVersion`,
-//!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`), `console` (`println`,
+//! - `app` (`alert`, `beep`, `response`, `launchURL`, `execMenuItem`, `viewerType`, `viewerVersion`,
+//!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
 //!   `show`, `clear`), `display` and `color`.
 //!
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
@@ -25,10 +25,13 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
-use boa_engine::object::builtins::{JsArray, JsFunction};
+use boa_engine::context::HostHooks;
+use boa_engine::object::builtins::{JsArray, JsDate, JsFunction};
 use boa_engine::object::{FunctionObjectBuilder, ObjectInitializer};
 use boa_engine::property::Attribute;
+use boa_engine::realm::Realm;
 use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
 /// The kinds of field, as `field.type` names them.
@@ -141,6 +144,8 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// The document has an XFA form, so scripts see `xfa_installed`.
+    pub xfa: bool,
 }
 
 /// Something a script asked the viewer to do.
@@ -159,6 +164,36 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
+    ShowPanel(Panel),
+}
+
+/// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panel {
+    /// The document's bookmarks (outline).
+    Bookmarks,
+    /// Page thumbnails.
+    Pages,
+    /// The files attached to the document.
+    Attachments,
+    /// The document's signatures and their validity.
+    Signatures,
+    /// The document's layers (optional content).
+    Layers,
+}
+
+impl Panel {
+    /// The panel's name in automation output, fixed whatever the variant is called.
+    pub fn id(self) -> &'static str {
+        match self {
+            Panel::Bookmarks => "bookmarks",
+            Panel::Pages => "pages",
+            Panel::Attachments => "attachments",
+            Panel::Signatures => "signatures",
+            Panel::Layers => "layers",
+        }
+    }
 }
 
 /// What running a script did.
@@ -176,6 +211,9 @@ pub struct Outcome {
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.
     pub error: Option<String>,
+    /// Errors in the document-level scripts that ran first. Each is a script of its own: one
+    /// that throws stops where it failed, and the others and the script itself still run (#3940).
+    pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
 }
@@ -194,12 +232,72 @@ impl Default for Limits {
 }
 
 struct Host {
-    fields: Vec<FieldState>,
+    fields: Arc<Vec<FieldState>>,
     changed: BTreeSet<usize>,
     alerts: Vec<String>,
     console: Vec<String>,
     requests: Vec<Request>,
     doc: DocInfo,
+    /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
+    kept: usize,
+    /// Alerts, console lines and requests the limits left out.
+    dropped: usize,
+}
+
+impl Host {
+    /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.
+    fn room(&mut self, bytes: usize) -> bool {
+        match self.kept.checked_add(bytes).filter(|k| *k <= xfa::MAX_PAYLOAD) {
+            Some(k) => {
+                self.kept = k;
+                true
+            }
+            None => {
+                self.dropped = self.dropped.saturating_add(1);
+                false
+            }
+        }
+    }
+
+    fn alert(&mut self, m: String) {
+        if self.alerts.len() >= xfa::MAX_ALERTS {
+            self.dropped = self.dropped.saturating_add(1);
+        } else if self.room(m.len()) {
+            self.alerts.push(m);
+        }
+    }
+
+    fn print(&mut self, m: String) {
+        if self.console.len() >= xfa::MAX_CONSOLE {
+            self.dropped = self.dropped.saturating_add(1);
+        } else if self.room(m.len()) {
+            self.console.push(m);
+        }
+    }
+
+    /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
+    /// requests and the run's byte budget.
+    fn request(&mut self, r: Request) {
+        if self.requests.len() >= xfa::MAX_EFFECTS {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        let r = match r {
+            Request::Reset(names) => Request::Reset(names.into_iter().map(xfa::clip).collect()),
+            Request::LaunchUrl(u) => Request::LaunchUrl(xfa::clip(u)),
+            Request::Submit(u) => Request::Submit(xfa::clip(u)),
+            Request::Focus(n) => Request::Focus(xfa::clip(n)),
+            other => other,
+        };
+        let bytes = match &r {
+            Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
+            Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
+            _ => 0,
+        };
+        if self.room(bytes) {
+            self.requests.push(r);
+        }
+    }
 }
 
 type Shared = RefCell<Host>;
@@ -218,6 +316,19 @@ fn text(v: &JsValue, ctx: &mut Context) -> JsResult<String> {
         return Ok(String::new());
     }
     Ok(v.to_string(ctx)?.to_std_string_escaped())
+}
+
+/// [`text`] cut to a message's length ([`xfa::clip`]), without first copying all of a longer
+/// string.
+fn text_line(v: &JsValue, ctx: &mut Context) -> JsResult<String> {
+    if v.is_undefined() || v.is_null() {
+        return Ok(String::new());
+    }
+    let js = v.to_string(ctx)?;
+    // Two UTF-16 units per character at most: the clip still sees more than a line's worth.
+    let keep = xfa::MAX_LINE.saturating_add(1).saturating_mul(2);
+    let js = if js.len() > keep { js.get(..keep).unwrap_or_default() } else { js };
+    Ok(xfa::clip(js.to_std_string_escaped()))
 }
 
 fn arg(args: &[JsValue], i: usize) -> JsValue {
@@ -286,7 +397,8 @@ fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
 fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
-    change(&mut h.fields[i]);
+    let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
+    change(field);
     h.changed.insert(i);
     Ok(())
 }
@@ -436,7 +548,7 @@ fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         Ok(JsValue::undefined())
     }
     fn set_focus(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        host(c)?.borrow_mut().requests.push(Request::Focus(name.to_std_string_escaped()));
+        host(c)?.borrow_mut().request(Request::Focus(name.to_std_string_escaped()));
         Ok(JsValue::undefined())
     }
 
@@ -490,12 +602,12 @@ fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
 
 fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let names = strings(&arg(args, 0), ctx)?;
-    host(ctx)?.borrow_mut().requests.push(Request::Reset(names));
+    host(ctx)?.borrow_mut().request(Request::Reset(names));
     Ok(JsValue::undefined())
 }
 
 fn print(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().requests.push(Request::Print);
+    host(ctx)?.borrow_mut().request(Request::Print);
     Ok(JsValue::undefined())
 }
 
@@ -508,7 +620,7 @@ fn submit_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsV
         }
         _ => text(&a, ctx)?,
     };
-    host(ctx)?.borrow_mut().requests.push(Request::Submit(url));
+    host(ctx)?.borrow_mut().request(Request::Submit(url));
     Ok(JsValue::undefined())
 }
 
@@ -530,49 +642,83 @@ fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let last = h.doc.num_pages.saturating_sub(1);
     let p = (n.max(0.0) as usize).min(last);
     h.doc.page = p;
-    h.requests.push(Request::GoToPage(p));
+    h.request(Request::GoToPage(p));
     Ok(JsValue::undefined())
 }
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
 
-/// A message argument: a string, or an object with `cMsg`.
+/// A message argument: a string, or an object with `cMsg`, cut to a message's length.
 fn message(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<String> {
     match v.as_object() {
         Some(o) if !o.is_array() && !o.is_callable() => {
             let m = o.get(JsString::from(key), ctx)?;
-            text(&m, ctx)
+            text_line(&m, ctx)
         }
-        _ => text(v, ctx),
+        _ => text_line(v, ctx),
     }
 }
 
+/// `app.alert(cMsg)`: records the message, given as a string or as an object with `cMsg`, and
+/// returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = message(&arg(args, 0), "cMsg", ctx)?;
-    host(ctx)?.borrow_mut().alerts.push(m);
+    host(ctx)?.borrow_mut().alert(m);
     // The OK button.
     Ok(JsValue::from(1))
 }
 
+/// `app.beep()`: queues a request to beep.
 fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    host(ctx)?.borrow_mut().requests.push(Request::Beep);
+    host(ctx)?.borrow_mut().request(Request::Beep);
     Ok(JsValue::undefined())
 }
 
+/// `app.launchURL(cURL)`: queues a request to open the URL, given as a string or as an object
+/// with `cURL`.
 fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let u = message(&arg(args, 0), "cURL", ctx)?;
-    host(ctx)?.borrow_mut().requests.push(Request::LaunchUrl(u));
+    host(ctx)?.borrow_mut().request(Request::LaunchUrl(u));
     Ok(JsValue::undefined())
 }
 
+/// What `app.execMenuItem(name)` asks for, for the menu items forms use: the side panels, Print
+/// and Save As. Other items do nothing.
+pub(crate) fn menu_item(name: &str) -> Option<Request> {
+    Some(match name {
+        "ShowHideFileAttachment" => Request::ShowPanel(Panel::Attachments),
+        "ShowHideBookmarks" => Request::ShowPanel(Panel::Bookmarks),
+        "ShowHideThumbnails" => Request::ShowPanel(Panel::Pages),
+        "ShowHideSignatures" => Request::ShowPanel(Panel::Signatures),
+        "ShowHideOptCont" => Request::ShowPanel(Panel::Layers),
+        "Print" => Request::Print,
+        // Save opens Save As too, as it always has for XFA forms' buttons: a click on a form
+        // never overwrites the file unasked.
+        "SaveAs" | "Save" => Request::SaveAs,
+        _ => return None,
+    })
+}
+
+/// `app.execMenuItem(name)`: queues the request [`menu_item`] gives for the name (Save opens
+/// Save As too); an unknown name does nothing.
+fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let item = text(&arg(args, 0), ctx)?;
+    if let Some(r) = menu_item(&item) {
+        host(ctx)?.borrow_mut().request(r);
+    }
+    Ok(JsValue::undefined())
+}
+
+/// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
+/// type one.
 fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     // No one to answer: as if the dialog was cancelled.
     Ok(JsValue::null())
 }
 
 fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = text(&arg(args, 0), ctx)?;
-    host(ctx)?.borrow_mut().console.push(m);
+    let m = text_line(&arg(args, 0), ctx)?;
+    host(ctx)?.borrow_mut().print(m);
     Ok(JsValue::undefined())
 }
 
@@ -748,7 +894,11 @@ fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
     let mut i = 0;
     while i < b.len() {
         let c = b[i];
-        let run = b[i..].iter().take_while(|x| **x == c).count();
+        // Only date letters read as runs; a literal is copied one character at a time, so
+        // measuring its run would rescan a long literal stretch at every position.
+        let run = if b"ymdHhMst".contains(&c) { b[i..].iter().take_while(|x| **x == c).count() } else { 1 };
+        #[cfg(test)]
+        PRINTD_SCANNED.fetch_add(run as u64, std::sync::atomic::Ordering::Relaxed);
         let push_num = |out: &mut String, v: i64, n: usize| {
             if n >= 2 {
                 out.push_str(&format!("{v:02}"));
@@ -800,6 +950,324 @@ fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
         i += run;
     }
     Ok(s(&out))
+}
+
+/// A field of a `util.scand` format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DateUnit {
+    /// `yyyy`: four digits.
+    Year,
+    /// `yy`: two digits, read as 1950–2049.
+    ShortYear,
+    Month,
+    /// `mmm`, `mmmm`: a month's name or its three-letter abbreviation.
+    MonthName,
+    Day,
+    /// `ddd`, `dddd`: a weekday's name, read and not checked.
+    Weekday,
+    Hour,
+    /// `h`, `hh`: 0–12, with `tt` for the afternoon.
+    Hour12,
+    Minute,
+    Second,
+    /// `t`, `tt`: am or pm.
+    AmPm,
+}
+
+impl DateUnit {
+    /// A year, month or day: a format needs one of these for `util.scand` to read anything.
+    fn is_date(self) -> bool {
+        matches!(self, Self::Year | Self::ShortYear | Self::Month | Self::MonthName | Self::Day)
+    }
+
+    /// Read from a run of digits, not from letters.
+    fn is_numeric(self) -> bool {
+        !matches!(self, Self::MonthName | Self::Weekday | Self::AmPm)
+    }
+}
+
+/// A piece of a `util.scand` format.
+#[derive(Debug, PartialEq, Eq)]
+enum ScanPart {
+    /// A field, the digits it takes when typed together with the next one (`width`), and whether
+    /// the next one follows it with nothing between them in the format (`joined`).
+    Field { unit: DateUnit, width: usize, joined: bool },
+    /// Letters the format writes as they are, which the text must have there.
+    Word(String),
+}
+
+/// The fields and literal words of a `util.scand` format, in order. A numeric field is marked
+/// `joined` when another numeric field follows it directly; anything but letters and digits
+/// outside a field is left out.
+fn scan_parts(fmt: &str) -> Vec<ScanPart> {
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut parts: Vec<ScanPart> = Vec::new();
+    // The last part is a field written right before this point, or letters still being collected.
+    let (mut after_field, mut in_word) = (false, false);
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        // Counted for field letters only, so a long run of anything else is read once.
+        let run = if "ymdHhMst".contains(c) { chars.get(i..).unwrap_or_default().iter().take_while(|x| **x == c).count() } else { 1 };
+        let field = match (c, run) {
+            ('y', 4..) => Some((DateUnit::Year, 4)),
+            ('y', _) => Some((DateUnit::ShortYear, 2)),
+            ('m', 3..) => Some((DateUnit::MonthName, 0)),
+            ('m', n) => Some((DateUnit::Month, n)),
+            ('d', 3..) => Some((DateUnit::Weekday, 0)),
+            ('d', n) => Some((DateUnit::Day, n)),
+            ('H', n) => Some((DateUnit::Hour, n.min(2))),
+            ('h', n) => Some((DateUnit::Hour12, n.min(2))),
+            ('M', n) => Some((DateUnit::Minute, n.min(2))),
+            ('s', n) => Some((DateUnit::Second, n.min(2))),
+            ('t', _) => Some((DateUnit::AmPm, 0)),
+            _ => None,
+        };
+        if let Some((unit, width)) = field {
+            if after_field
+                && unit.is_numeric()
+                && let Some(ScanPart::Field { unit: last, joined, .. }) = parts.last_mut()
+                && last.is_numeric()
+            {
+                *joined = true;
+            }
+            parts.push(ScanPart::Field { unit, width, joined: false });
+            (after_field, in_word) = (true, false);
+            i += run;
+            continue;
+        }
+        // `\` writes the next character as it is.
+        let (literal, step) = if c == '\\' { (chars.get(i + 1).copied(), 2) } else { (Some(c), 1) };
+        i += step;
+        after_field = false;
+        match literal {
+            Some(l) if l.is_alphanumeric() => match parts.last_mut() {
+                Some(ScanPart::Word(w)) if in_word => w.push(l),
+                _ => {
+                    parts.push(ScanPart::Word(l.to_string()));
+                    in_word = true;
+                }
+            },
+            _ => in_word = false,
+        }
+    }
+    parts
+}
+
+/// A run of digits or of letters in the text `util.scand` reads.
+enum ScanToken<'a> {
+    Digits(&'a str),
+    Letters(&'a str),
+}
+
+/// The text's runs of digits and of letters, in order; anything else only separates them, and
+/// may not begin or end the text. `None` when it does.
+fn scan_tokens(text: &str) -> Option<Vec<ScanToken<'_>>> {
+    // Some(true) for a digit, Some(false) for a letter, None for a separator.
+    let kind = |c: char| (c.is_ascii_digit() || c.is_alphabetic()).then_some(c.is_ascii_digit());
+    kind(text.chars().next()?)?;
+    kind(text.chars().next_back()?)?;
+    let mut out = Vec::new();
+    let mut start: Option<(usize, bool)> = None;
+    for (at, c) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
+        let k = kind(c);
+        if let Some((from, digits)) = start
+            && k != Some(digits)
+        {
+            let piece = text.get(from..at)?;
+            out.push(if digits { ScanToken::Digits(piece) } else { ScanToken::Letters(piece) });
+            start = None;
+        }
+        if let Some(digits) = k
+            && start.is_none()
+        {
+            start = Some((at, digits));
+        }
+    }
+    Some(out)
+}
+
+/// What `util.scand` reads.
+#[derive(Debug, PartialEq, Eq)]
+enum Scanned {
+    /// The text is empty: today, at noon.
+    Today,
+    /// A date and time: year, month (1–12), day, hours, minutes, seconds.
+    At(i32, u32, u32, u32, u32, u32),
+}
+
+/// The fields `util.scand` has read so far.
+#[derive(Default)]
+struct ScanValues {
+    y: Option<i32>,
+    mo: Option<u32>,
+    d: Option<u32>,
+    h: Option<u32>,
+    mi: Option<u32>,
+    sec: Option<u32>,
+    pm: Option<bool>,
+    /// The hour was read from `h` or `hh`.
+    twelve: bool,
+}
+
+impl ScanValues {
+    /// Records `v` as the value of `unit`: a `yy` year as 1950–2049, and an `h` or `hh` hour
+    /// marked as 12-hour. Month names, weekdays and am/pm are not read here.
+    fn set(&mut self, unit: DateUnit, v: u32) {
+        match unit {
+            DateUnit::Year => self.y = i32::try_from(v).ok(),
+            DateUnit::ShortYear => self.y = i32::try_from(v).ok().map(|v| if v < 50 { 2000 + v } else { 1900 + v }),
+            DateUnit::Month => self.mo = Some(v),
+            DateUnit::Day => self.d = Some(v),
+            DateUnit::Hour => self.h = Some(v),
+            DateUnit::Hour12 => {
+                self.h = Some(v);
+                self.twelve = true;
+            }
+            DateUnit::Minute => self.mi = Some(v),
+            DateUnit::Second => self.sec = Some(v),
+            DateUnit::MonthName | DateUnit::Weekday | DateUnit::AmPm => {}
+        }
+    }
+}
+
+/// Reads `text` by a `util.scand` format, as another viewer was observed to (black-box):
+///
+/// - Fields may be separated by anything but digits and letters, whether or not the format
+///   separates them, but nothing may come before the first or after the last.
+/// - Digits typed together fill the format's fields written together with exactly as many
+///   digits as each has letters (`yyyymd`: 4, 1 and 1). A run of digits for one field alone may
+///   have one or two, except a four-digit year.
+/// - `yy` is 1950–2049; month names may be written in full or as three letters, in any case.
+/// - Impossible dates are refused, but a month or day of 0 is read as 1.
+/// - A format with no year, month or day reads nothing; an empty text is today, at noon.
+///
+/// Not observed: a year left out is `this_year`, and a month or day left out is 1.
+fn scan_date(fmt: &str, text: &str, this_year: i32) -> Option<Scanned> {
+    let parts = scan_parts(fmt);
+    if !parts.iter().any(|p| matches!(p, ScanPart::Field { unit, .. } if unit.is_date())) {
+        return None;
+    }
+    if text.is_empty() {
+        return Some(Scanned::Today);
+    }
+    let tokens = scan_tokens(text)?;
+    let mut v = ScanValues::default();
+    let (mut p, mut t) = (0, 0);
+    while let Some(part) = parts.get(p) {
+        let token = tokens.get(t)?;
+        t += 1;
+        match (part, token) {
+            (ScanPart::Word(w), ScanToken::Letters(l) | ScanToken::Digits(l)) => {
+                if w.to_lowercase() != l.to_lowercase() {
+                    return None;
+                }
+                p += 1;
+            }
+            (ScanPart::Field { unit: DateUnit::MonthName, .. }, ScanToken::Letters(l)) => {
+                v.mo = Some(named(&MONTHS, l)?.saturating_add(1));
+                p += 1;
+            }
+            (ScanPart::Field { unit: DateUnit::Weekday, .. }, ScanToken::Letters(l)) => {
+                named(&DAYS, l)?;
+                p += 1;
+            }
+            (ScanPart::Field { unit: DateUnit::AmPm, .. }, ScanToken::Letters(l)) => {
+                v.pm = Some(match l.to_lowercase().as_str() {
+                    "am" | "a" => false,
+                    "pm" | "p" => true,
+                    _ => return None,
+                });
+                p += 1;
+            }
+            (ScanPart::Field { unit, width, joined }, ScanToken::Digits(run)) if unit.is_numeric() => {
+                // The fields written together from here, no more than the run's digits can fill,
+                // and the fewest of them the run fills.
+                let mut group = vec![(*unit, *width)];
+                let (mut more, mut widths) = (*joined, *width);
+                while more
+                    && widths < run.len()
+                    && let Some(ScanPart::Field { unit, width, joined }) = parts.get(p + group.len())
+                {
+                    group.push((*unit, *width));
+                    widths = widths.saturating_add(*width);
+                    more = *joined;
+                }
+                let mut sum = 0;
+                let fills = group.iter().position(|(_, w)| {
+                    sum += w;
+                    sum == run.len()
+                });
+                if let Some(last) = fills {
+                    let mut at = 0;
+                    for (unit, w) in group.iter().take(last + 1) {
+                        v.set(*unit, run.get(at..at + w)?.parse().ok()?);
+                        at += w;
+                    }
+                    p += last + 1;
+                } else if *unit != DateUnit::Year && run.len() <= 2 {
+                    v.set(*unit, run.parse().ok()?);
+                    p += 1;
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    if t != tokens.len() {
+        return None;
+    }
+    let y = v.y.unwrap_or(this_year);
+    let mo = v.mo.unwrap_or(1).max(1);
+    let d = v.d.unwrap_or(1).max(1);
+    if mo > 12 || i64::from(d) > i64::from(formcalc::days_in(i64::from(y), mo)) {
+        return None;
+    }
+    let mut h = v.h.unwrap_or(0);
+    if v.twelve && h > 12 {
+        return None;
+    }
+    match v.pm {
+        Some(true) if h < 12 => h += 12,
+        Some(false) if h == 12 => h = 0,
+        _ => {}
+    }
+    let (mi, sec) = (v.mi.unwrap_or(0), v.sec.unwrap_or(0));
+    (h <= 23 && mi <= 59 && sec <= 59).then_some(Scanned::At(y, mo, d, h, mi, sec))
+}
+
+/// The index of the name `word` is, in full or as its first three letters, in any case.
+fn named(names: &[&str], word: &str) -> Option<u32> {
+    let word = word.to_lowercase();
+    let i = names.iter().position(|n| {
+        let n = n.to_lowercase();
+        word == n || n.get(..3) == Some(word.as_str())
+    })?;
+    u32::try_from(i).ok()
+}
+
+/// `util.scand(cFormat, cDate)`: the date `cDate` gives by a `util.printd` format, as a local
+/// `Date`, or `null` when it doesn't read as one (see [`scan_date`]). Only text is read.
+fn scand(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let Some(typed) = arg(args, 1).as_string().map(|t| t.to_std_string_escaped()) else {
+        return Ok(JsValue::null());
+    };
+    let fmt = text(&arg(args, 0), ctx)?;
+    let date = JsDate::new(ctx);
+    let this_year = date.get_full_year(ctx)?.to_number(ctx)?;
+    let this_year = if this_year.is_finite() { this_year as i32 } else { 2000 };
+    match scan_date(&fmt, &typed, this_year) {
+        None => return Ok(JsValue::null()),
+        Some(Scanned::Today) => {
+            date.set_hours(&[12.into(), 0.into(), 0.into(), 0.into()], ctx)?;
+        }
+        Some(Scanned::At(y, mo, d, h, mi, sec)) => {
+            // setFullYear, not the constructor, so years 0–99 stay as they are.
+            date.set_full_year(&[y.into(), (mo.saturating_sub(1)).into(), d.into()], ctx)?;
+            date.set_hours(&[h.into(), mi.into(), sec.into(), 0.into()], ctx)?;
+        }
+    }
+    Ok(date.into())
 }
 
 /// `util.printx(cFormat, cSource)`: `?` any character, `X` letter or digit, `A` letter, `9`
@@ -867,6 +1335,8 @@ fn printx(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue>
     Ok(s(&out))
 }
 
+/// The `color` object: each named color (`transparent`, `black`, `red`, `cyan`, `gray`, …) as
+/// an array of its color space (`T`, `G`, `RGB` or `CMYK`) followed by its components.
 fn color_object(ctx: &mut Context) -> JsObject {
     let mut entries: Vec<(&str, Vec<JsValue>)> = vec![
         ("transparent", vec![s("T")]),
@@ -890,6 +1360,13 @@ fn color_object(ctx: &mut Context) -> JsObject {
     o.build()
 }
 
+/// The XFA version scripts see as `xfa_version`.
+const XFA_VERSION: f64 = 3.5;
+
+/// Defines the form object model's globals: the document's functions (`getField`, `resetForm`,
+/// `print`, `submitForm` and others) and properties (`numFields`, `pageNum`, `numPages`,
+/// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
+/// `color` objects.
 fn install(ctx: &mut Context) -> JsResult<()> {
     let globals: [(&str, usize, NativeFunction); 9] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
@@ -910,9 +1387,9 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
     let ps = function(ctx, NativeFunction::from_fn_ptr(page_num_set));
-    let (file, pages, info) = {
+    let (file, pages, info, xfa) = {
         let h = host(ctx)?.borrow();
-        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone())
+        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone(), h.doc.xfa)
     };
     let mut io = ObjectInitializer::new(ctx);
     for (k, v) in &info {
@@ -925,12 +1402,19 @@ fn install(ctx: &mut Context) -> JsResult<()> {
     ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
     ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
     ctx.register_global_property(js_string!("info"), info, rw)?;
+    // XFA forms check both before they run: every document sees the XFA version, and only an
+    // XFA form sees `xfa_installed`.
+    ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;
+    if xfa {
+        ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
+    }
 
     let app = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
+        .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
         .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
@@ -947,6 +1431,7 @@ fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(printf), js_string!("printf"), 1)
         .function(NativeFunction::from_fn_ptr(printd), js_string!("printd"), 2)
         .function(NativeFunction::from_fn_ptr(printx), js_string!("printx"), 2)
+        .function(NativeFunction::from_fn_ptr(scand), js_string!("scand"), 2)
         .build();
     ctx.register_global_property(js_string!("util"), util, rw)?;
     let console = ObjectInitializer::new(ctx)
@@ -1006,6 +1491,10 @@ fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
 // with a large stack (address space, committed only as it is used). Together these bound the
 // stack a script can use: brackets and prefix operators by the limits below, and every other
 // construct (a few KiB per level, several bytes of source each) by the length limit.
+
+/// Bytes `util.printd` has scanned for runs of a format character, for tests that bound its work.
+#[cfg(test)]
+pub(crate) static PRINTD_SCANNED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -1098,17 +1587,39 @@ fn refuse(source: &str) -> Option<String> {
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
 /// functions field scripts call), with the form's `fields`.
 pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared(script, event, doc, Arc::new(fields.to_vec()), doc_scripts, limits)
+}
+
+/// Like [`run`], sharing an immutable initial field snapshot. Scripts still get a fresh
+/// context; the first field write copies the snapshot, so neither the caller nor another
+/// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
+pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
-    if let Some(why) = std::iter::once(script).chain(doc_scripts.iter().map(String::as_str)).find_map(refuse) {
+    if let Some(why) = refuse(script) {
         return failed(why);
     }
+    // A document script too long or too deeply nested to run safely is skipped and reported,
+    // as one that throws is; the others and the script still run (#3940).
+    let mut skipped = Vec::new();
+    let kept: Vec<(usize, &str)> = doc_scripts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, d)| match refuse(d) {
+            Some(why) => {
+                skipped.push((i, why));
+                None
+            }
+            None => Some((i, d.as_str())),
+        })
+        .collect();
+    let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new()
                 .name("pdfcraft-js".into())
                 .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, doc_scripts, limits));
+                .spawn_scoped(scope, || run_here(script, event, doc, fields, kept, skipped, limits));
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -1116,28 +1627,89 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, doc_scripts, limits)
+    run_here(script, event, doc, fields, kept, skipped, limits)
 }
 
-fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], doc_scripts: &[String], limits: Limits) -> Outcome {
-    let mut ctx = Context::default();
+/// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
+/// and async kin). Such code is built at run time, so it never passed [`refuse`], and boa's
+/// recursive parser would overflow the stack on a deeply nested one.
+struct NoCodeFromStrings;
+
+impl HostHooks for NoCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, _: &[JsString], _: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
+        Err(JsNativeError::typ().with_message("scripts can't compile code from strings (eval, Function)").into())
+    }
+}
+
+/// Host hooks that hold code compiled from strings to the checks a script passes ([`refuse`]),
+/// for runners that start the script itself through `eval`.
+pub(crate) struct CheckedCodeFromStrings;
+
+impl HostHooks for CheckedCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, parameters: &[JsString], body: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
+        let units = parameters.iter().chain(std::iter::once(body)).fold(0usize, |n, s| n.saturating_add(s.len()));
+        if units > MAX_SCRIPT_BYTES {
+            return Err(JsNativeError::range().with_message("the code is too long to compile").into());
+        }
+        // As one text: brackets left open in one parameter carry into the next.
+        let mut source = parameters.iter().map(JsString::to_std_string_lossy).collect::<Vec<_>>().join(",");
+        source.push('\n');
+        source.push_str(&body.to_std_string_lossy());
+        match refuse(&source) {
+            Some(why) => Err(JsNativeError::range().with_message(why).into()),
+            None => Ok(()),
+        }
+    }
+}
+
+/// How [`Outcome::doc_errors`] names a failing document script: by its 1-based place.
+fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
+    format!("document script {}: {error}", index.saturating_add(1))
+}
+
+/// `doc_scripts` are the document scripts to run with their places among all of them;
+/// `skipped` the ones refused before running, with the reason.
+fn run_here(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[(usize, &str)],
+    skipped: &[(usize, String)],
+    limits: Limits,
+) -> Outcome {
+    let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            let error = Some(format!("the script engine could not start: {e}"));
+            return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
+        }
+    };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
-        fields: fields.to_vec(),
+        fields,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
+        kept: 0,
+        dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
+    let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
         install(&mut ctx)?;
         let ev = event_object(&mut ctx, event);
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
-        for d in doc_scripts {
-            ctx.eval(Source::from_bytes(d))?;
+        // One document script that throws (calling a method PdfCraft lacks, say) must not keep
+        // every field script in the form from running: what it defined before the error, and
+        // the other scripts, stay available (#3940).
+        for &(i, d) in doc_scripts {
+            if let Err(e) = ctx.eval(Source::from_bytes(d)) {
+                doc_errors.push((i, doc_error(i, &e)));
+            }
         }
         let r = ctx.eval(Source::from_bytes(script))?;
         if !r.is_undefined() {
@@ -1154,12 +1726,17 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], d
     if let Err(e) = result {
         out.error = Some(e.to_string());
     }
+    doc_errors.sort_by_key(|(i, _)| *i);
+    out.doc_errors = doc_errors.into_iter().map(|(_, e)| e).collect();
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();
         out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
         out.alerts = h.alerts;
         out.console = h.console;
         out.requests = h.requests;
+        if h.dropped > 0 {
+            out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
+        }
     }
     out
 }

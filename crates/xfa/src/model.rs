@@ -125,11 +125,22 @@ impl Edge {
     }
 }
 
-/// A box border: four edges (top, right, bottom, left) and a fill.
+/// One corner of a border: how far it rounds the box (`radius`), and whether the curve goes
+/// into the box (`inverted`) rather than around it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Corner {
+    pub presence: Presence,
+    pub radius: f64,
+    pub inverted: bool,
+}
+
+/// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
+/// bottom-right, bottom-left) and a fill.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Border {
     pub presence: Presence,
     pub edges: [Edge; 4],
+    pub corners: [Corner; 4],
     pub fill: Option<Color>,
 }
 
@@ -144,6 +155,15 @@ impl Border {
     pub fn fill(&self) -> Option<Color> {
         if self.presence == Presence::Visible { self.fill } else { None }
     }
+
+    /// How far each corner (top-left, top-right, bottom-right, bottom-left) rounds a box `w` by
+    /// `h`: its radius when the corner is shown, no more than half the box's shorter side, and 0
+    /// for a hidden corner or a hidden border.
+    pub fn radii(&self, w: f64, h: f64) -> [f64; 4] {
+        let most = (w.min(h) / 2.0).max(0.0);
+        let shown = self.presence == Presence::Visible;
+        self.corners.map(|c| if shown && c.presence == Presence::Visible && c.radius.is_finite() { c.radius.clamp(0.0, most) } else { 0.0 })
+    }
 }
 
 /// Font properties as written on an element; `None` inherits from the ancestors.
@@ -155,6 +175,8 @@ pub struct FontSpec {
     pub italic: Option<bool>,
     pub underline: Option<bool>,
     pub color: Option<Color>,
+    /// `fontHorizontalScale`, as a fraction (0.9 for `90%`).
+    pub h_scale: Option<f64>,
 }
 
 /// A font with every property resolved.
@@ -166,16 +188,20 @@ pub struct Font {
     pub italic: bool,
     pub underline: bool,
     pub color: Color,
+    /// Horizontal scale of the glyphs, as a fraction (1.0: as designed).
+    pub h_scale: f64,
 }
 
 impl Default for Font {
     /// XFA's default font: Courier 10 pt.
     fn default() -> Self {
-        Font { typeface: "Courier".into(), size: 10.0, bold: false, italic: false, underline: false, color: Color::BLACK }
+        Font { typeface: "Courier".into(), size: 10.0, bold: false, italic: false, underline: false, color: Color::BLACK, h_scale: 1.0 }
     }
 }
 
 impl Font {
+    /// This font with the properties `spec` sets in place of its own; those `spec` leaves
+    /// `None` are inherited.
     pub fn apply(&self, spec: &FontSpec) -> Font {
         Font {
             typeface: spec.typeface.clone().unwrap_or_else(|| self.typeface.clone()),
@@ -184,6 +210,7 @@ impl Font {
             italic: spec.italic.unwrap_or(self.italic),
             underline: spec.underline.unwrap_or(self.underline),
             color: spec.color.unwrap_or(self.color),
+            h_scale: spec.h_scale.unwrap_or(self.h_scale),
         }
     }
 }
@@ -479,6 +506,9 @@ pub struct Field {
     pub check_size: Option<f64>,
     pub check_round: bool,
     pub multiline: bool,
+    /// The field doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for one
+    /// line, `vScrollPolicy="off"` for several): it takes no more text than it shows.
+    pub no_scroll: bool,
     pub caption: Option<Caption>,
     pub value: Value,
     /// Check buttons: the on value then the off value; choice lists: the items as shown.
@@ -493,6 +523,9 @@ pub struct Field {
     pub access: Access,
     /// The edit picture clause (`<ui>…<picture>`), e.g. `date{YYYY-MM-DD}`.
     pub picture: Option<String>,
+    /// The data picture clause (`<bind>…<picture>`), e.g. `date{YYYYMMDD}`: how the value is
+    /// written in the data. Without one, dates there are ISO.
+    pub data_picture: Option<String>,
     /// `<event activity="…"><script>`: click, change, exit, initialize, …
     pub scripts: Vec<Script>,
     /// `<calculate><script>`: the value is the script's result.
@@ -503,9 +536,17 @@ pub struct Field {
     pub validate_message: Option<String>,
     /// Numeric fields (numericEdit, or a decimal/integer/float value) give scripts numbers.
     pub numeric: bool,
+    /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
+    /// shows when not being edited, and what scripts read as `formattedValue`.
+    pub display_picture: Option<String>,
 }
 
 impl Field {
+    /// Whether the text can determine this field's height.
+    pub(crate) fn grows_with_text(&self) -> bool {
+        self.ui == Ui::TextEdit && self.multiline && self.common.h.is_none()
+    }
+
     /// A choice list's value as saved to the data: an item's shown text becomes its saved
     /// value (an editable list keeps typed text); several values stay on separate lines.
     /// Other fields keep `v`.
@@ -563,7 +604,7 @@ pub enum Value {
         slope_up: bool,
         edge: Edge,
     },
-    Rectangle(Border),
+    Rectangle(Box<Border>),
 }
 
 impl Value {
@@ -611,8 +652,13 @@ pub struct Run {
     pub italic: Option<bool>,
     pub underline: Option<bool>,
     pub size: Option<f64>,
+    /// `xfa-font-horizontal-scale`, as a fraction.
+    pub h_scale: Option<f64>,
     /// A floating field embedded in the text (`xfa:embed="#id"`), shown by its value.
     pub embed: Option<String>,
+    /// Where the text links to (`<a href="…">`), as the template writes it: shared by every run
+    /// of the link's text, not copied.
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

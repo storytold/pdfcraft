@@ -13,11 +13,12 @@ pub enum ThemeKind {
     Dark,
 }
 
-/// The saved user choice, independent of the light/dark colours currently displayed.
+/// The saved user choice, independent of the light/dark colours currently displayed. A fresh
+/// install follows the system (#1248); a desktop that says nothing gets Light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ThemePreference {
-    System,
     #[default]
+    System,
     Light,
     Dark,
 }
@@ -224,6 +225,10 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
 /// The name of the installed Tamil face [`installed_font_definitions`] may add.
 pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
+/// The name of the installed Hebrew face [`installed_font_definitions`] may add.
+pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
+/// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
+pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
@@ -236,9 +241,10 @@ pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala and Tamil faces, when there are, end every family just
-/// before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) text, such as a file
-/// name, draws in a build without such faces.
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
+/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
+/// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
+/// without such faces.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -253,6 +259,8 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
+            (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
+            (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
         ] {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
@@ -382,13 +390,14 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         }
     }
     // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,
-    // file names), Hebrew faces (file names, text being edited) and Thai faces after the CJK ones; the
-    // ranges don't overlap.
+    // file names), Hebrew faces (file names, text being edited), Thai faces and Devanagari faces
+    // (the Hindi interface) after the CJK ones; the ranges don't overlap.
     for face in pdfcraft_fonts::ui_arabic_fonts()
         .into_iter()
         .chain(pdfcraft_fonts::ui_telugu_fonts())
         .chain(pdfcraft_fonts::ui_hebrew_fonts())
         .chain(pdfcraft_fonts::ui_thai_fonts())
+        .chain(pdfcraft_fonts::ui_devanagari_fonts())
     {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {
@@ -486,9 +495,48 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_style_of(egui::Theme::Dark, style);
 }
 
+/// WCAG 2 contrast ratio between two opaque colours.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let lin = |v: u8| {
+            let s = v as f32 / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    };
+    let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
+    x.max(y) / x.min(y)
+}
+
+/// `color` as text on `background`: itself when it reads (a WCAG 2 contrast of at least 3:1, the
+/// level for large or bold text), otherwise moved towards `text` until it does. A document's own
+/// colours (a bookmark's `/C`) were chosen for a white panel, and dark blue on a dark theme would
+/// be lost.
+pub fn readable(color: Color32, background: Color32, text: Color32) -> Color32 {
+    (0..=4).map(|step| color.lerp_to_gamma(text, step as f32 / 4.0)).find(|c| contrast(*c, background) >= 3.0).unwrap_or(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3193: a bookmark's own colour is kept where it reads on the panel, and moved towards the
+    /// theme's text colour where it doesn't (dark blue on the dark panel), never past it.
+    #[test]
+    fn a_document_colour_is_kept_where_it_reads() {
+        let (light, dark) = (Tokens::for_kind(ThemeKind::Light), Tokens::for_kind(ThemeKind::Dark));
+        let red = Color32::from_rgb(255, 0, 0);
+        assert_eq!(readable(red, light.panel, light.text), red, "red reads on white");
+        let navy = Color32::from_rgb(0, 0, 128);
+        assert_eq!(readable(navy, light.panel, light.text), navy);
+        let lifted = readable(navy, dark.panel, dark.text);
+        assert_ne!(lifted, navy, "navy is lost on the dark panel");
+        assert!(contrast(lifted, dark.panel) >= 3.0, "{lifted:?}");
+        assert_ne!(lifted, dark.text, "only as far as it needs");
+        // Even the panel's own colour comes out readable.
+        assert!(contrast(readable(dark.panel, dark.panel, dark.text), dark.panel) >= 3.0);
+        assert!(contrast(readable(light.panel, light.panel, light.text), light.panel) >= 3.0);
+    }
     use egui::epaint::text::{Fonts, TextOptions};
 
     const HINTING_CORPUS: [&str; 4] = ["Il1MWmw", "Hamburgefonts", "0123456789 .,;:!?()[]{}+-=/\\", "Café Ångström déjà-vu Ωμέγα Ελληνικά Журнал"];
@@ -720,19 +768,6 @@ mod tests {
         assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Dark), ThemeKind::Dark);
         assert_eq!(ThemePreference::Light.resolve(Some(true), ThemeKind::Dark), ThemeKind::Light);
         assert_eq!(ThemePreference::Dark.resolve(Some(false), ThemeKind::Light), ThemeKind::Dark);
-    }
-
-    /// WCAG 2 contrast ratio between two opaque colours.
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let lum = |c: Color32| {
-            let lin = |v: u8| {
-                let s = v as f32 / 255.0;
-                if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
-            };
-            0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
-        };
-        let (x, y) = (lum(a) + 0.05, lum(b) + 0.05);
-        x.max(y) / x.min(y)
     }
 
     #[test]

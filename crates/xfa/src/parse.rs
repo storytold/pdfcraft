@@ -5,7 +5,11 @@ use base64::Engine;
 use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
-use crate::model::*;
+use crate::model::{
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
+    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
+    Value,
+};
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
@@ -40,10 +44,20 @@ pub fn measure(s: &str) -> Option<f64> {
     Some((v * k).clamp(-100_000.0, 100_000.0))
 }
 
+/// The attribute `name` of `n` read as a measurement in points (see [`measure`]); `None`
+/// when it is missing or unreadable.
 fn attr_measure(n: XmlNode, name: &str) -> Option<f64> {
     n.attribute(name).and_then(measure)
 }
 
+/// A horizontal scale such as `90%` (a bare number is a percentage too), as a fraction, within
+/// 1% and 1000%; `None` when it isn't a positive number.
+fn scale(v: &str) -> Option<f64> {
+    let v: f64 = v.trim().trim_end_matches('%').trim().parse().ok()?;
+    (v.is_finite() && v > 0.0).then(|| (v / 100.0).clamp(0.01, 10.0))
+}
+
+/// The first child element of `n` named `name` (by local name, in any namespace).
 fn child<'a, 'd>(n: XmlNode<'a, 'd>, name: &str) -> Option<XmlNode<'a, 'd>> {
     n.children().find(|c| c.is_element() && c.tag_name().name() == name)
 }
@@ -136,9 +150,27 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
         3 => [e(0), e(1), e(2), e(1)],
         _ => [e(0), e(1), e(2), e(3)],
     };
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, fill: parse_fill(child(n, "fill")) })
+    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
 }
 
+/// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
+/// bottom-left: one applies to all four, and a corner not given is the last one given. Without
+/// any, the corners are square.
+fn parse_corners(n: XmlNode) -> [Corner; 4] {
+    let given: Vec<Corner> = children(n, "corner")
+        .take(4)
+        .map(|c| Corner {
+            presence: Presence::parse(c.attribute("presence")),
+            radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
+            inverted: c.attribute("inverted") == Some("1"),
+        })
+        .collect();
+    let Some(last) = given.last().copied() else { return [Corner::default(); 4] };
+    std::array::from_fn(|i| given.get(i).copied().unwrap_or(last))
+}
+
+/// `<font>`: typeface, size, weight, posture, underline, fill color and horizontal scale.
+/// What the element doesn't set, or a missing element, is left `None` to inherit.
 fn parse_font(n: Option<XmlNode>) -> FontSpec {
     let Some(n) = n else { return FontSpec::default() };
     FontSpec {
@@ -148,6 +180,7 @@ fn parse_font(n: Option<XmlNode>) -> FontSpec {
         italic: n.attribute("posture").map(|p| p == "italic"),
         underline: n.attribute("underline").map(|u| u != "0"),
         color: parse_color(child(n, "fill").and_then(|f| child(f, "color"))),
+        h_scale: n.attribute("fontHorizontalScale").and_then(scale),
     }
 }
 
@@ -188,7 +221,7 @@ fn parse_common(n: XmlNode) -> Common {
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become
-/// embedded fields.
+/// embedded fields; the text of an `<a href>` keeps where it links to.
 fn parse_rich(body: XmlNode) -> RichText {
     #[derive(Clone, Default)]
     struct Style {
@@ -196,7 +229,12 @@ fn parse_rich(body: XmlNode) -> RichText {
         italic: Option<bool>,
         underline: Option<bool>,
         size: Option<f64>,
+        h_scale: Option<f64>,
+        /// The `href` of the `<a>` the text is in.
+        link: Option<std::sync::Arc<str>>,
     }
+    /// `base` with the CSS declarations in `css` applied: weight, style, underline, size and
+    /// `xfa-font-horizontal-scale`. Anything else is ignored.
     fn styled(base: &Style, css: Option<&str>) -> Style {
         let mut s = base.clone();
         for decl in css.unwrap_or("").split(';') {
@@ -207,6 +245,7 @@ fn parse_rich(body: XmlNode) -> RichText {
                 "font-style" => s.italic = Some(v == "italic" || v == "oblique"),
                 "text-decoration" => s.underline = Some(v.contains("underline")),
                 "font-size" => s.size = measure(v).filter(|x| *x > 0.0),
+                "xfa-font-horizontal-scale" => s.h_scale = scale(v),
                 _ => {}
             }
         }
@@ -214,6 +253,9 @@ fn parse_rich(body: XmlNode) -> RichText {
     }
     // Paragraph boundaries from `p` are implicit (dropped when empty); `br` makes an explicit
     // line break that stays even when the line is blank.
+    /// Add the text under `n` to `out` as runs in `style`, as the elements it meets restyle it;
+    /// `p` and `br` start paragraphs (`explicit` marks the `br` ones) and `embed` spans add
+    /// embedded fields. Nothing deeper than `MAX_DEPTH` is read.
     fn walk(n: XmlNode, style: &Style, out: &mut RichText, explicit: &mut Vec<bool>, depth: usize) {
         if depth > MAX_DEPTH {
             return;
@@ -232,7 +274,9 @@ fn parse_rich(body: XmlNode) -> RichText {
                             italic: style.italic,
                             underline: style.underline,
                             size: style.size,
+                            h_scale: style.h_scale,
                             embed: None,
+                            link: style.link.clone(),
                         },
                     );
                 }
@@ -264,6 +308,13 @@ fn parse_rich(body: XmlNode) -> RichText {
                         "b" => st.bold = Some(true),
                         "i" => st.italic = Some(true),
                         "u" => st.underline = Some(true),
+                        // A link's text keeps where it points; an `<a>` without one (a named
+                        // anchor) leaves the text as it was.
+                        "a" => {
+                            if let Some(href) = c.attribute("href").map(str::trim).filter(|h| !h.is_empty()) {
+                                st.link = Some(std::sync::Arc::from(href));
+                            }
+                        }
                         _ => {}
                     }
                     let embed = c.attributes().find(|a| a.name() == "embed").map(|a| a.value().trim_start_matches('#').to_string());
@@ -271,7 +322,16 @@ fn parse_rich(body: XmlNode) -> RichText {
                         push_run(
                             out,
                             explicit,
-                            Run { text: String::new(), bold: st.bold, italic: st.italic, underline: st.underline, size: st.size, embed: Some(e) },
+                            Run {
+                                text: String::new(),
+                                bold: st.bold,
+                                italic: st.italic,
+                                underline: st.underline,
+                                size: st.size,
+                                h_scale: st.h_scale,
+                                embed: Some(e),
+                                link: st.link.clone(),
+                            },
                         );
                     }
                     walk(c, &st, out, explicit, depth + 1);
@@ -349,7 +409,7 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
             "rectangle" => {
                 let mut b = parse_border(Some(c)).unwrap_or_default();
                 b.fill = parse_fill(child(c, "fill"));
-                return Value::Rectangle(b);
+                return Value::Rectangle(Box::new(b));
             }
             "date" | "time" | "dateTime" | "integer" | "decimal" | "float" | "boolean" => return Value::Text(text_of(c)),
             _ => {}
@@ -368,7 +428,9 @@ fn parse_caption(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Option<Capti
             Some("inline") => Placement::Inline,
             _ => Placement::Left,
         },
-        reserve: attr_measure(n, "reserve").filter(|r| *r >= 0.0),
+        // A reserve of zero or less sizes the caption to its content, as none does (XFA 3.3,
+        // the caption's reserve).
+        reserve: attr_measure(n, "reserve").filter(|r| *r > 0.0),
         presence: Presence::parse(n.attribute("presence")),
         value: parse_value(child(n, "value"), warnings),
         font: parse_font(child(n, "font")),
@@ -407,6 +469,8 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
     (shown, saved)
 }
 
+/// A `<field>` element as the model's [`Field`]: its widget kind, caption, value, items,
+/// pictures (edit and data), scripts and access.
 fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
     let ui = child(n, "ui");
     let ui_el = ui.and_then(|u| u.children().find(|c| c.is_element() && c.tag_name().name() != "extras" && c.tag_name().name() != "picture"));
@@ -424,8 +488,14 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         Some(_) => Ui::Unknown,
     };
     let value_el = child(n, "value");
-    let max_chars =
-        value_el.and_then(|v| child(v, "text")).and_then(|t| t.attribute("maxChars")).and_then(|m| m.trim().parse::<usize>().ok()).filter(|m| *m > 0);
+    let max_chars = value_el
+        .and_then(|v| child(v, "text"))
+        .and_then(|t| t.attribute("maxChars"))
+        .and_then(|m| m.trim().parse::<usize>().ok())
+        // XFA 3.3, exData/maxLength: a character limit excluding markup; -1 is unlimited.
+        .or_else(|| value_el.and_then(|v| child(v, "exData")).and_then(|e| e.attribute("maxLength")).and_then(|m| m.trim().parse::<usize>().ok()))
+        // Preserve the existing zero/unbounded convention of generated form fields.
+        .filter(|m| *m > 0);
     let scripts = parse_events(n);
     let numeric = matches!(kind, Ui::NumericEdit)
         || value_el.is_some_and(|v| v.children().any(|c| c.is_element() && matches!(c.tag_name().name(), "decimal" | "integer" | "float")));
@@ -441,6 +511,7 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         }
         _ => ChoiceList::default(),
     };
+    let multiline = ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true"));
     let validate_el = child(n, "validate");
     let validate_message = validate_el
         .and_then(|v| child(v, "message"))
@@ -455,7 +526,8 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         ui_margin: parse_margin(ui_el.and_then(|e| child(e, "margin"))),
         check_size: ui_el.and_then(|e| attr_measure(e, "size")).filter(|s| *s > 0.0),
         check_round: ui_el.is_some_and(|e| e.attribute("shape") == Some("round")),
-        multiline: ui_el.is_some_and(|e| e.attribute("multiLine").is_some_and(|m| m == "1" || m == "true")),
+        multiline,
+        no_scroll: ui_el.is_some_and(|e| e.attribute(if multiline { "vScrollPolicy" } else { "hScrollPolicy" }) == Some("off")),
         caption: parse_caption(child(n, "caption"), warnings),
         value: parse_value(value_el, warnings),
         items,
@@ -470,11 +542,13 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
             _ => Access::Open,
         },
         picture: ui.and_then(|u| child(u, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        data_picture: child(n, "bind").and_then(|b| child(b, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         scripts,
         calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
         validate_message,
         numeric,
+        display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
     }
 }
 

@@ -28,8 +28,7 @@ pub struct PropsDraft {
     pub make_default: bool,
 }
 
-const ICONS: [NoteIcon; 7] =
-    [NoteIcon::Comment, NoteIcon::Note, NoteIcon::Help, NoteIcon::Insert, NoteIcon::Key, NoteIcon::NewParagraph, NoteIcon::Paragraph];
+const ICONS: [NoteIcon; 14] = NoteIcon::ALL;
 
 /// The name shown in the line-ending combo. [`LineEnding::name`] stays the PDF `/LE` token.
 fn ending_label(ending: LineEnding) -> &'static str {
@@ -109,8 +108,7 @@ impl PdfCraftApp {
             style.fill = p.fill;
         }
         self.comment_prefs.set_style(tool, style);
-        // Opacity and width go through the clamping setters: the dialog allows 0% opacity, and a
-        // default that draws invisible comments can't be found again.
+        // Keep invisible defaults out of tools where a zero stroke would make them disappear.
         self.comment_prefs.set_opacity(tool, p.opacity);
         if let Some(w) = p.width {
             self.comment_prefs.set_width(tool, w);
@@ -240,9 +238,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         e.opacity = pct / 100.0;
                     }
                     ui.end_row();
+                    let min_width = if e.font_size.is_some() { 0.0 } else { 0.5 };
                     if let Some(w) = e.width.as_mut() {
                         ui.label(tl!("Thickness"));
-                        ui.add(egui::Slider::new(w, 0.5..=12.0).step_by(0.5).suffix(" pt"));
+                        ui.add(egui::Slider::new(w, min_width..=12.0).step_by(0.5).suffix(" pt"));
                         ui.end_row();
                     }
                     if let Some(ends) = e.endings.as_mut() {
