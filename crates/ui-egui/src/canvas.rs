@@ -1084,6 +1084,11 @@ impl DocView {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
     }
 
+    /// Screen transforms of all pages drawn on screen last frame.
+    pub(crate) fn screen_xforms(&self) -> &[(usize, PageXform)] {
+        &self.screen_xforms
+    }
+
     /// The text selection as markup quadrilaterals in user space: (page, quads).
     pub(crate) fn selection_quads(&self, info: &DocInfo) -> Option<(usize, Vec<[f64; 8]>)> {
         let s = self.selection?;

@@ -861,6 +861,20 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
+        t("view_cursor_coordinates", "Cursor coordinates", "Inspect page dimensions and evaluate cursor coordinates on a document page (Acrobat's View ▸ Show/Hide ▸ Cursor Coordinates). Coordinates can be provided in user space (default, bottom-left origin) or view space (top-left origin), and values are formatted in the requested unit (pt, in, mm, cm).")
+            .ro()
+            .cmd("view.cursor_coordinates")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 0, "description": "0-based page index (default: 0)." },
+                    "point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Optional [x, y] coordinates on the page." },
+                    "space": { "type": "string", "enum": ["user", "view"], "description": "Coordinate space of the input point: user (default; origin at bottom-left) or view (origin at top-left)." },
+                    "unit": { "type": "string", "enum": ["pt", "in", "mm", "cm"], "description": "Unit to format output in (default: pt)." },
+                    "origin": { "type": "string", "enum": ["bottom-left", "top-left"], "description": "Origin anchor for offset coordinates: bottom-left (default) or top-left." },
+                }),
+                &["doc"],
+            )),
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(

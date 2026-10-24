@@ -2111,3 +2111,31 @@ fn full_screen_clicks_turn_pages_whatever_tool_was_on() {
     assert!(!h.state().full_screen);
     assert_eq!(h.state().quick_tool, QuickTool::Hand, "the tool from before is back");
 }
+
+/// Cursor coordinates floating window (View ▸ Show/Hide ▸ Cursor Coordinates, `Ctrl+Y` / `⌘Y`)
+/// toggles on and off, stays visible across frames, and formats pointer coordinates.
+#[test]
+fn cursor_coordinates_floating_window_toggles_and_renders() {
+    let mut h = harness(&[]);
+    h.run_steps(4);
+    assert!(!h.state().show_cursor_coordinates);
+
+    // Toggle on via command.
+    assert!(h.state_mut().execute("view.cursor_coordinates"));
+    h.run_steps(4);
+    assert!(h.state().show_cursor_coordinates);
+
+    // The floating window title is visible.
+    h.get_by_label("Cursor Coordinates");
+
+    // Toggle off via command.
+    assert!(h.state_mut().execute("view.cursor_coordinates"));
+    h.run_steps(4);
+    assert!(!h.state().show_cursor_coordinates);
+
+    // Toggle on via shortcut ⌘Y / Ctrl+Y.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+    h.run_steps(4);
+    assert!(h.state().show_cursor_coordinates);
+    h.get_by_label("Cursor Coordinates");
+}

@@ -607,6 +607,16 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ui.separator();
                     }
                     crate::commands::registry_menu(app, ui, "View");
+                    let ctx = ui.ctx().clone();
+                    ui.menu_button(tl!("Show/Hide"), |ui| {
+                        scroll_menu(ui, |ui| {
+                            let key = crate::commands::command_shortcut_label(&ctx, "view.cursor_coordinates");
+                            if widgets::menu_item_selected(ui, tl!("Cursor coordinates"), &key, app.show_cursor_coordinates).clicked() {
+                                ui.close();
+                                app.execute("view.cursor_coordinates");
+                            }
+                        });
+                    });
                     ui.menu_button(tl!("Display theme"), |ui| theme_menu(app, ui));
                     ui.menu_button(tl!("Side panels"), |ui| {
                         scroll_menu(ui, |ui| {

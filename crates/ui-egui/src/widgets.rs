@@ -208,6 +208,11 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
     ui.add(egui::Button::new(label).shortcut_text(shortcut))
 }
 
+/// A menu button with a shortcut label and an active selection state (such as checked/open).
+pub fn menu_item_selected(ui: &mut egui::Ui, label: &str, shortcut: &str, selected: bool) -> Response {
+    ui.add(egui::Button::new(label).selected(selected).shortcut_text(shortcut))
+}
+
 /// Corner radius of a checkbox's box. With the widgets' radius (`Tokens::radius`, 6) egui's 14 px
 /// box is a circle, the shape of a radio button, and View ▸ Page display has both.
 const CHECKBOX_RADIUS: u8 = 3;

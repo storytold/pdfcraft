@@ -2527,3 +2527,12 @@ animation effects	Off	Kapalı
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
+
+# Cursor coordinates (view.cursor-coordinates)
+	Show/Hide	Göster/Gizle
+	Cursor coordinates	İmleç koordinatları
+	Cursor Coordinates	İmleç Koordinatları
+	Origin:	Başlangıç:
+	Bottom-left	Sol alt
+	Top-left	Sol üst
+	Unit:	Birim:

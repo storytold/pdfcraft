@@ -244,6 +244,7 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
+            "view.cursor_coordinates" => self.toggle_cursor_coordinates(),
             layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
                 if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
                     self.views[i].set_layout(layout);
@@ -827,7 +828,8 @@ pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str
         }
         let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
         let enabled = app.command_enabled(spec);
-        let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
+        let selected = spec.id == "view.cursor_coordinates" && app.show_cursor_coordinates;
+        let resp = ui.add_enabled(enabled, egui::Button::new(label).selected(selected).shortcut_text(shortcut));
         if resp.clicked() {
             app.execute(spec.id);
             ui.close();
