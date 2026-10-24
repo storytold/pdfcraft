@@ -2113,7 +2113,7 @@ fn full_screen_clicks_turn_pages_whatever_tool_was_on() {
 }
 
 /// Cursor coordinates floating window (View ▸ Show/Hide ▸ Cursor Coordinates, `Ctrl+Y` / `⌘Y`)
-/// toggles on and off, stays visible across frames, and formats pointer coordinates.
+/// toggles on and off, stays visible across frames, and renders coordinate and dimension readouts.
 #[test]
 fn cursor_coordinates_floating_window_toggles_and_renders() {
     let mut h = harness(&[]);
@@ -2125,8 +2125,12 @@ fn cursor_coordinates_floating_window_toggles_and_renders() {
     h.run_steps(4);
     assert!(h.state().show_cursor_coordinates);
 
-    // The floating window title is visible.
+    // The floating window title and controls are visible.
     h.get_by_label("Cursor Coordinates");
+    h.get_by_label("Width:");
+    h.get_by_label("Height:");
+    h.get_by_label("Origin:");
+    h.get_by_label("Unit:");
 
     // Toggle off via command.
     assert!(h.state_mut().execute("view.cursor_coordinates"));

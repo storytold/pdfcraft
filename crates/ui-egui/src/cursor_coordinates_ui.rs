@@ -64,15 +64,19 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 let mut h_str = "—".to_string();
 
                 if let Some((view, doc)) = active {
-                    let page_hit =
-                        pointer.and_then(|pos| view.screen_xforms().iter().find(|(_, xf)| xf.rect.contains(pos)).map(|(p, xf)| (*p, *xf, pos)));
+                    let page_hit = pointer.and_then(|pos| {
+                        if !view.viewport_rect().contains(pos) || ctx.layer_id_at(pos) == Some(ui.layer_id()) {
+                            return None;
+                        }
+                        view.screen_xforms().iter().find(|(_, xf)| xf.rect.contains(pos)).map(|(p, xf)| (*p, *xf, pos))
+                    });
 
                     let target_page = page_hit.as_ref().map(|(p, _, _)| *p).unwrap_or(view.current);
 
                     if let Some(p_info) = doc.info.pages.get(target_page) {
-                        let [cx0, cy0, cx1, cy1] = p_info.crop;
-                        let pw = f64::from((cx1 - cx0).abs());
-                        let ph = f64::from((cy1 - cy0).abs());
+                        let [cx0, cy0, _, _] = p_info.crop;
+                        let pw = f64::from(p_info.width);
+                        let ph = f64::from(p_info.height);
                         w_str = format!("{:.d$} {}", pw * k, unit.label());
                         h_str = format!("{:.d$} {}", ph * k, unit.label());
 

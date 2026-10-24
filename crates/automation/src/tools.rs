@@ -867,7 +867,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(
                 json!({
                     "doc": doc(),
-                    "page": { "type": "integer", "minimum": 0, "description": "0-based page index (default: 0)." },
+                    "page": { "type": "integer", "minimum": 1, "description": "1-based page number (default: 1)." },
                     "point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Optional [x, y] coordinates on the page." },
                     "space": { "type": "string", "enum": ["user", "view"], "description": "Coordinate space of the input point: user (default; origin at bottom-left) or view (origin at top-left)." },
                     "unit": { "type": "string", "enum": ["pt", "in", "mm", "cm"], "description": "Unit to format output in (default: pt)." },

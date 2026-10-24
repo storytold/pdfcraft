@@ -24,11 +24,16 @@ impl Automation {
     /// positions along with formatted strings in the requested measurement unit.
     pub(crate) fn view_cursor_coordinates(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
-        let page = a.opt_int("page")?.unwrap_or(0);
-        if page < 0 || (page as usize) >= doc.info.pages.len() {
-            return Err(ToolError::InvalidArgs(format!("page {} is out of bounds (document has {} pages)", page, doc.info.pages.len())));
-        }
-        let page_idx = page as usize;
+        let page_idx = match a.opt_int("page")? {
+            Some(p) => {
+                let n = doc.info.pages.len();
+                if p < 1 || (p as usize) > n {
+                    return Err(ToolError::InvalidArgs(format!("page {p} is out of range: the document has {n} pages")));
+                }
+                (p as usize) - 1
+            }
+            None => 0,
+        };
         let p_info = &doc.info.pages[page_idx];
 
         let unit_str = a.opt_str("unit")?.unwrap_or("pt");
@@ -44,9 +49,9 @@ impl Automation {
             return Err(ToolError::InvalidArgs(format!("origin must be one of: {ORIGINS}")));
         }
 
-        let [cx0, cy0, cx1, cy1] = p_info.crop;
-        let page_w_pt = f64::from((cx1 - cx0).abs());
-        let page_h_pt = f64::from((cy1 - cy0).abs());
+        let [cx0, cy0, _cx1, _cy1] = p_info.crop;
+        let page_w_pt = f64::from(p_info.width);
+        let page_h_pt = f64::from(p_info.height);
 
         let scale = 1.0 / unit.points();
         let decimals = match unit {
@@ -59,7 +64,7 @@ impl Automation {
 
         let mut out = json!({
             "doc": doc.id.0,
-            "page": page_idx,
+            "page": page_idx + 1,
             "unit": unit.label(),
             "origin": origin,
             "page_width": page_w,

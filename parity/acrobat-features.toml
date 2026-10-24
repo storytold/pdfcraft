@@ -1662,7 +1662,7 @@ evidence = [
   "crates/automation/tests/it/automation.rs::cursor_coordinates_tool_evaluates_points_and_dimensions",
   "crates/ui-egui/tests/it/view.rs::cursor_coordinates_floating_window_toggles_and_renders",
 ]
-notes = "View ▸ Show/Hide ▸ Cursor Coordinates (Ctrl+Y / ⌘Y) floating window displaying X, Y, Width, Height in pt/in/mm/cm with bottom-left and top-left origins."
+notes = "View ▸ Show/Hide ▸ Cursor Coordinates (Ctrl+Y / ⌘Y) floating window displaying X, Y, Width, Height in pt/in/mm/cm with bottom-left and top-left origins. Not yet covered: the window's pointer-to-page X/Y readout and page size display are not asserted by the UI test; the origin choice is session-only and resets to bottom-left on launch; rotated-page behavior is not tested."
 
 [[feature]]
 id = "view.theme-light-dark"

@@ -8927,8 +8927,9 @@ fn cursor_coordinates_tool_evaluates_points_and_dimensions() {
     let mut a = auto(dir.path());
     let doc = ok(&mut a, "doc_open", json!({ "path": "doc.pdf" }))["doc"].as_u64().unwrap();
 
-    // Query dimensions without point in points.
-    let dims = ok(&mut a, "view_cursor_coordinates", json!({ "doc": doc, "page": 0 }));
+    // Query dimensions without point in points (page 1 by default or explicitly).
+    let dims = ok(&mut a, "view_cursor_coordinates", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(dims["page"].as_u64().unwrap(), 1);
     assert_eq!(dims["page_width"].as_f64().unwrap(), 200.0);
     assert_eq!(dims["page_height"].as_f64().unwrap(), 300.0);
     assert_eq!(dims["formatted_width"].as_str().unwrap(), "200.0 pt");
@@ -8941,7 +8942,7 @@ fn cursor_coordinates_tool_evaluates_points_and_dimensions() {
         "view_cursor_coordinates",
         json!({
             "doc": doc,
-            "page": 0,
+            "page": 1,
             "point": [50.0, 75.0],
             "space": "user",
             "origin": "bottom-left",
@@ -8960,7 +8961,7 @@ fn cursor_coordinates_tool_evaluates_points_and_dimensions() {
         "view_cursor_coordinates",
         json!({
             "doc": doc,
-            "page": 0,
+            "page": 1,
             "point": [50.0, 75.0],
             "space": "user",
             "origin": "top-left",
@@ -8977,7 +8978,7 @@ fn cursor_coordinates_tool_evaluates_points_and_dimensions() {
         "view_cursor_coordinates",
         json!({
             "doc": doc,
-            "page": 0,
+            "page": 1,
             "point": [72.0, 144.0],
             "unit": "in",
         }),
@@ -8994,7 +8995,8 @@ fn cursor_coordinates_tool_evaluates_points_and_dimensions() {
     let cm = ok(&mut a, "view_cursor_coordinates", json!({ "doc": doc, "unit": "cm" }));
     assert!(cm["formatted_width"].as_str().unwrap().ends_with(" cm"));
 
-    // Error cases: invalid page, unit, or point format.
+    // Error cases: invalid page (0 is rejected, 10 is out of range), unit, or point format.
+    assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "page": 0 })).is_err());
     assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "page": 10 })).is_err());
     assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "unit": "yards" })).is_err());
     assert!(a.call("view_cursor_coordinates", &json!({ "doc": doc, "point": [10.0] })).is_err());
