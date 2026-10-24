@@ -213,7 +213,27 @@ fn parse_common(n: XmlNode) -> Common {
         font: parse_font(child(n, "font")),
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
+        traversal: parse_traversal(child(n, "traversal")),
     }
+}
+
+/// Longest traversal reference kept (a SOM path); longer ones are ignored.
+const MAX_TRAVERSE_REF: usize = 1024;
+
+/// `<traversal><traverse operation="first|next" ref="…"/>`: the first of each kept. A
+/// `<traverse>` that computes its target with a script, or names none, is ignored.
+fn parse_traversal(n: Option<XmlNode>) -> Traversal {
+    let mut out = Traversal::default();
+    for t in n.into_iter().flat_map(|n| children(n, "traverse")) {
+        let Some(r) = t.attribute("ref").map(str::trim).filter(|r| !r.is_empty() && r.len() <= MAX_TRAVERSE_REF) else { continue };
+        let slot = match t.attribute("operation").map(str::trim).unwrap_or("next") {
+            "first" => &mut out.first,
+            "next" => &mut out.next,
+            _ => continue,
+        };
+        slot.get_or_insert_with(|| r.to_string());
+    }
+    out
 }
 
 /// Rich text: XHTML `body > p > span…`. `br` starts a new paragraph; `xfa:embed` spans become

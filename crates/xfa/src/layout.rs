@@ -292,6 +292,16 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
     n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
 }
 
+/// How many instances of `sf` the layout makes under the container at `parent_som`: its `occur`
+/// and the instances `data` holds ([`instance_count`]). The traversal counts them the same way.
+pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
+    let from_data = match (&sf.common.name, data) {
+        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
+        _ => 0,
+    };
+    instance_count(&sf.occur, from_data)
+}
+
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
 pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError> {
     let areas = match &tpl.root.page_set {
@@ -347,6 +357,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             }
         }
     }
+    // Tab goes the way the template's traversal says.
+    crate::traverse::order_widgets(&root_node, tpl, data, &mut l.pages);
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
 }
 
@@ -1124,11 +1136,7 @@ impl Layouter<'_> {
     /// repeating subform's `occur` and data instances ([`instance_count`]); one for anything else.
     fn instances(&self, node: &Node, parent_som: &str) -> usize {
         let Node::Subform(sf) = node else { return 1 };
-        let from_data = match (&sf.common.name, self.data) {
-            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-            _ => 0,
-        };
-        instance_count(&sf.occur, from_data)
+        subform_instances(self.tpl, self.data, sf, parent_som)
     }
 
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations
