@@ -170,10 +170,12 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
 /// or to the box dragged out, as the composer makes one), or the changed text (the engine fits
 /// the box to it). `None` when nothing changed, or a new box has no text.
 pub(crate) fn inline_edit(it: &InlineText, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+    if !it.has_changes() {
+        return None;
+    }
     let text = it.text.trim_end().to_string();
     match it.index {
-        Some(index) => (text != it.original.trim_end()).then_some(Edit::SetAnnotationContents { page: it.page, index, text }),
-        None if text.trim().is_empty() => None,
+        Some(index) => Some(Edit::SetAnnotationContents { page: it.page, index, text }),
         None => {
             let style = prefs.style(CommentTool::TextBox);
             let rect = match (it.size, info.pages.get(it.page)) {

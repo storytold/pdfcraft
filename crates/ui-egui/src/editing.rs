@@ -739,7 +739,7 @@ impl PdfCraftApp {
                 || v.content.draft.is_some()
                 || v.line_editor.as_ref().is_some_and(|ed| ed.has_changes())
                 || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
-                || v.comments.inline.as_ref().is_some_and(|t| t.text != t.original)
+                || v.comments.inline.as_ref().is_some_and(crate::comments::InlineText::has_changes)
         });
         if self.active != Some(i) {
             if !typing {
@@ -849,7 +849,7 @@ impl PdfCraftApp {
             || v.forms.focus.as_ref().is_some_and(|f| crate::forms_ui::draft_edit(f, &doc.form).is_some())
             || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
             || new_text_typed(v)
-            || v.comments.inline.as_ref().is_some_and(|t| t.text != t.original)
+            || v.comments.inline.as_ref().is_some_and(crate::comments::InlineText::has_changes)
             || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
     }
 }

@@ -84,6 +84,18 @@ pub struct InlineText {
     pub focus: bool,
 }
 
+impl InlineText {
+    /// Whether keeping the text would change anything, as [`inline_edit`] decides: trailing
+    /// spaces and line breaks don't count, and a new box needs some text.
+    pub(crate) fn has_changes(&self) -> bool {
+        let text = self.text.trim_end();
+        match self.index {
+            Some(_) => text != self.original.trim_end(),
+            None => !text.trim().is_empty(),
+        }
+    }
+}
+
 /// Whether `a` is typed into on the page (an upright text box or typewriter text on a page
 /// shown unturned) rather than in the composer card: a callout's box sits inside its rectangle,
 /// and turned text runs another way than the editor.

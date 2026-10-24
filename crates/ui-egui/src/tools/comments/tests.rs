@@ -432,6 +432,90 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
     );
 }
 
+/// What counts as a change to text typed on the page is what keeping it does: trailing spaces
+/// don't, nor a new box with nothing but spaces in it (no "Save changes?" for nothing).
+#[test]
+fn inline_text_changes_are_what_keeping_it_changes() {
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        ..Default::default()
+    };
+    let prefs = CommentPrefs::default();
+    let it = |index: Option<usize>, original: &str, text: &str| InlineText {
+        page: 0,
+        index,
+        at: [20.0, 380.0],
+        size: None,
+        text: text.into(),
+        original: original.into(),
+        focus: false,
+    };
+    for (t, changed) in [
+        (it(Some(0), "Box", "Box"), false),
+        (it(Some(0), "Box", "Box  \n"), false),
+        (it(Some(0), "Box", "Boxes"), true),
+        (it(None, "", " \n "), false),
+        (it(None, "", "New"), true),
+    ] {
+        assert_eq!(t.has_changes(), changed, "{:?} after {:?}", t.text, t.original);
+        assert_eq!(inline_edit(&t, &info, &prefs).is_some(), changed, "{:?} after {:?}", t.text, t.original);
+    }
+}
+
+/// "Edit text…" from the menu, with no page drawn (the Comments panel's menu for a page that
+/// isn't on screen): a text box is typed into on the page in an upright view, and in the
+/// composer when the view is turned.
+#[test]
+fn edit_text_from_the_menu_follows_the_view_rotation_without_a_drawn_page() {
+    use egui_kittest::kittest::Queryable;
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        annotations: vec![Annotation {
+            page: 0,
+            subtype: "FreeText".into(),
+            author: None,
+            contents: Some("Box".into()),
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            rect: [10.0, 10.0, 80.0, 30.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            points: Vec::new(),
+            no_rotate: false,
+        }],
+        ..Default::default()
+    };
+    for (rotation, in_place) in [(0, true), (90, false)] {
+        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+        view.rotation = rotation;
+        view.comments.selected = Some((0, 0));
+        assert!(view.page_xform(0).is_none(), "no page drawn");
+        let prefs = CommentPrefs::default();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, view: &mut DocView| {
+                ui.button("Page").context_menu(|ui| {
+                    let _ = context_menu(ui, view, &info, &prefs, true, true);
+                });
+            },
+            view,
+        );
+        h.run();
+        h.get_by_label("Page").click_secondary();
+        h.run();
+        h.get_by_label("Edit text…").click();
+        h.run();
+        let cv = &h.state().comments;
+        assert_eq!(cv.inline.is_some(), in_place, "view turned {rotation}°: on the page");
+        assert_eq!(cv.composer.is_some(), !in_place, "view turned {rotation}°: in the composer");
+    }
+}
+
 #[test]
 fn shift_keeps_the_current_proportions_unless_the_box_has_its_own() {
     let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));

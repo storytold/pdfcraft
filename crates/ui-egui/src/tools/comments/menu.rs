@@ -42,7 +42,9 @@ pub(crate) fn context_menu(
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
             if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
-                let rotation = view.page_xform(page).map_or(0, |xf| xf.rot);
+                // The view's rotation, also for a page that isn't on screen (the Comments panel's
+                // menu), which has no transform to read it from.
+                let rotation = view.rotation;
                 start_editing(&mut view.comments, a, info, rotation);
                 ui.close();
             }
