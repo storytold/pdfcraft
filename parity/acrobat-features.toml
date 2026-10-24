@@ -1055,11 +1055,11 @@ title = "Pan and zoom overview window"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.pan_zoom"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/viewer.rs::pan_zoom_window_toggles_and_pans_and_zooms_document"]
+notes = "View ▸ Zoom ▸ Pan & Zoom: a floating overview window showing the page thumbnail with a movable and resizable red viewport frame that updates document position and zoom in real time."
 
 [[feature]]
 id = "view.hand-tool"

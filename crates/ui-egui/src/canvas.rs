@@ -1324,6 +1324,19 @@ impl DocView {
         self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
     }
 
+    /// Center the document view on normalized coordinates `[u, v]` in `[0.0, 1.0]` of `page`.
+    pub fn center_on_fraction(&mut self, page: usize, u: f32, v: f32) {
+        if !u.is_finite() || !v.is_finite() {
+            return;
+        }
+        let u = u.clamp(0.0, 1.0);
+        let v = v.clamp(0.0, 1.0);
+        self.go_to_page(page);
+        let vw = if self.viewport_w > 0.0 { self.viewport_w } else { self.viewport_screen.width().max(600.0) };
+        let vh = if self.viewport_h > 0.0 { self.viewport_h } else { self.viewport_screen.height().max(400.0) };
+        self.goto_point = Some((page, Some(u), Some(v), vec2(vw, vh) / 2.0));
+    }
+
     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
     /// and zoomed as `dest` asks, as Acrobat does. `/XYZ` puts (left, top) at the window's
     /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit

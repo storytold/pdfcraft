@@ -110,6 +110,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Executes a command by id without catching panics.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -541,6 +542,17 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.pan_zoom" => {
+                if let Some(pan_zoom) = &mut self.pan_zoom {
+                    pan_zoom.open = !pan_zoom.open;
+                    if !pan_zoom.open {
+                        self.pan_zoom = None;
+                    }
+                } else if let Some(i) = self.active {
+                    let page = self.views.get(i).map_or(0, |v| v.current);
+                    self.pan_zoom = Some(crate::pan_zoom_ui::PanZoomState::new(page));
+                }
+            }
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;

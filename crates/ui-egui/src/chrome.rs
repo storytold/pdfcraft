@@ -545,6 +545,7 @@ pub(crate) fn scroll_menu(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, add);
 }
 
+/// Renders the main application menu popup and its submenus.
 fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let resp = widgets::ghost_button(ui, "panel-left", tl!("Menu"));
@@ -585,6 +586,13 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                         if widgets::menu_item(ui, tl!("Zoom out"), &key(ZOOM_OUT)).clicked() {
                             v.zoom_step(false);
+                        }
+                        let pan_zoom_open = app.pan_zoom.as_ref().is_some_and(|state| state.open);
+                        let pan_zoom_label = if pan_zoom_open { format!("✓ {}", tl!("Pan & Zoom")) } else { tl!("Pan & Zoom").to_owned() };
+                        if widgets::menu_item(ui, &pan_zoom_label, "").clicked() {
+                            ui.close();
+                            app.execute("view.pan_zoom");
+                            return;
                         }
                         if widgets::menu_item(ui, tl!("Rotate view clockwise"), &key(ROTATE_CW)).clicked() {
                             v.rotate_view(true);

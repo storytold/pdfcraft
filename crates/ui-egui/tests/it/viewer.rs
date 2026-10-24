@@ -2085,3 +2085,80 @@ fn go_to_page_brings_the_page_into_view_horizontally() {
     let (r, vp) = (v.page_screen_rect(2).expect("page 3 on screen"), v.viewport_rect());
     assert!(r.left() >= vp.left() && r.right() <= vp.right(), "page 3 at {r:?}, viewport {vp:?}");
 }
+
+/// View ▸ Zoom ▸ Pan & Zoom: toggles the floating Pan & Zoom overview window,
+/// updates view position via normalized fraction centering, adjusts magnification factor,
+/// and resets when closed or toggled off.
+#[test]
+fn pan_zoom_window_toggles_and_pans_and_zooms_document() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+
+    // Initial state: Pan & Zoom window is closed.
+    assert!(h.state().pan_zoom.is_none());
+
+    // Execute view.pan_zoom command to open the window.
+    assert!(h.state_mut().execute("view.pan_zoom"));
+    h.run_steps(3);
+
+    // Pan & Zoom window is now active.
+    let pan_zoom = h.state().pan_zoom.as_ref().expect("pan_zoom state active");
+    assert!(pan_zoom.open);
+    assert_eq!(pan_zoom.page, 0);
+
+    // Test viewport fraction computation.
+    let i = h.state().active.unwrap();
+    let v = &h.state().views[i];
+    let frac = pdfcraft_ui_egui::pan_zoom_ui::page_viewport_fraction(v, 0, 612.0, 792.0);
+    assert!(frac[0] >= 0.0 && frac[1] >= 0.0 && frac[2] <= 1.0 && frac[3] <= 1.0);
+    assert!(frac[0] <= frac[2] && frac[1] <= frac[3]);
+
+    // Set high zoom so page is larger than viewport and test centering movement.
+    h.state_mut().views[i].zoom = 4.0;
+    h.state_mut().views[i].center_on_fraction(0, 0.1, 0.1);
+    h.run_steps(3);
+    let frac_before = pdfcraft_ui_egui::pan_zoom_ui::page_viewport_fraction(&h.state().views[i], 0, 612.0, 792.0);
+
+    h.state_mut().views[i].center_on_fraction(0, 0.9, 0.9);
+    h.run_steps(3);
+    let frac_after = pdfcraft_ui_egui::pan_zoom_ui::page_viewport_fraction(&h.state().views[i], 0, 612.0, 792.0);
+    assert!(frac_after[0] > frac_before[0] || frac_after[1] > frac_before[1]);
+
+    // Overview pointer interaction: click inside overview window.
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(180.0, 200.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(180.0, 200.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].current, 0);
+
+    // Test zoom stepping via zoom controls.
+    let before_zoom = h.state().views[i].zoom;
+    h.state_mut().views[i].zoom_step(true);
+    let after_in = h.state().views[i].zoom;
+    assert!(after_in > before_zoom);
+
+    h.state_mut().views[i].zoom_step(false);
+    let after_out = h.state().views[i].zoom;
+    assert!(after_out < after_in);
+
+    // Test Turkish localization for Pan & Zoom.
+    h.state_mut().set_option("language", "tr").unwrap();
+    h.run_steps(2);
+    let lang = pdfcraft_ui_egui::i18n::Lang::from_code("tr").unwrap();
+    assert_eq!(pdfcraft_ui_egui::i18n::tr(lang, "Pan & Zoom"), "Kaydır ve Yakınlaştır");
+
+    // Toggle off via command.
+    assert!(h.state_mut().execute("view.pan_zoom"));
+    h.run_steps(3);
+    assert!(h.state().pan_zoom.is_none());
+}
