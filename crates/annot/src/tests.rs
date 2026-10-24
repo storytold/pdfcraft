@@ -1870,7 +1870,7 @@ fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
 
 /// A comment's built appearance for the dictionary `body` (no `/AP`), as text, or `None` when
 /// PdfCraft can't draw it.
-fn drawn(body: &str) -> Option<String> {
+fn built(body: &str) -> Option<String> {
     let doc = document_of(&[
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
@@ -1916,36 +1916,36 @@ fn extent(ops: &str) -> [f64; 4] {
 fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
     let base = "/Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 >>";
     for kind in ["Square", "Circle"] {
-        let ops = drawn(&format!("<< {base} /Subtype /{kind} /BE << /S /C /I 1 >> >>")).unwrap_or_else(|| panic!("{kind} is drawn"));
+        let ops = built(&format!("<< {base} /Subtype /{kind} /BE << /S /C /I 1 >> >>")).unwrap_or_else(|| panic!("{kind} is drawn"));
         assert!(ops.matches(" c\n").count() > 8 && !ops.contains(" re\n"), "{kind} as bumps: {ops}");
         let e = extent(&ops);
         assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 300.0 && e[3] <= 250.0, "{kind} stays in /Rect: {e:?}");
     }
-    let dashed = drawn(&format!("<< {base} /Subtype /Square /BS << /W 2 /S /D /D [6 3] >> /BE << /S /C /I 1 >> >>")).unwrap();
+    let dashed = built(&format!("<< {base} /Subtype /Square /BS << /W 2 /S /D /D [6 3] >> /BE << /S /C /I 1 >> >>")).unwrap();
     assert!(dashed.contains("[6 3] 0 d") && dashed.contains(" c\n"), "dashes honoured: {dashed}");
-    let text = drawn(&format!("<< {base} /Subtype /FreeText /DA (0 0 1 rg /Helv 10 Tf) /Contents (Look here) /BE << /S /C /I 1 >> >>")).unwrap();
+    let text = built(&format!("<< {base} /Subtype /FreeText /DA (0 0 1 rg /Helv 10 Tf) /Contents (Look here) /BE << /S /C /I 1 >> >>")).unwrap();
     assert!(text.contains(" c\n") && text.contains("(Look here) Tj"), "a cloud around the text: {text}");
-    let dashed_text = drawn(
+    let dashed_text = built(
         "<< /Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 /S /D /D [4 2] >> /Subtype /FreeText /DA (0 g /Helv 10 Tf) /Contents (x) /BE << /S /C /I 1 >> >>",
     )
     .unwrap();
     assert!(dashed_text.contains("[4 2] 0 d"), "a text box's cloud is dashed too: {dashed_text}");
     // Intensity 0, or none: a plain border (the default is 0).
     for be in ["<< /S /C /I 0 >>", "<< /S /C >>", "<< /S /S /I 2 >>"] {
-        let square = drawn(&format!("<< {base} /Subtype /Square /BE {be} >>")).unwrap();
+        let square = built(&format!("<< {base} /Subtype /Square /BE {be} >>")).unwrap();
         assert!(square.contains(" re\n") && !square.contains(" c\n"), "{be}: {square}");
         let polygon =
-            drawn(&format!("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE {be} >>"))
+            built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE {be} >>"))
                 .unwrap();
         assert!(!polygon.contains(" c\n"), "{be}: polygon edges stay straight: {polygon}");
     }
     let cloudy_polygon =
-        drawn("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
+        built("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
             .unwrap();
     assert!(cloudy_polygon.contains(" c\n"));
     // A cloudy callout is still left to its own appearance.
     assert!(
-        drawn(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
+        built(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
     );
 }
 
@@ -1954,7 +1954,7 @@ fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
 /// inner square.
 #[test]
 fn a_cloudy_square_follows_rd_left_top_right_bottom() {
-    let ops = drawn("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [10 40 20 30] >>")
+    let ops = built("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [10 40 20 30] >>")
         .unwrap();
     // The corners of the inner square are path points: left 110, bottom 130, right 280, top 260.
     for corner in ["110 130", "280 130", "280 260", "110 260"] {
@@ -1968,7 +1968,7 @@ fn a_cloudy_square_follows_rd_left_top_right_bottom() {
 #[test]
 fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
     for side in [20.0, 24.4, 30.0, 41.0] {
-        let ops = drawn(&format!(
+        let ops = built(&format!(
             "<< /Type /Annot /Subtype /Square /Rect [100 100 {x} {x}] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> >>",
             x = 100.0 + side
         ))
@@ -1977,7 +1977,7 @@ fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
         assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 101.0 + side && e[3] <= 101.0 + side, "side {side}: {e:?}");
     }
     let small_rd =
-        drawn("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
+        built("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
     assert!(small_rd.contains("101 101"), "the inner square starts where /RD says: {small_rd}");
 }
 
@@ -1988,7 +1988,7 @@ fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
 /// ignored and the shape fills `/Rect` as before.
 #[test]
 fn plain_squares_and_circles_are_drawn_inside_rect_less_rd() {
-    let square = |rd: &str| drawn(&format!("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> {rd} >>")).unwrap();
+    let square = |rd: &str| built(&format!("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> {rd} >>")).unwrap();
     // Rect + 15 + 1.5 on every side: a 67 × 67 square from 116.5.
     assert!(square("/RD [15 15 15 15]").contains("116.5 116.5 67 67 re"), "{}", square("/RD [15 15 15 15]"));
     // Left 10, top 40, right 20, bottom 30: the box is 110..180 × 130..160.
@@ -1996,7 +1996,7 @@ fn plain_squares_and_circles_are_drawn_inside_rect_less_rd() {
     for ignored in ["", "/RD [-1 0 0 0]", "/RD [1 2 3]", "/RD [60 0 60 0]", "/RD [0 50 0 49.5]", "/RD (x)"] {
         assert!(square(ignored).contains("101.5 101.5 97 97 re"), "{ignored}: {}", square(ignored));
     }
-    let circle = drawn("<< /Type /Annot /Subtype /Circle /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> /RD [15 15 15 15] >>").unwrap();
+    let circle = built("<< /Type /Annot /Subtype /Circle /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> /RD [15 15 15 15] >>").unwrap();
     // The ellipse starts at its rightmost point: 200 - 15 - 1.5, at mid-height.
     assert!(circle.starts_with("1 0 0 RG\n3 w\n183.5 150 m"), "{circle}");
 }
