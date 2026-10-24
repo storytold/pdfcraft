@@ -120,6 +120,39 @@ the app logs the failure and continues using the original preferences folder.
 The existing PrintCraft-to-PdfCraft migration runs first. macOS, Windows and portable
 copies retain their current preferences locations.
 
+On desktop preference saves, `app.ron` shows the `pdfcraft` JSON settings on separate
+lines inside a RON raw string. The outer string map and the JSON keys and values keep their
+existing schema: old compact files, the legacy `printcraft` key, and older readers remain
+compatible. For example:
+
+```ron
+{
+    "pdfcraft": r#"{
+  "default_zoom": "100%",
+  "javascript": false
+}"#,
+}
+```
+
+Close the app before editing its preferences. Desktop saves publish `app.ron` atomically,
+including the window state, egui memory and previously stored keys. The file permissions are
+preserved. eframe uses a private temporary working copy, so its compact background writer cannot
+overwrite the readable file. The working directory uses tempfile's temporary-directory permissions (0700 on Unix). It may
+remain in the OS's temporary folder when termination bypasses Rust destructors.
+
+An unchanged autosave skips formatting, staging and replacement only when the in-memory
+storage map and the exact contents of the validated writable target match the last successful
+publication. The comparison uses fixed-size read buffers, not just size or modification time.
+External edits, removal and read errors invalidate the cache; the active session's preferences
+are then published as usual. A failed save retains the previous cache so the next save can retry.
+The cache retains at most 16 MiB of target bytes; larger snapshots save without caching.
+This is a best-effort check, not a lock between applications: close PdfCraft before manual edits.
+
+Formatting is bounded to 16 MiB of input and 64 MiB of indented output. If a new snapshot exceeds
+the budget, it is still saved in the existing compact format, with a warning. If initial
+formatting or preparation fails (including malformed files, symlinks and read-only files), the
+app logs the error and uses its existing eframe persistence instead.
+
 ## Environment variables
 
 | Variable | Effect |

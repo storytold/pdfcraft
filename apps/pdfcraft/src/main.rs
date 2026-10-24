@@ -39,6 +39,7 @@ mod logging;
 mod motion;
 mod reopen;
 mod settings;
+mod settings_format;
 mod single_instance;
 mod text_scale;
 mod updates;
@@ -194,6 +195,7 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
     out
 }
 
+/// Start the native app with readable preference storage and the existing renderer fallback.
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -274,15 +276,27 @@ fn main() -> eframe::Result {
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    let mut native = native_options(launch.integrated, launch.window_controls.is_some(), first);
+    let preferences = native.persistence_path.as_deref().and_then(|path| match settings_format::Store::prepare(path) {
+        Ok(store) => Some(Rc::new(store)),
+        Err(e) => {
+            log::warn!("readable preferences unavailable at {}: {e}; using eframe storage", path.display());
+            None
+        }
+    });
+    if let Some(store) = &preferences {
+        native.persistence_path = Some(store.working_path().to_path_buf());
+    }
     let result = eframe::run_native(
         "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
+        native,
         app_creator(
             launch.clone(),
             Rc::clone(&started),
             instance.as_ref(),
             #[cfg(target_os = "macos")]
             &apple_events,
+            preferences.clone(),
         ),
     );
     match result {
@@ -292,15 +306,20 @@ fn main() -> eframe::Result {
             // Old or unusual GPUs and drivers (#461, #435, #392) can't give wgpu a device; OpenGL
             // usually still works there, so that's better than quitting.
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
+            let mut native = native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow);
+            if let Some(store) = &preferences {
+                native.persistence_path = Some(store.working_path().to_path_buf());
+            }
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                native,
                 app_creator(
                     launch,
                     started,
                     instance.as_ref(),
                     #[cfg(target_os = "macos")]
                     &apple_events,
+                    preferences,
                 ),
             )
         }
@@ -387,11 +406,13 @@ fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
     false
 }
 
+/// Restore an app instance and wrap native saves when readable storage is available.
 fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
+    preferences: Option<Rc<settings_format::Store>>,
 ) -> eframe::AppCreator<'a> {
     let Launch { files, options, control_file, create_images, integrated, window_controls } = launch;
     Box::new(move |cc| {
@@ -476,7 +497,11 @@ fn app_creator<'a>(
                 log::warn!("--{k} {v}: {e}");
             }
         }
-        Ok(Box::new(app))
+        let app: Box<dyn eframe::App> = match preferences {
+            Some(store) => settings_format::wrap(app, store),
+            None => Box::new(app),
+        };
+        Ok(app)
     })
 }
 
