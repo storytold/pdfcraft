@@ -1008,6 +1008,32 @@ struct SegExtra {
     more: Vec<Run>,
 }
 
+/// Whether `(script_bbox, script_h)` is a superscript or subscript on `(host_bbox, host_h)`.
+fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32; 4], script_h: f32) -> bool {
+    let host_cy = (host_bbox[1] + host_bbox[3]) / 2.0;
+    let script_cy = (script_bbox[1] + script_bbox[3]) / 2.0;
+    let script_w = script_bbox[2] - script_bbox[0];
+    let host_w = host_bbox[2] - host_bbox[0];
+    let smaller = script_h >= host_h * 0.45 && script_w < host_h * 3.0 && (script_h < host_h * 0.9 || (script_h <= host_h && host_w > script_w));
+    if !smaller {
+        return false;
+    }
+    if script_cy < host_cy {
+        // Superscript: raised above the host baseline, with its bottom inside the host line.
+        host_cy - script_cy >= host_h * 0.12
+            && host_cy - script_cy < host_h * 0.7
+            && host_bbox[3] - script_bbox[3] >= host_h * 0.15
+            && script_bbox[3] > host_bbox[1] + host_h * 0.25
+    } else {
+        // Subscript: lowered below the host baseline, with its centre still inside the host line.
+        script_cy - host_cy >= host_h * 0.12
+            && script_cy - host_cy < host_h * 0.5
+            && script_bbox[3] > host_bbox[3]
+            && host_bbox[3] > script_bbox[1] + script_h * 0.5
+            && script_bbox[1] >= host_bbox[1] - script_h * 0.2
+    }
+}
+
 impl Seg {
     fn new(first: Run, bbox: [f32; 4], h: f32) -> Self {
         Seg { first, extra: None, bbox, h }
@@ -1021,9 +1047,25 @@ impl Seg {
         std::iter::once(self.first).chain(self.extra.iter().flat_map(|e| e.more.iter().copied()))
     }
 
+    /// Extend `self`'s box and height with `(bbox, h)`. A smaller script (superscript or
+    /// subscript) widens the line horizontally without pulling its vertical baseline band up or
+    /// down; when a line begins with a script and continues with taller body text, the body text's
+    /// vertical band becomes the line's.
+    fn extend_box(&mut self, bbox: &[f32; 4], h: f32) {
+        if h > self.h * 1.15 || is_script_on(bbox, h, &self.bbox, self.h) {
+            self.bbox[1] = bbox[1];
+            self.bbox[3] = bbox[3];
+        } else if !(self.h > h * 1.15 || is_script_on(&self.bbox, self.h, bbox, h)) {
+            self.bbox[1] = self.bbox[1].min(bbox[1]);
+            self.bbox[3] = self.bbox[3].max(bbox[3]);
+        }
+        self.bbox[0] = self.bbox[0].min(bbox[0]);
+        self.bbox[2] = self.bbox[2].max(bbox[2]);
+        self.h = self.h.max(h);
+    }
+
     fn merge(&mut self, other: Seg) {
-        union(&mut self.bbox, &other.bbox);
-        self.h = self.h.max(other.h);
+        self.extend_box(&other.bbox, other.h);
         let extra = self.extra.get_or_insert_with(Default::default);
         extra.more.push(other.first);
         if let Some(o) = other.extra {
@@ -1240,8 +1282,10 @@ fn collide(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, h: f32, sc: &mu
             }
             budget -= 1;
             let (ra, rb) = (union_find(&mut sc.parent, ri), union_find(&mut sc.parent, rj));
+            let hj = height(j);
+            let script = is_script_on(&glyphs[i].rect, hi, &glyphs[j].rect, hj) || is_script_on(&glyphs[j].rect, hj, &glyphs[i].rect, hi);
             let overlap = x1.min(glyphs[j].rect[2]) - x0(j);
-            if ra != rb && overlap > RUN_COLLISION * hi.min(height(j)) {
+            if ra != rb && !script && overlap > RUN_COLLISION * hi.min(hj) {
                 sc.parent[ra] = rb;
                 collided = true;
             }
@@ -1523,14 +1567,19 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let mut furthest_progress = 0.0;
     for i in 0..n {
         let g = glyphs[i].rect;
+        let hi = height(i);
         let cont = segs.last().is_some_and(|s| {
             let Some(p) = s.first.end.checked_sub(1) else { return false };
-            let ph = height(p).min(height(i));
+            let ph = height(p).min(hi);
+            let sh = s.h.min(hi);
             let gap = g[0] - glyphs[p].rect[2];
             // A sub- or superscript is a smaller glyph on a shifted baseline: its em box centre sits off the line by
             // more than half its own height, but by less than half the height of the full-size glyph beside it.
-            let centre_limit = if gap.abs() < ph { height(p).max(height(i)) * 0.5 } else { ph * 0.5 };
-            (cy(i) - cy(p)).abs() < centre_limit && gap < ph * 3.0 && g[0] > glyphs[p].rect[0] - ph * 2.0
+            let centre_limit = if gap.abs() < ph { height(p).max(hi) * 0.5 } else { ph * 0.5 };
+            let same_line = ((cy(i) - cy(p)).abs() < centre_limit && gap < ph * 3.0)
+                || ((cy(i) - s.cy()).abs() < sh * 0.3 && (s.h / hi - 1.0).abs() < 0.35 && gap < sh * 3.0);
+            let on_seg = gap < s.h * 1.2 && (is_script_on(&s.bbox, s.h, &g, hi) || is_script_on(&g, hi, &s.bbox, s.h));
+            (same_line || on_seg) && g[0] > glyphs[p].rect[0] - sh * 2.0
         });
         let reset = cont && segs.last().is_some_and(|s| restarts_run(&glyphs, s.first.start, i, furthest_progress));
         if cont
@@ -1538,11 +1587,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             && let Some(s) = segs.last_mut()
         {
             s.first.end = i + 1;
-            union(&mut s.bbox, &g);
-            s.h = s.h.max(height(i));
+            s.extend_box(&g, hi);
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
         } else {
-            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, height(i)));
+            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi));
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
@@ -1591,7 +1639,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         kept_runs
     };
     segs.truncate(retained);
-    // Merge same-baseline segments that nearly touch.
+    // Merge same-baseline segments that nearly touch, then attach any remaining superscript or
+    // subscript segments to the closest host line segment they sit on.
     let mut merged = true;
     while merged {
         merged = false;
@@ -1609,6 +1658,30 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                     segs[a].merge(sb);
                     merged = true;
                     break 'outer;
+                }
+            }
+        }
+        if !merged {
+            let mut b = 0;
+            while b < segs.len() {
+                let sb = &segs[b];
+                let best_host = (0..segs.len())
+                    .filter(|&a| {
+                        if a == b {
+                            return false;
+                        }
+                        let sa = &segs[a];
+                        let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
+                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                    })
+                    .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
+                if let Some(a) = best_host {
+                    let sb = segs.remove(b);
+                    let a = if b < a { a - 1 } else { a };
+                    segs[a].merge(sb);
+                    merged = true;
+                } else {
+                    b += 1;
                 }
             }
         }
@@ -3499,5 +3572,136 @@ mod tests {
         let expected = "Rückfragen für Überhitzungsschutz: können, weiß, Café";
         assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
         assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
+    }
+
+    /// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of
+    /// splitting out as a raised segment that steals the block's tail and pushes the host line
+    /// after the paragraph.
+    #[test]
+    fn paragraph_selection_includes_lines_with_footnote_references() {
+        for inline in [true, false] {
+            let ops = if inline {
+                "BT /F1 12 Tf 1 0 0 1 40 300 Tm (First line of the paragraph) Tj \
+                 1 0 0 1 40 285 Tm (Second line with a note) Tj \
+                 /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+                 /F1 12 Tf ( and more text) Tj \
+                 1 0 0 1 40 270 Tm (Third line of the paragraph) Tj \
+                 /F1 7 Tf 1 0 0 1 40 104 Tm (1) Tj \
+                 /F1 10 Tf 1 0 0 1 47 100 Tm (Footnote at the bottom) Tj ET"
+            } else {
+                // Superscripts drawn in a separate pass after the body text.
+                "BT /F1 12 Tf 1 0 0 1 40 300 Tm (First line of the paragraph) Tj \
+                 1 0 0 1 40 285 Tm (Second line with a note) Tj \
+                 1 0 0 1 173 285 Tm (and more text) Tj \
+                 1 0 0 1 40 270 Tm (Third line of the paragraph) Tj \
+                 /F1 10 Tf 1 0 0 1 47 100 Tm (Footnote at the bottom) Tj \
+                 /F1 8 Tf 1 0 0 1 165 290.5 Tm (1) Tj \
+                 /F1 7 Tf 1 0 0 1 40 104 Tm (1) Tj ET"
+            };
+            let text = page_glyphs(ops);
+            let start = text.nearest(40.0, 95.0).unwrap();
+            let end = text.nearest(185.0, 128.0).unwrap();
+            assert_eq!(
+                text.text_of(start..end + 1),
+                "First line of the paragraph\nSecond line with a note1 and more text\nThird line of the paragraph",
+                "inline={inline}"
+            );
+            assert_eq!(text.line_rects(start..end + 1).len(), 3, "three selected lines, inline={inline}");
+            assert_eq!(
+                text.plain_text(),
+                "First line of the paragraph\nSecond line with a note1 and more text\nThird line of the paragraph\n1 Footnote at the bottom",
+                "inline={inline}"
+            );
+        }
+
+        // Superscript on the first line, multi-character bracketed reference `[12]` on the second
+        // line, and subscript on the third line (both inline and out-of-order).
+        for inline in [true, false] {
+            let ops = if inline {
+                "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Opening claim) Tj \
+                 /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+                 /F1 12 Tf ( in the first line) Tj \
+                 1 0 0 1 40 285 Tm (Middle citation) Tj \
+                 /F1 8 Tf 5.5 Ts ([12]) Tj 0 Ts \
+                 /F1 12 Tf ( continues here) Tj \
+                 1 0 0 1 40 270 Tm (Formula H) Tj \
+                 /F1 8 Tf -3 Ts (2) Tj 0 Ts \
+                 /F1 12 Tf (O in the third line) Tj ET"
+            } else {
+                "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Opening claim) Tj \
+                 1 0 0 1 125 300 Tm (in the first line) Tj \
+                 1 0 0 1 40 285 Tm (Middle citation) Tj \
+                 1 0 0 1 135 285 Tm (continues here) Tj \
+                 1 0 0 1 40 270 Tm (Formula H) Tj \
+                 1 0 0 1 101 270 Tm (O in the third line) Tj \
+                 /F1 8 Tf 1 0 0 1 117 305.5 Tm (1) Tj \
+                 1 0 0 1 117 290.5 Tm ([12]) Tj \
+                 1 0 0 1 96.5 267 Tm (2) Tj ET"
+            };
+            let text = page_glyphs(ops);
+            assert_eq!(
+                text.plain_text(),
+                "Opening claim1 in the first line\nMiddle citation[12] continues here\nFormula H2O in the third line",
+                "inline={inline}"
+            );
+            assert_eq!(text.line_rects(0..text.glyphs.len()).len(), 3, "inline={inline}");
+        }
+
+        // Justified wide gap (18pt = 1.5 * h) after an inline superscript stays on the same line,
+        // and an out-of-order superscript kerned slightly over punctuation does not break the host
+        // word via overprint collision.
+        let justified = page_glyphs(
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Justified clause.) Tj \
+             /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+             /F1 12 Tf 1 0 0 1 151 300 Tm (Next sentence on the same line) Tj \
+             1 0 0 1 40 285 Tm (Kerned clause.) Tj \
+             1 0 0 1 130 285 Tm (continues cleanly) Tj \
+             /F1 8 Tf 1 0 0 1 118 290.5 Tm (2) Tj ET",
+        );
+        assert_eq!(justified.plain_text(), "Justified clause.1 Next sentence on the same line\nKerned clause.2 continues cleanly");
+        assert_eq!(justified.line_rects(0..justified.glyphs.len()).len(), 2);
+
+        // A line that begins with a raised superscript marker and continues with taller body text
+        // adopts the body text's vertical band (Seg::extend_box first branch) so a later
+        // out-of-order superscript on that line still measures against the body baseline.
+        let leading_script = page_glyphs(
+            "BT /F1 8 Tf 1 0 0 1 40 300 Tm 6 Ts (1) Tj 0 Ts \
+             /F1 12 Tf ( See the appendix) Tj \
+             1 0 0 1 146 300 Tm (for details) Tj \
+             /F1 8 Tf 1 0 0 1 139 303.6 Tm (2) Tj ET",
+        );
+        assert_eq!(leading_script.plain_text(), "1 See the appendix2 for details");
+        let marker = leading_script.glyphs.first().unwrap().rect;
+        let body = leading_script.glyphs.iter().find(|g| g.text == "S").unwrap().rect;
+        let last = leading_script.glyphs.last().unwrap().rect;
+        let center = |r: [f32; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+        let (start_x, start_y) = center(marker);
+        let (end_x, end_y) = center(last);
+        let start = leading_script.nearest(start_x, start_y).unwrap();
+        let end = leading_script.nearest(end_x, end_y).unwrap();
+        assert_eq!(leading_script.text_of(start..end + 1), "1 See the appendix2 for details");
+        let rects = leading_script.line_rects(start..end + 1);
+        assert_eq!(rects.len(), 1);
+        assert!(marker[1] < body[1] && marker[3] < body[3], "marker must be raised above the body");
+        let close = |actual: f32, expected: f32| assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
+        // Highlight rectangles cover the actual glyphs, including the raised marker. They do
+        // not expose the segment's baseline band used for line grouping.
+        for (actual, expected) in rects[0].into_iter().zip([marker[0], marker[1], last[2], body[3]]) {
+            close(actual, expected);
+        }
+        close(rects[0][3] - rects[0][1], 14.8);
+        close(body[3] - 0.2 * 12.0, 100.0); // 300 pt PDF baseline on a 400 pt page.
+
+        // Pin that internal band too: replacing the first extend_box condition with `false`
+        // must fail here even when plain text and highlight rectangles remain unchanged.
+        let mut segment = Seg::new(Run { start: 0, end: 1 }, marker, marker[3] - marker[1]);
+        segment.extend_box(&body, body[3] - body[1]);
+        for (actual, expected) in segment.bbox.into_iter().zip([marker[0], body[1], body[2], body[3]]) {
+            close(actual, expected);
+        }
+        close(segment.h, 12.0);
+        close(segment.bbox[3] - segment.bbox[1], 12.0);
+        close(segment.bbox[3] - 0.2 * segment.h, 100.0);
+        close(segment.cy(), (body[1] + body[3]) / 2.0);
     }
 }
