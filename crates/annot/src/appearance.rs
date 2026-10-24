@@ -3,8 +3,8 @@
 //! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary alone, so the
 //! same code serves new comments and restyled ones. Drawings are in page space with
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
-//! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
-//! endings, indirect geometry), so callers never replace an appearance with a worse one.
+//! It returns `None` for anything it cannot draw faithfully (unknown line endings, indirect
+//! geometry, a cloudy callout), so callers never replace an appearance with a worse one.
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
@@ -21,9 +21,11 @@ pub fn arrow_size(w: f64) -> f64 {
     6.0 + 3.0 * w.max(0.0)
 }
 
-/// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1).
+/// Nominal radius of a cloudy border's bumps for a line of width `w` (intensity 1). ISO 32000-2
+/// Table 169 leaves the size open; this keeps a 2 pt cloud's bumps about 9 pt across, small
+/// enough to read as a cloud rather than a row of lobes.
 pub fn cloud_radius(w: f64) -> f64 {
-    6.0 + 1.5 * w.max(0.0)
+    3.0 + 0.75 * w.max(0.0)
 }
 
 /// One of the ten `/LE` names (ISO 32000-2 Table 217). Unknown names are not drawn.
@@ -122,6 +124,71 @@ fn smooth_curve(pts: &[(f64, f64)]) -> String {
 
 /// Bumps one cloudy outline draws at most (plus one per edge); past it the bumps grow.
 pub(crate) const MAX_CLOUD_BUMPS: usize = 20_000;
+
+/// A cloudy border's intensity (ISO 32000-2 §12.5.4, Table 169: `/BE /I`, "in the range 0 to 2.
+/// Default value: 0"), or `None` for no cloud: no `/BE`, a style other than `/C`, or intensity 0,
+/// which draws the border plain.
+fn cloud_intensity(d: &Dict) -> Option<f64> {
+    let be = d.get(b"BE").and_then(|b| b.as_dict())?;
+    if be.name(b"S") != Some(b"C") {
+        return None;
+    }
+    let i = be.get(b"I").and_then(|i| i.as_f64()).unwrap_or(0.0);
+    (i.is_finite() && i > 0.0).then(|| i.min(2.0))
+}
+
+/// The bump radius for a cloudy border of width `w` at `intensity` (0–2].
+fn cloud_bump(w: f64, intensity: f64) -> f64 {
+    cloud_radius(w) * intensity.clamp(0.5, 2.0)
+}
+
+/// `/RD` when it is four finite, non-negative numbers (Tables 170 and 180).
+fn rd_of(d: &Dict) -> Option<Vec<f64>> {
+    nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite() && *x >= 0.0))
+}
+
+/// `rect` less `rd`, whose four numbers are the left, top, right and bottom differences.
+fn less_rd(rect: [f64; 4], rd: &[f64]) -> [f64; 4] {
+    let at = |i: usize| rd.get(i).copied().unwrap_or(0.0);
+    [rect[0] + at(0), rect[1] + at(3), rect[2] - at(2), rect[3] - at(1)]
+}
+
+/// The box a plain (not cloudy) square or circle is drawn in: `/Rect` less a usable `/RD` (Table
+/// 180: the differences between `/Rect` and "the actual boundaries of the underlying square or
+/// circle"), or `None` when there is no `/RD`, it isn't four finite non-negative numbers, or it
+/// leaves less than a point either way, so the caller draws in `/Rect` as without one.
+fn rect_less_rd(d: &Dict, rect: [f64; 4]) -> Option<[f64; 4]> {
+    let inner = less_rd(rect, &rd_of(d)?);
+    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
+}
+
+/// The shape a cloudy square, circle or text box draws its bumps around: `/Rect` less `/RD`
+/// (Table 180: the differences between "the left, top, right, and bottom coordinates of Rect and
+/// those of the square or circle, respectively"), kept as given; or, without a usable `/RD`,
+/// less the bumps' greatest reach and half the line, so they stay inside `/Rect`.
+fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<[f64; 4]> {
+    let inner = match rd_of(d) {
+        Some(rd) => less_rd(rect, &rd),
+        None => {
+            // `cloud_path` rounds each edge to whole bumps, so one may span up to three radii
+            // and bulge 1.5 radii; it also grows the radius to keep within its bump budget.
+            let perimeter = 2.0 * ((rect[2] - rect[0]) + (rect[3] - rect[1]));
+            let m = 1.5 * bump.max(perimeter / (2.0 * MAX_CLOUD_BUMPS as f64)) + w / 2.0;
+            [rect[0] + m, rect[1] + m, rect[2] - m, rect[3] - m]
+        }
+    };
+    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
+}
+
+/// Points around the ellipse inscribed in `r`, counter-clockwise, one per bump of radius `bump`
+/// (each edge of the outline becomes one bump), for a cloudy circle.
+fn ellipse_points(r: [f64; 4], bump: f64) -> Vec<(f64, f64)> {
+    let (cx, cy, rx, ry) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, (r[2] - r[0]) / 2.0, (r[3] - r[1]) / 2.0);
+    // Ramanujan's approximation of the perimeter; the count stays within the bump budget.
+    let perimeter = std::f64::consts::PI * (3.0 * (rx + ry) - ((3.0 * rx + ry) * (rx + 3.0 * ry)).max(0.0).sqrt());
+    let count = (perimeter / (2.0 * bump.max(0.5))).round().clamp(8.0, MAX_CLOUD_BUMPS as f64) as u32;
+    (0..count).map(|i| f64::from(i) * std::f64::consts::TAU / f64::from(count)).map(|a| (cx + rx * a.cos(), cy + ry * a.sin())).collect()
+}
 
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
@@ -379,9 +446,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
     let subtype = d.name(b"Subtype")?.to_vec();
     let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-    // Cloudy borders (§12.5.4) are drawn for polygons only.
-    let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
-    if cloudy && subtype != b"Polygon" {
+    // Cloudy borders (§12.5.4, Table 169) apply to squares, circles, polygons and text boxes.
+    let cloud = cloud_intensity(d);
+    if cloud.is_some() && !matches!(subtype.as_slice(), b"Square" | b"Circle" | b"Polygon" | b"FreeText") {
         return None;
     }
     let opacity = d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0);
@@ -482,15 +549,27 @@ pub fn build(d: &Dict) -> Option<Stream> {
             if stroke.is_none() && fill.is_none() {
                 return Some(form(rect, c.as_bytes(), res));
             }
+            // A plain square or circle lies within /Rect less /RD (Table 180), its stroke centred
+            // half the width inside that box.
+            let shape = rect_less_rd(d, rect).unwrap_or(rect);
             let inset = w / 2.0;
-            let [x0, y0, x1, y1] = [rect[0] + inset, rect[1] + inset, rect[2] - inset, rect[3] - inset];
+            let [x0, y0, x1, y1] = [shape[0] + inset, shape[1] + inset, shape[2] - inset, shape[3] - inset];
             if let Some(f) = fill {
                 c.push_str(&rg(f));
             }
             if let Some(s) = stroke {
                 c.push_str(&format!("{}{} w\n{}", rg_stroke(s), n(w), dash(d)));
             }
-            if subtype == b"Square" {
+            if let Some(intensity) = cloud {
+                let bump = cloud_bump(w, intensity);
+                let inner = cloud_inner(d, rect, bump, w)?;
+                let pts = if subtype == b"Square" {
+                    vec![(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])]
+                } else {
+                    ellipse_points(inner, bump)
+                };
+                c.push_str(&format!("1 j\n{}", cloud_path(&pts, bump)));
+            } else if subtype == b"Square" {
                 c.push_str(&format!("{} {} {} {} re\n", n(x0), n(y0), n(x1 - x0), n(y1 - y0)));
             } else {
                 c.push_str(&ellipse(x0, y0, x1, y1));
@@ -548,9 +627,8 @@ pub fn build(d: &Dict) -> Option<Stream> {
             if let Some(s) = col {
                 c.push_str(&format!("{}{} w 1 J 1 j\n{}", rg_stroke(s), n(w), dash(d)));
             }
-            if cloudy {
-                let intensity = d.get(b"BE").and_then(|b| b.as_dict()).and_then(|b| b.get(b"I")).and_then(|i| i.as_f64()).unwrap_or(1.0);
-                c.push_str(&cloud_path(&pts, cloud_radius(w) * intensity.clamp(0.5, 2.0)));
+            if let Some(intensity) = cloud {
+                c.push_str(&cloud_path(&pts, cloud_bump(w, intensity)));
             } else {
                 for (i, p) in pts.iter().enumerate() {
                     c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
@@ -807,21 +885,36 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     return None;
                 }
             }
-            if let Some(bg) = bg {
-                c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
-            }
-            if bw > 0.0 {
-                let h = bw / 2.0;
-                c.push_str(&format!(
-                    "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
-                    rg_stroke(text_color),
-                    n(bw),
-                    dash(d),
-                    n(rect[0] + h),
-                    n(rect[1] + h),
-                    n(rect[2] - rect[0] - bw),
-                    n(rect[3] - rect[1] - bw)
-                ));
+            // A cloudy box (not a callout): its background and border follow the cloud around
+            // the text, which keeps to the cloud's inner rectangle.
+            if let Some(intensity) = cloud.filter(|_| !d.contains(b"CL")) {
+                let cw = if bw > 0.0 { bw } else { 1.0 };
+                let bump = cloud_bump(cw, intensity);
+                let inner = cloud_inner(d, rect, bump, cw)?;
+                let pts = [(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])];
+                c.push_str(&format!("{}{}{} w 1 j\n{}", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(cw), dash(d)));
+                c.push_str(&cloud_path(&pts, bump));
+                c.push_str(if bg.is_some() { "B\n[] 0 d\n" } else { "S\n[] 0 d\n" });
+                rect = inner;
+            } else if cloud.is_some() {
+                return None;
+            } else {
+                if let Some(bg) = bg {
+                    c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
+                }
+                if bw > 0.0 {
+                    let h = bw / 2.0;
+                    c.push_str(&format!(
+                        "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
+                        rg_stroke(text_color),
+                        n(bw),
+                        dash(d),
+                        n(rect[0] + h),
+                        n(rect[1] + h),
+                        n(rect[2] - rect[0] - bw),
+                        n(rect[3] - rect[1] - bw)
+                    ));
+                }
             }
             let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
             let pad = 2.0 + bw;
