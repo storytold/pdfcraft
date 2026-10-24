@@ -22,7 +22,6 @@ use hayro_syntax::page::Resources;
 use kurbo::{Affine, Rect, Shape};
 use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
-use std::iter;
 use std::ops::Deref;
 
 pub(crate) enum XObject<'a> {
@@ -1033,12 +1032,12 @@ fn decode_mask(
     target_dimension: Option<(u32, u32)>,
 ) -> Option<DecodedMask> {
     let ctx = decode_context(obj, target_dimension)?;
-    let mut height = ctx.height;
+    let height = ctx.height;
 
     let data = decode_mask_bytes(
         ctx.decoded.data,
         ctx.width,
-        &mut height,
+        height,
         &ctx.color_space,
         ctx.bits_per_component,
         &ctx.decode_arr,
@@ -1067,7 +1066,7 @@ fn decode_raster(
     target_dimension: Option<(u32, u32)>,
 ) -> Option<DecodedRaster> {
     let mut ctx = decode_context(obj, target_dimension)?;
-    let mut height = ctx.height;
+    let height = ctx.height;
 
     let is_default_decode = ctx.decode_arr
         == ctx
@@ -1091,7 +1090,7 @@ fn decode_raster(
         fix_image_length(
             ctx.decoded.data.to_mut(),
             ctx.width,
-            &mut height,
+            height,
             0,
             &ctx.color_space,
         )?;
@@ -1143,7 +1142,6 @@ fn decode_raster(
             &ctx.decode_arr,
             obj.interpolate,
         ) {
-            height = rgb.height;
             Some(rgb)
         } else {
             let mut f32_data = apply_decode_array(
@@ -1153,7 +1151,7 @@ fn decode_raster(
                 &ctx.decode_arr,
             )?;
 
-            fix_image_length(&mut f32_data, ctx.width, &mut height, 0.0, &ctx.color_space)?;
+            fix_image_length(&mut f32_data, ctx.width, height, 0.0, &ctx.color_space)?;
 
             get_rgb_data(
                 &f32_data,
@@ -1215,7 +1213,7 @@ fn decode_raster(
             &ctx.color_space,
             ctx.bits_per_component,
             ctx.width,
-            &mut height,
+            height,
             ctx.scale_factors,
             target_dimension,
         )
@@ -1237,7 +1235,7 @@ fn decode_raster(
 fn decode_mask_bytes(
     mut decoded_data: Cow<'_, [u8]>,
     width: u32,
-    height: &mut u32,
+    height: u32,
     color_space: &ColorSpace,
     bits_per_component: u8,
     decode_arr: &[(f32, f32)],
@@ -1261,7 +1259,7 @@ fn decode_mask_bytes(
         let components = get_components(
             &decoded_data,
             width,
-            *height,
+            height,
             color_space,
             bits_per_component,
         )?;
@@ -1294,7 +1292,7 @@ fn resolve_alpha(
     color_space: &ColorSpace,
     bits_per_component: u8,
     width: u32,
-    height: &mut u32,
+    height: u32,
     scale_factors: (f32, f32),
     target_dimension: Option<(u32, u32)>,
 ) -> Option<Option<LumaData>> {
@@ -1309,7 +1307,7 @@ fn resolve_alpha(
             Some(LumaData {
                 data,
                 width,
-                height: *height,
+                height,
                 interpolate: obj.interpolate,
                 scale_factors,
             })
@@ -1324,7 +1322,7 @@ fn resolve_alpha(
         let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         // PdfCraft patch (82): averaged down when far larger than where it is drawn, and cached.
-        obj.decoded_soft_mask(target_dimension, (width, *height)).map(|decoded| decoded.luma)
+        obj.decoded_soft_mask(target_dimension, (width, height)).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
         let mut mask_data = vec![];
 
@@ -1334,7 +1332,7 @@ fn resolve_alpha(
             _ => decoded.data.as_ref(),
         };
 
-        let components = get_components(raw_data, width, *height, color_space, bits_per_component)?;
+        let components = get_components(raw_data, width, height, color_space, bits_per_component)?;
 
         for pixel in components.chunks_exact(color_space.num_components() as usize) {
             let mut mask_val = 0;
@@ -1353,7 +1351,7 @@ fn resolve_alpha(
         Some(LumaData {
             data: mask_data,
             width,
-            height: *height,
+            height,
             interpolate: obj.interpolate,
             scale_factors,
         })
@@ -1446,33 +1444,30 @@ impl CacheKey for ImageXObject<'_> {
     }
 }
 
+/// `image` made exactly `width` × `height` pixels: extra samples are dropped, and missing ones
+/// are `filler`. `None` when there is no data at all (the image is left out) or no pixels.
+///
+/// PdfCraft patch (67): an image whose data stops short keeps its height, the missing samples
+/// padded the way `get_components` pads 1-, 2- and 4-bit ones, and the way Chrome draws such
+/// images. The height was cut to the rows present, so the image was drawn short and its soft
+/// mask squeezed into those rows: a scanned page's text came out as a faint ghost (#2780).
 #[must_use]
 fn fix_image_length<T: Copy>(
     image: &mut Vec<T>,
     width: u32,
-    height: &mut u32,
+    height: u32,
     filler: T,
     cs: &ColorSpace,
 ) -> Option<()> {
-    let row_len = width as usize * cs.num_components() as usize;
-
-    if (row_len * *height as usize) <= image.len() {
-        // Too much data (or just the right amount), truncate it.
-        image.truncate(row_len * *height as usize);
-    } else {
-        // Too little data, adapt the height and pad.
-        *height = image.len().div_ceil(row_len) as u32;
-
-        if !image.len().is_multiple_of(row_len) {
-            image.extend(iter::repeat_n(filler, row_len - (image.len() % row_len)));
-        }
+    let len = (width as usize)
+        .checked_mul(cs.num_components() as usize)?
+        .checked_mul(height as usize)?;
+    if image.is_empty() || len == 0 {
+        return None;
     }
+    image.resize(len, filler);
 
-    if width == 0 || *height == 0 {
-        None
-    } else {
-        Some(())
-    }
+    Some(())
 }
 
 fn get_components(
@@ -1583,17 +1578,15 @@ fn rgb_via_lookup(
     if n == 0 || bits == 0 || bits > MAX_LOOKUP_BITS || bpc > 16 || decode.len() < n {
         return None;
     }
-    // The length rules of `fix_image_length`: extra samples are dropped; missing ones shorten
-    // the image to the rows begun, the last row padded with decoded zeros.
-    let row_len = usize::try_from(width).ok()?.checked_mul(n)?;
-    let wanted = row_len.checked_mul(usize::try_from(height).ok()?)?;
-    let (height, used) = if wanted <= components.len() {
-        (height, wanted)
-    } else {
-        (u32::try_from(components.len().div_ceil(row_len)).ok()?, components.len())
-    };
+    // The length rules of `fix_image_length`: extra samples are dropped, and missing ones are
+    // decoded zeros (patch 67). With no samples at all, the caller's `fix_image_length` leaves
+    // the image out.
+    if components.is_empty() {
+        return None;
+    }
     let pixels = usize::try_from(width).ok()?.checked_mul(usize::try_from(height).ok()?)?;
     let total = pixels.checked_mul(n)?;
+    let used = total.min(components.len());
     let entries = 1usize << bits;
     if pixels <= entries {
         return None;
@@ -1620,15 +1613,25 @@ fn rgb_via_lookup(
             rgb.copy_from_slice(colour);
         }
     }
-    // The pixels past the samples present (at most a row): converted as before, padding and all.
+    // The pixels past the samples present: the one they stop in, from its samples and decoded
+    // zeros, and every one after it, all decoded zeros, in one colour converted once rather
+    // than once a pixel (they can be most of the image).
     if whole < pixels {
-        let tail: Vec<f32> = (whole * n..total)
+        let begun: Vec<f32> = (whole * n..(whole + 1) * n)
             .map(|i| match (components.get(i), decode.get(i % n)) {
                 (Some(s), Some(range)) if i < used => decode_sample(*s, bits_per_component, *range),
                 _ => 0.0,
             })
             .collect();
-        let _ = cs.convert_f32(&tail, data.get_mut(whole * 3..)?, false);
+        let _ = cs.convert_f32(&begun, data.get_mut(whole * 3..(whole + 1) * 3)?, false);
+        let rest = data.get_mut((whole + 1) * 3..)?;
+        if !rest.is_empty() {
+            let (zeros, mut zero) = (vec![0.0; n], [0u8; 3]);
+            let _ = cs.convert_f32(&zeros, &mut zero, false);
+            for rgb in rest.chunks_exact_mut(3) {
+                rgb.copy_from_slice(&zero);
+            }
+        }
     }
 
     Some(RgbData {

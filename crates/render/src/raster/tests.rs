@@ -9361,8 +9361,9 @@ fn soft_masks_handed_keyed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, 
 /// - takes each source sample into the target sample its centre falls in: seven columns
 ///   `0 0 0 255 0 0 0`, drawn three wide and so averaged to four, give `0 0 127 0` (by left edges,
 ///   `0 127 0 0`);
-/// - is never sized past the samples a truncated stream decodes: a mask that says it is 100 rows
-///   but holds 10, drawn 20 high, is handed no rows that no sample covers;
+/// - keeps the height a short stream says it has, its missing samples zeros (patch 67): a mask
+///   that says it is 100 rows but holds 10, drawn 20 high, is handed 32 rows, three opaque, one a
+///   third opaque, and the rest clear;
 /// - is cached per drawn size, rounded up to a power of two: the same image drawn 20 and then 200
 ///   points wide is handed its mask at 32 and then at its own 100, not the first draw's 32 again,
 ///   and drawn 20 and 21 wide it is handed one mask of 32 both times, whether the mask's
@@ -9374,8 +9375,10 @@ fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
     let (handed, _) = soft_masks_handed(7, 1, &[0, 0, 0, 255, 0, 0, 0], &[(3, 1)]);
     assert_eq!(handed, vec![(4, 1, vec![0, 0, 127, 0])], "centres, not left edges");
     let (handed, _) = soft_masks_handed(100, 100, &[255; 100 * 10], &[(20, 20)]);
-    // 32 wide (20 rounded up to a power of two), and 10 rows, the ones decoded, not 32: all opaque.
-    assert_eq!(handed, vec![(32, 10, vec![255; 32 * 10])], "no uncovered rows");
+    // 32 on a side (20 rounded up to a power of two). Rows 0 to 8 fall in the first three target
+    // rows; the fourth averages row 9 with two missing rows, which are zeros.
+    let rows = |alpha: u8, n: usize| vec![alpha; 32 * n];
+    assert_eq!(handed, vec![(32, 32, [rows(255, 3), rows(85, 1), rows(0, 28)].concat())], "a short mask keeps its height");
     let sizes = |draws: &[(u32, u32)]| -> Vec<(u32, u32)> {
         soft_masks_handed(100, 100, &[255; 100 * 100], draws).0.iter().map(|(w, h, _)| (*w, *h)).collect()
     };
@@ -10226,6 +10229,10 @@ mod tiff_predicted_images;
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
 mod isolated_cmyk_groups;
+
+// #2780: images and soft masks whose data stops short of their height (vendored
+// hayro-interpret patch 67).
+mod short_image_data;
 
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
 /// second object: enumeration yielded it once per key, so a document recovered without a readable
