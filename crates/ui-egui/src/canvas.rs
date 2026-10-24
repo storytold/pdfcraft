@@ -2282,7 +2282,7 @@ impl DocView {
 
     /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
     /// wider page elsewhere in the document can't push the shown one off-centre.
-    fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
+    pub(crate) fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
         let single = (self.layout == PageLayout::Single && !self.continuous).then(|| self.current.min(info.pages.len().saturating_sub(1)));
         let shown = info.pages.iter().enumerate().filter(|&(i, _)| single.is_none_or(|c| c == i));
         let max_w = shown.map(|(_, p)| self.display_size(p).0).fold(0.0, f32::max);
@@ -2291,7 +2291,7 @@ impl DocView {
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
-    fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
+    pub(crate) fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
         let s = self.zoom * PT;
         let gap = self.page_gap();
         let page_size = |p: &pdfcraft_render::PageInfo| {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::ObjRef;
 
-pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
+pub use pdfcraft_compare::{Change, Comparison, Kind, PageChange, PageKind, Side};
 // How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
 // that draw more.
 pub use pdfcraft_edit::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
@@ -60,12 +60,18 @@ impl Session {
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
+        Ok(pdfcraft_compare::compare_with_pages(&a.words(), a.info.pages.len(), &b.words(), b.info.pages.len()))
     }
 
-    /// Visual compare: regions where page n of `new` looks different from page n of `old`
-    /// (rendered at `dpi`), as (page, user-space box in `new`).
+    /// Visual compare: regions where each page of `new` looks different from its corresponding
+    /// page in `old` (rendered at `dpi`), as (page, user-space box in `new`).
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
+        let c = self.compare(old, new)?;
+        self.compare_visual_pairs(old, new, &c.page_pairs, dpi)
+    }
+
+    /// Visual compare over already-matched `(old_page, new_page)` pairs.
+    pub fn compare_visual_pairs(&self, old: DocId, new: DocId, pairs: &[(usize, usize)], dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         let renderer = |d: &crate::Document| {
@@ -77,9 +83,14 @@ impl Session {
         let (mut ra, mut rb) = (renderer(a), renderer(b));
         let scale = dpi.clamp(18.0, 150.0) / 72.0;
         let mut out = Vec::new();
-        for (page, info) in b.info.pages.iter().enumerate().take(a.info.pages.len()) {
-            let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
-            let (x, y) = (ra.render(req), rb.render(req));
+        for &(old_page, new_page) in pairs {
+            let Some(info) = b.info.pages.get(new_page) else { continue };
+            if old_page >= a.info.pages.len() {
+                continue;
+            }
+            let req_a = pdfcraft_render::RenderRequest { page: old_page, scale, ..Default::default() };
+            let req_b = pdfcraft_render::RenderRequest { page: new_page, scale, ..Default::default() };
+            let (x, y) = (ra.render(req_a), rb.render(req_b));
             if x.error.is_some() || y.error.is_some() {
                 continue;
             }
@@ -87,7 +98,7 @@ impl Session {
             for r in pdfcraft_compare::visual_regions((&y.rgba, y.width, y.height), (&x.rgba, x.width, x.height), 24) {
                 let p = info.view_to_user(r[0] as f32 / s, r[1] as f32 / s);
                 let q = info.view_to_user(r[2] as f32 / s, r[3] as f32 / s);
-                out.push((page, [p[0].min(q[0]) as f64, p[1].min(q[1]) as f64, p[0].max(q[0]) as f64, p[1].max(q[1]) as f64]));
+                out.push((new_page, [p[0].min(q[0]) as f64, p[1].min(q[1]) as f64, p[0].max(q[0]) as f64, p[1].max(q[1]) as f64]));
             }
         }
         Ok(out)

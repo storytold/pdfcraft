@@ -4,7 +4,7 @@
 
 use egui::{Align, Color32, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::compare::{Comparison, Kind};
+use pdfcraft_engine::compare::{Comparison, Kind, PageKind};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, RightPanel, widgets};
@@ -14,7 +14,7 @@ pub struct CompareState {
     pub old: DocId,
     pub new: DocId,
     pub result: Comparison,
-    /// Regions that look different (page, user-space box), page n against page n.
+    /// Regions that look different (new-page index, new-page user-space box), after page matching.
     pub visual: Vec<(usize, [f64; 4])>,
     pub selected: Option<usize>,
     /// Side by side: the old file on the left, the new on the right, scrolled and zoomed
@@ -36,6 +36,7 @@ pub const VISUAL: Color32 = Color32::from_rgb(0xF0, 0x8C, 0x1A);
 /// What the panel asks for.
 pub enum PanelAction {
     Select(usize),
+    SelectPage(usize),
     Mark,
     Report,
     Clear,
@@ -142,6 +143,35 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
         }
     });
     ui.separator();
+    for (pi, pc) in c.page_changes.iter().enumerate() {
+        let (kind, page, text) = match pc.kind {
+            PageKind::Moved => (Kind::Replaced, pc.new_page, format!("Page {} → Page {}", pc.old_page + 1, pc.new_page + 1)),
+            PageKind::Inserted => (Kind::Inserted, pc.new_page, format!("+ Page {}", pc.new_page + 1)),
+            PageKind::Deleted => (Kind::Deleted, pc.old_page, format!("− Page {}", pc.old_page + 1)),
+        };
+        let r = ui.push_id(("page-change", pi), |ui| {
+            ui.horizontal(|ui| {
+                let (bar, _) = ui.allocate_exact_size(egui::vec2(4.0, 34.0), egui::Sense::hover());
+                ui.painter().rect_filled(bar, egui::CornerRadius::same(2), colour(kind));
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::fmt(
+                            tl!("{kind} · page {p}"),
+                            &[("kind", tl!(pc.kind.label())), ("p", &(page + 1).to_string())],
+                        ))
+                        .small()
+                        .color(t.text_muted),
+                    );
+                    ui.selectable_label(false, text)
+                })
+                .inner
+            })
+            .inner
+        });
+        if r.inner.clicked() {
+            action = Some(PanelAction::SelectPage(pi));
+        }
+    }
     for (i, ch) in c.changes.iter().enumerate().filter(|_| s.show_text).take(2000) {
         let text = match ch.kind {
             Kind::Replaced => format!("\"{}\" → \"{}\"", ch.old.text, ch.new.text),
@@ -193,8 +223,8 @@ impl PdfCraftApp {
         let Some(old) = self.compare_old else { return };
         match self.session.compare(old, new) {
             Ok(result) => {
-                let visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
-                let n = result.changes.len();
+                let visual = self.session.compare_visual_pairs(old, new, &result.page_pairs, 72.0).unwrap_or_default();
+                let n = result.changes.len() + result.page_changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
                 let side_by_side = self.views.iter().any(|v| v.id == old) && self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0);
                 self.compare = Some(crate::compare_ui::CompareState {
@@ -241,6 +271,13 @@ impl PdfCraftApp {
                     let v = &mut self.views[oi];
                     v.go_to_page(old_target.0);
                     v.flash = Some((old_target.0, old_target.1.map(|x| x as f32), 0.0));
+                }
+            }
+            PanelAction::SelectPage(i) => {
+                let Some(pc) = s.result.page_changes.get(i).copied() else { return };
+                self.views[index].go_to_page(pc.new_page);
+                if let Some(oi) = self.views.iter().position(|v| v.id == old) {
+                    self.views[oi].go_to_page(pc.old_page);
                 }
             }
             PanelAction::SideBySide(on) => {
@@ -291,7 +328,7 @@ impl PdfCraftApp {
     fn shade_compare(&mut self, index: usize) {
         let Some(s) = self.compare.as_ref() else { return };
         let old = s.old;
-        let (old_marks, new_marks) = (shading(s, true), shading(s, false));
+        let (old_marks, new_marks) = (shading(s, true, &self.session), shading(s, false, &self.session));
         if let Some(v) = self.views.get_mut(index) {
             v.compare_marks = new_marks;
         }
@@ -305,7 +342,7 @@ impl PdfCraftApp {
 /// and the visual differences no text change there covers, so both versions read with their own
 /// shading. Hidden kinds are left out after the overlap test, so hiding the text does not uncover
 /// the visual differences a text change explains.
-fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
+fn shading(s: &CompareState, old: bool, session: &pdfcraft_engine::Session) -> Vec<(usize, [f32; 4], Color32)> {
     let overlaps = |p: usize, r: [f32; 4], marks: &[(usize, [f32; 4], Color32)]| {
         marks.iter().any(|(mp, m, _)| *mp == p && m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3])
     };
@@ -316,10 +353,28 @@ fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
     }
     let mut visual = Vec::new();
     for (p, r) in &s.visual {
-        let r = r.map(|v| v as f32);
+        let (p, r) = if old {
+            let Some(old_p) = s.result.old_page(*p) else { continue };
+            let old_info = session.get(s.old).and_then(|d| d.info.pages.get(old_p));
+            let new_info = session.get(s.new).and_then(|d| d.info.pages.get(*p));
+            let r = if let (Some(oi), Some(ni)) = (old_info, new_info) {
+                let (nw, nh) = (ni.width.max(1e-3), ni.height.max(1e-3));
+                let map = |x: f64, y: f64| {
+                    let v = ni.user_to_view(x as f32, y as f32);
+                    oi.view_to_user(v[0] / nw * oi.width, v[1] / nh * oi.height)
+                };
+                let (a, b) = (map(r[0], r[1]), map(r[2], r[3]));
+                [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+            } else {
+                r.map(|v| v as f32)
+            };
+            (old_p, r)
+        } else {
+            (*p, r.map(|v| v as f32))
+        };
         // The old file's half also skips a region overlapping one it already shades.
-        if !overlaps(*p, r, &text) && !(old && overlaps(*p, r, &visual)) {
-            visual.push((*p, r, VISUAL));
+        if !overlaps(p, r, &text) && !(old && overlaps(p, r, &visual)) {
+            visual.push((p, r, VISUAL));
         }
     }
     let mut out = if s.show_text { text } else { Vec::new() };
@@ -362,16 +417,19 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
     let leader = app.compare.as_ref().map_or(1, |c| c.leader);
     let (lead, follow) = if leader == 0 { (old, new) } else { (new, old) };
     // The follower takes the leader's zoom and layout before either is drawn.
-    let (zoom, fit, layout, continuous, page_gaps, rotation) = {
+    let (zoom, fit, layout, continuous, cover, page_gaps, rotation, lead_cur) = {
         let v = &app.views[lead];
-        (v.zoom, v.fit, v.layout, v.continuous, v.show_page_gaps, v.rotation)
+        (v.zoom, v.fit, v.layout, v.continuous, v.cover, v.show_page_gaps, v.rotation, v.current)
     };
+    let follow_cur =
+        app.compare.as_ref().map_or(lead_cur, |c| if leader == 0 { c.result.sync_new_page(lead_cur) } else { c.result.sync_old_page(lead_cur) });
     {
         let v = &mut app.views[follow];
         if v.zoom != zoom
             || v.fit != fit
             || v.layout != layout
             || v.continuous != continuous
+            || v.cover != cover
             || v.show_page_gaps != page_gaps
             || v.rotation != rotation
         {
@@ -379,8 +437,13 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
             v.fit = fit;
             v.layout = layout;
             v.continuous = continuous;
+            v.cover = cover;
             v.show_page_gaps = page_gaps;
             v.rotation = rotation;
+        }
+        if !continuous && v.current != follow_cur {
+            v.current = follow_cur;
+            v.page_input = (follow_cur + 1).to_string();
         }
     }
     let names = [old, new].map(|i| app.session.get(app.views[i].id).map(|d| d.name.clone()).unwrap_or_default());
@@ -408,16 +471,130 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
         child.set_clip_rect(body);
         crate::canvas::document_area(app, index, &mut child);
     }
-    // After both drew: the leader's scroll, when it moved, is the follower's next offset.
+    // After both drew: the leader's scroll, when it moved, is the follower's next offset,
+    // shifted by the difference between the corresponding pages' vertical positions.
     let (Some(old), Some(new)) = (find(app, ids[0]), find(app, ids[1])) else { return };
-    let follow = if leader == 0 { new } else { old };
+    let (lead, follow) = if leader == 0 { (old, new) } else { (new, old) };
     let offsets = [app.views[old].last_scroll, app.views[new].last_scroll];
+    let lead_page = app.views[lead].current;
+    let follow_page =
+        app.compare.as_ref().map_or(lead_page, |c| if leader == 0 { c.result.sync_new_page(lead_page) } else { c.result.sync_old_page(lead_page) });
+    let dy = page_top_y(app, follow, follow_page) - page_top_y(app, lead, lead_page);
     if let Some(c) = app.compare.as_mut() {
         let lead_k = if leader == 0 { 0 } else { 1 };
-        if (offsets[lead_k] - c.prev_scroll[lead_k]).length() > 0.5 && (offsets[1 - lead_k] - offsets[lead_k]).length() > 0.5 {
-            app.views[follow].sync_scroll = Some(offsets[lead_k]);
+        let target = egui::vec2(offsets[lead_k].x, (offsets[lead_k].y + dy).max(0.0));
+        if (offsets[lead_k] - c.prev_scroll[lead_k]).length() > 0.5 && (offsets[1 - lead_k] - target).length() > 0.5 {
+            app.views[follow].sync_scroll = Some(target);
+            app.views[follow].current = follow_page;
+            app.views[follow].page_input = (follow_page + 1).to_string();
             ui.ctx().request_repaint();
         }
         c.prev_scroll = offsets;
+    }
+}
+
+fn page_top_y(app: &PdfCraftApp, view_index: usize, page: usize) -> f32 {
+    let Some(v) = app.views.get(view_index) else { return 0.0 };
+    if !v.continuous {
+        return 0.0;
+    }
+    let Some(doc) = app.session.get(v.id) else { return 0.0 };
+    let w = v.content_width(&doc.info, v.viewport_rect().width());
+    v.layout(&doc.info, w, app.ctx.as_ref().map_or(1.0, egui::Context::pixels_per_point)).get(page).map_or(0.0, |r| r.min.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn blank_page_insertion_is_counted_and_shown_in_the_panel() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for pages in [1, 2] {
+            let bytes = app.session.create_blank(300.0, 400.0, pages).unwrap();
+            app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        }
+        app.compare_old = Some(app.views[0].id);
+        app.run_compare();
+        let summary = app.toast.as_ref().unwrap().0.clone();
+        let new = app.views[1].id;
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(640.0, 480.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let _ = panel(ui, &Tokens::get(ui.ctx()), &app.compare, new);
+            },
+            app,
+        );
+        h.run();
+        let page_visible = h.query_by_label("Inserted page · page 2").is_some();
+        assert!(summary == "1 difference found" && page_visible, "summary={summary:?}, page_visible={page_visible}");
+        if let Ok(path) = std::env::var("PDFCRAFT_COMPARE_SHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.state_mut().compare.as_mut().unwrap().result.page_changes = vec![
+            pdfcraft_engine::compare::PageChange { kind: PageKind::Deleted, old_page: 4, new_page: 1 },
+            pdfcraft_engine::compare::PageChange { kind: PageKind::Moved, old_page: 3, new_page: 2 },
+        ];
+        h.run();
+        assert!(h.query_by_label("Deleted page · page 5").is_some());
+        assert!(h.query_by_label("Moved page · page 3").is_some());
+    }
+
+    #[test]
+    fn comparison_page_tops_follow_two_up_rows_and_cover() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(300.0, 400.0, 4).unwrap();
+        app.open_bytes("test.pdf", None, bytes.as_ref().clone()).unwrap();
+        let v = &mut app.views[0];
+        v.layout = crate::canvas::PageLayout::TwoUp;
+        v.zoom = 1.0;
+        v.cover = false;
+        assert_eq!(page_top_y(&app, 0, 0), page_top_y(&app, 0, 1));
+        assert!(page_top_y(&app, 0, 2) > page_top_y(&app, 0, 1));
+        app.views[0].cover = true;
+        assert_eq!(page_top_y(&app, 0, 1), page_top_y(&app, 0, 2));
+        assert!(page_top_y(&app, 0, 3) > page_top_y(&app, 0, 2));
+        let unrotated_step = page_top_y(&app, 0, 3) - page_top_y(&app, 0, 1);
+        app.views[0].rotation = 90;
+        assert_eq!(page_top_y(&app, 0, 1), page_top_y(&app, 0, 2));
+        let rotated_step = page_top_y(&app, 0, 3) - page_top_y(&app, 0, 1);
+        assert!((unrotated_step - rotated_step - 100.0 * crate::canvas::PT).abs() < 0.001);
+    }
+
+    #[test]
+    fn matched_visual_shading_keeps_page_mapping_and_filters() {
+        let mut app = PdfCraftApp::new();
+        for (width, height, pages) in [(300.0, 400.0, 2), (600.0, 800.0, 3)] {
+            let bytes = app.session.create_blank(width, height, pages).unwrap();
+            app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        }
+        app.compare_old = Some(app.views[0].id);
+        app.run_compare();
+        let s = app.compare.as_mut().unwrap();
+        s.result.page_pairs = vec![(0, 0), (1, 2)];
+        s.visual = vec![(2, [100.0, 200.0, 200.0, 400.0]), (1, [10.0, 20.0, 30.0, 40.0])];
+        app.shade_compare(1);
+        assert_eq!(app.views[0].compare_marks, [(1, [50.0, 100.0, 100.0, 200.0], VISUAL)]);
+        assert_eq!(app.views[1].compare_marks.len(), 2, "an inserted page has no old-page mark");
+        app.compare_action(1, PanelAction::Show { text: false, visual: true });
+        assert_eq!(app.views[0].compare_marks, [(1, [50.0, 100.0, 100.0, 200.0], VISUAL)]);
+        app.compare_action(1, PanelAction::Show { text: true, visual: false });
+        assert!(app.views.iter().all(|v| v.compare_marks.is_empty()));
+        use pdfcraft_engine::compare::{Change, Side};
+        app.compare.as_mut().unwrap().result.changes.push(Change {
+            kind: Kind::Replaced,
+            old: Side { page: 1, rects: vec![[50.0, 100.0, 100.0, 200.0]], ..Side::default() },
+            new: Side { page: 2, rects: vec![[100.0, 200.0, 200.0, 400.0]], ..Side::default() },
+        });
+        app.compare_action(1, PanelAction::Show { text: false, visual: true });
+        assert!(app.views[0].compare_marks.is_empty(), "hiding text must not reveal an overlapping mapped visual mark");
+        assert_eq!(app.views[1].compare_marks, [(1, [10.0, 20.0, 30.0, 40.0], VISUAL)]);
     }
 }
