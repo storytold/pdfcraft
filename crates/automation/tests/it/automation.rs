@@ -6381,6 +6381,70 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }
 
+/// #4158: a word set in italic inside a sentence ("Before *Chevron* after.") reaches Word as an
+/// italic run of the sentence's paragraph, not as a paragraph of its own between two halves.
+#[test]
+fn exporting_to_word_keeps_an_italic_word_inside_its_sentence() {
+    let dir = workdir("italic-run-word");
+    let content = "BT /F1 12 Tf 72 700 Td (Before ) Tj /F2 12 Tf (Chevron) Tj /F1 12 Tf ( after.) Tj ET \
+BT /F1 12 Tf 72 640 Td (A paragraph further down.) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("opinion.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "opinion.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "opinion.docx" }));
+    let zip = std::fs::read(dir.join("opinion.docx")).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    // The paragraphs that hold text, each as its runs: (text, italic).
+    let paragraphs: Vec<Vec<(String, bool)>> = xml
+        .split("<w:p>")
+        .skip(1)
+        .map(|p| {
+            let p = p.split_once("</w:p>").map_or(p, |(inside, _)| inside);
+            p.split("<w:r>")
+                .skip(1)
+                .filter_map(|r| Some((r.split_once("<w:t xml:space=\"preserve\">")?.1.split_once("</w:t>")?.0.to_string(), r.contains("<w:i/>"))))
+                .collect::<Vec<_>>()
+        })
+        .filter(|runs| !runs.is_empty())
+        .collect();
+    let sentence = paragraphs.iter().find(|p| p.iter().any(|(t, _)| t.contains("Before"))).unwrap_or_else(|| panic!("{xml}"));
+    assert_eq!(sentence.len(), 3, "one paragraph, three runs: {xml}");
+    assert_eq!(sentence.iter().map(|(t, _)| t.as_str()).collect::<String>(), "Before Chevron after.", "{xml}");
+    assert_eq!(sentence.iter().map(|(_, i)| *i).collect::<Vec<_>>(), [false, true, false], "{xml}");
+    assert_eq!(paragraphs.len(), 2, "{xml}");
+}
+
 #[test]
 fn hundreds_of_xfa_calculations_open_and_recalculate_within_their_budgets() {
     let dir = workdir("xfa-many");
