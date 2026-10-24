@@ -45,13 +45,13 @@ pub enum PickFor {
 /// Which native panel to show.
 pub(crate) enum Ask {
     /// Choose one existing file.
-    File(rfd::AsyncFileDialog),
+    File(crate::fd::AsyncFileDialog),
     /// Choose one or more existing files.
-    Files(rfd::AsyncFileDialog),
+    Files(crate::fd::AsyncFileDialog),
     /// Choose a folder.
-    Folder(rfd::AsyncFileDialog),
+    Folder(crate::fd::AsyncFileDialog),
     /// Choose where to save a file.
-    Save(rfd::AsyncFileDialog),
+    Save(crate::fd::AsyncFileDialog),
 }
 
 /// What to do with the chosen paths, on a later frame.
@@ -170,7 +170,7 @@ impl Pickers {
 impl PdfCraftApp {
     /// Show a native picker for `pick_for` without blocking the frame. The choice is used on a
     /// later frame by [`Self::process_picked`].
-    pub(crate) fn pick(&mut self, pick_for: PickFor, dialog: rfd::AsyncFileDialog, multiple: bool) {
+    pub(crate) fn pick(&mut self, pick_for: PickFor, dialog: crate::fd::AsyncFileDialog, multiple: bool) {
         // Insert and Replace edit the active document: remember which one.
         let target = match pick_for {
             PickFor::Files(purpose) if purpose.edits_active_document() => self.active_ids().map(|(_, id)| id),
@@ -217,7 +217,7 @@ impl PdfCraftApp {
         }
         // On macOS creating the future shows the panel; it must happen here, on the main thread.
         let ctx = self.ctx.clone();
-        let one = |h: Option<rfd::FileHandle>| h.map(|h| h.path().to_path_buf()).into_iter().collect::<Vec<_>>();
+        let one = |h: Option<crate::fd::FileHandle>| h.map(|h| h.path().to_path_buf()).into_iter().collect::<Vec<_>>();
         let started = match ask {
             Ask::File(d) => {
                 let pick = d.pick_file();
@@ -396,9 +396,9 @@ mod tests {
         app.pick_override = Some(vec!["c.pdf".into()]);
         let got = Arc::new(Mutex::new(Vec::new()));
         let first = got.clone();
-        assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, move |_, _| first.lock().unwrap().push("first")));
+        assert!(app.ask(Ask::Save(crate::fd::AsyncFileDialog::new()), None, move |_, _| first.lock().unwrap().push("first")));
         let second = got.clone();
-        assert!(app.ask(Ask::Folder(rfd::AsyncFileDialog::new()), None, move |_, _| second.lock().unwrap().push("second")));
+        assert!(app.ask(Ask::Folder(crate::fd::AsyncFileDialog::new()), None, move |_, _| second.lock().unwrap().push("second")));
         assert!(app.toast.as_ref().is_some_and(|(m, _)| m.contains("will open when it closes")), "the user is told it will follow");
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec!["first"], "the waiting picker shows only once the first one is answered");
@@ -415,7 +415,7 @@ mod tests {
         app.pickers.showing.store(true, Ordering::SeqCst);
         let got = Arc::new(Mutex::new(Vec::new()));
         let into = got.clone();
-        assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
+        assert!(app.ask(Ask::File(crate::fd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
         app.process_picked();
         assert!(got.lock().unwrap().is_empty(), "the showing picker still owns the flag");
         app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
@@ -486,13 +486,13 @@ mod tests {
         app.pick_override = Some(vec!["first.fdf".into()]);
         let got = Arc::new(Mutex::new(Vec::new()));
         let into = got.clone();
-        assert!(app.ask(Ask::Files(rfd::AsyncFileDialog::new()), None, move |app, _| {
+        assert!(app.ask(Ask::Files(crate::fd::AsyncFileDialog::new()), None, move |app, _| {
             // Merge data: the spreadsheet's save picker, asked from the first pick's closure.
-            assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, move |_, _| into.lock().unwrap().push("chained")));
+            assert!(app.ask(Ask::Save(crate::fd::AsyncFileDialog::new()), None, move |_, _| into.lock().unwrap().push("chained")));
         }));
         // Another command asks for a picker before the frame uses the first pick: it waits.
         let other = got.clone();
-        assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, _| other.lock().unwrap().push("other")));
+        assert!(app.ask(Ask::File(crate::fd::AsyncFileDialog::new()), None, move |_, _| other.lock().unwrap().push("other")));
         for _ in 0..4 {
             app.process_picked();
         }

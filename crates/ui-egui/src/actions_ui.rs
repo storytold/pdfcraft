@@ -77,7 +77,7 @@ impl PdfCraftApp {
         match self.export_dir_override.clone() {
             Some(d) => self.run_action_into(action, files, d.into()),
             None => {
-                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the results").to_string());
+                let dialog = crate::fd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the results").to_string());
                 self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.run_action_into(action, files, dir));
             }
         }
@@ -186,7 +186,7 @@ impl PdfCraftApp {
             match self.action_files_override.clone() {
                 Some(p) => run(self, p.into_iter().map(std::path::PathBuf::from).collect()),
                 None => {
-                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
+                    let dialog = crate::fd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
                     self.ask(crate::pickers::Ask::Files(dialog), None, run);
                 }
             }

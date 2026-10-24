@@ -313,7 +313,7 @@ impl PdfCraftApp {
         match self.export_dir_override.clone() {
             Some(d) => self.ocr_files_into(files, settings, d.into()),
             None => {
-                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the searchable files").to_string());
+                let dialog = crate::fd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the searchable files").to_string());
                 self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.ocr_files_into(files, settings, dir));
             }
         }

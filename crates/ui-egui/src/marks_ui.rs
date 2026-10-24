@@ -475,7 +475,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     // Browse…: the picker answers on a later frame, into the draft.
     #[cfg(not(target_arch = "wasm32"))]
     if browse {
-        let dialog = rfd::AsyncFileDialog::new()
+        let dialog = crate::fd::AsyncFileDialog::new()
             .add_filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
         let epoch = app.dialog_epoch();
         app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
