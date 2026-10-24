@@ -714,7 +714,7 @@ impl DocView {
         self.auto_scroll.active()
     }
 
-    /// Whether a held middle-button pan is active, outside Linux (tests and automation).
+    /// Whether a held middle-button pan is active (platforms without auto-scroll; tests and automation).
     pub fn middle_panning(&self) -> bool {
         self.auto_scroll.panning()
     }

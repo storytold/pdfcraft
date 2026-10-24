@@ -1792,14 +1792,14 @@ fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     assert!(!s.session.get(s.views[0].id).unwrap().dirty, "scrolling never edits the PDF");
     assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
     let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
-    if cfg!(target_os = "linux") {
-        // Linux latches auto-scroll instead of panning with the drag.
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
+        // Linux and Windows latch auto-scroll instead of panning with the drag.
         assert!(s.views[0].auto_scrolling());
     } else {
         assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
     }
     // The tool still draws with the primary button afterwards.
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
     }
