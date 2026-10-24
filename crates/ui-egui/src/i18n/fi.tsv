@@ -2790,6 +2790,21 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	No matches to replace	Korvattavia osumia ei ole
+	Not replaced: {why}	Ei korvattu: {why}
+	Nothing replaced	Mitään ei korvattu
+	Replace ({key})	Korvaa ({key})
+	Replace all	Korvaa kaikki
+	Replace with	Korvaava teksti
+	Replaced {n} on {pages}	Korvattiin {n} sivulla {pages}
+	Replace…	Korvaa…
+	not editable text	ei muokattavaa tekstiä
+	scanned text	skannattu teksti
+	spans two paragraphs	ulottuu kahteen kappaleeseen
+	the font can't draw it	fontti ei voi piirtää sitä
+	the paragraph can't be rewritten	kappaletta ei voi kirjoittaa uudelleen
+	{k} skipped: {why}	{k} ohitettu: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

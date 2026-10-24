@@ -440,11 +440,27 @@ pub(super) fn rewrite_styled_block(
         return Err(EditError::Invalid("text style ranges must be disjoint UTF-8 boundaries with finite formatting (at most 1024 ranges)".into()));
     }
     let source_count = lines.len();
+    // Given sources must cover the draft in order, on character boundaries, from the block's runs.
+    let sources = if style.sources.is_empty() {
+        block.edited_spans(draft)
+    } else {
+        let mut at = 0;
+        for (range, source) in &style.sources {
+            if range.start != at || range.start >= range.end || draft.get(range.clone()).is_none() || !block.lines.contains(source) {
+                return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+            }
+            at = range.end;
+        }
+        if at != draft.len() {
+            return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+        }
+        style.sources.clone()
+    };
     let mut styled_lines = lines.to_vec();
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
     let mut overrides = HashMap::new();
-    for (span, source) in block.edited_spans(draft) {
+    for (span, source) in sources {
         let mut edges = vec![span.start, span.end];
         for r in &ranges {
             for edge in [r.range.start, r.range.end] {
@@ -842,7 +858,7 @@ pub(super) fn rewrite_styled_block(
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state.
-    let plain = BlockStyle { ranges: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), ..style.clone() } == BlockStyle::default();
     let mut kept = if plain {
         untouched_rows(block, draft, &row_ranges).into_iter().zip(&rows).map(|(same, row)| same && row.iter().all(|c| c.1 < source_count)).collect()
     } else {

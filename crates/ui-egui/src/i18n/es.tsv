@@ -2645,6 +2645,21 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+	Replace…	Reemplazar…
+	Replace ({key})	Reemplazar ({key})
+	Replace with	Reemplazar por
+	Replace all	Reemplazar todo
+	No matches to replace	No hay coincidencias que reemplazar
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	No se ha reemplazado: {why}
+	Nothing replaced	No se ha reemplazado nada
+	Replaced {n} on {pages}	Se han reemplazado {n} en {pages}
+	{k} skipped: {why}	{k} omitidas: {why}
+	spans two paragraphs	abarca dos párrafos
+	scanned text	texto escaneado
+	the font can't draw it	la fuente no puede dibujarlo
+	the paragraph can't be rewritten	el párrafo no se puede reescribir
+	not editable text	texto no editable
 	Attach a file…	Adjuntar un archivo…
 	Delete attachment	Eliminar adjunto
 	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web

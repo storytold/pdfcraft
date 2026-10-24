@@ -2495,6 +2495,21 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Replace…	Αντικατάσταση…
+	Replace ({key})	Αντικατάσταση ({key})
+	Replace with	Αντικατάσταση με
+	Replace all	Αντικατάσταση όλων
+	No matches to replace	Δεν υπάρχουν αντιστοιχίες για αντικατάσταση
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Δεν αντικαταστάθηκε: {why}
+	Nothing replaced	Δεν αντικαταστάθηκε τίποτα
+	Replaced {n} on {pages}	Αντικαταστάθηκαν {n} σε {pages}
+	{k} skipped: {why}	Παραλείφθηκαν {k}: {why}
+	spans two paragraphs	εκτείνεται σε δύο παραγράφους
+	scanned text	σαρωμένο κείμενο
+	the font can't draw it	η γραμματοσειρά δεν μπορεί να το σχεδιάσει
+	the paragraph can't be rewritten	η παράγραφος δεν μπορεί να ξαναγραφτεί
+	not editable text	μη επεξεργάσιμο κείμενο
 	Attach a file…	Επισύναψη αρχείου…
 	Delete attachment	Διαγραφή συνημμένου
 	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό

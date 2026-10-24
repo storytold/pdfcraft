@@ -2503,6 +2503,21 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Replace…	Substituir…
+	Replace ({key})	Substituir ({key})
+	Replace with	Substituir por
+	Replace all	Substituir tudo
+	No matches to replace	Nenhuma correspondência para substituir
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Não substituído: {why}
+	Nothing replaced	Nada foi substituído
+	Replaced {n} on {pages}	{n} substituições em {pages}
+	{k} skipped: {why}	{k} ignoradas: {why}
+	spans two paragraphs	abrange dois parágrafos
+	scanned text	texto digitalizado
+	the font can't draw it	a fonte não consegue desenhá-lo
+	the paragraph can't be rewritten	o parágrafo não pode ser reescrito
+	not editable text	texto não editável
 	Attach a file…	Anexar um arquivo…
 	Delete attachment	Excluir anexo
 	Attaching files is not available on the web yet	Anexar arquivos ainda não está disponível na web

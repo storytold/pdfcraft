@@ -2563,6 +2563,21 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Replace…	Nahradit…
+	Replace ({key})	Nahradit ({key})
+	Replace with	Nahradit čím
+	Replace all	Nahradit vše
+	No matches to replace	Žádné shody k nahrazení
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nenahrazeno: {why}
+	Nothing replaced	Nic nebylo nahrazeno
+	Replaced {n} on {pages}	Nahrazeno: {n} ({pages})
+	{k} skipped: {why}	Přeskočeno {k}: {why}
+	spans two paragraphs	zasahuje do dvou odstavců
+	scanned text	naskenovaný text
+	the font can't draw it	písmo ho nedokáže vykreslit
+	the paragraph can't be rewritten	odstavec nelze přepsat
+	not editable text	neupravitelný text
 	Attach a file…	Připojit soubor…
 	Delete attachment	Odstranit přílohu
 	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici

@@ -2487,6 +2487,21 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Replace…	Ауыстыру…
+	Replace ({key})	Ауыстыру ({key})
+	Replace with	Мынаған ауыстыру
+	Replace all	Барлығын ауыстыру
+	No matches to replace	Ауыстыратын сәйкестік жоқ
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Ауыстырылмады: {why}
+	Nothing replaced	Ештеңе ауыстырылмады
+	Replaced {n} on {pages}	Ауыстырылды: {n} ({pages})
+	{k} skipped: {why}	{k} өткізілді: {why}
+	spans two paragraphs	екі абзацқа созылады
+	scanned text	сканерленген мәтін
+	the font can't draw it	қаріп оны сала алмайды
+	the paragraph can't be rewritten	абзацты қайта жазу мүмкін емес
+	not editable text	түзетуге болмайтын мәтін
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз

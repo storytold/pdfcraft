@@ -2485,6 +2485,21 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Replace…	Değiştir…
+	Replace ({key})	Değiştir ({key})
+	Replace with	Şununla değiştir
+	Replace all	Tümünü değiştir
+	No matches to replace	Değiştirilecek eşleşme yok
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Değiştirilmedi: {why}
+	Nothing replaced	Hiçbir şey değiştirilmedi
+	Replaced {n} on {pages}	{n} değiştirildi ({pages})
+	{k} skipped: {why}	{k} atlandı: {why}
+	spans two paragraphs	iki paragrafa yayılıyor
+	scanned text	taranmış metin
+	the font can't draw it	yazı tipi bunu çizemiyor
+	the paragraph can't be rewritten	paragraf yeniden yazılamıyor
+	not editable text	düzenlenemeyen metin
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor

@@ -2758,6 +2758,21 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	No matches to replace	Tidak ada yang cocok untuk diganti
+	Not replaced: {why}	Tidak diganti: {why}
+	Nothing replaced	Tidak ada yang diganti
+	Replace ({key})	Ganti ({key})
+	Replace all	Ganti semua
+	Replace with	Ganti dengan
+	Replaced {n} on {pages}	Mengganti {n} pada {pages}
+	Replace…	Ganti…
+	not editable text	bukan teks yang dapat diedit
+	scanned text	teks hasil pindai
+	spans two paragraphs	mencakup dua paragraf
+	the font can't draw it	font tidak dapat menggambarnya
+	the paragraph can't be rewritten	paragraf tidak dapat ditulis ulang
+	{k} skipped: {why}	{k} dilewati: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

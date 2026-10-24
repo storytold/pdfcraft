@@ -2465,6 +2465,21 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Replace…	Zastąp…
+	Replace ({key})	Zastąp ({key})
+	Replace with	Zastąp przez
+	Replace all	Zastąp wszystko
+	No matches to replace	Brak dopasowań do zastąpienia
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nie zastąpiono: {why}
+	Nothing replaced	Nic nie zastąpiono
+	Replaced {n} on {pages}	Zastąpiono: {n} ({pages})
+	{k} skipped: {why}	Pominięto {k}: {why}
+	spans two paragraphs	obejmuje dwa akapity
+	scanned text	zeskanowany tekst
+	the font can't draw it	czcionka nie potrafi go wyświetlić
+	the paragraph can't be rewritten	nie można przepisać akapitu
+	not editable text	tekst nieedytowalny
 	Attach a file…	Dołącz plik…
 	Delete attachment	Usuń załącznik
 	Attaching files is not available on the web yet	Dołączanie plików nie jest jeszcze dostępne w wersji webowej

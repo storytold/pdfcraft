@@ -2398,6 +2398,21 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Replace…	భర్తీ చేయి…
+	Replace ({key})	భర్తీ చేయి ({key})
+	Replace with	దీనితో భర్తీ చేయి
+	Replace all	అన్నీ భర్తీ చేయి
+	No matches to replace	భర్తీ చేయడానికి సరిపోలికలు లేవు
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	భర్తీ చేయలేదు: {why}
+	Nothing replaced	ఏదీ భర్తీ చేయలేదు
+	Replaced {n} on {pages}	{n} భర్తీ చేయబడ్డాయి ({pages})
+	{k} skipped: {why}	{k} దాటవేయబడ్డాయి: {why}
+	spans two paragraphs	రెండు పేరాగ్రాఫ్‌లలో విస్తరించింది
+	scanned text	స్కాన్ చేసిన టెక్స్ట్
+	the font can't draw it	ఫాంట్ దీన్ని చూపించలేదు
+	the paragraph can't be rewritten	పేరాగ్రాఫ్‌ను తిరిగి రాయలేము
+	not editable text	సవరించలేని టెక్స్ట్
 	Attach a file…	ఫైల్‌ను జోడించు…
 	Delete attachment	జోడింపును తొలగించు
 	Attaching files is not available on the web yet	వెబ్‌లో ఫైల్‌లను జోడించడం ఇంకా అందుబాటులో లేదు

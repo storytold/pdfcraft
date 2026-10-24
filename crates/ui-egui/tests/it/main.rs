@@ -41,6 +41,7 @@ mod document_links;
 mod editing;
 mod export;
 mod fill_sign;
+mod find_replace;
 mod folders;
 mod fonts;
 mod forms;

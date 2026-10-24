@@ -2747,6 +2747,21 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Replace…	Pakeisti…
+	Replace ({key})	Pakeisti ({key})
+	Replace with	Pakeisti į
+	Replace all	Pakeisti visus
+	No matches to replace	Nėra ką pakeisti
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nepakeista: {why}
+	Nothing replaced	Nieko nepakeista
+	Replaced {n} on {pages}	Pakeista: {n} ({pages})
+	{k} skipped: {why}	Praleista {k}: {why}
+	spans two paragraphs	apima dvi pastraipas
+	scanned text	nuskaitytas tekstas
+	the font can't draw it	šriftas negali jo atvaizduoti
+	the paragraph can't be rewritten	pastraipos negalima perrašyti
+	not editable text	neredaguojamas tekstas
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

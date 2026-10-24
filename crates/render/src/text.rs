@@ -89,6 +89,15 @@ pub fn fold_case(s: &str) -> String {
     out
 }
 
+/// Byte ranges in `text` where `needle` occurs, with the find bar's rules ([`PageText::find_opts`]):
+/// case folded unless `case_sensitive`, any run of whitespace matching one space, and with
+/// `whole_words` only where no letter or digit adjoins the match. At most `limit` ranges, in order
+/// and not overlapping. Find and replace matches a paragraph's text with it, so what the find bar
+/// highlights is what gets replaced.
+pub fn find_in_text(text: &str, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
+    search::find_in_text(text, needle, case_sensitive, whole_words, limit)
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -2384,6 +2393,33 @@ mod tests {
         assert_eq!(lower.find("İSTANBUL"), vec![0..8]);
         assert_eq!(lower.find("IRMAK"), vec![8..13]);
         assert_eq!(lower.find("KIŞ"), vec![13..16]);
+    }
+
+    /// Find and replace matches a paragraph's text with the find bar's own rules: the same
+    /// matches as the page search, as byte ranges of the text (multi-byte letters included).
+    #[test]
+    fn text_search_agrees_with_the_page_search() {
+        let mut v = Vec::new();
+        word(&mut v, "İSTANBUL", 10.0, 10.0, 7.0);
+        word(&mut v, "cat", 80.0, 10.0, 7.0);
+        word(&mut v, "Cats", 110.0, 10.0, 7.0);
+        word(&mut v, "cat.", 150.0, 10.0, 7.0);
+        let page = layout(v);
+        let text = page.plain_text();
+        assert_eq!(text, "İSTANBUL cat Cats cat.");
+        for (needle, case, whole) in
+            [("cat", false, false), ("cat", true, false), ("cat", false, true), ("istanbul cat", false, false), ("CATS", true, true)]
+        {
+            let glyphs: Vec<String> = page.find_opts(needle, case, whole).into_iter().map(|r| page.text_of(r)).collect();
+            let bytes: Vec<&str> = find_in_text(&text, needle, case, whole, usize::MAX).into_iter().filter_map(|r| text.get(r)).collect();
+            assert_eq!(glyphs, bytes, "{needle:?} case {case} whole {whole}");
+        }
+        assert_eq!(find_in_text(&text, "cat", false, true, usize::MAX), vec![10..13, 19..22]);
+        assert_eq!(find_in_text(&text, "istanbul", false, false, usize::MAX), vec![0..9], "İ is two bytes");
+        assert_eq!(find_in_text("a\n  b", "a b", false, false, usize::MAX), vec![0..5], "any whitespace run is one space");
+        assert_eq!(find_in_text("cat cat", "cat", false, false, 1), vec![0..3]);
+        assert!(find_in_text("cat", "   ", false, false, usize::MAX).is_empty());
+        assert!(find_in_text("cat", "cat", false, false, 0).is_empty());
     }
 
     #[test]

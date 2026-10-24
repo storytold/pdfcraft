@@ -2757,6 +2757,21 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	No matches to replace	바꿀 항목이 없습니다
+	Not replaced: {why}	바꾸지 않음: {why}
+	Nothing replaced	바뀐 항목 없음
+	Replace ({key})	바꾸기 ({key})
+	Replace all	모두 바꾸기
+	Replace with	바꿀 내용
+	Replaced {n} on {pages}	{pages}에서 {n}개를 바꿨습니다
+	Replace…	바꾸기…
+	not editable text	편집할 수 없는 텍스트
+	scanned text	스캔한 텍스트
+	spans two paragraphs	두 단락에 걸쳐 있음
+	the font can't draw it	글꼴로 그릴 수 없음
+	the paragraph can't be rewritten	단락을 다시 쓸 수 없음
+	{k} skipped: {why}	{k} 건너뜀: {why}
+	{why} ({n})	{why} ({n})
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

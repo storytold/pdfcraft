@@ -439,14 +439,7 @@ impl TextBlock {
         let old: Vec<_> = self.editor_text.chars().collect();
         let new: Vec<_> = draft.char_indices().collect();
         let chars: Vec<_> = new.iter().map(|(_, c)| *c).collect();
-        let mut original = Vec::with_capacity(old.len());
-        let mut span = 0;
-        for (byte, _) in self.editor_text.char_indices() {
-            while self.spans.get(span).is_some_and(|(r, _)| byte >= r.end) {
-                span += 1;
-            }
-            original.push(self.spans.get(span).or_else(|| self.spans.last()).map_or(0, |(_, i)| *i));
-        }
+        let original = self.char_sources();
         let mut sources = Vec::with_capacity(new.len());
         let slices = |text: &[char]| words(text).into_iter().map(|w| text.get(w).unwrap_or_default().to_vec()).collect::<Vec<_>>();
         let (old_words, new_words) = (slices(&old), slices(&chars));
@@ -587,6 +580,79 @@ fn replaced(original: &[usize], at: usize, old: &[char], new: &[char], out: &mut
             Some(inherited)
         };
         out.push(source.unwrap_or(inherited));
+    }
+}
+
+/// Byte ranges of a paragraph's text and the source run (an index into [`text_lines`]) each one
+/// keeps the style of, in order ([`TextBlock::spans`], [`BlockStyle::sources`]).
+pub type RunSources = Vec<(std::ops::Range<usize>, usize)>;
+
+impl TextBlock {
+    /// The source run (an index into [`text_lines`]) of each character of `editor_text`. A
+    /// character no span covers (the line break between two rows, a space put between two runs)
+    /// belongs to the run that follows it.
+    fn char_sources(&self) -> Vec<usize> {
+        let mut original = Vec::with_capacity(self.editor_text.len());
+        let mut span = 0;
+        for (byte, _) in self.editor_text.char_indices() {
+            while self.spans.get(span).is_some_and(|(r, _)| byte >= r.end) {
+                span += 1;
+            }
+            original.push(self.spans.get(span).or_else(|| self.spans.last()).map_or(0, |(_, i)| *i));
+        }
+        original
+    }
+
+    /// `editor_text` with each of `ranges` (byte ranges in it, in order and not overlapping) put
+    /// in `with`, and the source run each byte range of the result keeps the style of
+    /// ([`BlockStyle::sources`]): every character outside the ranges its own, a replacement the
+    /// run of the first character it replaces. Spaces a replacement puts side by side become
+    /// one (deleting a word leaves one space between its neighbours), while a run of spaces the
+    /// paragraph already had stays, since the rewrite keeps every space typed. `None` when a
+    /// range is out of order, overlaps another or does not fall on character boundaries.
+    pub fn replaced(&self, ranges: &[std::ops::Range<usize>], with: &str) -> Option<(String, RunSources)> {
+        let mut end = 0;
+        for r in ranges {
+            if r.start < end || r.start >= r.end || self.editor_text.get(r.clone()).is_none() {
+                return None;
+            }
+            end = r.end;
+        }
+        // One run per stretch of the result: a piece from the same run right after it joins it.
+        fn extend(spans: &mut Vec<(std::ops::Range<usize>, usize)>, start: usize, len: usize, source: usize) {
+            match spans.last_mut() {
+                _ if len == 0 => {}
+                Some((range, last)) if *last == source && range.end == start => range.end = start.saturating_add(len),
+                _ => spans.push((start..start.saturating_add(len), source)),
+            }
+        }
+        let mut draft = String::with_capacity(self.editor_text.len());
+        let mut spans = Vec::new();
+        let mut next = ranges.iter().peekable();
+        // Right after a replacement: a space here would join one the draft ends with.
+        let mut joined = false;
+        let spacing = |c: char| c != '\n' && c != '\r' && paragraph_separator(c);
+        for ((byte, ch), source) in self.editor_text.char_indices().zip(self.char_sources()) {
+            if let Some(r) = next.peek()
+                && byte >= r.start
+            {
+                if byte == r.start {
+                    extend(&mut spans, draft.len(), with.len(), source);
+                    draft.push_str(with);
+                }
+                if byte.saturating_add(ch.len_utf8()) >= r.end {
+                    next.next();
+                    joined = true;
+                }
+                continue;
+            }
+            if std::mem::take(&mut joined) && spacing(ch) && draft.chars().next_back().is_some_and(spacing) {
+                continue;
+            }
+            extend(&mut spans, draft.len(), ch.len_utf8(), source);
+            draft.push(ch);
+        }
+        Some((draft, spans))
     }
 }
 
@@ -2840,6 +2906,12 @@ pub struct BlockStyle {
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,
+    /// The source run each byte range of the new text keeps the style of (indexes into
+    /// [`text_lines`], as in [`TextBlock::spans`]), covering the text in order. Empty:
+    /// [`TextBlock::edited_spans`] works it out by aligning the old and new text, where a changed
+    /// word takes the run before it. Find and replace sets it ([`TextBlock::replaced`]): there a
+    /// replacement takes the run of the text it replaces, however many matches the paragraph has.
+    pub sources: RunSources,
 }
 
 #[derive(Clone, Debug, PartialEq)]

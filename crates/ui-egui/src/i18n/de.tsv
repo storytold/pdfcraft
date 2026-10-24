@@ -2490,6 +2490,21 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Replace…	Ersetzen…
+	Replace ({key})	Ersetzen ({key})
+	Replace with	Ersetzen durch
+	Replace all	Alle ersetzen
+	No matches to replace	Keine Treffer zum Ersetzen
+	{why} ({n})	{why} ({n})
+	Not replaced: {why}	Nicht ersetzt: {why}
+	Nothing replaced	Nichts ersetzt
+	Replaced {n} on {pages}	{n} ersetzt auf {pages}
+	{k} skipped: {why}	{k} übersprungen: {why}
+	spans two paragraphs	reicht über zwei Absätze
+	scanned text	gescannter Text
+	the font can't draw it	die Schrift kann es nicht darstellen
+	the paragraph can't be rewritten	der Absatz lässt sich nicht neu schreiben
+	not editable text	kein bearbeitbarer Text
 	Attach a file…	Datei anhängen…
 	Delete attachment	Anhang löschen
 	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar
