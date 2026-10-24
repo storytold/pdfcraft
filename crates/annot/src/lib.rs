@@ -1631,14 +1631,36 @@ fn rich_text(d: &mut Dict) {
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let font_name = d
+        .get(b"PCFont")
+        .and_then(Object::as_string)
+        .map(PdfString::to_text)
+        .or_else(|| {
+            let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned())?;
+            let toks: Vec<&str> = da.split_whitespace().collect();
+            for (i, t) in toks.iter().enumerate() {
+                if *t == "Tf" && i >= 2 {
+                    let font_tok = toks[i - 2].trim_start_matches('/');
+                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                        return Some("Times".to_string());
+                    } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
+                        return Some("Courier".to_string());
+                    } else if font_tok.eq_ignore_ascii_case("helv") || font_tok.eq_ignore_ascii_case("helvetica") {
+                        return Some("Helvetica".to_string());
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| "Helvetica".to_string());
     let style = format!(
-        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
+        "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:{font_name};font-stretch:normal",
         n(size)
     );
     let rc = format!(
         "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xfa:spec=\"2.0.2\" style=\"{style}\">{body}</body>"
     );
-    d.set(b"DS".to_vec(), PdfString::text(&format!("font: Helvetica {}pt; text-align:{align}; color:{hex}", n(size))));
+    d.set(b"DS".to_vec(), PdfString::text(&format!("font: {font_name} {}pt; text-align:{align}; color:{hex}", n(size))));
     d.set(b"RC".to_vec(), PdfString::text(&rc));
 }
 
@@ -2158,7 +2180,34 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     let before = d;
     doc.update_dict(r, |d| {
         let (col, _) = appearance::parse_da(d);
-        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(col[0]), n(col[1]), n(col[2]), n(size)).into_bytes()));
+        let da_font = d
+            .get(b"PCFont")
+            .and_then(Object::as_string)
+            .map(PdfString::to_text)
+            .map(|f| match f.as_str() {
+                "Times" => "/Times",
+                "Courier" => "/Cour",
+                _ => "/Helv",
+            })
+            .or_else(|| {
+                let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned())?;
+                let toks: Vec<&str> = da.split_whitespace().collect();
+                for (i, t) in toks.iter().enumerate() {
+                    if *t == "Tf" && i >= 2 {
+                        let font_tok = toks[i - 2].trim_start_matches('/');
+                        if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                            return Some("/Times");
+                        } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
+                            return Some("/Cour");
+                        } else if font_tok.eq_ignore_ascii_case("helv") || font_tok.eq_ignore_ascii_case("helvetica") {
+                            return Some("/Helv");
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap_or("/Helv");
+        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg {} {} Tf", n(col[0]), n(col[1]), n(col[2]), da_font, n(size)).into_bytes()));
         rich_text(d);
         touch(d, meta);
     })?;
@@ -2502,11 +2551,28 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
         font: (subtype == "FreeText").then(|| {
-            d.get(b"PCFont")
-                .and_then(Object::as_string)
-                .map(PdfString::to_text)
-                .or_else(|| pdfcraft_fonts::active_thai_font_entry().map(|e| e.name))
-                .unwrap_or_else(|| "Sarabun".to_string())
+            if let Some(f) = d.get(b"PCFont").and_then(Object::as_string).map(PdfString::to_text) {
+                return f;
+            }
+            let text = text_value(doc, d, b"Contents").unwrap_or_default();
+            if text.chars().any(pdfcraft_fonts::is_thai) {
+                return pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "Sarabun".to_string());
+            }
+            let da = d.get(b"DA").and_then(|o| o.as_string()).map(|s| String::from_utf8_lossy(&s.bytes).into_owned()).unwrap_or_default();
+            let toks: Vec<&str> = da.split_whitespace().collect();
+            for (i, t) in toks.iter().enumerate() {
+                if *t == "Tf" && i >= 2 {
+                    let font_tok = toks[i - 2].trim_start_matches('/');
+                    if font_tok.eq_ignore_ascii_case("times") || font_tok.eq_ignore_ascii_case("times-roman") || font_tok.eq_ignore_ascii_case("tiro") {
+                        return "Times".to_string();
+                    } else if font_tok.eq_ignore_ascii_case("cour") || font_tok.eq_ignore_ascii_case("courier") {
+                        return "Courier".to_string();
+                    } else if font_tok.eq_ignore_ascii_case("helv") || font_tok.eq_ignore_ascii_case("helvetica") {
+                        return "Helvetica".to_string();
+                    }
+                }
+            }
+            "Helvetica".to_string()
         }),
         subtype,
         endings: line_endings_of(d),

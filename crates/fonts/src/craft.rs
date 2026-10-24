@@ -997,11 +997,16 @@ mod tests {
 
             // Test switching font if multiple are available
             if fonts.len() > 1 {
+                let prior_font = active;
+                let prior_entry = active_thai_font_entry();
                 let other = &fonts[1];
                 let switched = set_active_thai_font_by_name(&other.file_name);
                 assert!(switched.is_ok(), "switching Thai font to {} should succeed", other.file_name);
                 let current = active_thai_font_entry();
                 assert_eq!(current.as_ref().map(|c| c.file_name.as_str()), Some(other.file_name.as_str()));
+                set_active_thai_font(prior_font);
+                set_active_thai_entry(prior_entry);
+                crate::shaping::invalidate_thai_cache();
             }
         }
     }
