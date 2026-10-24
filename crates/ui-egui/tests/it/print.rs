@@ -111,6 +111,32 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let _ = std::fs::remove_file(out);
 }
 
+/// In a window shorter than the dialog, the card stays on screen and its settings scroll, with
+/// Print and Cancel still in view.
+#[test]
+fn print_dialog_fits_a_short_window() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 560.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(3);
+    let screen = h.ctx.content_rect();
+    let card = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dialog").with("card"))).expect("Print is shown");
+    assert!(screen.contains_rect(card), "card {card:?} runs off {screen:?}");
+    let title = h.get_by_role_and_label(Role::Label, "Print").rect();
+    let printer = h.get_by_label("Printer:").rect();
+    assert!(title.bottom() <= printer.top(), "the title {title:?} overlaps the settings {printer:?}");
+    for label in ["Save as PDF", "Cancel"] {
+        let button = h.get_by_role_and_label(Role::Button, label).rect();
+        assert!(card.contains_rect(button), "{label} {button:?} outside the card {card:?}");
+    }
+}
+
 /// Pages picked beforehand are what the dialog offers to print (Acrobat's "Selected pages").
 #[test]
 fn print_dialog_prints_the_selected_pages() {

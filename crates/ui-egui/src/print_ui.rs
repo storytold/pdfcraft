@@ -14,6 +14,8 @@ const PREVIEW_W: f32 = 320.0;
 const PREVIEW_H: f32 = 380.0;
 const PREVIEW_INSET: f32 = 12.0;
 pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PREVIEW_H - 2.0 * PREVIEW_INSET);
+/// The height of the Print and Cancel row (a pill button's).
+const FOOTER_H: f32 = 28.0;
 /// Label printing reads the printed area of at most this many pages (each is a quick render on
 /// the UI thread); further pages print whole.
 pub(crate) const LABEL_CROP_PAGES: usize = 50;
@@ -929,12 +931,19 @@ pub(crate) fn body(
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
     ui.set_width(820.0);
+    // The modal's area starts each pass at its last size: say how tall the dialog may grow.
+    let most = widgets::modal_max_height(ui.ctx());
+    ui.set_max_height(most);
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
-    ui.horizontal_top(|ui| {
+    // In a short window the settings and preview scroll, and Print and Cancel stay in view: the
+    // title above takes what is used so far, the buttons below a 12-point gap and their row.
+    let footer = 12.0 + FOOTER_H + 2.0 * ui.spacing().item_spacing.y;
+    let max = (most - ui.min_rect().height() - footer).max(0.0);
+    egui::ScrollArea::vertical().id_salt("print-settings").max_height(max).show(ui, |ui| ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
             ui.set_width(470.0);
@@ -1356,10 +1365,11 @@ pub(crate) fn body(
                 }
             }
         });
-    });
+    }));
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    // One row tall: a centred row given the rest of the height would stretch the card.
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), FOOTER_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
         if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {

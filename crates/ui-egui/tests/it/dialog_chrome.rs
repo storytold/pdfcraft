@@ -65,6 +65,21 @@ fn document_properties_fields_are_tall_and_inset() {
 }
 
 #[test]
+fn dialog_card_stays_within_a_short_window() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 360.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, fixture()).unwrap();
+        app.set_option("dialog", "properties").unwrap();
+        app
+    });
+    h.run_steps(4);
+    let card = card(&h, "dialog");
+    let screen = h.ctx.content_rect();
+    assert!(screen.contains_rect(card), "card {card:?} runs off {screen:?}");
+}
+
+#[test]
 fn password_prompt_field_is_tall_and_inset() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
