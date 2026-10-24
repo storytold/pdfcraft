@@ -385,3 +385,70 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }
+
+fn line_harness() -> Harness<'static, PdfCraftApp> {
+    let body = "2 w 50 250 m 350 250 l S 0 0 1 RG 40 60 m 120 60 l S BT /F1 12 Tf 240 90 Td (Keep here) Tj ET";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lines.pdf", None, out.clone()).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        assert!(app.execute("edit.edit_text"));
+        app
+    });
+    for _ in 0..60 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h
+}
+
+#[test]
+fn a_drawn_line_is_picked_up_on_its_stroke_and_dragged_as_one_undo_step() {
+    let mut h = line_harness();
+    let before = objects(&h);
+    let line = before.iter().find(|o| o.target.kind == pdfcraft_engine::ObjectKind::Path && o.rect[1] > 200.0).unwrap().clone();
+    // Empty space beside the line selects nothing.
+    let p = at(&h, 200.0, 200.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.query_all_by_label_contains("object selected").next().is_none());
+    let (a, b) = (at(&h, 200.0, 250.0), at(&h, 230.0, 270.0));
+    drag(&mut h, a, b);
+    let after = objects(&h);
+    for old in &before {
+        let new = after.iter().find(|o| o.target == old.target).unwrap();
+        let shift = if old.target == line.target { [30.0, -20.0] } else { [0.0, 0.0] };
+        for i in 0..4 {
+            assert!((new.rect[i] - old.rect[i] - shift[i % 2]).abs() < 0.01, "{old:?} -> {new:?}");
+        }
+    }
+    h.get_by_label("1 object selected");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Move object"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+}

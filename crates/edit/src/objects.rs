@@ -19,6 +19,8 @@ pub enum ObjectKind {
     Added,
     Text,
     Image,
+    /// A vector path (line, rectangle, curve) painted by the page's own content streams.
+    Path,
 }
 
 impl ObjectKind {
@@ -27,6 +29,7 @@ impl ObjectKind {
             Self::Added => "added",
             Self::Text => "text",
             Self::Image => "image",
+            Self::Path => "path",
         }
     }
 }
@@ -89,6 +92,18 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             text: None,
         });
     }
+    let paths = crate::paths::selectable_paths(doc, page, &excluded)?;
+    // A drawing with more paths than the inventory holds keeps its text and images selectable.
+    if objects.len().saturating_add(paths.len()) <= MAX_PAGE_OBJECTS {
+        for (index, path) in paths {
+            objects.push(EditableObject {
+                target: ObjectTarget { kind: ObjectKind::Path, index },
+                rect: path.rect,
+                content_type: "path",
+                text: None,
+            });
+        }
+    }
     if objects.len() > MAX_PAGE_OBJECTS {
         return Err(EditError::Invalid("this page has too many objects to select together".into()));
     }
@@ -122,6 +137,9 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     }
     let indexes = |kind| targets.iter().filter(|t| t.kind == kind).map(|t| t.index).collect::<Vec<_>>();
     let mut work = doc.clone();
+    // Paths first: shifting their coordinates adds and removes no operators, so the other
+    // kinds' inventories still read the same afterwards.
+    crate::paths::translate_paths(&mut work, page, &indexes(ObjectKind::Path), offset)?;
     crate::text::translate_blocks(&mut work, page, &indexes(ObjectKind::Text), offset)?;
     crate::images::translate_images(&mut work, page, &indexes(ObjectKind::Image), offset)?;
     translate_added(&mut work, page, &indexes(ObjectKind::Added), offset)?;

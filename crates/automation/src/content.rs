@@ -241,7 +241,8 @@ impl Automation {
                 Some("added") => ObjectKind::Added,
                 Some("text") => ObjectKind::Text,
                 Some("image") => ObjectKind::Image,
-                _ => return Err(bad("object kind must be added, text or image (see object_list)")),
+                Some("path") => ObjectKind::Path,
+                _ => return Err(bad("object kind must be added, text, image or path (see object_list)")),
             };
             let index = row
                 .get("index")

@@ -6638,3 +6638,92 @@ fn a_flatten_refused_on_a_later_page_changes_nothing() {
     assert!(matches!(flatten(&mut doc, &[0, 1], true, false), Err(EditError::Invalid(_))));
     assert_eq!((*doc.get(first)).clone(), before, "the first page keeps its comment and content");
 }
+
+fn path_targets(doc: &Document) -> Vec<EditableObject> {
+    editable_objects(doc, 0).unwrap().into_iter().filter(|o| o.target.kind == ObjectKind::Path).collect()
+}
+
+#[test]
+fn vector_paths_are_listed_and_move_alone_without_adding_operators() {
+    let mut doc = text_page("2 w 100 100 m 300 100 l S 0 0 1 rg 50 400 100 50 re f BT /F1 12 Tf 72 700 Td (Label) Tj ET");
+    let paths = path_targets(&doc);
+    assert_eq!(paths.len(), 2, "the line and the filled rectangle");
+    assert!(close(paths[0].rect, [99.0, 99.0, 301.0, 101.0]), "half the 2 pt stroke on each side: {:?}", paths[0].rect);
+    assert!(close(paths[1].rect, [50.0, 400.0, 150.0, 450.0]));
+    let text_before = editable_objects(&doc, 0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Text).unwrap();
+    let ops_before = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.len();
+    move_objects(&mut doc, 0, &[paths[0].target], [25.0, -10.0]).unwrap();
+    move_objects(&mut doc, 0, &[paths[0].target], [5.0, 10.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = path_targets(&doc);
+    assert!(close(after[0].rect, [129.0, 99.0, 331.0, 101.0]), "{:?}", after[0].rect);
+    assert!(close(after[1].rect, paths[1].rect), "the other path stays put");
+    let text_after = editable_objects(&doc, 0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Text).unwrap();
+    assert!(close(text_after.rect, text_before.rect), "text stays put");
+    assert_eq!(pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops.len(), ops_before, "moves rewrite numbers, not structure");
+    assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("0 0 1 rg"), "colour operators are kept");
+}
+
+#[test]
+fn vector_paths_move_by_user_space_offsets_under_transforms() {
+    // Scaled and turned a quarter: a user-space move must not come out scaled or turned.
+    let mut doc =
+        text_page("q 0 2 -2 0 300 300 cm 0 0 m 50 0 l 25 40 l h S Q q 0.5 0 0 0.5 0 0 cm 100 100 50 50 re 120 120 m 10 0 0 10 130 130 c f* Q");
+    let paths = path_targets(&doc);
+    assert_eq!(paths.len(), 2);
+    let targets: Vec<_> = paths.iter().map(|p| p.target).collect();
+    move_objects(&mut doc, 0, &targets, [12.5, 40.0]).unwrap();
+    let after = path_targets(&reopen(&doc));
+    for (old, new) in paths.iter().zip(&after) {
+        let r = old.rect;
+        assert!(close(new.rect, [r[0] + 12.5, r[1] + 40.0, r[2] + 12.5, r[3] + 40.0]), "{:?} -> {:?}", r, new.rect);
+    }
+}
+
+#[test]
+fn clips_invisible_and_unsafe_paths_are_not_listed() {
+    for content in [
+        "q 0 0 100 100 re W n BT /F1 12 Tf 10 10 Td (Clipped) Tj ET Q",
+        "10 10 m 90 90 l n",
+        "0 0 100 100 re W f",
+        "10 10 m 2 0 0 2 0 0 cm 50 50 l S",
+        "BT 10 10 m 50 50 l S ET",
+        "10 10 m 90 10 l f",
+        "l S h f",
+        "1e300 0 m 1 1 l S",
+    ] {
+        let doc = text_page(content);
+        assert!(paths::page_paths(&doc, 0).unwrap().is_empty(), "{content}");
+    }
+}
+
+#[test]
+fn path_hit_testing_follows_strokes_and_fills() {
+    let doc = text_page("1 w 100 100 200 200 re S 0 0 1 rg 400 400 50 50 re f");
+    let at = |x, y| paths::path_at(&doc, 0, [x, y], 2.0).unwrap();
+    assert_eq!(at(100.0, 150.0), Some(0), "on the stroked edge");
+    assert_eq!(at(102.0, 150.0), Some(0), "within the tolerance");
+    assert_eq!(at(200.0, 200.0), None, "the middle of a stroked-only box is empty");
+    assert_eq!(at(425.0, 425.0), Some(1), "inside the fill");
+    assert_eq!(at(f64::NAN, 425.0), None);
+}
+
+#[test]
+fn drawings_with_more_paths_than_listed_keep_text_selectable() {
+    let mut content = String::from("BT /F1 12 Tf 72 700 Td (Title) Tj ET\n");
+    for i in 0..=paths::MAX_PAGE_PATHS {
+        content.push_str(&format!("{} 10 m {} 20 l S\n", i % 500, i % 500));
+    }
+    let doc = text_page(&content);
+    assert!(paths::page_paths(&doc, 0).unwrap().is_empty());
+    let objects = editable_objects(&doc, 0).unwrap();
+    assert!(objects.iter().any(|o| o.target.kind == ObjectKind::Text));
+}
+
+#[test]
+fn a_stale_path_reference_is_refused_without_changes() {
+    let mut doc = text_page("100 100 m 300 100 l S");
+    let before = page_content_bytes(&doc, 0);
+    assert!(move_objects(&mut doc, 0, &[ObjectTarget { kind: ObjectKind::Path, index: 1 }], [5.0, 5.0]).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}

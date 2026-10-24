@@ -543,6 +543,12 @@ impl Document {
         pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
     }
 
+    /// The topmost vector path (its [`ObjectKind::Path`] index) at user-space `point`, on its
+    /// stroke or inside its fill, within `tolerance` points.
+    pub fn path_at(&self, page: usize, point: [f64; 2], tolerance: f64) -> Option<usize> {
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::path_at(&e.cos, page, point, tolerance).ok()).flatten()
+    }
+
     /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,
     /// so even a large crop-box origin cannot erase a small drag by cancellation.
     pub fn object_move_offset(&self, page: usize, delta: [f64; 2]) -> Result<[f64; 2], String> {

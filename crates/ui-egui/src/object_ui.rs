@@ -206,7 +206,15 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
                     && area.height() > 3.0
                     && let Ok(objects) = s.inventory(doc, page)
                 {
-                    let candidates: Vec<_> = objects.into_iter().filter(|o| area.intersects(screen(xf, info, page, o))).collect();
+                    // Paths only when wholly inside: a frame or background rectangle around the
+                    // area must not join the selection.
+                    let candidates: Vec<_> = objects
+                        .into_iter()
+                        .filter(|o| {
+                            let r = screen(xf, info, page, o);
+                            if o.target.kind == ObjectKind::Path { area.contains_rect(r) } else { area.intersects(r) }
+                        })
+                        .collect();
                     let mut selected = s.selected.clone();
                     for object in candidates {
                         if !selected.iter().any(|o| o.target == object.target) {
@@ -259,11 +267,19 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
         }
     };
     let additive = modified(ui);
-    // A page-sized background image must not hide editable labels or added notes.
-    // Within each kind, prefer the last object as the ordinary single-item tools do.
-    let hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image]
-        .into_iter()
-        .find_map(|kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)));
+    // A page-sized background image must not hide editable labels, added notes or the lines
+    // drawn over it. Within each kind, prefer the last object as the ordinary single-item tools
+    // do. A path is hit on its stroke or inside its fill, not anywhere in its box, so the
+    // inside of a drawn frame stays free for an area selection.
+    let in_box = |kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p));
+    let on_path = || {
+        let (vx, vy) = xf.screen_to_view(p);
+        let u = info.pages.get(page)?.view_to_user(vx, vy);
+        let tolerance = f64::from(PATH_REACH / xf.zoom().max(1e-3));
+        let index = doc.path_at(page, [f64::from(u[0]), f64::from(u[1])], tolerance)?;
+        objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Path, index })
+    };
+    let hit = in_box(ObjectKind::Added).or_else(|| in_box(ObjectKind::Text)).or_else(on_path).or_else(|| in_box(ObjectKind::Image));
     if additive {
         if s.page != Some(page) {
             s.clear();
@@ -310,6 +326,16 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
         view.current = page;
         return true;
     }
+    // A path has no single-object tool of its own: a press selects it here, a drag moves it.
+    if let Some(object) = hit.filter(|o| o.target.kind == ObjectKind::Path) {
+        s.clear();
+        s.page = Some(page);
+        s.selected.push(object.clone());
+        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        leave_single(view);
+        view.current = page;
+        return true;
+    }
     s.clear();
     // A closed paragraph's width handle reaches past its box, and a press there rewraps the
     // paragraph (as in `edit_text_ui`) instead of starting an area selection (#2276).
@@ -333,6 +359,9 @@ fn on_frame(r: Rect, p: Pos2) -> bool {
 
 /// How far outside a paragraph's frame a press still grabs it (screen pixels).
 const FRAME_REACH: f32 = 6.0;
+
+/// How far from a line a press still picks it up (screen pixels).
+const PATH_REACH: f32 = 4.0;
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.
