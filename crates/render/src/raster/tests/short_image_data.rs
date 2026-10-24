@@ -66,6 +66,18 @@ fn a_short_spot_colour_image_draws_its_rows_where_they_belong() {
     assert_eq!(rows(&objects), ["black", "white", "black", "black"]);
 }
 
+/// A colour-key `/Mask` keys a short image's padded samples like its own: a key range without
+/// sample 0 leaves them opaque. The key was tested on the samples present only, and the padded
+/// pixels were masked out. A spot-colour image (tint t drawn as gray t) takes the path that keys
+/// the decoded samples rather than the padded image data.
+#[test]
+fn a_colour_key_keys_a_short_images_padded_samples() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 4 /ColorSpace [/Separation /Spot /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] /BitsPerComponent 8 /Mask [200 255] /Length 2 >>";
+    // Black, then white, which the key masks out.
+    let objects: [(&str, &[u8]); 1] = [(image, &SHORT)];
+    assert_eq!(rows(&objects), ["black", "white", "black", "black"]);
+}
+
 /// A soft mask whose data holds only its first two rows, opaque then clear, masks the first two
 /// rows of its image and leaves the rest clear (alpha 0). The opaque row was stretched over the
 /// top half.
