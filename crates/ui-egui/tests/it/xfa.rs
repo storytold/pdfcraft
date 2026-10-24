@@ -127,6 +127,38 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(4);
 }
 
+/// Clicking an XFA check box or radio button in the app runs its click script after its change
+/// script; the script's message shows.
+#[test]
+fn xfa_check_box_and_radio_clicks_run_their_click_scripts_in_the_app() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template()));
+    crate::support::settle(&mut h);
+    // What the scripts have written to the form's log field so far.
+    let log = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    click_field(&mut h, "agree");
+    assert_eq!(log(&h), "change 1;click 1;", "console: {:?}", h.state().js_console.log);
+    assert!(h.query_by_label_contains("Agreed").is_some(), "the click script's message shows");
+    // The second radio button of the group.
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "answer").expect("the radio group");
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 1).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    assert!(log(&h).ends_with("no click;"), "{}", log(&h));
+}
+
+/// Clicking an XFA button in the app runs its click script: one adds a row, another shows its
+/// message as a notice.
 #[test]
 fn xfa_buttons_run_their_scripts_in_the_app() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));

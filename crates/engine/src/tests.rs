@@ -5609,6 +5609,47 @@ fn xfa_data_import_on_a_static_form_replaces_every_value_and_pictures_reach_its_
     assert!(xml.contains("<name>Bob</name>") && !xml.contains("<agree>1</agree>"), "{xml}");
 }
 
+/// A click on an XFA check box or radio button runs the field's change scripts, then the click
+/// scripts of what was clicked, which read the new value, show messages and may ask for the focus;
+/// all as one undo step. A text field's click script doesn't run when its value changes.
+#[test]
+fn xfa_check_box_and_radio_button_clicks_run_their_click_scripts() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template()));
+    let mut s = Session::new();
+    let id = s.open("toggle.pdf", None, bytes, None).expect("opens");
+    // What the scripts have written to the form's log field so far.
+    let log = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default();
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;", "change, then click, each seeing the new value");
+    let out = s.take_js_output(id);
+    assert_eq!(out.alerts, ["Agreed"]);
+    assert!(out.requests.iter().any(|r| matches!(r, pdfcraft_js::Request::Focus(n) if n == "note")), "a click may move the focus: {out:?}");
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(false) }).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;change 0;click 0;", "turning it off is a click too");
+    // One undo step takes back the click and what its scripts did.
+    s.undo(id).unwrap();
+    assert_eq!(log(&s), "change 1;click 1;");
+    // A radio button runs its own click script, the one now on.
+    let state = |s: &Session, i: usize| s.get(id).unwrap().form.iter().find(|f| f.name == "answer").and_then(|f| f.widgets.get(i)?.on_state.clone());
+    let (yes, no) = (state(&s, 0).expect("yes"), state(&s, 1).expect("no"));
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(no)) }).unwrap();
+    assert!(log(&s).ends_with("no click;"), "{}", log(&s));
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(yes)) }).unwrap();
+    assert!(log(&s).ends_with("no click;yes click;"), "{}", log(&s));
+    // A text field's value isn't set by a click.
+    s.apply(id, Edit::SetFieldValue { name: "note".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert!(!log(&s).contains("note click"), "{}", log(&s));
+    // A value set again, unchanged, isn't a click: no click script, no message or request.
+    let _ = s.take_js_output(id);
+    let seen = log(&s);
+    s.apply(id, Edit::SetFieldValue { name: "agree".into(), value: FieldValue::Check(true) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "answer".into(), value: FieldValue::Radio(Some(state(&s, 0).unwrap())) }).unwrap();
+    let after = log(&s);
+    assert!(!after.get(seen.len()..).unwrap_or_default().contains("click"), "{after}");
+    let out = s.take_js_output(id);
+    assert!(out.alerts.is_empty() && out.requests.is_empty(), "{out:?}");
+}
+
 /// Importing data into a dynamic form adds and removes the rows of its repeating subform to
 /// match, and the calculations over them run again.
 #[test]

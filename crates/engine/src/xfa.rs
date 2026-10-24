@@ -213,15 +213,29 @@ struct FieldInfo {
     on_state: String,
     /// List boxes that take several values (one per line in the data).
     multi: bool,
+    /// Radio groups: each button's on state and SOM path (each button of an XFA radio group is a
+    /// field of its own, with scripts of its own).
+    buttons: Vec<(String, String)>,
 }
 
+/// The generated fields of `doc`, by name, as the runner tracks them.
 fn field_infos(doc: &pdfcraft_cos::Document) -> HashMap<String, FieldInfo> {
+    // The SOM path a widget or field records for its XFA object.
+    let som_of = |obj: pdfcraft_cos::ObjRef| {
+        let object = doc.get(obj);
+        object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string().map(|s| s.to_text())
+    };
     pdfcraft_forms::fields(doc)
         .into_iter()
         .map(|f| {
             let on_state = f.widgets.first().and_then(|w| w.on_state.clone()).unwrap_or_else(|| "1".into());
             let multi = f.kind == pdfcraft_forms::FieldKind::List && f.has(pdfcraft_forms::flags::MULTI_SELECT);
-            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state, multi })
+            let buttons = if f.kind == pdfcraft_forms::FieldKind::Radio {
+                f.widgets.iter().filter_map(|w| Some((w.on_state.clone()?, som_of(w.obj)?))).collect()
+            } else {
+                Vec::new()
+            };
+            (f.name, FieldInfo { kind: f.kind, value: f.value, on_state, multi, buttons })
         })
         .collect()
 }
@@ -702,6 +716,27 @@ impl<'a, 'b> Runner<'a, 'b> {
         Ok(())
     }
 
+    /// The SOM path of what a click on field `name` (at `som`) turned on or off, when it is a
+    /// check box or a radio group: the check box itself, or the group's radio button now on.
+    /// `None` for other fields, for a group left with no button on, and when the value is still
+    /// `before` (set again, not clicked).
+    fn clicked(&mut self, name: &str, som: &str, before: Option<&Vec<String>>) -> Option<String> {
+        use pdfcraft_forms::FieldKind as K;
+        let f = self.fields().get(name)?;
+        if before.is_some_and(|b| *b == f.value) {
+            return None;
+        }
+        match f.kind {
+            K::CheckBox => Some(som.to_string()),
+            K::Radio => {
+                let on = f.value.first()?;
+                f.buttons.iter().find(|(state, _)| state == on).map(|(_, button)| button.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// The `activity` scripts of the object at `som` in the live form.
     fn events_of(&mut self, som: &str, activity: &str) -> Vec<ScriptEvent> {
         self.live().events.iter().filter(|e| e.som == som && e.activity == activity).cloned().collect()
     }
@@ -825,18 +860,39 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     r.finish()
 }
 
+/// What a click on a check box or radio button runs once it has set the value, in order: the
+/// field's change scripts (a radio group's, as for any value change), then the click scripts of
+/// what was clicked (the check box, or the radio button now on). Their exit scripts follow, as
+/// after any change. The order is to be confirmed on a synthetic form in another viewer.
+const TOGGLE_ORDER: [&str; 2] = ["change", "click"];
+
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
-/// the calculations once (or only those, after a reset). A validate script that answers false,
-/// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
-/// than reverting it.
-pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names: &[String], run: &mut XfaRun) -> Result<(), String> {
+/// the calculations once (or only those, after a reset). A check box or radio button runs its
+/// click scripts too ([`TOGGLE_ORDER`]): it changes only when it is clicked, and a click script
+/// reads the new value. A validate script that answers false, or fails, shows its message; the
+/// value stays, as Acrobat marks the field invalid rather than reverting it. `before` holds each
+/// field's value before the edit: a check box or radio group set to the value it had runs no
+/// click scripts, since nothing was clicked.
+pub(crate) fn on_changes(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    names: &[String],
+    before: &HashMap<String, Vec<String>>,
+    run: &mut XfaRun,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
-        for ev in r.events_of(&som, "change").into_iter().chain(r.events_of(&som, "exit")) {
-            r.run(&ev, &value)?;
+        let clicked = r.clicked(name, &som, before.get(name));
+        let steps: &[&str] = if clicked.is_some() { &TOGGLE_ORDER } else { &["change"] };
+        for activity in steps.iter().copied().chain(["exit"]) {
+            // A click's scripts are those of what was clicked; the others are the field's.
+            let at = if activity == "click" { clicked.as_deref().unwrap_or(&som) } else { som.as_str() };
+            for ev in r.events_of(at, activity) {
+                r.run(&ev, &value)?;
+            }
         }
         for ev in r.events_of(&som, "validate") {
             let Some(o) = r.run(&ev, &value)? else { continue };

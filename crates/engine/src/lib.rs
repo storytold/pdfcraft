@@ -4050,8 +4050,10 @@ impl Session {
             if !changed.is_empty() || reset {
                 let mut run = xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false };
                 // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run))
+                // only those). The values before the edit tell a click from a value set again.
+                let before: std::collections::HashMap<String, Vec<String>> =
+                    doc.form.iter().filter(|f| changed.contains(&f.name)).map(|f| (f.name.clone(), f.value.clone())).collect();
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &before, &mut run))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;

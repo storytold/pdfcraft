@@ -234,6 +234,43 @@ pub fn scripted_template() -> String {
     .to_string()
 }
 
+/// A form whose check box `agree` logs its change and click scripts (with the value each sees)
+/// into `log`, and whose click also shows "Agreed" and asks for the focus in `note` when it turns
+/// the box on; whose radio group `answer` has buttons `yes` and `no` that log their own clicks;
+/// and whose text field `note` has a click script, which a change of its value doesn't run.
+pub fn toggle_template() -> String {
+    let js = "application/x-javascript";
+    // A script line that adds `what` (JavaScript), then ";", to the log field.
+    let add = |what: &str| format!(r#"log.rawValue = (log.rawValue || "") + {what} + ";";"#);
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="agree" w="2in" h="0.3in"><ui><checkButton/></ui><caption placement="right" reserve="1.5in"><value><text>Agree</text></value></caption><items><integer>1</integer><integer>0</integer></items>
+   <event activity="change"><script contentType="{js}">{}</script></event>
+   <event activity="click"><script contentType="{js}">{} if (this.rawValue == 1) {{ xfa.host.messageBox("Agreed"); xfa.host.setFocus("note"); }}</script></event></field>
+  <exclGroup name="answer" layout="lr-tb">
+   <field name="yes" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>Y</text></items><event activity="click"><script contentType="{js}">{}</script></event></field>
+   <field name="no" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>N</text></items><event activity="click"><script contentType="{js}">{}</script></event></field>
+  </exclGroup>
+  <field name="note" w="3in" h="0.3in"><ui><textEdit/></ui><event activity="click"><script contentType="{js}">{}</script></event></field>
+  <field name="log" w="4in" h="0.3in" access="protected"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        add(r#""change " + this.rawValue"#),
+        add(r#""click " + this.rawValue"#),
+        add(r#""yes click""#),
+        add(r#""no click""#),
+        add(r#""note click""#),
+    )
+}
+
 /// [`scripted_template`] with every script in FormCalc (no `contentType`, as Designer writes
 /// the default language): the same fields, plus `words`, the total in English words.
 pub fn formcalc_template() -> String {
