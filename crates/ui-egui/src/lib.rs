@@ -174,6 +174,8 @@ use workflows::js_ui;
 use workflows::ocr_ui;
 use workflows::optimize_ui;
 use workflows::print_ui;
+#[cfg(any(target_arch = "wasm32", test))]
+use workflows::ocr_route;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::web_print;

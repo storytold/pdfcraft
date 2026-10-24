@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use crate::ocr_route::{Inbox, Router};
 use pdfcraft_engine::ocr::{DETECTION_MODEL, FileJob, Line, Ocr, OcrPage, OcrSettings, OcrShot, OcrSteps, RECOGNITION_MODEL};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
@@ -134,7 +135,8 @@ struct Pool {
     events: Rc<RefCell<Vec<(usize, Event)>>>,
     started: f64,
     last_used: f64,
-    next_id: u64,
+    /// Which run each page sent belongs to: single-file and multiple-file OCR share the workers.
+    router: Router<Result<Vec<Line>, String>>,
 }
 
 thread_local! {
@@ -182,7 +184,7 @@ impl Pool {
     /// the worker script or the browser refuses it.
     fn start(ctx: &egui::Context) -> Pool {
         let t = now();
-        let mut pool = Pool { members: Vec::new(), events: Rc::new(RefCell::new(Vec::new())), started: t, last_used: t, next_id: 0 };
+        let mut pool = Pool { members: Vec::new(), events: Rc::new(RefCell::new(Vec::new())), started: t, last_used: t, router: Router::default() };
         let url = web_sys::window()
             .and_then(|w| w.document())
             .and_then(|d| d.query_selector(WORKER_META).ok().flatten())
@@ -229,8 +231,9 @@ impl Pool {
         }
     }
 
-    /// Act on what the workers said; returns the pages they finished, by id.
-    fn update(&mut self) -> Vec<(u64, Result<Vec<Line>, String>)> {
+    /// Act on what the workers said; the pages they finished go to the inboxes of the runs that
+    /// sent them.
+    fn update(&mut self) {
         let mut done = Vec::new();
         let events: Vec<_> = self.events.borrow_mut().drain(..).collect();
         for (i, event) in events {
@@ -275,25 +278,28 @@ impl Pool {
                 }
             }
         }
-        done
+        for (id, lines) in done {
+            self.router.deliver(id, lines);
+        }
     }
 
-    /// Hand `shot` to worker `i`; its id, or `None` if it couldn't be sent.
-    fn send(&mut self, i: usize, shot: &OcrShot) -> Option<u64> {
+    /// Hand `shot` to worker `i` for the run reading into `inbox`; its id, or `None` if it
+    /// couldn't be sent.
+    fn send(&mut self, i: usize, shot: &OcrShot, inbox: &Inbox<Result<Vec<Line>, String>>) -> Option<u64> {
         let m = self.members.get_mut(i)?;
-        let id = self.next_id;
-        let pixels = js_sys::Uint8Array::from(&shot.rgba[..]);
-        let msg = message(&[
-            ("type", &"page".into()),
-            ("id", &JsValue::from_f64(id as f64)),
-            ("width", &shot.width.into()),
-            ("height", &shot.height.into()),
-            ("pixels", &pixels),
-        ]);
-        // The pixels move to the worker rather than being copied again.
-        m.worker.post_message_with_transfer(&msg, &js_sys::Array::of1(&pixels.buffer())).ok()?;
+        let id = self.router.send(inbox, |id| {
+            let pixels = js_sys::Uint8Array::from(&shot.rgba[..]);
+            let msg = message(&[
+                ("type", &"page".into()),
+                ("id", &JsValue::from_f64(id as f64)),
+                ("width", &shot.width.into()),
+                ("height", &shot.height.into()),
+                ("pixels", &pixels),
+            ]);
+            // The pixels move to the worker rather than being copied again.
+            m.worker.post_message_with_transfer(&msg, &js_sys::Array::of1(&pixels.buffer())).is_ok()
+        })?;
         m.slot = Slot::Busy(id);
-        self.next_id += 1;
         self.last_used = now();
         Some(id)
     }
@@ -327,6 +333,9 @@ pub struct Pages {
     steps: OcrSteps,
     /// Pages with a worker: id, position in the run, the page (its pixels gone to the worker).
     reading: Vec<(u64, usize, OcrShot)>,
+    /// Where the workers' answers for this run's pages arrive (dropped with the run, so a
+    /// cancelled run's late answers are let go).
+    inbox: Inbox<Result<Vec<Line>, String>>,
     found: Vec<(usize, OcrPage)>,
     next: usize,
     rendered_all: bool,
@@ -334,7 +343,7 @@ pub struct Pages {
 
 impl Pages {
     pub fn new(steps: OcrSteps) -> Pages {
-        Pages { steps, reading: Vec::new(), found: Vec::new(), next: 0, rendered_all: false }
+        Pages { steps, reading: Vec::new(), inbox: Inbox::default(), found: Vec::new(), next: 0, rendered_all: false }
     }
 
     pub fn total(&self) -> usize {
@@ -351,7 +360,8 @@ impl Pages {
     pub fn pump(&mut self, cancel: bool, ctx: &egui::Context) -> Option<Vec<OcrPage>> {
         POOL.with_borrow_mut(|pool| {
             let pool = pool.get_or_insert_with(|| Pool::start(ctx));
-            for (id, lines) in pool.update() {
+            pool.update();
+            for (id, lines) in self.inbox.take() {
                 if let Some(k) = self.reading.iter().position(|r| r.0 == id) {
                     let (_, order, shot) = self.reading.swap_remove(k);
                     self.found.push((order, shot.place(lines)));
@@ -370,7 +380,7 @@ impl Pages {
                     }
                     Some(Ok(mut shot)) => {
                         let order = self.take_order();
-                        match worker.and_then(|i| pool.send(i, &shot)) {
+                        match worker.and_then(|i| pool.send(i, &shot, &self.inbox)) {
                             Some(id) => {
                                 // The worker has its own copy; drop this one.
                                 shot.rgba = pdfcraft_render::Pixels::from(Vec::new());
