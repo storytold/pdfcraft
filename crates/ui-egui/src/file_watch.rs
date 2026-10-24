@@ -7,7 +7,9 @@
 //! last KiB is read first, so a file still being written costs one small read. The new bytes go
 //! to the UI thread, which is woken for them: a clean document is reloaded in place, keeping its
 //! tab, page, zoom and scroll; one with unsaved changes gets a notice instead. PdfCraft's own
-//! saves are recognised by the file's stamp after writing, so they never reload.
+//! saves are recognised by the file's stamp after writing, so they never reload. A new stamp on
+//! the very bytes the document came from (a sync client such as Nextcloud or Dropbox
+//! sets a file's times again after uploading it) is not a new version either.
 
 use std::collections::HashMap;
 use std::fs::{File, Metadata};
@@ -418,6 +420,13 @@ impl PdfCraftApp {
             return;
         }
         self.watch.known.insert(c.doc, c.stamp);
+        // The bytes the document was opened from or last saved as, only stamped anew (a sync
+        // client set the file's times after uploading it): the same version. Reloading it would
+        // drop the undo history, and unsaved changes would get a notice about nothing.
+        if self.session.get(c.doc).is_some_and(|d| d.saved_bytes().as_slice() == c.bytes.as_slice()) {
+            self.watch.basis.insert(c.doc, c.stamp);
+            return;
+        }
         if self.has_unsaved_work(i) {
             if let Some(view) = self.views.get_mut(i) {
                 view.disk_changed = true;
@@ -425,6 +434,35 @@ impl PdfCraftApp {
             return;
         }
         self.reload_view(i, c.bytes);
+    }
+
+    /// Whether the file at `path` is another version than the one `doc` came from (see
+    /// [`FileWatch::disk_differs`], which compares the bytes only when nothing but the change time
+    /// moved), its bytes compared too when only its stamp differs: a file a
+    /// sync client stamped anew after uploading it is still the document's version, and from
+    /// now on under its new stamp.
+    pub(crate) fn disk_is_another_version(&mut self, doc: DocId, path: &str) -> bool {
+        let saved = self.session.get(doc).map(|d| d.saved_bytes());
+        if !self.watch.disk_differs(doc, path, saved.clone()) {
+            return false;
+        }
+        let Some(saved) = saved else { return true };
+        let Some(stamp) = Stamp::at(path) else { return true };
+        // Another length is another version; read only a file that could be the same.
+        if stamp.len != saved.len() as u64 {
+            return true;
+        }
+        // This runs on the UI thread during Save, so the read stops one byte past the saved length
+        // even if the file grew since `Stamp::at`. Still that stamp after reading: nothing wrote
+        // the file meanwhile.
+        let same = File::open(path).is_ok_and(|file| reads_exactly(file, &saved));
+        if same && Stamp::at(path) == Some(stamp) {
+            self.watch.known.insert(doc, stamp);
+            self.watch.basis.insert(doc, stamp);
+            false
+        } else {
+            true
+        }
     }
 
     /// The notice bar's Reload: read the file now and replace the document, unsaved changes and
@@ -464,6 +502,22 @@ impl PdfCraftApp {
                 let name = self.session.get(id).map(|d| d.name.clone()).unwrap_or_default();
                 self.notify_fmt("Couldn't reload {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
             }
+        }
+    }
+}
+
+/// Whether `reader` yields `expected` and nothing more, compared a block at a time: it reads at
+/// most one byte past `expected`, however long the file has grown.
+fn reads_exactly(reader: impl Read, expected: &[u8]) -> bool {
+    let mut reader = reader.take(expected.len() as u64 + 1);
+    let mut block = vec![0; expected.len().clamp(1, 1 << 16)];
+    let mut at = 0;
+    loop {
+        match reader.read(&mut block) {
+            Ok(0) => return at == expected.len(),
+            Ok(n) if expected.get(at..at + n) == Some(&block[..n]) => at += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            _ => return false,
         }
     }
 }
@@ -652,5 +706,31 @@ mod tests {
         assert_eq!(d.path.as_deref(), Some(new_path.as_str()));
         assert_eq!(d.info.pages.len(), 2, "the old file's version was not applied to the new one");
         assert!(d.can_undo().is_some() && !d.dirty, "the saved document and its history stay");
+    }
+
+    /// Counts what is read through it.
+    struct Counted<R>(R, std::rc::Rc<std::cell::Cell<usize>>);
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.read(buf)?;
+            self.1.set(self.1.get() + n);
+            Ok(n)
+        }
+    }
+
+    /// Save's comparison reads no further than one byte past the saved length: a file that grows
+    /// while it is read (here, one that never ends) can't make it read more.
+    #[test]
+    fn the_comparison_stops_one_byte_past_the_saved_length() {
+        let read = std::rc::Rc::new(std::cell::Cell::new(0));
+        assert!(!reads_exactly(Counted(std::io::repeat(7), read.clone()), &[7; 8]), "longer is another version");
+        assert_eq!(read.get(), 9);
+        let saved = fixture(3);
+        assert!(reads_exactly(saved.as_slice(), &saved));
+        assert!(!reads_exactly(&saved[..saved.len() - 1], &saved), "shorter");
+        let mut other = saved.clone();
+        other[saved.len() / 2] ^= 1;
+        assert!(!reads_exactly(other.as_slice(), &saved), "the same length, one byte other");
     }
 }
