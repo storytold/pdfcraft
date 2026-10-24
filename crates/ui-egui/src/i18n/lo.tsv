@@ -2439,3 +2439,10 @@ animation effects	Off	ປິດ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	ເປີດ PDF ຖັດໄປໃນໂຟນເດີ
+	Open previous PDF in folder	ເປີດ PDF ກ່ອນໜ້າໃນໂຟນເດີ
+	This document isn't in a folder yet: save it first	ເອກະສານນີ້ຍັງບໍ່ຢູ່ໃນໂຟນເດີໃດ: ບັນທຶກມັນກ່ອນ
+	This is the last PDF in its folder	ນີ້ແມ່ນ PDF ສຸດທ້າຍໃນໂຟນເດີຂອງມັນ
+	This is the first PDF in its folder	ນີ້ແມ່ນ PDF ທຳອິດໃນໂຟນເດີຂອງມັນ

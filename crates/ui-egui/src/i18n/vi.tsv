@@ -2798,3 +2798,10 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Mở PDF tiếp theo trong thư mục
+	Open previous PDF in folder	Mở PDF trước đó trong thư mục
+	This document isn't in a folder yet: save it first	Tài liệu này chưa nằm trong thư mục nào: hãy lưu trước
+	This is the last PDF in its folder	Đây là PDF cuối cùng trong thư mục
+	This is the first PDF in its folder	Đây là PDF đầu tiên trong thư mục

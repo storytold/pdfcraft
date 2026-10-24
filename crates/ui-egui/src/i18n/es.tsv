@@ -2854,3 +2854,10 @@ theme	Appearance	Aspecto
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoy
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Abrir el PDF siguiente de la carpeta
+	Open previous PDF in folder	Abrir el PDF anterior de la carpeta
+	This document isn't in a folder yet: save it first	Este documento aún no está en una carpeta: guárdelo primero
+	This is the last PDF in its folder	Este es el último PDF de su carpeta
+	This is the first PDF in its folder	Este es el primer PDF de su carpeta

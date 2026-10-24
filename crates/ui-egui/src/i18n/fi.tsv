@@ -2801,3 +2801,10 @@ theme	Appearance	Teema
 	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Avaa kansion seuraava PDF
+	Open previous PDF in folder	Avaa kansion edellinen PDF
+	This document isn't in a folder yet: save it first	Tämä asiakirja ei ole vielä missään kansiossa: tallenna se ensin
+	This is the last PDF in its folder	Tämä on kansionsa viimeinen PDF
+	This is the first PDF in its folder	Tämä on kansionsa ensimmäinen PDF

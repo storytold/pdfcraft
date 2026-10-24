@@ -2707,3 +2707,10 @@ key	Space	Mellomrom
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Åpne neste PDF i mappen
+	Open previous PDF in folder	Åpne forrige PDF i mappen
+	This document isn't in a folder yet: save it first	Dette dokumentet ligger ikke i en mappe ennå: lagre det først
+	This is the last PDF in its folder	Dette er den siste PDF-en i mappen
+	This is the first PDF in its folder	Dette er den første PDF-en i mappen

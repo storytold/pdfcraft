@@ -1643,7 +1643,7 @@ fn title_of(name: &str) -> &str {
 
 /// File names in the order people expect: case-insensitive, with numbers by value
 /// ("scan2" before "scan10").
-fn natural(a: &str, b: &str) -> Ordering {
+pub(crate) fn natural(a: &str, b: &str) -> Ordering {
     let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
     loop {
         match (a.peek().copied(), b.peek().copied()) {

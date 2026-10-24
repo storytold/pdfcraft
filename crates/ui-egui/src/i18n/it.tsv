@@ -2763,3 +2763,10 @@ certificate	SHA-256 digest	Impronta SHA-256
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Apri il PDF successivo nella cartella
+	Open previous PDF in folder	Apri il PDF precedente nella cartella
+	This document isn't in a folder yet: save it first	Questo documento non è ancora in una cartella: salvalo prima
+	This is the last PDF in its folder	Questo è l'ultimo PDF della sua cartella
+	This is the first PDF in its folder	Questo è il primo PDF della sua cartella

@@ -2768,3 +2768,10 @@ theme	Appearance	स्वरूप
 	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
 	Delete attachment	अनुलग्नक हटाएँ
 	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	फ़ोल्डर में अगली PDF खोलें
+	Open previous PDF in folder	फ़ोल्डर में पिछली PDF खोलें
+	This document isn't in a folder yet: save it first	यह दस्तावेज़ अभी किसी फ़ोल्डर में नहीं है: पहले इसे सहेजें
+	This is the last PDF in its folder	यह अपने फ़ोल्डर की आखिरी PDF है
+	This is the first PDF in its folder	यह अपने फ़ोल्डर की पहली PDF है

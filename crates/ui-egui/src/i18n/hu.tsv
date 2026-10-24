@@ -2530,3 +2530,10 @@ animation effects	Off	Ki
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	A mappa következő PDF-jének megnyitása
+	Open previous PDF in folder	A mappa előző PDF-jének megnyitása
+	This document isn't in a folder yet: save it first	Ez a dokumentum még nincs mappában: előbb mentse el
+	This is the last PDF in its folder	Ez a mappa utolsó PDF-je
+	This is the first PDF in its folder	Ez a mappa első PDF-je

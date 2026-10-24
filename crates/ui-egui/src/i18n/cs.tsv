@@ -2838,3 +2838,10 @@ certificate	Version	Verze
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Otevřít další PDF ve složce
+	Open previous PDF in folder	Otevřít předchozí PDF ve složce
+	This document isn't in a folder yet: save it first	Tento dokument zatím není v žádné složce: nejprve ho uložte
+	This is the last PDF in its folder	Toto je poslední PDF ve složce
+	This is the first PDF in its folder	Toto je první PDF ve složce

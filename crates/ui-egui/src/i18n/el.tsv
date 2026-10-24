@@ -2537,3 +2537,10 @@ animation effects	Off	Ανενεργά
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Άνοιγμα επόμενου PDF στον φάκελο
+	Open previous PDF in folder	Άνοιγμα προηγούμενου PDF στον φάκελο
+	This document isn't in a folder yet: save it first	Αυτό το έγγραφο δεν βρίσκεται ακόμη σε φάκελο: αποθηκεύστε το πρώτα
+	This is the last PDF in its folder	Αυτό είναι το τελευταίο PDF του φακέλου
+	This is the first PDF in its folder	Αυτό είναι το πρώτο PDF του φακέλου

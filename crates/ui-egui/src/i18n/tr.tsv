@@ -2527,3 +2527,10 @@ animation effects	Off	Kapalı
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Bugün
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Klasördeki sonraki PDF'yi aç
+	Open previous PDF in folder	Klasördeki önceki PDF'yi aç
+	This document isn't in a folder yet: save it first	Bu belge henüz bir klasörde değil: önce kaydedin
+	This is the last PDF in its folder	Bu, klasöründeki son PDF
+	This is the first PDF in its folder	Bu, klasöründeki ilk PDF

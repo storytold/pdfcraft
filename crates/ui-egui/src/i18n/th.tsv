@@ -2694,3 +2694,10 @@ theme	Appearance	ลักษณะที่ปรากฏ
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	เปิด PDF ถัดไปในโฟลเดอร์
+	Open previous PDF in folder	เปิด PDF ก่อนหน้าในโฟลเดอร์
+	This document isn't in a folder yet: save it first	เอกสารนี้ยังไม่อยู่ในโฟลเดอร์ใด: บันทึกก่อน
+	This is the last PDF in its folder	นี่คือ PDF สุดท้ายในโฟลเดอร์
+	This is the first PDF in its folder	นี่คือ PDF แรกในโฟลเดอร์

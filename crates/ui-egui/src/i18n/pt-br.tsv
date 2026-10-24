@@ -2816,3 +2816,10 @@ theme	Appearance	Aparência
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoje
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Abrir o próximo PDF da pasta
+	Open previous PDF in folder	Abrir o PDF anterior da pasta
+	This document isn't in a folder yet: save it first	Este documento ainda não está em uma pasta: salve-o primeiro
+	This is the last PDF in its folder	Este é o último PDF da pasta
+	This is the first PDF in its folder	Este é o primeiro PDF da pasta

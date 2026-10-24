@@ -62,7 +62,7 @@ pub struct Shortcut {
     pub shift: bool,
     /// ⌃ on macOS (in addition to ⌘); unused elsewhere.
     pub mac_ctrl: bool,
-    /// Key name: a letter, a digit, punctuation such as `,`, or `Delete`.
+    /// Key name: a letter, a digit, punctuation such as `,`, an arrow such as `→`, or `Delete`.
     pub key: &'static str,
 }
 
@@ -165,6 +165,9 @@ const HELP: Option<&str> = Some("Help");
 pub const COMMANDS: &[CommandSpec] = &[
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
     c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
+    // ⇧⌘→ selects to the end of the line in a text field, so the field keeps it there.
+    ct("file.open_next_in_folder", "Open next PDF in folder", FILE, Some(Shortcut::cmd_shift("→")), Document, "chevron-right"),
+    ct("file.open_previous_in_folder", "Open previous PDF in folder", FILE, Some(Shortcut::cmd_shift("←")), Document, "chevron-left"),
     // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
     c("file.clear_recent", "Clear Recent Files", None, None, Nothing, "trash-2"),
     c("file.pin_folder", "Pin folder to Home…", FILE, None, Nothing, "folder-plus"),

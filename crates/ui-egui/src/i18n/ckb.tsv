@@ -2723,3 +2723,10 @@ certificate	Version	وەشان
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	کردنەوەی PDFی داهاتوو لە فۆڵدەرەکەدا
+	Open previous PDF in folder	کردنەوەی PDFی پێشوو لە فۆڵدەرەکەدا
+	This document isn't in a folder yet: save it first	ئەم بەڵگەنامەیە هێشتا لە هیچ فۆڵدەرێکدا نییە: سەرەتا پاشەکەوتی بکە
+	This is the last PDF in its folder	ئەمە دوایین PDFی فۆڵدەرەکەیەتی
+	This is the first PDF in its folder	ئەمە یەکەمین PDFی فۆڵدەرەکەیەتی

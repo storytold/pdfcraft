@@ -2792,3 +2792,10 @@ theme	Appearance	Aspect
 	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
 	Delete attachment	Ștergere atașament
 	Delete attachment {key}	Ștergere atașament {key}
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Deschidere PDF următor din folder
+	Open previous PDF in folder	Deschidere PDF anterior din folder
+	This document isn't in a folder yet: save it first	Acest document nu este încă într-un folder: salvați-l mai întâi
+	This is the last PDF in its folder	Acesta este ultimul PDF din folderul său
+	This is the first PDF in its folder	Acesta este primul PDF din folderul său

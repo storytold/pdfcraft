@@ -32,10 +32,10 @@ area = "A"
 tier = "P0"
 milestone = "M1"
 status = "shipped"
-commands = ["file.open"]
+commands = ["file.open", "file.open_next_in_folder", "file.open_previous_in_folder"]
 tools = ["doc_open"]
-evidence = ["crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/ui.rs::files_and_quit_from_the_operating_system", "crates/ui-egui/src/open_worker_tests.rs::a_chosen_tool_runs_on_its_file_only_after_native_preparation_commits", "crates/ui-egui/tests/it/editing.rs::opening_the_same_path_again_focuses_its_tab", "crates/ui-egui/tests/it/editing.rs::opening_a_file_whose_copy_vanished_from_disk_focuses_its_tab"]
-notes = "File ▸ Open, the command line (Linux and Windows file associations), the Windows MSI's \"Edit with PdfCraft\" entry on PDF files' File Explorer right-click menu (#682; several selected PDFs open as tabs of one window), and on macOS Finder, Open With and the Dock (Apple events; the bundle declares PDF as a document type); an already-open file focuses its tab instead of opening a second copy (#1620). Not yet: a first-level Windows 11 menu entry (needs package identity) or Combine from the file manager (#585)"
+evidence = ["crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/ui.rs::files_and_quit_from_the_operating_system", "crates/ui-egui/src/open_worker_tests.rs::a_chosen_tool_runs_on_its_file_only_after_native_preparation_commits", "crates/ui-egui/tests/it/editing.rs::opening_the_same_path_again_focuses_its_tab", "crates/ui-egui/tests/it/editing.rs::opening_a_file_whose_copy_vanished_from_disk_focuses_its_tab", "crates/ui-egui/tests/it/commands.rs::ctrl_shift_arrows_open_the_next_and_previous_pdf_in_the_folder"]
+notes = "File ▸ Open, the command line (Linux and Windows file associations), the Windows MSI's \"Edit with PdfCraft\" entry on PDF files' File Explorer right-click menu (#682; several selected PDFs open as tabs of one window), and on macOS Finder, Open With and the Dock (Apple events; the bundle declares PDF as a document type); an already-open file focuses its tab instead of opening a second copy (#1620). Not yet: a first-level Windows 11 menu entry (needs package identity) or Combine from the file manager (#585). File ▸ Open next / previous PDF in folder (Ctrl+Shift+→ / ←, ⇧⌘→ / ⇧⌘← on macOS; desktop only) opens the PDF beside the active document in natural order, in its own tab like any open, and says so at either end (#4267); Acrobat has no such command"
 
 [[feature]]
 id = "core.repair-broken-files"

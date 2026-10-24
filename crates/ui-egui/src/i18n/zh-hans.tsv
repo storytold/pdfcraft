@@ -2495,3 +2495,10 @@ animation effects	Off	关
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	打开文件夹中的下一个 PDF
+	Open previous PDF in folder	打开文件夹中的上一个 PDF
+	This document isn't in a folder yet: save it first	此文档尚未保存在文件夹中：请先保存
+	This is the last PDF in its folder	这是所在文件夹中的最后一个 PDF
+	This is the first PDF in its folder	这是所在文件夹中的第一个 PDF

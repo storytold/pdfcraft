@@ -2529,3 +2529,10 @@ animation effects	Off	Өшірулі
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Қалтадағы келесі PDF файлын ашу
+	Open previous PDF in folder	Қалтадағы алдыңғы PDF файлын ашу
+	This document isn't in a folder yet: save it first	Бұл құжат әлі ешбір қалтада жоқ: алдымен оны сақтаңыз
+	This is the last PDF in its folder	Бұл — қалтадағы соңғы PDF
+	This is the first PDF in its folder	Бұл — қалтадағы бірінші PDF

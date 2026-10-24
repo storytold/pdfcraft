@@ -2797,3 +2797,10 @@ certificate	Version	Version
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Aujourd'hui
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Ouvrir le PDF suivant du dossier
+	Open previous PDF in folder	Ouvrir le PDF précédent du dossier
+	This document isn't in a folder yet: save it first	Ce document n'est pas encore dans un dossier : enregistrez-le d'abord
+	This is the last PDF in its folder	C'est le dernier PDF de son dossier
+	This is the first PDF in its folder	C'est le premier PDF de son dossier

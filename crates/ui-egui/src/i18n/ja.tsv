@@ -2531,3 +2531,10 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	フォルダー内の次の PDF を開く
+	Open previous PDF in folder	フォルダー内の前の PDF を開く
+	This document isn't in a folder yet: save it first	この文書はまだフォルダーに保存されていません。先に保存してください
+	This is the last PDF in its folder	フォルダー内の最後の PDF です
+	This is the first PDF in its folder	フォルダー内の最初の PDF です

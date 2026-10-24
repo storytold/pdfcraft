@@ -2444,3 +2444,10 @@ animation effects	Off	Выкл
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Открыть следующий PDF в папке
+	Open previous PDF in folder	Открыть предыдущий PDF в папке
+	This document isn't in a folder yet: save it first	Этот документ ещё не находится в папке: сначала сохраните его
+	This is the last PDF in its folder	Это последний PDF в его папке
+	This is the first PDF in its folder	Это первый PDF в его папке

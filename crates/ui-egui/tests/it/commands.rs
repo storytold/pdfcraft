@@ -699,3 +699,96 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+/// ⇧⌘→ / ⇧⌘← (Ctrl+Shift+→ / ← elsewhere) open the next / previous PDF in the open document's
+/// folder, in natural order (#4267): only files ending in `.pdf` in any case, not folders, other
+/// files or hidden ones. A file already open comes to the front. At either end, and for a
+/// document with no folder, nothing opens and the user is told.
+#[test]
+fn ctrl_shift_arrows_open_the_next_and_previous_pdf_in_the_folder() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-folder-step-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("scan5.pdf")).unwrap();
+    // A plain sort puts scan10 right after scan1; the hidden file and the PDF bytes in a .txt
+    // file would be next to them in any order.
+    for name in ["scan1.pdf", "scan2.pdf", "scan3.txt", "scan10.PDF", ".scan0.pdf"] {
+        std::fs::write(dir.join(name), fixture(1)).unwrap();
+    }
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let mut h = harness();
+    h.state_mut().run_inline = true;
+    h.state_mut().open_path(&path("scan1.pdf"));
+    h.run_steps(3);
+    let shown = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|d| d.path.clone())
+    };
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key: Key| {
+        h.state_mut().toast = None;
+        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, key);
+        h.run_steps(3);
+    };
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(shown(&h), Some(path("scan2.pdf")), "scan2 comes after scan1, before scan10");
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(shown(&h), Some(path("scan10.PDF")), "the folder and the text file are skipped");
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(shown(&h), Some(path("scan10.PDF")));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("This is the last PDF in its folder"));
+    assert_eq!(h.state().views.len(), 4, "three files and the document the harness opened");
+    press(&mut h, Key::ArrowLeft);
+    assert_eq!(shown(&h), Some(path("scan2.pdf")));
+    press(&mut h, Key::ArrowLeft);
+    assert_eq!(shown(&h), Some(path("scan1.pdf")));
+    assert_eq!(h.state().views.len(), 4, "a file already open comes to the front, not into a new tab");
+    press(&mut h, Key::ArrowLeft);
+    assert_eq!(shown(&h), Some(path("scan1.pdf")), "the hidden file is not opened");
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("This is the first PDF in its folder"));
+    // The harness's document was never saved to a folder.
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(h.state().views.len(), 4);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("This document isn't in a folder yet: save it first"));
+    // A text field keeps ⇧⌘→ for selecting.
+    h.state_mut().execute("edit.find");
+    h.run_steps(3);
+    assert!(h.ctx.text_edit_focused(), "the find field has the keyboard");
+    press(&mut h, Key::ArrowRight);
+    assert_eq!(h.state().toast, None, "typing in a text field runs no command");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The folder is read on a worker (a network drive can stall `read_dir`): the command returns
+/// without opening anything, and the file opens on a later frame.
+#[test]
+fn stepping_through_a_folder_reads_it_off_the_ui_thread() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-folder-step-worker-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["a.pdf", "b.pdf"] {
+        std::fs::write(dir.join(name), fixture(1)).unwrap();
+    }
+    let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let mut h = harness();
+    h.state_mut().run_inline = true;
+    h.state_mut().open_path(&path("a.pdf"));
+    h.run_steps(3);
+    h.state_mut().run_inline = false;
+    let shown = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|d| d.path.clone())
+    };
+    assert!(h.state_mut().execute("file.open_next_in_folder"));
+    assert!(h.state().folder_step_pending(), "the command only starts the scan; a frame takes its answer");
+    assert_eq!(shown(&h), Some(path("a.pdf")));
+    for _ in 0..200 {
+        h.run_steps(1);
+        if shown(&h) == Some(path("b.pdf")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(shown(&h), Some(path("b.pdf")), "the worker's answer opens the next file");
+    let _ = std::fs::remove_dir_all(&dir);
+}

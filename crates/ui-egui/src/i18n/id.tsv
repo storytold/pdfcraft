@@ -2769,3 +2769,10 @@ theme	Appearance	Tampilan
 	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Buka PDF berikutnya di folder
+	Open previous PDF in folder	Buka PDF sebelumnya di folder
+	This document isn't in a folder yet: save it first	Dokumen ini belum ada di folder: simpan dulu
+	This is the last PDF in its folder	Ini PDF terakhir di foldernya
+	This is the first PDF in its folder	Ini PDF pertama di foldernya

@@ -2440,3 +2440,10 @@ animation effects	Off	ఆఫ్
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	ఫోల్డర్‌లో తదుపరి PDF తెరువు
+	Open previous PDF in folder	ఫోల్డర్‌లో మునుపటి PDF తెరువు
+	This document isn't in a folder yet: save it first	ఈ పత్రం ఇంకా ఏ ఫోల్డర్‌లోనూ లేదు: ముందుగా దీన్ని సేవ్ చేయండి
+	This is the last PDF in its folder	ఇది దాని ఫోల్డర్‌లోని చివరి PDF
+	This is the first PDF in its folder	ఇది దాని ఫోల్డర్‌లోని మొదటి PDF

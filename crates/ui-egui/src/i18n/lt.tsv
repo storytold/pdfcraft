@@ -2792,3 +2792,10 @@ theme	Appearance	Išvaizda
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Atverti kitą aplanko PDF
+	Open previous PDF in folder	Atverti ankstesnį aplanko PDF
+	This document isn't in a folder yet: save it first	Šis dokumentas dar nėra jokiame aplanke: pirmiausia jį įrašykite
+	This is the last PDF in its folder	Tai paskutinis jo aplanko PDF
+	This is the first PDF in its folder	Tai pirmasis jo aplanko PDF

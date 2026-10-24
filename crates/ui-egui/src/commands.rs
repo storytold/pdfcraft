@@ -94,6 +94,8 @@ impl PdfCraftApp {
             && match spec.id {
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
+                // A browser gives the page a file's bytes, never its folder.
+                "file.open_next_in_folder" | "file.open_previous_in_folder" => !cfg!(target_arch = "wasm32"),
                 _ => true,
             }
     }
@@ -167,6 +169,8 @@ impl PdfCraftApp {
                 Some(p) => self.open_recent(&p),
                 None => self.notify_tr("No recent files"),
             },
+            "file.open_next_in_folder" => self.open_pdf_beside(true),
+            "file.open_previous_in_folder" => self.open_pdf_beside(false),
             "file.clear_recent" if self.recent.is_empty() => self.notify_tr("No recent files"),
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
@@ -738,7 +742,13 @@ impl PdfCraftApp {
             if typing && !spec.in_text {
                 continue;
             }
-            let Some(key) = Key::from_name(s.key) else { continue };
+            // egui names the arrows ⏴ / ⏵; menus write them ← / →.
+            let name = match s.key {
+                "←" => "ArrowLeft",
+                "→" => "ArrowRight",
+                key => key,
+            };
+            let Some(key) = Key::from_name(name) else { continue };
             let mut m = Modifiers::NONE;
             if s.command {
                 m |= Modifiers::COMMAND;

@@ -2536,3 +2536,10 @@ animation effects	Off	Izklopljeni
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Odpri naslednji PDF v mapi
+	Open previous PDF in folder	Odpri prejšnji PDF v mapi
+	This document isn't in a folder yet: save it first	Ta dokument še ni v nobeni mapi: najprej ga shranite
+	This is the last PDF in its folder	To je zadnji PDF v svoji mapi
+	This is the first PDF in its folder	To je prvi PDF v svoji mapi

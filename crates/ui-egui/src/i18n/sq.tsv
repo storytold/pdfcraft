@@ -2518,3 +2518,10 @@ animation effects	Off	Joaktiv
 	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	Hap PDF-në pasuese në dosje
+	Open previous PDF in folder	Hap PDF-në e mëparshme në dosje
+	This document isn't in a folder yet: save it first	Ky dokument nuk është ende në një dosje: ruajeni më parë
+	This is the last PDF in its folder	Kjo është PDF-ja e fundit në dosjen e saj
+	This is the first PDF in its folder	Kjo është PDF-ja e parë në dosjen e saj

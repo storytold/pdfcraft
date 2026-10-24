@@ -2807,3 +2807,10 @@ certificate	Version	الإصدار
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم
+
+# Next / previous PDF in folder (#4267) (not separately native-reviewed)
+	Open next PDF in folder	فتح ملف PDF التالي في المجلد
+	Open previous PDF in folder	فتح ملف PDF السابق في المجلد
+	This document isn't in a folder yet: save it first	هذا المستند ليس في مجلد بعد: احفظه أولاً
+	This is the last PDF in its folder	هذا آخر ملف PDF في مجلده
+	This is the first PDF in its folder	هذا أول ملف PDF في مجلده
