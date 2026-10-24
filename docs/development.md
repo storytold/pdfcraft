@@ -12,11 +12,14 @@ cargo build --profile low-disk -p pdfcraft-cli
 cargo test --profile low-disk -p pdfcraft-cos --lib
 ```
 
-The profile inherits the normal development settings, including debug assertions and overflow
-checks. It uses line-table-only debug information for workspace code, which keeps file and line
-numbers in backtraces but omits local-variable and parameter details, and it disables incremental
-compilation for this profile only. Ordinary `cargo build`, `cargo test`, and release builds keep
-their existing profiles.
+The profile inherits the normal development settings, including debug assertions, overflow
+checks and line-table-only debug information, and disables incremental compilation for this
+profile only. Ordinary `cargo build` and `cargo test` keep incremental compilation.
+
+The development profile itself keeps only line tables for workspace code and no debug information
+for dependencies. Backtraces show file and line numbers but no local variables or parameters; for
+full debug information in workspace code (for a debugger), build with
+`CARGO_PROFILE_DEV_DEBUG=true`.
 
 Cargo stores custom-profile artifacts separately under `target/low-disk`. Switching between the
 normal and low-disk profiles can therefore leave both sets of artifacts on disk. To remove only

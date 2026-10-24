@@ -274,3 +274,39 @@ fn expanding_and_collapsing_all_bookmarks() {
     h.run_steps(3);
     assert!(shown(&h, "Chapter") && !shown(&h, "Section"));
 }
+
+/// #3193: a bookmark's Style and Colour menus make its title bold, italic and coloured
+/// (ISO 32000-2 §12.3.3, Tables 151 and 152), each an undoable edit.
+#[test]
+fn style_and_colour_from_the_bookmark_menu() {
+    let mut h = harness();
+    add(&mut h, "Intro");
+    let look = |h: &Harness<'static, PdfCraftApp>| {
+        let id = h.state().views[0].id;
+        let b = &h.state().session.get(id).unwrap().info.outline[0];
+        (b.bold, b.italic, b.color)
+    };
+    let submenu = |h: &mut Harness<'static, PdfCraftApp>, menu: &str, item: &str| {
+        h.get_by_label("Intro").click_secondary();
+        h.run_steps(2);
+        // A submenu's button carries its arrow.
+        h.get_by_label(&format!("{menu} ⏵")).click();
+        h.run_steps(2);
+        h.get_by_label(item).click();
+        h.run_steps(3);
+    };
+    submenu(&mut h, "Style", "Bold");
+    assert_eq!(look(&h), (true, false, None));
+    submenu(&mut h, "Style", "Italic");
+    assert_eq!(look(&h), (true, true, None));
+    submenu(&mut h, "Colour", "Red");
+    let (bold, italic, color) = look(&h);
+    assert!(bold && italic, "the colour keeps the style");
+    let [r, g, b] = color.expect("coloured");
+    assert!((r - 0.89).abs() < 0.01 && (g - 0.13).abs() < 0.01 && (b - 0.13).abs() < 0.01, "{color:?}");
+    submenu(&mut h, "Style", "Bold");
+    assert!(!look(&h).0, "bold again turns it off");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert!(look(&h).0, "undoable");
+}

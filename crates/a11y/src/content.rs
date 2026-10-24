@@ -53,6 +53,15 @@ struct Walk<'a> {
     budget: DecodeBudget,
 }
 
+fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
+    op.name(0) == Some(b"Artifact")
+        || match op.operands.get(1) {
+            Some(Object::Dict(d)) => d.contains(b"MCID"),
+            Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false),
+            _ => false,
+        }
+}
+
 impl Walk<'_> {
     fn sub(&self, res: &Dict, key: &[u8]) -> Dict {
         res.get(key).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
@@ -68,17 +77,7 @@ impl Walk<'_> {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
-                b"BDC" => {
-                    let marks = op.name(0) == Some(b"Artifact")
-                        || match op.operands.get(1) {
-                            Some(Object::Dict(d)) => d.contains(b"MCID"),
-                            Some(Object::Name(n)) => {
-                                props.get(n).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false)
-                            }
-                            _ => false,
-                        };
-                    stack.push(inside || marks);
-                }
+                b"BDC" => stack.push(inside || bdc_marks(self.doc, &op, &props)),
                 b"EMC" => {
                     stack.pop();
                 }

@@ -360,26 +360,36 @@ impl EmbeddedKind {
                 }
             }
         } else if let Ok(cmap) = self.base_font.font_ref().cmap() {
-            for record in cmap.encoding_records() {
-                if record.platform_id() == PlatformId::Windows
-                    && matches!(record.encoding_id(), 0 | 1)
-                {
-                    if let Ok(subtable) = record.subtable(cmap.offset_data()) {
-                        for offset in [0x0000_u32, 0xF000, 0xF100, 0xF200] {
-                            glyph = glyph
-                                .or_else(|| subtable.map_codepoint(code as u32 + offset))
-                                .filter(|g| *g != GlyphId::NOTDEF);
-                        }
+            // PdfCraft patch (#4156): the Windows (3, 0) subtable comes first, and the (1, 0) one
+            // only for codes it doesn't map (ISO 32000-2 §9.6.5.4: "If the font contains a (3, 0)
+            // subtable" it is used; "Otherwise, if the font contains a (1, 0) subtable"). The
+            // records are listed by platform ID, so Macintosh came before Windows and a wrong
+            // (1, 0) table, as SAS writes for its AMT fonts, drew "8" as "p" and "+" as "V".
+            for windows_pass in [true, false] {
+                for record in cmap.encoding_records() {
+                    let windows = record.platform_id() == PlatformId::Windows
+                        && matches!(record.encoding_id(), 0 | 1);
+                    if windows != windows_pass {
+                        continue;
                     }
-                } else if matches!(
-                    record.platform_id(),
-                    PlatformId::Macintosh | PlatformId::Unicode
-                ) && record.encoding_id() == 0
-                    && let Ok(subtable) = record.subtable(cmap.offset_data())
-                {
-                    glyph = glyph
-                        .or_else(|| subtable.map_codepoint(code))
-                        .filter(|g| *g != GlyphId::NOTDEF);
+                    if windows {
+                        if let Ok(subtable) = record.subtable(cmap.offset_data()) {
+                            for offset in [0x0000_u32, 0xF000, 0xF100, 0xF200] {
+                                glyph = glyph
+                                    .or_else(|| subtable.map_codepoint(code as u32 + offset))
+                                    .filter(|g| *g != GlyphId::NOTDEF);
+                            }
+                        }
+                    } else if matches!(
+                        record.platform_id(),
+                        PlatformId::Macintosh | PlatformId::Unicode
+                    ) && record.encoding_id() == 0
+                        && let Ok(subtable) = record.subtable(cmap.offset_data())
+                    {
+                        glyph = glyph
+                            .or_else(|| subtable.map_codepoint(code))
+                            .filter(|g| *g != GlyphId::NOTDEF);
+                    }
                 }
             }
         }

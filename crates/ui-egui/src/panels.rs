@@ -56,9 +56,9 @@ pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, back: Opt
             close = true;
         }
     });
-    ui.add_space(2.0);
-    ui.separator();
     ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(6.0);
     (go_back, close)
 }
 
@@ -68,6 +68,7 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         app.left_open = false;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.add_space(2.0);
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {
             if tool_row(ui, t, g).clicked() {
@@ -156,7 +157,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     let (back, close) = panel_header(ui, t, g.label, Some(tl!("Back to all tools")));
     if back {
         app.left = LeftPanel::AllTools;
-        app.mode = crate::Mode::AllTools;
+        app.enter_mode(crate::Mode::AllTools);
     }
     if close {
         app.left_open = false;
@@ -200,6 +201,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
+        ui.add_space(2.0);
         for s in g.sections {
             widgets::section_title(ui, tl!(s.title));
             for item in s.items {
@@ -300,7 +302,7 @@ fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static 
     ui.horizontal(|ui| {
         if from_all_tools && icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
             app.left = LeftPanel::AllTools;
-            app.mode = crate::Mode::AllTools;
+            app.enter_mode(crate::Mode::AllTools);
         }
         // "Edit" under the Edit tab, as Acrobat titles it; the tool's own name from All tools.
         let title = if from_all_tools { tl!(g.label) } else { tl!("Edit") };
@@ -314,9 +316,9 @@ fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static 
             app.left_open = false;
         }
     });
-    ui.add_space(2.0);
-    ui.separator();
     ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(6.0);
     // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
     let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
     if count > 0 {
@@ -882,6 +884,14 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
                     RightPanel::Attachments => {
+                        let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
+                        if attachable {
+                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
+                                    panel_command = Some("edit.attach");
+                                }
+                            });
+                        }
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
@@ -913,6 +923,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                             && icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab")).clicked()
                                         {
                                             attachment_action = Some((ai, true));
+                                        }
+                                        if let pdfcraft_render::AttachmentSource::Document { key } = &a.source
+                                            && attachable
+                                            && icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment")).clicked()
+                                        {
+                                            panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
                                         }
                                     });
                                 });
@@ -1019,6 +1035,10 @@ pub enum BmAction {
     StartRename(Vec<usize>),
     Rename(Vec<usize>, String),
     SetToCurrentPage(Vec<usize>),
+    /// Make the title bold or italic or not (`None` keeps that one).
+    SetStyle(Vec<usize>, Option<bool>, Option<bool>),
+    /// Colour the title; black is the default.
+    SetColor(Vec<usize>, [f64; 3]),
     Delete(Vec<usize>),
     MoveUp(Vec<usize>),
     MoveDown(Vec<usize>),
@@ -1092,6 +1112,23 @@ pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) 
     }
 }
 
+/// How a bookmark's title is drawn: in its own style and colour (ISO 32000-2 §12.3.3, Tables 151
+/// and 152), bold in the heavier face and italic slanted, its colour kept readable on the panel.
+/// Top-level bookmarks without a style keep the medium face.
+fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextFormat {
+    let font_id = match (item.bold, depth) {
+        (true, _) => theme::semibold(13.0),
+        (false, 0) => theme::medium(13.0),
+        (false, _) => theme::regular(13.0),
+    };
+    let color = item.color.map_or(t.text, |rgb| {
+        // Each component is within 0–1, so the rounded value fits a byte.
+        let [r, g, b] = rgb.map(|c| (c * 255.0).round() as u8);
+        theme::readable(egui::Color32::from_rgb(r, g, b), t.panel, t.text)
+    });
+    egui::TextFormat { font_id, color, italics: item.italic, ..Default::default() }
+}
+
 fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineItem, path: &[usize], siblings: usize, cx: &mut OutlineCtx<'_>) {
     if cx.searching && !cx.matches.contains(path) {
         return;
@@ -1145,9 +1182,10 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
             })
         });
         let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
-        let font = if depth == 0 { theme::medium(13.0) } else { theme::regular(13.0) };
         let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
-        let galley = ui.fonts_mut(|f| f.layout(item.title.clone(), font, t.text, wrap_w));
+        let mut job = egui::text::LayoutJob::single_section(item.title.clone(), title_format(item, depth, t));
+        job.wrap.max_width = wrap_w;
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &item.title));
@@ -1190,6 +1228,26 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
                 pick(ui, tl!("Rename"), true, BmAction::StartRename(path.to_vec()));
                 let set_page = crate::i18n::fmt(tl!("Set to current page ({n})"), &[("n", &(current + 1).to_string())]);
                 pick(ui, &set_page, true, BmAction::SetToCurrentPage(path.to_vec()));
+                // The title's style and colour (ISO 32000-2 §12.3.3, Tables 151 and 152).
+                let mut styled = None;
+                ui.menu_button(tl!("Style"), |ui| {
+                    let (mut bold, mut italic) = (item.bold, item.italic);
+                    if ui.add(crate::widgets::checkbox(&mut bold, tl!("Bold"))).clicked() {
+                        styled = Some(BmAction::SetStyle(path.to_vec(), Some(bold), None));
+                    }
+                    if ui.add(crate::widgets::checkbox(&mut italic, tl!("Italic"))).clicked() {
+                        styled = Some(BmAction::SetStyle(path.to_vec(), None, Some(italic)));
+                    }
+                });
+                ui.menu_button(tl!("Colour"), |ui| {
+                    let current = item.color.map_or([0.0; 3], |c| c.map(f64::from));
+                    if let Some(c) = crate::comments::swatch_grid(ui, Some(current)) {
+                        styled = Some(BmAction::SetColor(path.to_vec(), c));
+                    }
+                });
+                if styled.is_some() {
+                    ui.close();
+                }
                 ui.separator();
                 pick(ui, tl!("Move up"), i > 0, BmAction::MoveUp(path.to_vec()));
                 pick(ui, tl!("Move down"), i + 1 < siblings, BmAction::MoveDown(path.to_vec()));
@@ -1197,6 +1255,9 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
                 pick(ui, tl!("Outdent"), depth > 0, BmAction::Outdent(path.to_vec()));
                 ui.separator();
                 pick(ui, tl!("Delete"), true, BmAction::Delete(path.to_vec()));
+                if let Some(a) = styled {
+                    *cx.action = Some(a);
+                }
             });
         }
     }
@@ -1361,6 +1422,13 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
                 }
                 if ui.button(tl!("Extract pages")).clicked() {
                     view.pending_action = Some(crate::canvas::ViewAction::Extract);
+                    ui.close();
+                }
+                if ui.button(tl!("Split document…")).clicked() {
+                    if view.selected.is_empty() {
+                        view.select_pages(&[i]);
+                    }
+                    view.pending_action = Some(crate::canvas::ViewAction::SplitBeforeSelected);
                     ui.close();
                 }
                 if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
@@ -1863,11 +1931,39 @@ mod label_column {
 
 #[cfg(test)]
 mod bookmark_filter {
-    use super::outline_matches;
+    use super::{outline_matches, title_format};
+    use crate::theme::{self, Tokens};
     use pdfcraft_render::OutlineItem;
 
+    /// #3193: a bookmark's title is drawn in its own style and colour.
+    #[test]
+    fn bookmark_titles_take_their_style_and_colour() {
+        let t = Tokens::for_kind(crate::theme::ThemeKind::Light);
+        let plain = item("Plain", Vec::new());
+        assert_eq!(title_format(&plain, 0, &t).font_id, theme::medium(13.0));
+        assert_eq!(title_format(&plain, 1, &t).font_id, theme::regular(13.0));
+        assert_eq!(title_format(&plain, 1, &t).color, t.text);
+        assert!(!title_format(&plain, 1, &t).italics);
+        let styled = OutlineItem { color: Some([1.0, 0.0, 0.0]), italic: true, bold: true, ..item("Styled", Vec::new()) };
+        let f = title_format(&styled, 1, &t);
+        assert_eq!(f.font_id, theme::semibold(13.0));
+        assert!(f.italics);
+        assert_eq!(f.color, egui::Color32::from_rgb(255, 0, 0));
+        let half = OutlineItem { color: Some([0.0, 0.5, 0.0]), ..item("Green", Vec::new()) };
+        assert_eq!(title_format(&half, 1, &t).color, egui::Color32::from_rgb(0, 128, 0));
+    }
+
     fn item(title: &str, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem { title: title.into(), page: Some(0), view: pdfcraft_render::DestView::Top, children, open: true }
+        OutlineItem {
+            title: title.into(),
+            page: Some(0),
+            view: pdfcraft_render::DestView::Top,
+            children,
+            open: true,
+            color: None,
+            italic: false,
+            bold: false,
+        }
     }
 
     /// Turkish dotted and dotless i match in any case, as in Find (#892).

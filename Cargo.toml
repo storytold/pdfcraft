@@ -89,20 +89,20 @@ dbg_macro = "warn"
 todo = "warn"
 
 # `"*"` matches every non-workspace package: crates.io dependencies and the
-# vendored crates under `vendor/` (excluded from the workspace). Our own crates
-# keep full debug info. Dependencies keep only line tables, so backtraces still
-# show file and line, but debug info for the whole dependency graph stays out of
-# every test binary (each UI test binary had a 500-600 MB PDB on Windows, #454).
+# vendored crates under `vendor/` (excluded from the workspace). Dependencies
+# carry no debug info and our own crates only line tables: backtraces and
+# panics still show file and line, while test binaries and the target dir stay
+# small (each UI test binary had a 500-600 MB PDB on Windows, #454).
 [profile.dev.package."*"]
 opt-level = 2
-debug = "line-tables-only"
+debug = false
 
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.low-disk]
 inherits = "dev"
-debug = "line-tables-only"
 incremental = false
 
 [profile.release]
@@ -115,6 +115,7 @@ hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
+hayro-postscript = { path = "vendor/hayro-postscript" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
 winit = { path = "vendor/winit" }

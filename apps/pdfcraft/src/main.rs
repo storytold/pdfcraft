@@ -1,6 +1,6 @@
 //! PdfCraft desktop app.
 //!
-//! Usage: `pdfcraft [options] [files…]`
+//! Usage: `pdfcraft [options] [files…]` (`-h` / `--help` prints a short version of this, [`USAGE`]).
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
@@ -55,6 +55,32 @@ const APP_ID: &str = "ai.storyteller.pdfcraft";
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft-1024.png");
 #[cfg(not(target_os = "macos"))]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
+
+/// What `-h` / `--help` prints (#4076): a hint, not the full option list (that is this file's
+/// doc comment and the README). Scripts want `pdfcraft-cli`, which never opens a window.
+const USAGE: &str = "\
+Usage: pdfcraft [options] [files…]
+
+Opens the files in the PdfCraft desktop app.
+
+Options:
+  --new-window                open a window of its own instead of passing the files to a running PdfCraft
+  --create-images [images…]   put the images in one PDF and ask for the page DPI
+  --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
+  --page N, --zoom 150, --layout continuous, --theme dark, …
+                              view settings applied once the files are open
+  -h, --help                  print this and exit
+  --version                   print the version and exit
+
+To inspect, convert or edit PDFs from a script, use pdfcraft-cli (pdfcraft-cli --help).";
+
+/// Print `text` for `--help` and `--version`. `println!` would panic on a full or closed
+/// standard output; this exits normally instead.
+fn print_and_exit(text: &str) -> eframe::Result {
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout().lock(), "{text}");
+    Ok(())
+}
 
 /// The app was called PrintCraft before; settings saved then are under this key.
 const LEGACY_STORAGE_KEY: &str = "printcraft";
@@ -196,10 +222,9 @@ fn main() -> eframe::Result {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--version" => {
-                println!("pdfcraft {}", pdfcraft_engine::build_info::version());
-                return Ok(());
-            }
+            "--version" => return print_and_exit(&format!("pdfcraft {}", pdfcraft_engine::build_info::version())),
+            // Before any window or log file, so a scripted call returns (#4076).
+            "-h" | "--help" => return print_and_exit(USAGE),
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
             "--new-window" => new_window = true,
@@ -1413,5 +1438,27 @@ mod tests {
         let entry = include_str!("../../../packaging/linux/ai.storyteller.pdfcraft.desktop");
         let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
         assert_eq!(class, Some(super::APP_ID));
+    }
+
+    // Regression test for #246: `eprintln!` panics when standard error is a broken pipe (a GUI
+    // launch on Windows), and a panic inside the panic hook aborts the process. The start-up
+    // path and the hook must write to standard error without it.
+    #[test]
+    fn start_up_and_the_panic_hook_never_use_eprintln() {
+        let source = include_str!("main.rs");
+        // Everything before the top-level test module is product code.
+        let product = source.split("\n#[cfg(test)]\nmod tests {").next().unwrap_or(source);
+        assert!(product.len() < source.len(), "found the end of the product code");
+        let offenders: Vec<_> = product
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with("//") && line.contains("eprintln!"))
+            .map(|(n, line)| format!("main.rs:{}: {}", n + 1, line.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "`eprintln!` panics on a broken standard error pipe; use `log::warn!` or `write_fmt` on `stderr()` and ignore the error:\n{}",
+            offenders.join("\n")
+        );
     }
 }

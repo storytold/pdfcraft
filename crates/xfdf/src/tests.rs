@@ -1759,6 +1759,15 @@ fn an_imported_redaction_rect_with_a_non_number_is_not_used() {
     assert!(mark.get(b"QuadPoints").is_none(), "quads were drawn from a malformed /Rect: {mark:?}");
 }
 
+#[test]
+fn a_colour_with_non_hex_digits_is_rejected() {
+    assert!(parse_hex("#+f+f+f").is_none());
+    assert!(parse_hex("#+1+2+3").is_none());
+    assert!(parse_hex("#-1-2-3").is_none());
+    assert!(parse_hex("#ff00zz").is_none());
+    assert_eq!(parse_hex("#FF8000").map(|c| c[0]), Some(1.0));
+}
+
 /// An FDF body with `body` as its `/FDF` dictionary contents and `objects` (numbered from 2).
 fn fdf_with(body: &str, objects: &[String]) -> Vec<u8> {
     let mut out = format!("%FDF-1.2\n1 0 obj\n<< /FDF << {body} >> >>\nendobj\n");

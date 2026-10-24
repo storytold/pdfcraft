@@ -28,6 +28,11 @@ fn fixture_with(catalog: &[u8], more: &[&[u8]]) -> Vec<u8> {
         b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
     ];
     objs.extend_from_slice(more);
+    write_pdf(&objs)
+}
+
+/// A classic-xref PDF of `objs`, numbered from 1, with object 1 as the catalog.
+fn write_pdf(objs: &[&[u8]]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -139,6 +144,71 @@ fn signing_an_existing_field_and_counter_signing() {
     ));
 }
 
+/// A page whose /Annots is an object of its own: signing and commenting update that array in
+/// place, not the page. A second signature is a signature change for the first, as with an
+/// inline /Annots, and a comment is still a comment (refused under a form-fill certification).
+#[test]
+fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
+    let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
+    let unsigned = edit_after(&fixture(), |doc| {
+        let annots = doc.add(Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef { num: 6, generation: 0 })]));
+        doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Ref(annots))).unwrap();
+    });
+    let annots_ref = |bytes: &[u8]| open(bytes).get(page).as_dict().and_then(|d| d.get(b"Annots").and_then(Object::as_ref));
+    let annots = annots_ref(&unsigned).unwrap();
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let first = pdfcraft_sign::sign(&open(&unsigned), &id, &opts()).unwrap();
+    let second = pdfcraft_sign::sign(&open(&first), &id, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() }).unwrap();
+    assert_eq!(annots_ref(&second), Some(annots), "the signer kept the page's array indirect");
+    let doc = open(&second);
+    let sigs = signatures(&doc, &second, &trust);
+    let s = sigs.iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(s.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{:?}", s.details);
+    assert_eq!(s.status, Status::Valid);
+    // A comment appended to the indirect array.
+    let comment = |doc: &mut Document| {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Text"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(10), Object::Int(10), Object::Int(30), Object::Int(30)]));
+        let r = doc.add(Object::Dict(d));
+        let mut a = doc.get(annots).as_array().cloned().unwrap();
+        a.push(Object::Ref(r));
+        doc.set(annots, Object::Array(a));
+    };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let s = check(&edit_after(&first, comment));
+    assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])));
+    let certified = pdfcraft_sign::sign(&open(&unsigned), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let s = check(&edit_after(&certified, comment));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+    // Under that certification, a signed comment swapped for a new signature widget is still a
+    // deleted comment, and a form field taken off the page is permitted by no level.
+    let commented = pdfcraft_sign::sign(&open(&edit_after(&unsigned, comment)), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let swap = |drop: &dyn Fn(&Document, &Object) -> bool| {
+        edit_after(&commented, |doc| {
+            let mut w = pdfcraft_cos::Dict::new();
+            w.set(b"Type".to_vec(), Object::name("Annot"));
+            w.set(b"Subtype".to_vec(), Object::name("Widget"));
+            w.set(b"FT".to_vec(), Object::name("Sig"));
+            w.set(b"T".to_vec(), PdfString::text("Later"));
+            w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+            let w = doc.add(Object::Dict(w));
+            let mut a = doc.get(annots).as_array().cloned().unwrap();
+            a.retain(|o| !drop(doc, o));
+            a.push(Object::Ref(w));
+            doc.set(annots, Object::Array(a));
+        })
+    };
+    let subtype =
+        |doc: &Document, o: &Object, t: &[u8]| o.as_ref().is_some_and(|r| doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(t)));
+    let s = check(&swap(&|doc, o| subtype(doc, o, b"Text")));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+    let s = check(&swap(&|doc, o| subtype(doc, o, b"Widget") && o.as_ref().is_some_and(|r| r.num == 6)));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+}
+
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
 /// it is listed as unsigned and can be signed by name.
 #[test]
@@ -160,6 +230,24 @@ fn a_field_with_a_null_value_is_unsigned_and_can_be_signed() {
         let listed = signatures(&open(&signed), &signed, &TrustStore::default());
         assert!(listed.iter().any(|s| s.field == "Approval" && s.signed), "{what}");
         assert!(!listed.iter().any(|s| s.field == "Signature1"), "{what}: no new field");
+    }
+}
+
+/// A signature field whose widget is hidden (annotation flag Hidden, 2) or not shown on screen
+/// (NoView, 32) is listed as not visible, whatever its rectangle, as form widgets are: a form's
+/// requestor box with flags 96 (NoView and ReadOnly) has no box on the page to show. A widget
+/// that is only printable (4) stays visible.
+#[test]
+fn a_hidden_signature_field_is_listed_as_not_visible() {
+    let field = pdfcraft_cos::ObjRef { num: 6, generation: 0 };
+    let visible_with = |flags: i64| {
+        let bytes = edit_after(&fixture(), |doc| doc.update_dict(field, |d| d.set(b"F".to_vec(), Object::Int(flags))).unwrap());
+        let listed = signatures(&open(&bytes), &bytes, &TrustStore::default());
+        listed.iter().find(|s| s.field == "Approval").map(|s| s.visible).expect("listed")
+    };
+    assert!(visible_with(4), "printable only: shown");
+    for flags in [2, 32, 96, 34] {
+        assert!(!visible_with(flags), "flags {flags}: not shown");
     }
 }
 
@@ -345,6 +433,105 @@ fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
     // An invisible signature has nothing to show: no image is embedded.
     let invisible = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { rect: None, graphic: Some(picture(false)), ..opts() }).unwrap();
     assert!(!invisible.windows(6).any(|w| w == b"/Image"));
+}
+
+/// [`fixture`]'s page and "Approval" widget with extra entries: `page` (a `/Rotate`, say) and
+/// `widget` (an `/MK`); `pages` goes on the page tree node, where `/Rotate` is inheritable.
+fn rotated_fixture(pages: &str, page: &str, widget: &str) -> Vec<u8> {
+    let pages = format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages} >>");
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] {page} >>"
+    );
+    let widget = format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 {widget} >>");
+    write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        pages.as_bytes(),
+        page.as_bytes(),
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        widget.as_bytes(),
+    ])
+}
+
+/// The signature field `name`'s widget and its normal appearance's dictionary and content.
+fn widget_and_appearance(bytes: &[u8], name: &str) -> (pdfcraft_cos::Dict, pdfcraft_cos::Dict, String) {
+    let doc = open(bytes);
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let form = doc.resolve(catalog.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let fields = doc.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let widget = fields
+        .iter()
+        .filter_map(|f| doc.resolve(f).as_dict().cloned())
+        .find(|f| matches!(f.get(b"T"), Some(Object::String(s)) if s.bytes == name.as_bytes()))
+        .unwrap();
+    let ap = doc.resolve(widget.get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(s) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("no normal appearance") };
+    (widget.clone(), s.dict.clone(), String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+fn numbers(d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<Vec<f64>> {
+    d.get(key).and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|n| n.as_f64()).collect())
+}
+
+/// On a page shown turned, a visible signature reads upright as displayed: its appearance is the
+/// one an unturned page gets in the box with the displayed proportions, turned back onto the
+/// widget by `/MK /R` and the matching `/Matrix`.
+#[test]
+fn visible_signatures_read_upright_on_rotated_pages() {
+    use pdfcraft_sign::Appearance;
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    // 200 x 50 in user space: shown 50 wide and 200 tall on a page turned a quarter.
+    let rect = [20.0, 100.0, 220.0, 150.0];
+    let swapped = [20.0, 100.0, 70.0, 300.0];
+    let shown = Appearance { reason: true, location: true, ..Appearance::default() };
+    let sign = |bytes: &[u8], rect: [f64; 4]| {
+        let o = SignOptions { rect: Some(rect), graphic: Some(picture(false)), appearance: shown.clone(), ..opts() };
+        pdfcraft_sign::sign(&open(bytes), &id, &o).unwrap()
+    };
+    let upright = |rect: [f64; 4]| widget_and_appearance(&sign(&fixture(), rect), "Signature1");
+    for (pages, page, turn) in [
+        ("", "", 0),
+        ("", "/Rotate 90", 90),
+        ("", "/Rotate 180", 180),
+        ("", "/Rotate 270", 270),
+        ("", "/Rotate -90", 270),
+        // Inherited from the page tree.
+        ("/Rotate 270", "", 270),
+        // Not a quarter turn: drawn as unturned, as the page is.
+        ("", "/Rotate 45", 0),
+    ] {
+        let doc = rotated_fixture(pages, page, "");
+        let signed = sign(&doc, rect);
+        let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!((s.status, s.modification), (Status::Unknown, Modification::None), "{pages} {page}: {:?}", s.details);
+        let (widget, form, content) = widget_and_appearance(&signed, "Signature1");
+        let (_, expected_form, expected) = upright(if turn % 180 == 0 { rect } else { swapped });
+        assert_eq!(content, expected, "{pages} {page}: the layout is the upright box's");
+        assert_eq!(numbers(&form, b"BBox"), numbers(&expected_form, b"BBox"), "{pages} {page}");
+        let mk = widget.get(b"MK").and_then(|m| m.as_dict()).and_then(|m| m.int(b"R"));
+        let matrix = numbers(&form, b"Matrix");
+        if turn == 0 {
+            assert_eq!((mk, matrix), (None, None), "{pages} {page}: an unturned page's signature is unchanged");
+        } else {
+            assert_eq!(mk, Some(turn), "{pages} {page}");
+            assert_eq!(matrix, Some(pdfcraft_model::view_matrix_for(turn, rect).to_vec()), "{pages} {page}");
+        }
+    }
+    // An existing field keeps its own orientation: `/MK /R` turns it, whatever the page does.
+    let field = |bytes: &[u8]| {
+        let o = SignOptions { field: Some("Approval".into()), graphic: Some(picture(false)), appearance: shown.clone(), ..opts() };
+        widget_and_appearance(&pdfcraft_sign::sign(&open(bytes), &id, &o).unwrap(), "Approval")
+    };
+    let field_rect = [150.0, 20.0, 280.0, 70.0];
+    let (_, plain, plain_content) = field(&rotated_fixture("", "/Rotate 90", ""));
+    assert_eq!((numbers(&plain, b"Matrix"), numbers(&plain, b"BBox")), (None, Some(vec![0.0, 0.0, 130.0, 50.0])));
+    let (_, turned, turned_content) = field(&rotated_fixture("", "/Rotate 90", "/MK << /R 90 >>"));
+    assert_eq!(numbers(&turned, b"BBox"), Some(vec![0.0, 0.0, 50.0, 130.0]));
+    assert_eq!(numbers(&turned, b"Matrix"), Some(pdfcraft_model::view_matrix_for(90, field_rect).to_vec()));
+    assert_ne!(turned_content, plain_content);
+    // A malformed `/MK /R` counts as 0.
+    let (_, odd, _) = field(&rotated_fixture("", "", "/MK << /R (ninety) >>"));
+    assert_eq!(numbers(&odd, b"Matrix"), None);
 }
 
 #[test]
@@ -545,6 +732,35 @@ fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
 }
 
 #[test]
+fn ltv_writers_may_declare_the_esic_extension_but_not_change_a_signed_one() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let ext = |base: &[u8], level: i64| {
+        let mut esic = pdfcraft_cos::Dict::new();
+        esic.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+        esic.set(b"ExtensionLevel".to_vec(), Object::Int(level));
+        let mut e = pdfcraft_cos::Dict::new();
+        e.set(b"ESIC".to_vec(), Object::Dict(esic));
+        edit_after(base, |doc| {
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(e))).unwrap();
+        })
+    };
+    // As PAdES LTV writers save it: the store and the ESIC declaration in one revision.
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let evidence = pdfcraft_sign::dss::Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let ltv = pdfcraft_sign::dss::embed(&open(&ext(&signed, 2)), &evidence).unwrap();
+    let s = check(&ltv);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if !k.contains(&kind::STRUCTURE)), "{:?}", s.modification);
+    // A declaration that was signed may not change afterwards.
+    let signed_with = pdfcraft_sign::sign(&open(&ext(&fixture(), 2)), &id, &opts()).unwrap();
+    let s = check(&ext(&signed_with, 3));
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::STRUCTURE])));
+}
+
+#[test]
 fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
     use pdfcraft_sign::dss::{self, Evidence};
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -665,12 +881,20 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// Held by every test that changes the user's keychain search list. Each saves the list, changes
+/// it and restores what it saved, so two at once could undo each other's temporary keychain or
+/// put back one already deleted.
+#[cfg(target_os = "macos")]
+static KEYCHAIN_SEARCH_LIST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Signing with Keychain identities, in a throwaway keychain file. Ignored by default: creating
 /// a keychain touches the user's keychain search list (restored afterwards).
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "creates a temporary macOS keychain; run with --ignored"]
 fn signing_with_keychain_identities() {
+    // A test that failed while holding it leaves the list restored, so a poisoned lock is fine.
+    let _list = KEYCHAIN_SEARCH_LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::process::Command;
     let dir = std::env::temp_dir().join(format!("pdfcraft-keychain-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -683,7 +907,7 @@ fn signing_with_keychain_identities() {
     let restore = || {
         let mut args = vec!["list-keychains", "-d", "user", "-s"];
         args.extend(saved.iter().map(String::as_str));
-        sec(&args);
+        sec(&args)
     };
     restore();
     // Everything that can fail runs before the clean-up below.
@@ -705,9 +929,11 @@ fn signing_with_keychain_identities() {
             assert_eq!(s.status, Status::Valid, "{:?}", s.details);
         }
     }));
+    // The list first: it is what outlives the test if deleting the keychain goes wrong.
+    let restored = restore();
     sec(&["delete-keychain", k]);
-    restore();
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(restored.status.success(), "the keychain search list wasn't restored: {}", String::from_utf8_lossy(&restored.stderr));
     result.unwrap();
 }
 
@@ -718,20 +944,28 @@ fn signing_with_keychain_identities() {
 #[test]
 #[ignore = "creates a temporary macOS keychain; run with --ignored"]
 fn keychain_identities_carry_their_issuers() {
+    // A test that failed while holding it leaves the list restored, so a poisoned lock is fine.
+    let _list = KEYCHAIN_SEARCH_LIST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::process::Command;
-    let dir = std::env::temp_dir().join(format!("pdfcraft-keychain-chain-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // The same path every run: trustd remembers which keychain file it found an issuer in, and
+    // after a run's keychain is deleted it keeps looking there, so a keychain at a new path
+    // would get an empty chain until that memory expires.
+    let dir = std::env::temp_dir().join("pdfcraft-keychain-chain");
     let kc = dir.join("test.keychain-db");
     let sec = |args: &[&str]| Command::new("security").args(args).output().unwrap();
+    let k = kc.to_str().unwrap();
+    // Left over by a run that was killed before its clean-up.
+    sec(&["delete-keychain", k]);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
     let list = String::from_utf8(sec(&["list-keychains", "-d", "user"]).stdout).unwrap();
     let saved: Vec<String> = list.lines().map(|l| l.trim().trim_matches('"').to_string()).filter(|l| !l.is_empty()).collect();
-    let k = kc.to_str().unwrap();
     assert!(sec(&["create-keychain", "-p", "pc-test", k]).status.success());
     let set_list = |extra: Option<&str>| {
         let mut args = vec!["list-keychains", "-d", "user", "-s"];
         args.extend(saved.iter().map(String::as_str));
         args.extend(extra);
-        sec(&args);
+        sec(&args)
     };
     // macOS finds an identity's issuers in the keychains on the search list.
     set_list(Some(k));
@@ -742,15 +976,29 @@ fn keychain_identities_carry_their_issuers() {
         assert!(out.status.success(), "chain-legacy.p12: {}", String::from_utf8_lossy(&out.stderr));
         let listed = pdfcraft_sign::keychain::identities(Some(&kc)).unwrap();
         assert_eq!(listed.len(), 1, "{listed:?}");
-        let id = pdfcraft_sign::keychain::find(&pdfcraft_sign::keychain::reference(&listed[0].certificate)).unwrap();
+        // The Security framework caches the search list in-process and learns of `security
+        // list-keychains` asynchronously, so after another Keychain test it takes a moment to look
+        // in the new keychain.
+        let reference = pdfcraft_sign::keychain::reference(&listed[0].certificate);
+        let mut found = pdfcraft_sign::keychain::find(&reference);
+        for _ in 0..50 {
+            if found.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            found = pdfcraft_sign::keychain::find(&reference);
+        }
+        let id = found.unwrap();
         let issuers: Vec<_> = id.chain.iter().map(|c| c.subject.common_name()).collect();
         assert_eq!(issuers, [Some("PrintCraft Test Root CA")]);
         let file = pkcs12::open(&data("chain.p12"), "test").unwrap();
         assert_eq!(id.chain.iter().map(|c| &c.raw).collect::<Vec<_>>(), file.chain.iter().map(|c| &c.raw).collect::<Vec<_>>());
     }));
+    // The list first: it is what outlives the test if deleting the keychain goes wrong.
+    let restored = set_list(None);
     sec(&["delete-keychain", k]);
-    set_list(None);
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(restored.status.success(), "the keychain search list wasn't restored: {}", String::from_utf8_lossy(&restored.stderr));
     result.unwrap();
 }
 
@@ -2575,4 +2823,46 @@ fn a_timestamp_from_a_certificate_not_issued_for_time_stamping_is_not_trusted_ti
     assert!(s.timestamp);
     assert_eq!(s.timestamp_time, None, "{:?}", s.details);
     assert!(s.details.iter().any(|d| d.message.contains("not issued for time stamping")), "{:?}", s.details);
+}
+
+/// A signed revision's objects can't be freed or its signature widget rewritten without the
+/// change being seen: the classifier used to look only at objects still present, and let a
+/// signature widget's geometry and appearance change count as a signature.
+#[test]
+fn freeing_a_signed_object_or_rewriting_the_signed_widget_is_a_page_content_change() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let freed = check(&edit_after(&signed, |doc| doc.free(pdfcraft_cos::ObjRef { num: 5, generation: 0 })));
+    assert_eq!(freed.status, Status::Invalid, "{:?}", freed.modification);
+    assert!(matches!(&freed.modification, Modification::Disallowed(k) if k.contains(&kind::PAGE_CONTENT)), "{:?}", freed.modification);
+    let widget = open(&signed)
+        .object_numbers()
+        .into_iter()
+        .map(|num| pdfcraft_cos::ObjRef { num, generation: 0 })
+        .find(|r| open(&signed).get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && d.contains(b"V")))
+        .unwrap();
+    let moved = check(&edit_after(&signed, |doc| {
+        doc.update_dict(widget, |d| d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])))
+            .unwrap();
+    }));
+    assert_eq!(moved.status, Status::Invalid, "{:?}", moved.modification);
+    assert!(matches!(&moved.modification, Modification::Disallowed(k) if k.contains(&kind::PAGE_CONTENT)), "{:?}", moved.modification);
+}
+
+/// An existing signature field whose `/V` is null is unsigned: signing it rewrites its widget,
+/// and that is a signature, not a change to what an earlier signature shows.
+#[test]
+fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_valid() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let first = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let second = pdfcraft_sign::sign(&open(&first), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let all = signatures(&open(&second), &second, &trust);
+    assert!(
+        all.iter().filter(|s| s.signed).all(|s| s.status == Status::Valid),
+        "{:?}",
+        all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
+    );
 }

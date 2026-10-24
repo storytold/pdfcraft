@@ -41,6 +41,13 @@ pub struct Bookmark {
     /// Where on that page it goes: the destination's type (`XYZ`, `Fit`, `FitH`…) and the numbers
     /// after it, in PDF user space (`None` for `null` or anything that isn't a number).
     pub view: Option<(Vec<u8>, Vec<Option<f64>>)>,
+    /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), each component kept
+    /// within 0–1; `None` for the default black or a value that isn't three numbers. The
+    /// inspector's `OutlineItem::color` reads it the same way.
+    pub color: Option<[f32; 3]>,
+    /// The title's style (`/F`, Table 152): bit 1 italic, bit 2 bold.
+    pub italic: bool,
+    pub bold: bool,
 }
 
 /// One page of the outline listing (see [`bookmark_page`]).
@@ -61,6 +68,8 @@ pub enum OutlineError {
     EmptyTitle,
     #[error("a bookmark's position must be a finite number")]
     BadPosition,
+    #[error("a bookmark's colour must be three numbers from 0 to 1")]
+    BadColor,
     #[error("this document has no tagged headings to make bookmarks from")]
     NoEntries,
     #[error("{0}")]
@@ -306,7 +315,19 @@ fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>
     };
     let page = dest.as_deref().and_then(|d| page_of_explicit(targets, d));
     let view = dest.as_deref().filter(|_| page.is_some()).and_then(|d| view_of_explicit(doc, d));
-    Bookmark { obj, path, title, open, page, view }
+    let color = item.as_dict().and_then(|d| d.get(b"C").map(|c| doc.resolve(c))).and_then(|c| title_color(doc, &c));
+    let flags = item.as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);
+    Bookmark { obj, path, title, open, page, view, color, italic: flags & 1 != 0, bold: flags & 2 != 0 }
+}
+
+/// A bookmark title's `/C` as a colour: three numbers, each kept within 0–1 (ISO 32000-2
+/// §12.3.3, Table 151: "An array of three numbers in the range 0.0 to 1.0"); a number past the
+/// range, however large, is kept at its edge. Black, the default, and anything else give `None`.
+fn title_color(doc: &Document, c: &Object) -> Option<[f32; 3]> {
+    let [r, g, b] = c.as_array()?.as_slice() else { return None };
+    let channel = |v: &Object| doc.resolve(v).as_f64().map(|v| v.clamp(0.0, 1.0) as f32);
+    let rgb = [channel(r)?, channel(g)?, channel(b)?];
+    (rgb != [0.0; 3]).then_some(rgb)
 }
 
 /// Lists up to `limit` bookmarks from position `offset`, entering no level deeper than `max_depth`.
@@ -610,6 +631,33 @@ pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Resul
     }
     let (r, _) = resolve_path(doc, path)?;
     put(doc, r, b"Title", Some(Object::String(PdfString::text(title))))
+}
+
+/// Set the colour of a bookmark's title (`/C`, ISO 32000-2 §12.3.3, Table 151: "An array of three
+/// numbers in the range 0.0 to 1.0, representing the components in the DeviceRGB colour space").
+/// Black, the default, and `None` remove `/C`; a component outside 0–1 is refused.
+pub fn set_bookmark_color(doc: &mut Document, path: &[usize], color: Option<[f64; 3]>) -> Result<()> {
+    if color.is_some_and(|c| !c.iter().all(|v| (0.0..=1.0).contains(v))) {
+        return Err(OutlineError::BadColor);
+    }
+    let (r, _) = resolve_path(doc, path)?;
+    let value = color.filter(|c| *c != [0.0; 3]).map(|c| Object::Array(c.iter().map(|v| Object::Real(*v)).collect()));
+    put(doc, r, b"C", value)
+}
+
+/// Make a bookmark's title bold or italic or not (`/F`, ISO 32000-2 §12.3.3, Table 152: bit 1
+/// italic, bit 2 bold); `None` keeps that one as it is, and so are the other bits. When no bit is
+/// left, `/F` is removed, its default being 0.
+pub fn set_bookmark_style(doc: &mut Document, path: &[usize], bold: Option<bool>, italic: Option<bool>) -> Result<()> {
+    let (r, _) = resolve_path(doc, path)?;
+    let old = doc.get(r).as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);
+    let bit = |flags: i64, mask: i64, on: Option<bool>| match on {
+        Some(true) => flags | mask,
+        Some(false) => flags & !mask,
+        None => flags,
+    };
+    let flags = bit(bit(old, 1, italic), 2, bold);
+    put(doc, r, b"F", (flags != 0).then_some(Object::Int(flags)))
 }
 
 /// Point a bookmark at `page` (0-based), replacing its destination or GoTo action.

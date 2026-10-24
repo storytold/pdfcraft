@@ -618,8 +618,14 @@ impl PageCx<'_> {
         self.xf.norm_to_screen(v[0] / self.xf.pw, v[1] / self.xf.ph)
     }
 
+    /// The page's clockwise `/Rotate`.
+    fn rotation(&self) -> u16 {
+        self.info.pages.get(self.page).map_or(0, |p| p.rotation)
+    }
+
+    /// Where a comment is drawn on screen (a sticky note stays upright on a turned page).
     fn screen_rect(&self, a: &Annotation) -> Rect {
-        self.xf.user_rect(self.info, self.page, a.rect)
+        self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
     }
 
     /// Top-level comments on this page, in paint order.
@@ -688,16 +694,13 @@ impl PageCx<'_> {
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.xf.user_rect(self.info, self.page, rect.map(|v| v as f32));
+            return self.xf.user_rect(self.info, self.page, a.shown(*rect, self.rotation()).map(|v| v as f32));
         }
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.xf.user_rect(
-                self.info,
-                self.page,
-                [a.rect[0] + *dx as f32, a.rect[1] + *dy as f32, a.rect[2] + *dx as f32, a.rect[3] + *dy as f32],
-            );
+            let r = a.shown_rect(self.rotation());
+            return self.xf.user_rect(self.info, self.page, [r[0] + *dx as f32, r[1] + *dy as f32, r[2] + *dx as f32, r[3] + *dy as f32]);
         }
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
@@ -1230,7 +1233,7 @@ fn select_input(
                     let from_rect = cx.screen_rect(a);
                     let shift = ui.input(|i| i.modifiers.shift);
                     let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = cx.rect_to_user(r);
+                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
                     if r.width() >= 4.0 && r.height() >= 4.0 {
                         view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
                     }
@@ -1278,7 +1281,7 @@ fn select_input(
         cv.selected = Some((cx.page, a.index));
         cv.composer = Some(Composer {
             page: cx.page,
-            at: [a.rect[2] as f64, a.rect[3] as f64],
+            at: edit_anchor(cx.info, a),
             kind: ComposerKind::Edit(a.index),
             text: a.contents.clone().unwrap_or_default(),
             focus: true,
@@ -1550,6 +1553,20 @@ fn erase(cx: &PageCx<'_>, path: &[[f64; 2]]) -> Option<Edit> {
     Some(Edit::Batch { label: "Erase".into(), edits })
 }
 
+/// Where the composer for editing `a` opens: the top-right corner of the comment as drawn on the
+/// displayed page.
+fn edit_anchor(info: &DocInfo, a: &Annotation) -> [f64; 2] {
+    let Some(p) = info.pages.get(a.page) else { return [f64::from(a.rect[2]), f64::from(a.rect[3])] };
+    let r = a.shown_rect(p.rotation);
+    let (u, v) = (p.user_to_view(r[0], r[1]), p.user_to_view(r[2], r[3]));
+    p.view_to_user(u[0].max(v[0]), u[1].min(v[1])).map(f64::from)
+}
+
+/// Whether comment `index` on the composer's page is at least partly inside `viewport`, as drawn.
+fn edited_in_view(cx: &PageCx<'_>, index: usize, viewport: Rect) -> bool {
+    cx.info.annotations.iter().any(|a| a.page == cx.page && a.index == index && viewport.intersects(cx.screen_rect(a)))
+}
+
 fn new_comment(cx: &PageCx<'_>, tool: CommentTool, shape: Shape, contents: String) -> Edit {
     Edit::AddAnnotation(NewAnnotation { page: cx.page, shape, style: cx.prefs.style(tool), contents, author: cx.prefs.author.clone() })
 }
@@ -1559,11 +1576,15 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let c = view.comments.composer.as_ref()?;
     let page = c.page;
     let Some(xf) = view.page_xform(page) else {
-        // Scrolled away: keep the draft until the page is back.
+        // Scrolled away: keep the draft until the page is back, and give it the keyboard then.
+        if let Some(c) = view.comments.composer.as_mut() {
+            c.focus = true;
+        }
         return None;
     };
     let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false, redact_mark: ([0.89, 0.13, 0.13], 1.0) };
     let anchor = cx.to_screen(c.at);
+    let viewport = view.viewport_rect();
     let t = Tokens::get(ctx);
     let mut post = false;
     let mut cancel = false;
@@ -1576,8 +1597,21 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         ComposerKind::Replace => "Replacement text",
         ComposerKind::Edit(_) => "Edit comment",
     };
+    // Its comment scrolled out of the document: keep the draft until it is back, rather than
+    // pushing the card into the window over the mode bar and toolbar (#4021). An edited comment
+    // that is only partly scrolled away keeps its card, at the nearest point inside the document.
+    let mut anchor = anchor;
+    if !viewport.contains(anchor) {
+        let part_visible = matches!(c.kind, ComposerKind::Edit(index) if edited_in_view(&cx, index, viewport));
+        if !part_visible {
+            c.focus = true;
+            return None;
+        }
+        anchor = anchor.clamp(viewport.min, viewport.max);
+    }
     let pos = pos2(anchor.x + 12.0, anchor.y);
-    egui::Area::new(egui::Id::new(("comment-composer", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    let area = egui::Area::new(egui::Id::new(("comment-composer", view.id.0))).order(egui::Order::Foreground).constrain_to(viewport);
+    area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
             ui.horizontal(|ui| {
@@ -1823,6 +1857,55 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     }
 }
 
+/// The arrow keys move the selected comment a screen pixel; with ⌘/Ctrl or Shift, ten. Up is up
+/// on screen whatever the zoom, the page's rotation and the view's; the keys are taken before
+/// the view scrolls or turns the page with them. Each press is one undo step. Text markup stays
+/// with its text, and a locked comment where it is.
+pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) {
+    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
+        return;
+    }
+    let cv = &view.comments;
+    if cv.gesture.is_some() || cv.composer.is_some() {
+        return;
+    }
+    let Some((page, index)) = cv.selected else { return };
+    let movable =
+        info.annotations.iter().any(|a| a.page == page && a.index == index && a.in_reply_to.is_none() && !is_markup(&a.subtype) && !a.locked);
+    let (Some(xf), Some(p)) = (view.page_xform(page), info.pages.get(page)) else { return };
+    if !movable {
+        return;
+    }
+    use egui::{Key, Modifiers};
+    let mut step = egui::Vec2::ZERO;
+    ctx.input_mut(|i| {
+        for (key, direction) in
+            [(Key::ArrowLeft, vec2(-1.0, 0.0)), (Key::ArrowRight, vec2(1.0, 0.0)), (Key::ArrowUp, vec2(0.0, -1.0)), (Key::ArrowDown, vec2(0.0, 1.0))]
+        {
+            // The modified patterns first: a plain one also matches a Shift press.
+            if i.consume_key(Modifiers::COMMAND, key) || i.consume_key(Modifiers::SHIFT, key) {
+                step += direction * 10.0;
+            } else if i.consume_key(Modifiers::NONE, key) {
+                step += direction;
+            }
+        }
+    });
+    if step == egui::Vec2::ZERO {
+        return;
+    }
+    // The step on screen, in user space: from the page's centre to `step` pixels away.
+    let user = |s: Pos2| {
+        let (vx, vy) = xf.screen_to_view(s);
+        let u = p.view_to_user(vx, vy);
+        [f64::from(u[0]), f64::from(u[1])]
+    };
+    let (a, b) = (user(xf.rect.center()), user(xf.rect.center() + step));
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
+        view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+    }
+}
+
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
 /// menus as in the Attachments panel: the comment is where the reader finds its file. Reading
 /// the file changes nothing, so a read-only document offers them too.
@@ -1841,7 +1924,15 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 }
 
 /// Items of the canvas context menu for the selected comment (or the page).
-pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs, allowed: bool) -> Option<CanvasAction> {
+/// `can_modify`: the document's pages may change (Flatten comments draws into them).
+pub(crate) fn context_menu(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    info: &DocInfo,
+    prefs: &CommentPrefs,
+    allowed: bool,
+    can_modify: bool,
+) -> Option<CanvasAction> {
     let mut action = None;
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
     match selected {
@@ -1851,7 +1942,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
             if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
                 view.comments.composer = Some(Composer {
                     page,
-                    at: [a.rect[2] as f64, a.rect[3] as f64],
+                    at: edit_anchor(info, a),
                     kind: ComposerKind::Edit(index),
                     text: a.contents.clone().unwrap_or_default(),
                     focus: true,
@@ -1873,7 +1964,8 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                         }
                     }
                 });
-                ui.menu_button(tl!("Colour"), |ui| {
+                let keep_open = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                let _ = egui::containers::menu::SubMenuButton::new(tl!("Colour")).config(keep_open).ui(ui, |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
                         action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
                             page,
@@ -1923,6 +2015,16 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 action = Some(CanvasAction::OpenComments);
                 ui.close();
             }
+        }
+    }
+    // Every comment of the document into its pages, as Comment ▸ Flatten comments does: signed
+    // or reviewed pages whose comments should no longer move.
+    if !info.annotations.is_empty() {
+        ui.separator();
+        if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
+            view.comments.selected = None;
+            action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
+            ui.close();
         }
     }
     action
@@ -2092,7 +2194,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Colour")));
     let resp = resp.on_hover_text(tl!("Colour"));
-    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         if let Some(c) = swatch_grid(ui, Some(style.color)) {
             prefs.set_color(tool, c);
             selected_color = Some(c);
@@ -2101,7 +2203,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     });
     if tool.has_fill() {
         let resp = fill_button(ui, style.fill);
-        egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+        egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.label(egui::RichText::new(tl!("Fill colour")).font(theme::semibold(12.0)));
             if let Some(f) = fill_picker(ui, style.fill) {
                 prefs.set_fill(tool, f);
@@ -2190,6 +2292,51 @@ mod tests {
         assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
         assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
     }
+
+    /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
+    /// composer stays open while the drawn note is partly in view, even with `/Rect` out of it.
+    #[test]
+    fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
+        let note = |no_rotate| Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            rect: [40.0, 20.0, 70.0, 40.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate,
+            points: Vec::new(),
+        };
+        let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
+        let prefs = CommentPrefs::default();
+        // Screen x is user y here: `/Rect` spans x 20..40, the upright note x 40..70.
+        let viewport = Rect::from_min_max(pos2(50.0, 0.0), pos2(140.0, 200.0));
+        for (no_rotate, in_view) in [(true, true), (false, false)] {
+            let info = DocInfo { pages: vec![page.clone()], annotations: vec![note(no_rotate)], ..Default::default() };
+            let cx = PageCx {
+                page: 0,
+                xf: &xf,
+                info: &info,
+                tool: QuickTool::Select,
+                prefs: &prefs,
+                allowed: true,
+                hidden: false,
+                redact_mark: ([0.0; 3], 1.0),
+            };
+            assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
+        }
+    }
+
     use pdfcraft_render::TextGlyph;
 
     /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn
@@ -2337,6 +2484,107 @@ mod tests {
         plus[0].click();
         h.run();
         assert_eq!(h.query_all_by_label("Apply").count(), 1, "only the first grid's picker opens");
+    }
+
+    #[test]
+    fn other_colour_opens_the_picker_inside_the_quick_bar_popup() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, prefs: &mut CommentPrefs| {
+                let _ = quick_bar_controls(ui, CommentTool::Highlight, prefs);
+            },
+            CommentPrefs::default(),
+        );
+        h.run();
+        h.get_by_label("Colour").click();
+        h.run();
+        h.get_by_label("Other colour…").click();
+        h.run();
+        assert!(h.query_by_label("Apply").is_some(), "the popup stays open with the picker showing");
+        h.get_by_label("Apply").click();
+        h.run();
+        assert!(h.query_by_label("Other colour…").is_none(), "applying a colour closes the popup");
+    }
+
+    #[test]
+    fn other_colour_opens_the_picker_inside_the_quick_bar_fill_popup() {
+        use egui_kittest::kittest::Queryable;
+        let prefs = CommentPrefs::default();
+        let fill_label = if prefs.style(CommentTool::Rectangle).fill.is_some() { "Fill colour" } else { "Fill colour: none" };
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, prefs: &mut CommentPrefs| {
+                let _ = quick_bar_controls(ui, CommentTool::Rectangle, prefs);
+            },
+            prefs,
+        );
+        h.ctx.set_fonts(theme::font_definitions());
+        h.run();
+        h.get_by_label(fill_label).click();
+        h.run();
+        h.get_by_label("Other colour…").click();
+        h.run();
+        assert!(h.query_by_label("Apply").is_some(), "the popup stays open with the picker showing");
+        h.get_by_label("Apply").click();
+        h.run();
+        assert!(h.query_by_label("No fill").is_none(), "applying a colour closes the popup");
+        assert!(h.state().style(CommentTool::Rectangle).fill.is_some());
+    }
+
+    #[test]
+    fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_menu() {
+        use egui_kittest::kittest::Queryable;
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+            annotations: vec![Annotation {
+                page: 0,
+                subtype: "Square".into(),
+                author: None,
+                contents: None,
+                modified: None,
+                name: None,
+                in_reply_to: None,
+                rect: [10.0, 10.0, 50.0, 50.0],
+                color: None,
+                index: 0,
+                state: None,
+                quads: Vec::new(),
+                locked: false,
+                intent: None,
+                fill_sign: false,
+                points: Vec::new(),
+                no_rotate: false,
+            }],
+            ..Default::default()
+        };
+        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+        view.comments.selected = Some((0, 0));
+        let prefs = CommentPrefs::default();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
+                ui.button("Page").context_menu(|ui| {
+                    if let Some(a) = context_menu(ui, view, &info, &prefs, true, true) {
+                        actions.push(a);
+                    }
+                });
+            },
+            (view, Vec::new()),
+        );
+        h.run();
+        h.get_by_label("Page").click_secondary();
+        h.run();
+        h.get_by_label("Colour ⏵").click();
+        h.run();
+        h.get_by_label("Other colour…").click();
+        h.run();
+        assert!(h.query_by_label("Apply").is_some(), "the submenu stays open with the picker showing");
+        h.get_by_label("Red").click();
+        h.run();
+        assert!(h.query_by_label("Edit text…").is_none(), "picking a swatch closes the whole menu");
+        let actions = &h.state().1;
+        assert!(
+            matches!(actions.as_slice(), [CanvasAction::Edit(e)] if matches!(**e, Edit::StyleAnnotation { page: 0, index: 0, color: Some(_), .. })),
+            "{actions:?}"
+        );
     }
 
     #[test]

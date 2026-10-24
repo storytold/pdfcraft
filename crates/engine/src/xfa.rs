@@ -53,6 +53,7 @@ fn click_only(e: &XfaEffect) -> Option<&'static str> {
         XfaEffect::Print => Some("print"),
         XfaEffect::SaveAs => Some("save"),
         XfaEffect::LaunchUrl(_) => Some("open a link"),
+        XfaEffect::ShowPanel(_) => Some("show a side panel"),
         XfaEffect::SetFocus(_) => Some("move the focus"),
         _ => None,
     }
@@ -532,7 +533,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         } else {
             Some(by_som.iter().filter(|(som, _)| names.iter().any(|n| som_matches(som, n))).map(|(_, f)| f.clone()).collect())
         };
-        if listed.as_ref().is_some_and(|l| l.is_empty()) {
+        if listed.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
         }
         pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
@@ -628,6 +629,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
                 XfaEffect::SaveAs => self.run.out.requests.push(Request::SaveAs),
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
+                XfaEffect::ShowPanel(p) => self.run.out.requests.push(Request::ShowPanel(*p)),
                 XfaEffect::SetFocus(som) => {
                     if let Some(name) = self.by_som().get(som).cloned() {
                         self.run.out.requests.push(Request::Focus(name));
@@ -856,6 +858,28 @@ pub(crate) fn on_data_replaced(doc: &mut pdfcraft_cos::Document, tpl: &Template,
         r.calculates()?;
     }
     r.finish().map(|_| ())
+}
+
+/// A text value typed into the laid-out XFA date field `name` by another of its edit picture's
+/// patterns, written in the first ([`pdfcraft_xfa::typed_date`]); `None` for anything else.
+/// `tpl` is the template the scripts use, when they run; otherwise it is read from `doc`.
+pub(crate) fn typed_date(
+    doc: &pdfcraft_cos::Document,
+    tpl: Option<&Template>,
+    name: &str,
+    value: &pdfcraft_forms::FieldValue,
+) -> Option<pdfcraft_forms::FieldValue> {
+    let pdfcraft_forms::FieldValue::Text(text) = value else { return None };
+    let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find_map(|(som, n)| (n == name).then_some(som))?;
+    let read;
+    let tpl = match tpl {
+        Some(t) => t,
+        None => {
+            read = pdfcraft_xfa::template_of(doc).ok()?;
+            &read
+        }
+    };
+    pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
 }
 
 /// A button's click script (or any event, by SOM path and activity), then calculations.

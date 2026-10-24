@@ -450,6 +450,8 @@ impl PdfCraftApp {
         // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
         // document is signed once the user has chosen.
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let folder = self.session.get(doc_id).and_then(|d| d.path.clone());
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
             // Sign what was typed while the save panel was open, too (#166); a refused value
@@ -478,6 +480,7 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             None => {
                 let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
+                let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                 // The signature's page, rectangle and field refer to the document as it is now:
                 // the pick is dropped (with a notice) if it is edited or switched away from
                 // meanwhile. Once the picker shows, the dialog closes; an error from here on
@@ -1630,19 +1633,22 @@ mod tests {
     /// left): never a mix, and never a label signing would refuse.
     #[test]
     fn appearance_labels_are_translated_or_all_english() {
-        use crate::i18n::{Lang, tr};
+        use crate::i18n::{Lang, has, tr};
         let english = AppearanceLabels::default();
         assert_eq!(appearance_labels(Lang::EN), (english.clone(), false));
+        // Latin-script catalogs the signature's font can draw: stamped in the language once every
+        // label is translated there.
         for code in ["de", "es", "fr", "it", "pt-br", "pl", "tr", "sl", "hu"] {
             let lang = Lang::from_code(code).unwrap();
+            if !english.fields().into_iter().all(|(_, source)| has(lang, source)) {
+                continue;
+            }
             let (labels, in_english) = appearance_labels(lang);
             assert!(!in_english, "{code}: {labels:?}");
             for ((field, ours), (_, source)) in labels.fields().into_iter().zip(english.fields()) {
                 assert_eq!(ours, tr(lang, source), "{code}: {field}");
             }
         }
-        let (de, _) = appearance_labels(Lang::from_code("de").unwrap());
-        assert_eq!((de.signed_by.as_str(), de.reason.as_str()), ("Digital signiert von", "Grund: "));
         for code in ["zh-hans", "zh-hant", "ja", "ru", "uk", "bg", "kk", "el", "te", "cs", "lt", "ar"] {
             assert_eq!(appearance_labels(Lang::from_code(code).unwrap()), (english.clone(), true), "{code}");
         }

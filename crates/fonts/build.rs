@@ -7,6 +7,9 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+#[path = "src/cjk_scripts.rs"]
+mod cjk_scripts;
+
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
@@ -27,10 +30,6 @@ fn main() {
     }
 }
 
-/// Family-name prefixes of the faces AGENTS.md §1.1 forbids: Adobe's Source families and Noto
-/// CJK, which is Source Han under another name. The test in `src/craft.rs` has the same list.
-const BARRED_FAMILIES: [&str; 5] = ["Source Han", "Source Serif", "Source Sans", "Noto Sans CJK", "Noto Serif CJK"];
-
 /// One `CraftFont { .. }` initialiser per manifest line.
 fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
     let manifest = dir.join("fonts/manifest.txt");
@@ -43,10 +42,13 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        // AGENTS.md §1.1 bars Adobe's type designs whatever their licence, so a checkout that
-        // carries one (craft-fonts has Noto Sans CJK, which is Source Han) never embeds it.
-        if BARRED_FAMILIES.iter().any(|barred| family.starts_with(barred)) {
-            println!("cargo::warning=craft-fonts: not embedding {family} {style} (AGENTS.md §1.1)");
+        // Whole CJK faces aren't embedded for size; interface CJK comes from cut faces once the app
+        // moves to craft-fonts-build (storytold/craft-libs#213).
+        let cjk = scripts.split(',').any(cjk_scripts::is_cjk_script);
+        if cjk
+            && !cjk_scripts::WHOLE_CJK_FAMILIES.contains(family)
+            && std::fs::metadata(dir.join(file)).is_ok_and(|m| m.len() > cjk_scripts::MAX_OTHER_CJK_BYTES)
+        {
             continue;
         }
         // Arabic interface faces are small, so the web build keeps them too.

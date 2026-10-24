@@ -235,7 +235,7 @@ fn hex(c: &[f64]) -> Option<String> {
 
 fn parse_hex(s: &str) -> Option<[f64; 3]> {
     let h = s.trim().trim_start_matches('#');
-    if h.len() != 6 {
+    if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let p = |i: usize| h.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()).map(|v| f64::from(v) / 255.0);

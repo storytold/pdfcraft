@@ -325,7 +325,10 @@ pub enum LinkTarget {
         preserve_rb: bool,
     },
     /// A local-file remote Go-To action. The caller resolves `file` relative to the source path.
+    /// `launch` marks a Launch action that names a PDF file (see `launch_pdf`), opened the same
+    /// way: as a document in PdfCraft, never by the operating system.
     RemoteGoTo {
+        launch: bool,
         file: String,
         destination: RemoteDestination,
         new_window: Option<bool>,
@@ -399,6 +402,12 @@ pub struct OutlineItem {
     pub view: DestView,
     pub children: Vec<OutlineItem>,
     pub open: bool,
+    /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), or `None` for the
+    /// default black or a value that isn't three numbers.
+    pub color: Option<[f32; 3]>,
+    /// The title's style (`/F`, Table 152): bit 1 italic, bit 2 bold.
+    pub italic: bool,
+    pub bold: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -427,6 +436,10 @@ pub struct Annotation {
     /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
     /// signature or initials (the rules of `pdfcraft_annot::is_fill_sign`).
     pub fill_sign: bool,
+    /// The NoRotate flag (`/F` bit 5), set on sticky notes and attachments: on a turned page the
+    /// appearance stays upright, turned about the upper-left corner of `rect`
+    /// ([`Self::shown_rect`]).
+    pub no_rotate: bool,
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
@@ -437,6 +450,58 @@ impl Annotation {
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
     }
+
+    /// Where the comment is drawn on a page turned by `rotation` (`PageInfo::rotation`), in user
+    /// space: `rect`, or for a NoRotate comment `rect` turned upright about its upper-left corner
+    /// (see [`Self::no_rotate`]). Hit-testing, selection and anything placed beside the comment
+    /// use this, so they match the drawing.
+    pub fn shown_rect(&self, rotation: u16) -> [f32; 4] {
+        self.shown(self.rect.map(f64::from), rotation).map(|v| v as f32)
+    }
+
+    /// [`Self::shown_rect`] for this comment with its `/Rect` at `rect` (one being moved or
+    /// resized).
+    pub fn shown(&self, rect: [f64; 4], rotation: u16) -> [f64; 4] {
+        if self.no_rotate { upright_rect(rect, rotation) } else { rect }
+    }
+
+    /// The `/Rect` that shows this comment in the user-space box `shown`: the inverse of
+    /// [`Self::shown`], for a box resized as drawn.
+    pub fn rect_for_shown(&self, shown: [f64; 4], rotation: u16) -> [f64; 4] {
+        if self.no_rotate { rect_from_upright(shown, rotation) } else { shown }
+    }
+}
+
+/// The user-space box a NoRotate annotation with `/Rect` `rect` is drawn in on a page turned
+/// clockwise by `rotation` (ISO 32000-2 §12.5.3): `rect` turned as far counterclockwise about its
+/// upper-left corner `(x0, y1)`, which stays where it is on the page. As displayed, the box's
+/// top-left is that corner, the rectangle's width runs across and its height down, as on an
+/// unturned page. `rect` itself for 0 or anything that isn't a quarter turn. The vendored
+/// renderer draws the appearance there (hayro-interpret patch 37).
+fn upright_rect(rect: [f64; 4], rotation: u16) -> [f64; 4] {
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let (w, h) = (x1 - x0, y1 - y0);
+    match rotation {
+        90 => [x0, y1, x0 + h, y1 + w],
+        180 => [x0 - w, y1, x0, y1 + h],
+        270 => [x0 - h, y1 - w, x0, y1],
+        _ => [x0, y0, x1, y1],
+    }
+}
+
+/// The `/Rect` whose [`upright_rect`] is `shown`: `shown` turned back about the corner that
+/// stays put.
+fn rect_from_upright(shown: [f64; 4], rotation: u16) -> [f64; 4] {
+    let [s0, s1, s2, s3] = [shown[0].min(shown[2]), shown[1].min(shown[3]), shown[0].max(shown[2]), shown[1].max(shown[3])];
+    let (sw, sh) = (s2 - s0, s3 - s1);
+    // The upper-left corner of `/Rect` and the rectangle's width and height.
+    let ((x0, y1), w, h) = match rotation {
+        90 => ((s0, s1), sh, sw),
+        180 => ((s2, s1), sw, sh),
+        270 => ((s2, s3), sh, sw),
+        _ => return [s0, s1, s2, s3],
+    };
+    [x0, y1 - h, x0 + w, y1]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1072,7 +1137,13 @@ impl<'a> Inspector<'a> {
             }
             let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
             let title = self.text(d, b"Title").unwrap_or_default();
-            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open }));
+            let color = match d.get(b"C").map(|o| self.resolve(o)) {
+                Ok(Object::Array(c)) => outline_color(c.iter().map(|v| self.resolve(v).as_float().ok())),
+                _ => None,
+            };
+            let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
+            let (italic, bold) = (flags & 1 != 0, flags & 2 != 0);
+            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open, color, italic, bold }));
         }
         (nest_outline(listed), more)
     }
@@ -1341,6 +1412,7 @@ impl<'a> Inspector<'a> {
                     locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                     intent: self.name(d, b"IT"),
                     fill_sign,
+                    no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                     points,
                 };
                 kept = kept.saturating_add(retained(&annotation));
@@ -1375,6 +1447,7 @@ impl<'a> Inspector<'a> {
                 }
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+                Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
@@ -1383,25 +1456,7 @@ impl<'a> Inspector<'a> {
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
-        if self.name(action, b"FS").as_deref() == Some("URL") {
-            return None;
-        }
-        let file = match self.resolve(action.get(b"F").ok()?) {
-            Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
-            Object::Dictionary(spec) => {
-                if self.name(spec, b"FS").as_deref() == Some("URL") {
-                    return None;
-                }
-                spec.get(b"UF")
-                    .ok()
-                    .and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES))
-                    .or_else(|| spec.get(b"F").ok().and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES)))?
-            }
-            _ => return None,
-        };
-        if file.is_empty() {
-            return None;
-        }
+        let file = self.action_file(action)?;
         let destination = match action.get(b"D") {
             Err(_) => RemoteDestination::Default,
             Ok(o) => match self.resolve(o) {
@@ -1428,11 +1483,54 @@ impl<'a> Inspector<'a> {
                 _ => return None,
             },
         };
-        let new_window = match action.get(b"NewWindow").map(|o| self.resolve(o)) {
+        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+    }
+
+    /// The non-empty local file an action's `/F` names (a string or a file specification), shared
+    /// by GoToR and Launch. A URL file system (`/FS /URL`) names no local file.
+    fn action_file(&self, action: &Dictionary) -> Option<String> {
+        if self.name(action, b"FS").as_deref() == Some("URL") {
+            return None;
+        }
+        let file = match self.resolve(action.get(b"F").ok()?) {
+            Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
+            Object::Dictionary(spec) => {
+                if self.name(spec, b"FS").as_deref() == Some("URL") {
+                    return None;
+                }
+                spec.get(b"UF")
+                    .ok()
+                    .and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES))
+                    .or_else(|| spec.get(b"F").ok().and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES)))?
+            }
+            _ => return None,
+        };
+        (!file.is_empty()).then_some(file)
+    }
+
+    fn new_window(&self, action: &Dictionary) -> Option<bool> {
+        match action.get(b"NewWindow").map(|o| self.resolve(o)) {
             Ok(Object::Boolean(value)) => Some(*value),
             _ => None,
-        };
-        Some(LinkTarget::RemoteGoTo { file, destination, new_window })
+        }
+    }
+
+    /// A Launch action (ISO 32000-2 §12.6.4.6, Table 207) whose `/F` names a `.pdf` file, read as
+    /// the remote Go-To to that file's first page that it amounts to (#4168). Launching anything
+    /// else, or with the deprecated `/Win` launch parameters (an application, an operation, its
+    /// arguments), is not followed: a document must not start programs. `\` separators, which
+    /// Windows writers put in such paths, are read as `/` (§7.11.2.1 separates components with
+    /// `/`) when the path has no `/` of its own. Launch has no `/D`, so one present (written
+    /// for GoToR, or junk) is ignored rather than checked as a destination.
+    fn launch_pdf(&self, action: &Dictionary) -> Option<LinkTarget> {
+        if action.has(b"Win") {
+            return None;
+        }
+        let file = self.action_file(action)?;
+        let new_window = self.new_window(action);
+        let file = if file.contains('/') { file } else { file.replace('\\', "/") };
+        let pdf = file.rsplit('/').next().is_some_and(|name| name.len() > 4 && name.to_ascii_lowercase().ends_with(".pdf"));
+        pdf.then_some(LinkTarget::RemoteGoTo { launch: true, file, destination: RemoteDestination::Default, new_window })
     }
 
     fn pdf_text(&self, o: &Object, max_bytes: usize) -> Option<String> {
@@ -1784,6 +1882,18 @@ fn limited_pdf_string(bytes: &[u8], max_bytes: usize) -> Option<String> {
     (text.len() <= max_bytes).then_some(text)
 }
 
+/// A bookmark title's colour from its `/C` entries, each kept within 0–1 (ISO 32000-2 §12.3.3,
+/// Table 151: "An array of three numbers in the range 0.0 to 1.0, representing the components in
+/// the DeviceRGB colour space"). Black, the default, and anything that isn't three numbers give
+/// `None`.
+pub(crate) fn outline_color(values: impl Iterator<Item = Option<f32>>) -> Option<[f32; 3]> {
+    let v: Vec<Option<f32>> = values.take(4).collect();
+    let [Some(r), Some(g), Some(b)] = v.as_slice() else { return None };
+    // A number past the range, however large, is kept at its edge.
+    let rgb = [*r, *g, *b].map(|c| c.clamp(0.0, 1.0));
+    (rgb != [0.0; 3]).then_some(rgb)
+}
+
 /// Nests a pre-order list of `(depth, item)` into the outline tree.
 fn nest_outline(listed: Vec<(usize, OutlineItem)>) -> Vec<OutlineItem> {
     let mut roots = Vec::new();
@@ -1809,6 +1919,17 @@ fn close_outline(open: &mut Vec<(usize, OutlineItem)>, roots: &mut Vec<OutlineIt
             None => roots.push(item),
         }
     }
+}
+
+/// An annotation's `/F` as the renderer reads it: a real is truncated, and a value that isn't a
+/// `u32` counts as no flags.
+fn draw_flags(o: &Object) -> u32 {
+    let f = match o {
+        Object::Integer(i) => *i,
+        Object::Real(r) => *r as i64,
+        _ => 0,
+    };
+    u32::try_from(f).unwrap_or(0)
 }
 
 fn rect4(o: &Object) -> [f32; 4] {
@@ -2264,6 +2385,54 @@ mod tests {
         let p = super::PageInfo { width: 200.0, height: 300.0, label: String::new(), crop: [10.0, 20.0, 210.0, 320.0], rotation: 0 };
         assert_eq!(p.view_to_user(0.0, 0.0), [10.0, 320.0]);
         assert_eq!(p.view_rect_to_quad([0.0, 0.0, 10.0, 5.0]), [10.0, 320.0, 20.0, 320.0, 10.0, 315.0, 20.0, 315.0]);
+    }
+
+    /// #2583: a NoRotate comment is drawn upright with its top-left as displayed at the upper-left
+    /// corner of `/Rect`, its width across and its height down; a box resized as drawn maps back to
+    /// the `/Rect` that shows it. Other comments, and pages that aren't quarter-turned, keep `/Rect`.
+    #[test]
+    fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
+        let mut note = super::Annotation {
+            page: 0,
+            subtype: "Text".into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            rect: [40.0, 50.0, 70.0, 70.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: true,
+            points: Vec::new(),
+        };
+        let rect = note.rect.map(f64::from);
+        for rotation in [0u16, 90, 180, 270, 45] {
+            let (w, h) = if rotation % 180 == 90 { (140.0, 200.0) } else { (200.0, 140.0) };
+            let p = super::PageInfo { width: w, height: h, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation };
+            let shown = note.shown_rect(rotation);
+            let (a, b) = (p.user_to_view(shown[0], shown[1]), p.user_to_view(shown[2], shown[3]));
+            let [cx, cy] = p.user_to_view(40.0, 70.0);
+            let want = [cx, cy, cx + 30.0, cy + 20.0];
+            let got = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+            assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-3), "{rotation}: shown {got:?}, want {want:?}");
+            assert_eq!(note.rect_for_shown(note.shown(rect, rotation), rotation), rect, "{rotation}");
+            // Moved by (5, -7) and resized to 50 × 10 as drawn, back to a /Rect.
+            let resized = [shown[0] as f64 + 5.0, shown[1] as f64 - 7.0, 0.0, 0.0];
+            let across = if rotation % 180 == 90 { [10.0, 50.0] } else { [50.0, 10.0] };
+            let resized = [resized[0], resized[1], resized[0] + across[0], resized[1] + across[1]];
+            let back = note.rect_for_shown(resized, rotation);
+            assert_eq!((back[2] - back[0], back[3] - back[1]), (50.0, 10.0), "{rotation}: {back:?}");
+            assert_eq!(note.shown(back, rotation), resized, "{rotation}");
+        }
+        note.no_rotate = false;
+        assert_eq!(note.shown_rect(90), note.rect);
+        assert_eq!(note.rect_for_shown([1.0, 2.0, 3.0, 4.0], 90), [1.0, 2.0, 3.0, 4.0]);
     }
 
     use super::*;
@@ -3119,6 +3288,46 @@ trailer << /Root 1 0 R >>
         );
     }
 
+    /// #4168: a Launch action naming a `.pdf` file is read as the link to that file it amounts
+    /// to, `\` separators included, and a stray `/D` (which Launch has no use for) doesn't stop
+    /// it. One naming anything else, with no file, or with `/Win` launch parameters stays an
+    /// action that isn't followed.
+    #[test]
+    fn launch_actions_that_name_a_pdf_open_it_like_a_remote_link() {
+        let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R 36 0 R 37 0 R 38 0 R] >> endobj\n\
+             30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Launch /F (..\\\\se\\\\se_ST.pdf) >> >> endobj\n\
+             31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Launch /F << /Type /Filespec /F (chapters/Two.PDF) >> /NewWindow true >> >> endobj\n\
+             32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /Launch /F (tool.exe) >> >> endobj\n\
+             33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /Launch /F (a.pdf) /Win << /F (cmd.exe) /P (/c x) >> >> >> endobj\n\
+             34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /Launch /Win << /F (b.pdf) >> >> >> endobj\n\
+             35 0 obj << /Type /Annot /Subtype /Link /Rect [0 100 10 110] /A << /S /Launch /F (.pdf) >> >> endobj\n\
+             36 0 obj << /Type /Annot /Subtype /Link /Rect [0 120 10 130] /A << /S /Launch /F (dir/a\\\\b.pdf) >> >> endobj\n\
+             37 0 obj << /Type /Annot /Subtype /Link /Rect [0 140 10 150] /A << /S /Launch /FS /URL /F (https://example.com/x.pdf) >> >> endobj\n\
+             38 0 obj << /Type /Annot /Subtype /Link /Rect [0 160 10 170] /A << /S /Launch /F (c.pdf) /D 0 >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+        let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+        let launch =
+            |file: &str, new_window| LinkTarget::RemoteGoTo { launch: true, file: file.into(), destination: RemoteDestination::Default, new_window };
+        let other = || LinkTarget::Other("Launch".into());
+        assert_eq!(
+            targets,
+            [
+                launch("../se/se_ST.pdf", None),
+                launch("chapters/Two.PDF", Some(true)),
+                other(),
+                other(),
+                other(),
+                other(),
+                launch("dir/a\\b.pdf", None),
+                other(),
+                launch("c.pdf", None),
+            ]
+        );
+    }
+
     #[test]
     fn links_read_bounded_local_remote_go_to_actions() {
         use DestView::{Fit, Xyz};
@@ -3147,6 +3356,7 @@ trailer << /Root 1 0 R >>
         let targets: Vec<_> = info.links.iter().map(|l| (l.index, l.target.clone())).collect();
         let huge_page_target = usize::try_from(i64::MAX)
             .map(|page| LinkTarget::RemoteGoTo {
+                launch: false,
                 file: "chapter.pdf".into(),
                 destination: RemoteDestination::Page { page, view: Fit },
                 new_window: None,
@@ -3158,6 +3368,7 @@ trailer << /Root 1 0 R >>
                 (
                     1,
                     LinkTarget::RemoteGoTo {
+                        launch: false,
                         file: "chapters/remote.pdf".into(),
                         destination: RemoteDestination::Page { page: 2, view: Xyz { left: Some(10.0), top: Some(20.0), zoom: Some(1.5) } },
                         new_window: Some(true),
@@ -3166,16 +3377,33 @@ trailer << /Root 1 0 R >>
                 (
                     2,
                     LinkTarget::RemoteGoTo {
+                        launch: false,
                         file: "foo.pdf".into(),
                         destination: RemoteDestination::Page { page: 0, view: Fit },
                         new_window: Some(false),
                     }
                 ),
-                (3, LinkTarget::RemoteGoTo { file: "remote.pdf".into(), destination: RemoteDestination::Default, new_window: None }),
-                (4, LinkTarget::RemoteGoTo { file: "chapter.pdf".into(), destination: RemoteDestination::Named("chapter".into()), new_window: None }),
+                (3, LinkTarget::RemoteGoTo { launch: false, file: "remote.pdf".into(), destination: RemoteDestination::Default, new_window: None }),
+                (
+                    4,
+                    LinkTarget::RemoteGoTo {
+                        launch: false,
+                        file: "chapter.pdf".into(),
+                        destination: RemoteDestination::Named("chapter".into()),
+                        new_window: None
+                    }
+                ),
                 (5, LinkTarget::Other("GoToR".into())),
                 (6, LinkTarget::Other("GoToR".into())),
-                (7, LinkTarget::RemoteGoTo { file: "chapter.pdf".into(), destination: RemoteDestination::Named("chapter".into()), new_window: None }),
+                (
+                    7,
+                    LinkTarget::RemoteGoTo {
+                        launch: false,
+                        file: "chapter.pdf".into(),
+                        destination: RemoteDestination::Named("chapter".into()),
+                        new_window: None
+                    }
+                ),
                 (8, LinkTarget::Other("GoToR".into())),
                 (9, LinkTarget::Other("GoToR".into())),
                 (10, huge_page_target),
@@ -3423,6 +3651,54 @@ trailer << /Root 1 0 R >>
     /// The titles of `items`, with children in brackets (`Parent[Child]`).
     fn shape(items: &[OutlineItem]) -> Vec<String> {
         items.iter().map(|o| if o.children.is_empty() { o.title.clone() } else { format!("{}[{}]", o.title, shape(&o.children).join(",")) }).collect()
+    }
+
+    /// #3193: a bookmark's colour and style (ISO 32000-2 §12.3.3, Tables 151 and 152). `/C` is
+    /// three numbers within 0–1 (one outside is kept at the edge); black, the default, and a `/C`
+    /// that isn't three numbers read as no colour. `/F` bit 1 is italic, bit 2 bold.
+    #[test]
+    fn outline_items_carry_their_colour_and_style() {
+        let titles = [
+            ("Plain", ""),
+            ("Red", "/C [1 0 0]"),
+            ("Italic", "/F 1"),
+            ("Bold", "/F 2"),
+            ("Both", "/C [0 0 1] /F 3"),
+            ("Black", "/C [0 0 0]"),
+            ("Bright", "/C [2 -1 0.5]"),
+            ("Short", "/C [1 0]"),
+            ("Long", "/C [1 0 0 0]"),
+            ("Named", "/C [1 /x 0]"),
+            ("Other bits", "/F 4"),
+        ];
+        let n = titles.len();
+        let items: Vec<String> = titles
+            .iter()
+            .enumerate()
+            .map(|(k, (title, extra))| {
+                let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+                let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+                format!("<< /Title ({title}) /Parent 4 0 R{prev}{next} /Dest [3 0 R /Fit] {extra} >>")
+            })
+            .collect();
+        let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+        let got: Vec<(&str, Option<[f32; 3]>, bool, bool)> = info.outline.iter().map(|o| (o.title.as_str(), o.color, o.italic, o.bold)).collect();
+        assert_eq!(
+            got,
+            [
+                ("Plain", None, false, false),
+                ("Red", Some([1.0, 0.0, 0.0]), false, false),
+                ("Italic", None, true, false),
+                ("Bold", None, false, true),
+                ("Both", Some([0.0, 0.0, 1.0]), true, true),
+                ("Black", None, false, false),
+                ("Bright", Some([1.0, 0.0, 0.5]), false, false),
+                ("Short", None, false, false),
+                ("Long", None, false, false),
+                ("Named", None, false, false),
+                ("Other bits", None, false, false),
+            ]
+        );
     }
 
     #[test]

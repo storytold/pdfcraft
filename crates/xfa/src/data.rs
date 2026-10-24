@@ -441,11 +441,8 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
             "yyyy" | "yy" | "mm" | "m" | "dd" | "d" => {
                 // Digits up to the next literal (or a fixed width).
                 let fixed = matches!(t.as_str(), "yyyy" | "yy" | "mm" | "dd");
-                let width = if fixed {
-                    t.len()
-                } else {
-                    rest.chars().take_while(|c| c.is_ascii_digit()).count().min(if t == "d" || t == "m" { 2 } else { 4 })
-                };
+                let width =
+                    if fixed { t.len() } else { rest.chars().take_while(char::is_ascii_digit).count().min(if t == "d" || t == "m" { 2 } else { 4 }) };
                 let digits: String = rest.chars().take(width).collect();
                 if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
                     return None;

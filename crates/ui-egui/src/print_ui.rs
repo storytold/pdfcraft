@@ -223,13 +223,22 @@ impl PrintDraft {
         self.handling == Handling::Multiple && self.order == PageOrder::CutStack
     }
 
+    /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
+    /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
         spool::Job {
             printer: self.printer.clone(),
             copies: self.copies.max(1),
             collate: self.collate,
-            // Cut and stack needs single-sided sheets, whatever the printer's default.
-            duplex: if self.cut_and_stack() { Some(spool::Duplex::Off) } else { self.duplex },
+            // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
+            // decides two-sided itself (#2707), leaving the Two-sided choice as it was.
+            duplex: if self.cut_and_stack() {
+                Some(spool::Duplex::Off)
+            } else if self.handling == Handling::Booklet {
+                Some(print::booklet_duplex(self.booklet_subset))
+            } else {
+                self.duplex
+            },
             scaling: spool::Scaling::Exact,
             grayscale: self.grayscale,
             title: title.to_string(),
@@ -240,7 +249,7 @@ impl PrintDraft {
             }
             .into_iter()
             // The sheet the PDF was laid out on, not the queue's default paper.
-            .chain(print::cups_media(self.paper).map(|m| ("media".to_string(), m.to_string())))
+            .chain(print::media_option(self.paper))
             .collect(),
         }
     }
@@ -1017,22 +1026,26 @@ pub(crate) fn body(
                     });
                 });
                 ui.end_row();
-                ui.label(tl!("Two-sided:"));
-                ui.add_enabled_ui(!browser, |ui| {
-                    combo(
-                        ui,
-                        "duplex",
-                        &mut d.duplex,
-                        &[
-                            (None, tl!("Printer default")),
-                            (Some(spool::Duplex::Off), tl!("Off")),
-                            (Some(spool::Duplex::LongEdge), tl!("Flip on long edge")),
-                            (Some(spool::Duplex::ShortEdge), tl!("Flip on short edge")),
-                        ],
-                        160.0,
-                    );
-                });
-                ui.end_row();
+                // A booklet decides two-sided itself (#2707), so the choice is hidden meanwhile, as
+                // in Acrobat's Print dialog; it is kept for the other layouts.
+                if d.handling != Handling::Booklet {
+                    ui.label(tl!("Two-sided:"));
+                    ui.add_enabled_ui(!browser, |ui| {
+                        combo(
+                            ui,
+                            "duplex",
+                            &mut d.duplex,
+                            &[
+                                (None, tl!("Printer default")),
+                                (Some(spool::Duplex::Off), tl!("Off")),
+                                (Some(spool::Duplex::LongEdge), tl!("Flip on long edge")),
+                                (Some(spool::Duplex::ShortEdge), tl!("Flip on short edge")),
+                            ],
+                            160.0,
+                        );
+                    });
+                    ui.end_row();
+                }
                 ui.label(tl!("Paper:"));
                 let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
                 let before = d.paper;

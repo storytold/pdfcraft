@@ -9,21 +9,19 @@ use pdfcraft_engine::field_table::TableColumn;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+    harness_with("form.pdf", include_bytes!("../data/form.pdf").to_vec())
+}
+
+fn harness_with(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
     });
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h
 }
 
@@ -710,6 +708,134 @@ fn actions_tab_adds_and_removes_actions() {
             (FieldTrigger::OnBlur, FieldAction::Uri("https://example.org".into()))
         ]
     );
+}
+
+#[test]
+fn actions_tab_edits_the_script_of_an_existing_action() {
+    use pdfcraft_engine::{FieldAction, FieldTrigger};
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let script = "if (event.value > 10) {\n  app.alert('Too many');\n}";
+    let actions = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().field_actions("city")
+    };
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("city", 0);
+        h.run_steps(2);
+        h.get_by_label("Actions").click();
+        h.run_steps(2);
+    };
+    // A script on Mouse Up and a link on Blur, saved with the field.
+    open(&mut h);
+    for (trigger, kind, text) in [(FieldTrigger::MouseUp, 0, script), (FieldTrigger::OnBlur, 1, "https://example.org")] {
+        let d = h.state_mut().field_props.as_mut().unwrap();
+        d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger, kind, text: text.into() };
+        h.run_steps(3);
+        h.get_by_label("Add").click();
+        h.run_steps(2);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let saved = actions(&h);
+    // Edit shows the script exactly as stored; Discard leaves everything as it was.
+    open(&mut h);
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Edit Action");
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, script);
+    h.state_mut().field_props.as_mut().unwrap().new_action.text = "app.alert('changed');".into();
+    h.run_steps(2);
+    h.get_by_label("Discard").click();
+    h.run_steps(2);
+    h.get_by_label("Add an Action");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(actions(&h), saved);
+    // Update replaces that script only: same trigger, the link untouched.
+    open(&mut h);
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().unwrap().new_action.text = "app.alert('changed');".into();
+    h.run_steps(2);
+    h.get_by_label("Update").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(
+        actions(&h),
+        [
+            (FieldTrigger::MouseUp, FieldAction::JavaScript("app.alert('changed');".into())),
+            (FieldTrigger::OnBlur, FieldAction::Uri("https://example.org".into()))
+        ]
+    );
+}
+
+/// One page with a push button "go": Mouse Up runs a script with a link chained after it, On Blur
+/// runs another script.
+fn chained_action_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [20 300 100 320] /P 3 0 R /A 5 0 R /AA << /Bl << /S /JavaScript /JS (this.dirty = true;) >> >> >>",
+        "<< /S /JavaScript /JS (app.alert\\(1\\);) /Next 6 0 R >>",
+        "<< /S /URI /URI (https://example.org) >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
+    use egui_kittest::kittest::NodeT;
+    use pdfcraft_engine::FieldTrigger;
+    let mut h = harness_with("chain.pdf", chained_action_fixture());
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("go", 0);
+        h.run_steps(2);
+        h.get_by_label("Actions").click();
+        h.run_steps(2);
+    };
+    open(&mut h);
+    h.get_by_label("Run a JavaScript, then 1 more action");
+    // The first Edit is the menu bar's; the rows' follow (Mouse Up, On Blur).
+    assert_eq!(h.get_all_by_label("Edit").count(), 3);
+    h.get_all_by_label("Edit").nth(1).unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().editing, Some(FieldTrigger::MouseUp));
+    // While one script is open, no other Edit can overwrite it.
+    assert!(h.get_all_by_label("Edit").skip(1).all(|n| n.accesskit_node().is_disabled()));
+    h.get_by_label("Discard").click();
+    h.run_steps(2);
+    assert!(h.get_all_by_label("Edit").skip(1).all(|n| !n.accesskit_node().is_disabled()));
+    // Replace the Mouse Up script with a link: the chained link stays after it.
+    {
+        let d = h.state_mut().field_props.as_mut().unwrap();
+        d.actions.retain(|(t, _)| *t != FieldTrigger::MouseUp);
+        d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger: FieldTrigger::MouseUp, kind: 1, text: "https://example.com".into() };
+    }
+    h.run_steps(3);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    open(&mut h);
+    h.get_by_label("Open a web link: https://example.com, then 1 more action");
 }
 
 /// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by

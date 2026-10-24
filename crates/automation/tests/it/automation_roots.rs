@@ -152,6 +152,7 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
         ("doc_create_multiple", json!({"paths": [secret], "mode": "combine", "out": out})),
         ("doc_create", json!({"from": "images", "paths": [pic]})),
         ("stamp_custom", json!({"doc": 1, "page": 1, "path": secret, "at": [10, 10]})),
+        ("stamp_custom", json!({"doc": 1, "page": 1, "path": secret, "rect": [10, 10, 493, 300]})),
         ("page_add_image", json!({"doc": 1, "page": 1, "path": pic})),
         ("image_edit", json!({"doc": 1, "page": 1, "image": 1, "action": "replace", "path": pic})),
         ("comment_add", json!({"doc": 1, "page": 1, "type": "attachment", "at": [10, 10], "path": secret})),

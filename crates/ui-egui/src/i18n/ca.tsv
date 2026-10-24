@@ -574,6 +574,7 @@
 	Discard private data of other applications	Descarta les dades privades d'altres aplicacions
 	Discard hidden text	Descarta el text ocult
 	Use Flate to encode streams that are not encoded	Utilitza Flate per codificar els fluxos que no estan codificats
+	In streams that use LZW encoding, use Flate instead	Als fluxos que utilitzen codificació LZW, utilitza Flate
 	Remove invalid links and bookmarks	Elimina els enllaços i marcadors no vàlids
 	Remove unreferenced named destinations	Elimina les destinacions amb nom sense referència
 	Compress document structure (object streams)	Comprimeix l'estructura del document (fluxos d'objectes)
@@ -2000,6 +2001,10 @@ action wizard	Start	Inicia
 	Perimeter	Perímetre
 	Area	Àrea
 	Drawing scale	Escala del dibuix
+	Scale	Escala
+	Common scales	Escales habituals
+	Enter a scale such as 1:50.	Introduïu una escala com 1:50.
+	Applying a scale switches units to m / mm.	En aplicar una escala, les unitats canvien a m / mm.
 	Snapping	Ajust
 	Export measurements	Exporta les mesures
 	Open a PDF to measure it.	Obre un PDF per mesurar-lo.
@@ -2137,6 +2142,8 @@ action wizard	Start	Inicia
 	Home / End	Inici / Fi
 	H / Space (hold)	H / Espai (mantén premut)
 	Reload documents when their files change on disk	Torna a carregar els documents quan els seus fitxers canviïn al disc
+	Don't show again	No ho tornis a mostrar
+	Show a notice when a document is secured	Mostra un avís quan un document està protegit
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Aquest fitxer ha canviat al disc. Torna'l a carregar per veure'n la versió nova; es perdran els canvis sense desar.
 	Reload	Torna a carregar
 	Couldn't reload {name}: {e}	No s'ha pogut tornar a carregar {name}: {e}
@@ -2774,3 +2781,14 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Avui
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Restaura l'última vista (pàgina, zoom i visualització de pàgina) quan es torna a obrir un document
+	Attach a file…	Adjunta un fitxer…
+	Attach {name}	Adjunta {name}
+	Attaching files is not available on the web yet	Encara no es poden adjuntar fitxers al web
+	Delete attachment	Elimina l'adjunt
+	Delete attachment {key}	Elimina l'adjunt {key}

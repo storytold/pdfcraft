@@ -7,8 +7,8 @@
 use crate::support;
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use pdfcraft_render::PageRenderer;
+use egui_kittest::kittest::{NodeT, Queryable};
+use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 /// An `n`-page document with a proper xref table.
@@ -115,9 +115,12 @@ fn a_pick_for_a_document_that_is_no_longer_active_is_dropped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A scratch folder for one test.
+/// A scratch folder for one test, of its own for each call: the tests share one process and run
+/// in parallel, so two that picked the same name would delete each other's folder (#4186).
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-{name}-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-{name}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -253,6 +256,58 @@ fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
     let tab = s.active.and_then(|i| s.views.get(i)).and_then(|v| s.session.get(v.id)).map(|d| d.name.clone());
     assert_eq!(tab.as_deref(), Some("Chapter 2.pdf"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3593: Extract pages takes page ranges typed in its Pages field, in the order typed, each page
+/// once; left empty, it takes the selected pages as before. A range it can't use is refused, with
+/// the reason in the dialog and the Extract button off.
+#[test]
+fn extract_pages_takes_the_page_ranges_typed_in_the_dialog() {
+    let texts = |app: &PdfCraftApp, view: usize| {
+        let doc = app.session.get(app.views[view].id).unwrap();
+        let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+        (0..r.page_count())
+            .map(|p| {
+                let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+                out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut h = harness(&[6]);
+    h.state_mut().views[0].select_pages(&[1]);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(2);
+    assert_eq!(h.state().extract_draft.pages, "", "opens on the selection");
+    h.get_by_label("Pages");
+    h.get_by_label_contains("1 page selected.");
+    // Ranges, a backward one and a repeat: in that order, each page once.
+    h.state_mut().extract_draft.pages = "5-6, 3-2, 6".into();
+    h.run_steps(2);
+    h.get_by_label_contains("4 pages selected.");
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    let s = h.state();
+    assert_eq!(s.views.len(), 2, "the pages open in a new tab");
+    assert_eq!(texts(s, 1), ["Page 5", "Page 6", "Page 3", "Page 2"]);
+    // A page that isn't there: the dialog says so, Extract is off and extracts nothing.
+    h.state_mut().active = Some(0);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.pages = "2, 9".into();
+    h.run_steps(2);
+    assert!(h.get_by_label("Extract").accesskit_node().is_disabled(), "Extract is off");
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 2, "nothing extracted");
+    // Extract and delete takes the typed pages out of the document.
+    h.state_mut().active = Some(0);
+    h.state_mut().open_extract_dialog();
+    h.state_mut().extract_draft.pages = "6, 1-2".into();
+    h.state_mut().extract_draft.delete = true;
+    h.state_mut().extract_selection();
+    h.run_steps(2);
+    let s = h.state();
+    assert_eq!(texts(s, 2), ["Page 6", "Page 1", "Page 2"]);
+    assert_eq!(texts(s, 0), ["Page 3", "Page 4", "Page 5"]);
 }
 
 /// Left as the document's name (or emptied), the names are the ones Extract always used.

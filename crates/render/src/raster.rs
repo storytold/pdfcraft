@@ -88,8 +88,8 @@ impl RenderConfig {
 /// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
 /// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
 /// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
-/// font, and when PdfCraft was built without craft-fonts. Only Japanese: the pinned craft-fonts
-/// has no other CJK faces, and its later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
+/// font, and when PdfCraft was built without craft-fonts. Only Japanese: no other CJK face is
+/// embedded whole.
 fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
     let FontQuery::Fallback(f) = query else { return None };
     if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
@@ -220,6 +220,9 @@ pub struct RenderedPage {
 pub enum RenderWarning {
     /// Content was skipped after the per-page decoded-content budget was exhausted.
     ContentTruncated,
+    /// A colour could not be computed (a colour space that cannot be read, or a Separation or
+    /// DeviceN tint transform that cannot be evaluated) and was painted in a fallback colour.
+    ColourFallback,
 }
 
 /// Counters for work performed by a renderer or render pool.
@@ -402,12 +405,15 @@ fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<Rend
     InterpreterSettings {
         warning_sink: Arc::new(move |warning| {
             // Nested forms, Type 3 glyphs and patterns are interpreted again and each reports the
-            // exhausted budget: once per page is enough.
-            if matches!(warning, InterpreterWarning::ContentTruncated) {
-                let mut warnings = lock(&target);
-                if !warnings.contains(&RenderWarning::ContentTruncated) {
-                    warnings.push(RenderWarning::ContentTruncated);
-                }
+            // exhausted budget, or the colours that fell back: once per page is enough.
+            let warning = match warning {
+                InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
+                InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
+                InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
+            };
+            let mut warnings = lock(&target);
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
             }
         }),
         ..settings.clone()
@@ -488,7 +494,7 @@ fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown panic".into())
+    p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown panic".into())
 }
 
 /// How long one page may render before the pool gives up on it (the watchdog).
@@ -587,7 +593,7 @@ struct Shared {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -666,7 +672,7 @@ impl PoolParser {
                     // Drop never joins a parser. A waiting worker must still notice
                     // its pool's disconnected wake channel while another thread is
                     // stuck in initialization and cannot signal this condition.
-                    state = self.ready.wait_timeout(state, std::time::Duration::from_millis(50)).unwrap_or_else(|p| p.into_inner()).0;
+                    state = self.ready.wait_timeout(state, std::time::Duration::from_millis(50)).unwrap_or_else(std::sync::PoisonError::into_inner).0;
                 }
                 ParserState::Empty => {
                     *state = ParserState::Loading;
@@ -3175,6 +3181,91 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    /// #2583, #1869: a sticky note carries the NoRotate flag (`/F` bit 5), so on a page with
+    /// `/Rotate` its icon stays upright as displayed, turned about the upper-left corner of its
+    /// `/Rect`, which stays where it is on the page (ISO 32000-2 §12.5.3). It was drawn turned with
+    /// the page, in `/Rect` as displayed (vendored hayro-interpret patch 37). A note without the
+    /// flag still turns with the page. `Annotation::shown_rect` is where the UI hit-tests the
+    /// note, and must be where it is drawn.
+    #[test]
+    fn no_rotate_notes_stay_upright_at_their_corner_on_rotated_pages() {
+        // A 30 × 20 appearance: red in its top-left quarter, blue elsewhere.
+        let content = "0 0 1 rg 0 0 30 20 re f 1 0 0 rg 0 10 15 10 re f";
+        for rotation in [0u16, 90, 180, 270] {
+            let objects = [
+                "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+                format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 140] /Rotate {rotation} /Annots [4 0 R 5 0 R] >>"),
+                // NoRotate (and Print), as PdfCraft and Acrobat save notes.
+                "<< /Type /Annot /Subtype /Text /F 20 /Rect [40 50 70 70] /AP << /N 6 0 R >> >>".to_string(),
+                // The same appearance without the flag.
+                "<< /Type /Annot /Subtype /Text /F 4 /Rect [120 50 150 70] /AP << /N 6 0 R >> >>".to_string(),
+                format!("<< /Type /XObject /Subtype /Form /BBox [0 0 30 20] /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            ];
+            let mut pdf = b"%PDF-1.7\n".to_vec();
+            let mut offsets = Vec::new();
+            for (i, object) in objects.iter().enumerate() {
+                offsets.push(pdf.len());
+                pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+            }
+            let xref = pdf.len();
+            pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+            for offset in offsets {
+                pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+            }
+            pdf.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+            let pdf = Arc::new(pdf);
+            let info = crate::inspect(pdf.clone(), None).expect("opens");
+            let page = &info.pages[0];
+            assert_eq!(page.rotation, rotation);
+            let mut r = PageRenderer::new(pdf, RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            // Displayed-page points are device pixels at scale 1.
+            let px = |x: f32, y: f32| -> [u8; 4] {
+                let (x, y) = (x.clamp(0.0, p.width as f32 - 1.0) as u32, y.clamp(0.0, p.height as f32 - 1.0) as u32);
+                p.rgba[((y * p.width + x) * 4) as usize..][..4].try_into().unwrap()
+            };
+            let red: fn([u8; 4]) -> bool = |c| c[0] > 200 && c[1] < 60 && c[2] < 60;
+            let blue: fn([u8; 4]) -> bool = |c| c[2] > 200 && c[0] < 60 && c[1] < 60;
+            let paper: fn([u8; 4]) -> bool = |c| c.iter().all(|v| *v > 240);
+
+            // The NoRotate note: its upper-left corner (40, 70) is the top-left of an upright
+            // 30 × 20 icon as displayed, red quarter top-left.
+            let [cx, cy] = page.user_to_view(40.0, 70.0);
+            for ((dx, dy), want, what) in [
+                ((7.5, 5.0), red, "red top-left quarter"),
+                ((22.5, 5.0), blue, "blue top-right"),
+                ((7.5, 15.0), blue, "blue bottom-left"),
+                ((22.5, 15.0), blue, "blue bottom-right"),
+                ((-3.0, 10.0), paper, "paper left of the icon"),
+                ((10.0, -3.0), paper, "paper above the icon"),
+                ((33.0, 10.0), paper, "paper right of its 30 pt width"),
+                ((10.0, 23.0), paper, "paper below its 20 pt height"),
+            ] {
+                let c = px(cx + dx, cy + dy);
+                assert!(want(c), "rotation {rotation}: NoRotate note at corner + ({dx}, {dy}) is {c:?}, want {what}");
+            }
+            let note = info.annotations.iter().find(|a| a.no_rotate).expect("the NoRotate note is listed");
+            let shown = note.shown_rect(rotation);
+            let (a, b) = (page.user_to_view(shown[0], shown[1]), page.user_to_view(shown[2], shown[3]));
+            let box_ = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+            let want = [cx, cy, cx + 30.0, cy + 20.0];
+            assert!(box_.iter().zip(want).all(|(v, w)| (v - w).abs() < 0.01), "rotation {rotation}: shown {box_:?}, drawn {want:?}");
+
+            // The note without the flag turns with the page: its red quarter stays at the
+            // user-space top-left of /Rect, at the displayed top-left only when unturned.
+            let plain = info.annotations.iter().find(|a| !a.no_rotate).expect("the plain note is listed");
+            assert_eq!(plain.shown_rect(rotation), plain.rect);
+            let [rx, ry] = page.user_to_view(127.5, 65.0);
+            let [bx, by] = page.user_to_view(142.5, 55.0);
+            assert!(red(px(rx, ry)) && blue(px(bx, by)), "rotation {rotation}: the plain note's appearance turns with the page");
+            let (a, b) = (page.user_to_view(120.0, 50.0), page.user_to_view(150.0, 70.0));
+            let corner = px(a[0].min(b[0]) + 4.0, a[1].min(b[1]) + 4.0);
+            assert_eq!(red(corner), rotation == 0, "rotation {rotation}: displayed top-left of the plain note is {corner:?}");
+        }
+    }
+
     /// #1968: the highlight appearance other editors write, a transparency group whose content is
     /// filled with `/BM /Multiply`, drew as an opaque block over the text. Every `/Group` form
     /// got a layer of its own, so the Multiply blended with that layer's transparent backdrop
@@ -3341,6 +3432,40 @@ trailer << /Root 1 0 R >>
         let hidden = render(true);
         assert_eq!(px(&hidden, 75, 25), vec![255, 255, 255, 255], "Hide all comments");
         assert_eq!(px(&hidden, 20, 80), vec![255, 0, 0, 255], "fields stay");
+    }
+
+    /// ISO 32000-2 Table 167: Invisible hides an annotation of a type that isn't standard and
+    /// nothing else; §12.5.6.14: a popup has no appearance of its own, so its `/AP` isn't painted.
+    #[test]
+    fn invisible_unknown_annotations_and_popups_paint_nothing() {
+        let annots = [
+            "/Subtype /MyCustomType /F 0",
+            "/Subtype /MyCustomType /F 1",
+            "/Subtype /MyCustomType /F 5",
+            "/F 1",
+            "/Subtype /Square /F 1",
+            "/Subtype /Popup /F 4 /Open true",
+        ];
+        let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+        pdf.push_str("2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n");
+        let refs: Vec<String> = (0..annots.len()).map(|i| format!("{} 0 R", 10 + i)).collect();
+        pdf.push_str(&format!("3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 50] /Annots [{}] >> endobj\n", refs.join(" ")));
+        pdf.push_str("4 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 24 >> stream\n0 1 0 rg 0 0 30 30 re f\nendstream endobj\n");
+        for (i, a) in annots.iter().enumerate() {
+            let x = 10 + 50 * i;
+            pdf.push_str(&format!("{} 0 obj << /Type /Annot {a} /Rect [{x} 10 {} 40] /AP << /N 4 0 R >> >> endobj\n", 10 + i, x + 30));
+        }
+        pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        let px = |x: u32| p.rgba[((25 * p.width + x) * 4) as usize..][..4].to_vec();
+        let (green, white) = (vec![0, 255, 0, 255], vec![255, 255, 255, 255]);
+        assert_eq!(px(25), green, "an unknown type without Invisible is drawn");
+        assert_eq!(px(75), white, "Invisible hides an unknown type");
+        assert_eq!(px(125), white, "even with the Print flag");
+        assert_eq!(px(175), white, "no Subtype is no standard type");
+        assert_eq!(px(225), green, "Invisible means nothing for a standard type");
+        assert_eq!(px(275), white, "a popup's appearance is not painted on the page");
     }
 
     #[test]
@@ -7439,6 +7564,9 @@ endstream endobj
     // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
     mod icc_profile_cache;
 
+    // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
+    mod symbolic_truetype_cmap;
+
     /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.
     fn render_first_page(pdf: Vec<u8>) -> RenderedPage {
         let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
@@ -8162,6 +8290,10 @@ trailer << /Root 1 0 R >>
 
     // #1201: /DefaultGray, /DefaultRGB and /DefaultCMYK (vendored hayro-interpret patch 38).
     mod default_colour_spaces;
+
+    // #4260: DeviceN colours with many inks, and tint transforms that cannot be evaluated
+    // (vendored hayro-syntax patch 28, hayro-interpret patch 55).
+    mod devicen_inks;
 
     /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
     /// but draws no pixels itself.

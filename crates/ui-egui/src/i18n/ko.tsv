@@ -558,6 +558,7 @@
 	Discard private data of other applications	다른 응용 프로그램의 개인 데이터 삭제
 	Discard hidden text	숨겨진 텍스트 삭제
 	Use Flate to encode streams that are not encoded	인코딩되지 않은 스트림을 Flate로 인코딩
+	In streams that use LZW encoding, use Flate instead	LZW 인코딩 스트림을 Flate로 인코딩
 	Remove invalid links and bookmarks	잘못된 링크 및 책갈피 제거
 	Remove unreferenced named destinations	참조되지 않은 이름이 지정된 대상 제거
 	Compress document structure (object streams)	문서 구조 압축(개체 스트림)
@@ -1961,6 +1962,10 @@
 	Perimeter	둘레
 	Area	면적
 	Drawing scale	도면 축척
+	Scale	축척
+	Common scales	자주 쓰는 축척
+	Enter a scale such as 1:50.	1:50과 같은 축척을 입력하세요.
+	Applying a scale switches units to m / mm.	축척을 적용하면 단위가 m / mm로 바뀝니다.
 	Snapping	스냅
 	Export measurements	측정값 내보내기
 	Open a PDF to measure it.	측정할 PDF를 여세요.
@@ -2250,6 +2255,8 @@ key	Space	스페이스
 	Printer paper and scaling may differ. Check driver settings.	프린터 용지와 배율이 다를 수 있습니다. 드라이버 설정을 확인하세요.
 	Drawing scale changes. Use Actual size for full-scale plans.	도면 축척이 변경됩니다. 실제 크기 도면에는 '실제 크기'를 사용하세요.
 	Reload documents when their files change on disk	파일이 디스크에서 변경되면 문서 다시 불러오기
+	Don't show again	다시 표시 안 함
+	Show a notice when a document is secured	문서가 보호되어 있으면 알림 표시
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	이 파일이 디스크에서 변경되었습니다. 새 버전을 보려면 다시 불러오세요. 저장하지 않은 변경 내용은 손실됩니다.
 	Reload	다시 불러오기
 	Couldn't reload {name}: {e}	{name}을(를) 다시 불러올 수 없습니다: {e}
@@ -2750,3 +2757,14 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	오늘
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	문서를 다시 열 때 마지막 보기(페이지, 확대/축소, 페이지 표시) 복원
+	Attach a file…	파일 첨부…
+	Attach {name}	{name} 첨부
+	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
+	Delete attachment	첨부 파일 삭제
+	Delete attachment {key}	첨부 파일 {key} 삭제

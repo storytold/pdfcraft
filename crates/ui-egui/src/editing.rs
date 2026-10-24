@@ -265,6 +265,10 @@ impl PdfCraftApp {
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
+            Some(crate::canvas::ViewAction::SplitBeforeSelected) => {
+                self.split_draft.mode = crate::SplitMode::Selection;
+                self.dialog = Some(crate::Dialog::Split);
+            }
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
@@ -537,17 +541,44 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        let typing = self
-            .views
-            .get(i)
-            .is_some_and(|v| v.pending_edit.is_some() || v.forms.focus.is_some() || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty()));
+        let typing = self.views.get(i).is_some_and(|v| {
+            v.pending_edit.is_some()
+                || v.forms.focus.is_some()
+                || v.content.draft.is_some()
+                || v.line_editor.as_ref().is_some_and(|ed| ed.has_changes())
+                || v.fill_text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+        });
         if self.active != Some(i) {
             if !typing {
                 return true;
             }
             self.active = Some(i);
         }
-        self.commit_form_typing() && self.commit_open_fill_text(id)
+        self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
+    }
+
+    /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on
+    /// click-away. Save does that first, so the typed text is in the file instead of being left
+    /// open on the screen (#3496).
+    fn commit_open_text_edits(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let Some(doc) = self.session.get(id) else { return true };
+        let Some(view) = self.views.iter_mut().find(|v| v.id == id) else { return true };
+        // Both are taken out of the view before either edit runs, so keep what is needed to put
+        // back whichever one the document refuses: typed text must not be lost.
+        let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
+        let added = view.content.finish_draft(doc.added());
+        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
+        let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
+        let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
+        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+            if !added_ok {
+                (view.content.draft, view.content.select_added) = (draft, select_added);
+            }
+            if !paragraph_ok {
+                view.line_editor = editor;
+            }
+        }
+        added_ok && paragraph_ok
     }
 
     /// The Fill & Sign type box commits on click-away. Save does that first, so the text is in
@@ -637,6 +668,7 @@ impl PdfCraftApp {
         let (name, path) = (doc.name.clone(), doc.path.clone());
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let doc_path = path.clone();
             let destination = match (target, path, &self.save_override) {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
@@ -645,6 +677,7 @@ impl PdfCraftApp {
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
+                    let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
                         app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
@@ -900,10 +933,15 @@ impl PdfCraftApp {
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
     fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
         self.close_tab(index);
-        // A newer prompt wins: the user may have started another close while a save was pending.
+        // A newer prompt wins: the user may have started another close while a save was pending,
+        // and seen its question, which keeps counting as seen.
         if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
             match self.first_dirty() {
-                Some(_) => self.close_request = Some(req),
+                Some(_) => {
+                    // A question about the next document is a new one.
+                    self.save_prompt_seen = false;
+                    self.close_request = Some(req);
+                }
                 None if req == CloseRequest::Quit => self.quit(ctx),
                 None => {}
             }
@@ -959,6 +997,32 @@ impl PdfCraftApp {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
         }
+    }
+
+    /// Ask for the user's attention when the "save changes?" question opens while PdfCraft is in
+    /// the background (Quit in the Dock menu, logging out, or an agent quitting), and withdraw the
+    /// request once the user comes back or the question is answered.
+    ///
+    /// The question holds up the quit the user asked for, so the request is critical, as AppKit
+    /// makes it for a modal panel that an inactive app presents: the Dock icon bounces until
+    /// PdfCraft is active, Windows flashes the taskbar button until the window is in front, and
+    /// X11 sets the urgency hint, which stays until it is reset. A question that opens in front
+    /// asks nothing, and neither does leaving it open: the user has seen it. Each document asked
+    /// about when quitting is a new question, so one that opens in the background asks even after
+    /// a question the user saw; a request that still stands carries over to it.
+    pub(crate) fn attend_save_prompt(&mut self, ctx: &egui::Context) {
+        let open = self.close_request.is_some();
+        let focused = ctx.input(|i| i.focused);
+        if self.save_prompt_attention {
+            if focused || !open {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Reset));
+                self.save_prompt_attention = false;
+            }
+        } else if open && !self.save_prompt_seen && !focused {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Critical));
+            self.save_prompt_attention = true;
+        }
+        self.save_prompt_seen = open;
     }
 }
 
@@ -1019,17 +1083,42 @@ fn is_form_edit(edit: &Edit) -> bool {
 ///
 /// Outlook opens an attachment from its own cache: `INetCache\Content.Outlook\<random>\` for
 /// classic Outlook (`Temporary Internet Files\Content.Outlook\` on older Windows), and the
-/// `Microsoft.OutlookForWindows` package folder for the new Outlook. Saving there either fails,
+/// `Packages\Microsoft.OutlookForWindows_<id>` package folder for the new Outlook. The patterns
+/// follow those layouts, so an ordinary folder that merely shares a name doesn't match. Saving there either fails,
 /// because Outlook can still hold the file, or appears to work while the edits stay out of the
 /// email and are deleted with the cache. Apple Mail opens one from `Mail Downloads/<UUID>/` in
 /// its sandbox container, where other apps can't write, so saving there fails (#2751). Matched on
 /// either separator and in any case, so it can be tested on every platform.
 pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
     let p = path.replace('\\', "/").to_ascii_lowercase();
-    p.contains("/inetcache/content.outlook/")
-        || p.contains("/temporary internet files/content.outlook/")
-        || p.contains("/microsoft.outlookforwindows")
+    // Outlook's cache holds `<marker><random folder>/<file>`: exactly one folder, then the file.
+    let in_outlook_cache = |marker: &str| {
+        p.split_once(marker)
+            .is_some_and(|(_, rest)| matches!(rest.split('/').collect::<Vec<_>>()[..], [dir, file] if !dir.is_empty() && !file.is_empty()))
+    };
+    in_outlook_cache("/inetcache/content.outlook/")
+        || in_outlook_cache("/temporary internet files/content.outlook/")
+        || p.contains("/packages/microsoft.outlookforwindows_")
         || p.contains("/library/containers/com.apple.mail/data/library/mail downloads/")
+}
+
+/// The folder a Save As style dialog should open in for a document stored at `path`: the
+/// document's own folder, as Acrobat and Foxit do, instead of whichever folder the system picks.
+/// `None` (keep the system's choice) for a new document, a path with no parent, or an email
+/// attachment's temporary copy (`is_mail_temp_copy`), which is no place to keep work. Also right
+/// for UNC paths on Windows (`\\server\share\dir\f.pdf` gives `\\server\share\dir`).
+pub(crate) fn save_dialog_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
+    let path = path.filter(|p| !is_mail_temp_copy(p))?;
+    let parent = std::path::Path::new(path).parent()?;
+    (!parent.as_os_str().is_empty()).then(|| parent.to_path_buf())
+}
+
+/// `dialog` opened in the folder of the document stored at `path` ([`save_dialog_folder`]).
+pub(crate) fn in_document_folder(dialog: rfd::AsyncFileDialog, path: Option<&str>) -> rfd::AsyncFileDialog {
+    match save_dialog_folder(path) {
+        Some(dir) => dialog.set_directory(dir),
+        None => dialog,
+    }
 }
 
 /// Write via a temporary file in the same directory and rename over the target, so a crash or
@@ -1107,6 +1196,8 @@ impl PdfCraftApp {
             }
             A::Rename(path, title) => Edit::RenameBookmark { path, title },
             A::SetToCurrentPage(path) => Edit::SetBookmarkPage { path, page: current },
+            A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
+            A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
             A::Delete(path) => Edit::DeleteBookmark { path },
             A::MoveUp(path) => {
                 let at = path[path.len() - 1].saturating_sub(1);
@@ -1144,7 +1235,31 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{SaveTarget, is_mail_temp_copy, write_atomically, write_atomically_syncing, write_atomically_with};
+    use super::{SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
+
+    #[test]
+    fn save_dialogs_open_in_the_documents_folder() {
+        use std::path::PathBuf;
+        assert_eq!(save_dialog_folder(Some("/home/a/plans/f.pdf")), Some(PathBuf::from("/home/a/plans")));
+        // A new document has no folder yet; a bare name has an empty parent; the root has none.
+        assert_eq!(save_dialog_folder(None), None);
+        assert_eq!(save_dialog_folder(Some("f.pdf")), None);
+        assert_eq!(save_dialog_folder(Some("/")), None);
+        // An email attachment's temporary copy is not offered.
+        assert_eq!(save_dialog_folder(Some("C:\\Users\\a\\AppData\\Local\\Microsoft\\Windows\\INetCache\\Content.Outlook\\AB12\\f.pdf")), None);
+        assert_eq!(save_dialog_folder(Some("/Users/a/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/UUID/f.pdf")), None);
+    }
+
+    /// The Windows rules for `Path::parent` (UNC share roots included) only apply on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn save_dialog_folder_handles_unc_paths() {
+        use std::path::PathBuf;
+        assert_eq!(save_dialog_folder(Some(r"\\nas\projets\2026\f.pdf")), Some(PathBuf::from(r"\\nas\projets\2026")));
+        assert_eq!(save_dialog_folder(Some(r"\\nas\projets\f.pdf")), Some(PathBuf::from(r"\\nas\projets\")));
+        assert_eq!(save_dialog_folder(Some(r"\\nas\projets")), None);
+        assert_eq!(save_dialog_folder(Some(r"C:\Users\a\f.pdf")), Some(PathBuf::from(r"C:\Users\a")));
+    }
     use pdfcraft_platform::staging::{STAGING_ATTEMPTS, staging_suffixes};
     use std::path::{Path, PathBuf};
 
@@ -1387,6 +1502,9 @@ mod tests {
             r"C:\Users\me\Documents\Quote.pdf",
             r"C:\Users\me\OneDrive - Contoso\Content.Outlook notes\Quote.pdf",
             r"C:\Users\me\AppData\Local\Microsoft\Windows\INetCache\IE\Quote.pdf",
+            "/home/microsoft.outlookforwindows/report.pdf",
+            "/x/inetcache/content.outlook/y.pdf",
+            "/x/temporary internet files/content.outlook/y.pdf",
             "/home/me/Documents/Quote.pdf",
             "/Users/me/Downloads/Mail Downloads/booking.pdf",
             "/Users/me/Library/Containers/com.apple.Notes/Data/Library/Mail Downloads/booking.pdf",
@@ -1416,6 +1534,32 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         out
+    }
+
+    #[test]
+    fn save_commits_the_open_text_box() {
+        let dir = staging_dir("open-text-box");
+        let dest = dir.join("out.pdf");
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        app.save_override = Some(dest.to_string_lossy().into_owned());
+        let style = crate::content_ui::default_style();
+        app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+            page: 0,
+            index: None,
+            rect: [20.0, 20.0, 120.0, 40.0],
+            text: "Typed text".into(),
+            style,
+            focus: true,
+        });
+
+        assert!(app.save_active(SaveTarget::InPlace));
+        let id = app.views[0].id;
+        let added = app.session.get(id).unwrap().added();
+        assert_eq!(added.len(), 1, "the open text box was committed before the save");
+        assert!(app.views[0].content.draft.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1623,5 +1767,47 @@ mod content_page_tests {
         assert_eq!(content_page(&moved), Some(3));
         assert_eq!(content_page(&Edit::RotatePages { pages: vec![0], degrees: 90 }), None);
         assert_eq!(content_page(&Edit::SetInfo { key: "Title".into(), value: "x".into() }), None);
+    }
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::CloseRequest;
+    use crate::PdfCraftApp;
+
+    /// The attention requests one frame of `attend_save_prompt` sends, with the window `focused`
+    /// or not.
+    fn attend(app: &mut PdfCraftApp, ctx: &egui::Context, focused: bool) -> Vec<egui::UserAttentionType> {
+        let mut out = ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| app.attend_save_prompt(ui.ctx()));
+        // The frame's font texture isn't uploaded anywhere in a unit test.
+        out.textures_delta.clear();
+        out.viewport_output
+            .values()
+            .flat_map(|v| v.commands.iter())
+            .filter_map(|c| if let egui::ViewportCommand::RequestUserAttention(a) = c { Some(*a) } else { None })
+            .collect()
+    }
+
+    /// A save that finishes after a newer "save changes?" question opened in front, and after the
+    /// user went to another app, asks for no attention: the user saw that question.
+    #[test]
+    fn a_save_finishing_behind_a_newer_question_the_user_saw_asks_for_nothing() {
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            app.open_bytes(name, None, bytes.as_ref().clone()).unwrap();
+            app.active = Some(app.views.len() - 1);
+            assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        }
+        // a.pdf was answered with Save while quitting. While that save is pending, the user closes
+        // c.pdf's tab, and its question opens in front.
+        let c = app.views[2].id;
+        app.close_request = Some(CloseRequest::Tab(c));
+        assert!(attend(&mut app, &ctx, true).is_empty());
+        // a.pdf's save finishes once the user has gone to another app.
+        app.close_and_continue(&ctx, 0, CloseRequest::Quit);
+        assert_eq!(app.close_request, Some(CloseRequest::Tab(c)), "the newer question stands");
+        assert!(attend(&mut app, &ctx, false).is_empty(), "the user has seen it");
     }
 }
