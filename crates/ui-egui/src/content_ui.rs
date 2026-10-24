@@ -569,19 +569,42 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             }
             // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
-            let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
-            // Laid out as the page draws it, so opening the box doesn't show it realigned.
-            // shortcut: justified text is shown left-aligned here (TextEdit can't justify), until the editor gets its own layouter.
-            let halign = match t.style.align {
-                pdfcraft_engine::TextAlign::Center => egui::Align::Center,
-                pdfcraft_engine::TextAlign::Right => egui::Align::Max,
-                pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify => egui::Align::Min,
+            let text_color = Color32::from_rgb(cr, cg, cb);
+            let is_rtl = crate::bidi::has_rtl(&t.text);
+            let halign = if is_rtl {
+                egui::Align::Max
+            } else {
+                match t.style.align {
+                    pdfcraft_engine::TextAlign::Center => egui::Align::Center,
+                    pdfcraft_engine::TextAlign::Right => egui::Align::Max,
+                    pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify => egui::Align::Min,
+                }
             };
-            // Character spacing shows as the page will draw it, scaled like the font.
             let letter_spacing = (t.style.char_spacing * f64::from(zoom)) as f32;
-            let mut spaced = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                let job = spaced_job(text.as_str(), &font, Color32::from_rgb(cr, cg, cb), letter_spacing, wrap_width, halign);
-                ui.fonts_mut(|f| f.layout_job(job))
+            let font_clone = font.clone();
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                let raw = text.as_str();
+                if is_rtl {
+                    let measure = |f: &mut egui::epaint::text::FontsView<'_>, s: &str| {
+                        f.layout_no_wrap(s.to_owned(), font_clone.clone(), Color32::WHITE).size().x
+                    };
+                    let width = wrap_width.max(60.0);
+                    let lines = ui.fonts_mut(|f| {
+                        crate::bidi::wrap(raw, |s| measure(f, s) <= width)
+                    });
+                    let display = lines.into_iter().map(|l| l.text).collect::<Vec<_>>().join("\n");
+                    let mut job = egui::text::LayoutJob::simple(
+                        display,
+                        font_clone.clone(),
+                        text_color,
+                        f32::INFINITY,
+                    );
+                    job.halign = egui::Align::RIGHT;
+                    ui.fonts_mut(|f| f.layout_job(job))
+                } else {
+                    let job = spaced_job(raw, &font_clone, text_color, letter_spacing, wrap_width, halign);
+                    ui.fonts_mut(|f| f.layout_job(job))
+                }
             };
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -591,11 +614,11 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .desired_rows(1)
                     .horizontal_align(halign)
                     .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
-                    .text_color(Color32::from_rgb(cr, cg, cb))
+                    .text_color(text_color)
                     .hint_text(tl!("Type text"))
                     .id_salt("added-text-edit");
-                if letter_spacing != 0.0 {
-                    edit = edit.layouter(&mut spaced);
+                if is_rtl || letter_spacing != 0.0 {
+                    edit = edit.layouter(&mut layouter);
                 }
                 let resp = ui.add(edit);
                 if t.focus {
@@ -641,8 +664,11 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
 
 /// A finished draft as an edit: new text is added (and selected once it exists), retyped text
 /// updated, and text emptied by retyping removed. Empty new text adds nothing.
-fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
+fn finish(cv: &mut ContentView, mut d: TextDraft, added: &[Added]) -> Option<Edit> {
     let text = d.text.trim_end().to_string();
+    if crate::bidi::has_rtl(&text) && d.style.align == pdfcraft_engine::TextAlign::Left {
+        d.style.align = pdfcraft_engine::TextAlign::Right;
+    }
     match d.index {
         None if text.trim().is_empty() => None,
         None => {

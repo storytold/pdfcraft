@@ -166,8 +166,14 @@ static INTER_SEMIBOLD_FACE: CraftFont =
 
 /// The face for Latin, Greek and Cyrillic text written into PDFs: the bundled Inter Regular, or
 /// SemiBold for bold text. Present in every build, crafted ones included.
+pub fn document_latin_font(bold: bool) -> &'static CraftFont {
+    if bold { &INTER_SEMIBOLD_FACE } else { &INTER_REGULAR_FACE }
+}
+
+/// The faces for Latin, Greek and Cyrillic text written into PDFs: the bundled Inter Regular, or
+/// SemiBold for bold text. Present in every build, crafted ones included.
 pub fn document_latin_fonts(bold: bool) -> Vec<&'static CraftFont> {
-    vec![if bold { &INTER_SEMIBOLD_FACE } else { &INTER_REGULAR_FACE }]
+    vec![document_latin_font(bold)]
 }
 
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {

@@ -261,6 +261,7 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
+    let latin = uses_latin_face(t);
     let mut out = Vec::new();
     for para in t.text.split('\n') {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
@@ -278,7 +279,19 @@ fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
+<<<<<<< HEAD
+        let measure = |s: &str| {
+            if rtl_script || thai {
+                shaped_width(t, s, rtl)
+            } else if latin {
+                latin_width(t, s)
+            } else {
+                t.family.width(s, t.size, t.bold, t.italic)
+            }
+        };
+=======
         let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
+>>>>>>> origin/main
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
@@ -344,11 +357,41 @@ fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
+/// Whether `t` is drawn in the bundled Latin face (Inter, [`pdfcraft_fonts::document_latin_fonts`])
+/// instead of its standard-14 font: some character other than a line break is outside
+/// WinAnsiEncoding (Turkish ğ ı ş İ Ğ Ş, other Latin Extended letters, Greek, Cyrillic), and there is
+/// no Arabic, Hebrew or Thai (those items are shaped with their own faces). Text the standard font
+/// can draw keeps it, so Western European items are written exactly as before.
+fn uses_latin_face(t: &AddedText) -> bool {
+    !t.text.chars().any(|c| is_thai(c) || is_arabic(c) || is_hebrew(c)) && t.text.chars().any(|c| c != '\n' && !pdfcraft_fonts::win_ansi_encodable(c))
+}
+
+/// The width of `s` in a [`uses_latin_face`] item; a tab is drawn as a space, as in WinAnsi.
+fn bundled_latin_width(t: &AddedText, s: &str) -> f64 {
+    pdfcraft_fonts::latin_face_width(t.bold, &s.replace('\t', " "), t.size) + t.char_spacing * s.chars().count() as f64
+}
+
+/// The first character of a [`uses_latin_face`] item the face can't draw: a control character
+/// (a line break is laid out, a tab becomes a space) or one the face has no glyph for.
+fn first_undrawable_in_latin_face_str(bold: bool, text: &str) -> Option<char> {
+    let face = pdfcraft_fonts::document_latin_fonts(bold).into_iter().next();
+    text.chars()
+        .filter(|c| !matches!(c, '\n' | '\t'))
+        .find(|c| c.is_control() || !face.is_some_and(|f| pdfcraft_fonts::embedding::covers(f.bytes, c.encode_utf8(&mut [0u8; 4]))))
+}
+
+fn first_undrawable_in_latin_face(t: &AddedText) -> Option<char> {
+    first_undrawable_in_latin_face_str(t.bold, &t.text)
+}
+
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    if uses_latin_face(t) {
+        return first_undrawable_in_latin_face(t);
+    }
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
             return Some(c);
@@ -371,7 +414,13 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     wrapped(t).into_iter().find_map(|(line, rtl)| {
         let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
         pieces.iter().find_map(|p| match p {
-            Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
+            Piece::Latin(s) => {
+                if s.chars().any(|c| !pdfcraft_fonts::win_ansi_encodable(c)) {
+                    first_undrawable_in_latin_face_str(t.bold, s)
+                } else {
+                    pdfcraft_fonts::first_non_win_ansi(s)
+                }
+            }
             Piece::Shaped(_) => None,
         })
     })
@@ -473,7 +522,13 @@ fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
     let width = pieces
         .iter()
         .map(|p| match p {
-            Piece::Latin(s) => latin_width(t, s),
+            Piece::Latin(s) => {
+                if s.chars().any(|c| !pdfcraft_fonts::win_ansi_encodable(c)) {
+                    bundled_latin_width(t, s)
+                } else {
+                    latin_width(t, s)
+                }
+            }
             // Each cluster is shown on its own, so the spacing follows each once.
             Piece::Shaped(clusters) => clusters.iter().map(|c| c.advance * t.size + t.char_spacing).sum::<f64>(),
         })
@@ -581,6 +636,9 @@ fn copy_key(c: &Content) -> Content {
 
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
+    if uses_latin_face(t) {
+        return t.text.split('\n').map(|line| bundled_latin_width(t, line)).fold(0.0, f64::max);
+    }
     t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
 }
 
@@ -664,6 +722,26 @@ fn draw_laid_shaped(
         fonts.set(name.clone().into_bytes(), Object::Ref(font));
         names.push(name);
     }
+    let has_non_win_ansi = laid.iter().flat_map(|(_, _, pieces, _)| pieces).any(|p| match p {
+        Piece::Latin(s) => s.chars().any(|c| !pdfcraft_fonts::win_ansi_encodable(c)),
+        _ => false,
+    });
+    let latin_embedded = if has_non_win_ansi {
+        let face = pdfcraft_fonts::document_latin_font(t.bold);
+        let mut page_fonts = taken.clone();
+        for (k, v) in fonts.iter() {
+            page_fonts.set(k.clone(), v.clone());
+        }
+        let emb_name = pdfcraft_fonts::embedding::embed(doc, &mut page_fonts, face.bytes, &face.name())
+            .map_err(|e| EditError::Invalid(format!("couldn't embed the {} font: {e}", face.name())))?;
+        let font_obj = page_fonts.get(emb_name.as_bytes()).cloned().ok_or_else(|| EditError::Invalid("the embedded font is missing".into()))?;
+        let dict = doc.resolve(&font_obj).as_dict().cloned().ok_or_else(|| EditError::Invalid("the embedded font is not a dictionary".into()))?;
+        let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &dict);
+        fonts.set(emb_name.clone().into_bytes(), font_obj);
+        Some((emb_name, metrics))
+    } else {
+        None
+    };
     let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
     out.extend(format!("BT {} {} {} rg\n", n(cr), n(cg), n(cb)).bytes());
     if t.char_spacing != 0.0 {
@@ -690,11 +768,38 @@ fn draw_laid_shaped(
         for piece in pieces {
             match piece {
                 Piece::Latin(s) => {
-                    out.extend(format!("/{latin} {} Tf {} Tw 1 0 0 1 {} {} Tm ", n(t.size), n(tw), n(pen), n(y)).bytes());
-                    out.extend(literal(&win_ansi(s)));
-                    out.extend_from_slice(b" Tj\n");
-                    current = Some(latin.as_str());
-                    pen += latin_width(t, s) + tw * s.matches(' ').count() as f64;
+                    let non_win_ansi = s.chars().any(|c| !pdfcraft_fonts::win_ansi_encodable(c));
+                    if let (true, Some((emb_name, metrics))) = (non_win_ansi, &latin_embedded) {
+                        let slant = if t.italic { ITALIC_SLANT } else { 0.0 };
+                        out.extend(format!("/{emb_name} {} Tf 1 0 {} 1 {} {} Tm ", n(t.size), n(slant), n(pen), n(y)).bytes());
+                        let normalized = s.replace('\t', " ");
+                        if tw > 0.0 && s.contains(' ') {
+                            let adjust = -tw * 1000.0 / t.size;
+                            out.push(b'[');
+                            for (k, word) in s.split(' ').enumerate() {
+                                if k > 0 {
+                                    let sp = metrics.encode(" ").map(|b| literal(&b)).ok_or_else(|| EditError::Invalid("can't encode space".into()))?;
+                                    out.extend(sp);
+                                    out.extend(format!(" {} ", n(adjust)).bytes());
+                                }
+                                let enc = metrics.encode(&word.replace('\t', " ")).map(|b| literal(&b)).ok_or_else(|| EditError::Invalid(format!("can't encode {word:?}")))?;
+                                out.extend(enc);
+                            }
+                            out.extend_from_slice(b"] TJ\n");
+                        } else {
+                            let enc = metrics.encode(&normalized).map(|b| literal(&b)).ok_or_else(|| EditError::Invalid(format!("can't encode {normalized:?}")))?;
+                            out.extend(enc);
+                            out.extend_from_slice(b" Tj\n");
+                        }
+                        current = Some(emb_name.as_str());
+                        pen += pdfcraft_fonts::latin_face_width(t.bold, &normalized, t.size) + t.char_spacing * s.chars().count() as f64 + tw * s.matches(' ').count() as f64;
+                    } else {
+                        out.extend(format!("/{latin} {} Tf {} Tw 1 0 0 1 {} {} Tm ", n(t.size), n(tw), n(pen), n(y)).bytes());
+                        out.extend(literal(&win_ansi(s)));
+                        out.extend_from_slice(b" Tj\n");
+                        current = Some(latin.as_str());
+                        pen += latin_width(t, s) + tw * s.matches(' ').count() as f64;
+                    }
                 }
                 Piece::Shaped(clusters) => {
                     for c in clusters {
@@ -818,6 +923,70 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     doc.add(Object::Dict(font))
 }
 
+/// The text matrix's slant for italic text in the bundled Latin face, which has no italic of its
+/// own: tan 12°, the angle by which Helvetica-Oblique slants Helvetica.
+const ITALIC_SLANT: f64 = 0.212_556_56;
+
+/// Draw a [`uses_latin_face`] text item. The face is embedded whole, once per document (a Type 0
+/// font with a ToUnicode map, so copy and search get the text back), and shared by every item and
+/// page that shows it. Lines are placed as [`draw`] places standard-font lines. `taken` holds the
+/// page's font names: the new resource never takes one, and a copy of the face already there is
+/// reused.
+fn draw_latin_face(doc: &mut Document, t: &AddedText, taken: &Dict, res: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
+    let face = pdfcraft_fonts::document_latin_font(t.bold);
+    let mut page_fonts = taken.clone();
+    let name = pdfcraft_fonts::embedding::embed(doc, &mut page_fonts, face.bytes, &face.name())
+        .map_err(|e| EditError::Invalid(format!("couldn't embed the {} font: {e}", face.name())))?;
+    let font = page_fonts.get(name.as_bytes()).cloned().ok_or_else(|| EditError::Invalid("the embedded font is missing".into()))?;
+    let dict = doc.resolve(&font).as_dict().cloned().ok_or_else(|| EditError::Invalid("the embedded font is not a dictionary".into()))?;
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &dict);
+    // Never a `?`: a line the font can't encode fails the edit (`first_undrawable` refuses such
+    // text before it gets here).
+    let encode =
+        |s: &str| metrics.encode(s).map(|b| literal(&b)).ok_or_else(|| EditError::Invalid(format!("the {} font can't encode {s:?}", face.name())));
+    let mut fonts = Dict::new();
+    fonts.set(name.clone().into_bytes(), font);
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    let r = text_rect(t);
+    let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
+    let slant = if t.italic { ITALIC_SLANT } else { 0.0 };
+    out.extend(format!("BT /{name} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
+    let all = lines(t);
+    for (i, line) in all.iter().enumerate() {
+        let line = line.replace('\t', " ");
+        let w = pdfcraft_fonts::latin_face_width(t.bold, &line, t.size);
+        let x = match t.align {
+            Align::Left | Align::Justify => r[0],
+            Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
+            Align::Right => r[2] - w,
+        };
+        // Baseline: as in `draw`.
+        let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
+        let spaces = line.matches(' ').count();
+        let tw = if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+        out.extend(format!("1 0 {} 1 {} {} Tm ", n(slant), n(x), n(y)).bytes());
+        if tw > 0.0 {
+            // Word spacing (`Tw`) applies to the one-byte code 32 only, never to this font's
+            // two-byte codes (ISO 32000-2 §9.3.3), so a justified line moves each word with `TJ`.
+            let adjust = -tw * 1000.0 / t.size;
+            out.push(b'[');
+            for (k, word) in line.split(' ').enumerate() {
+                if k > 0 {
+                    out.extend(encode(" ")?);
+                    out.extend(format!(" {} ", n(adjust)).bytes());
+                }
+                out.extend(encode(word)?);
+            }
+            out.extend_from_slice(b"] TJ\n");
+        } else {
+            out.extend(encode(&line)?);
+            out.extend_from_slice(b" Tj\n");
+        }
+    }
+    out.extend_from_slice(b"ET\n");
+    Ok(())
+}
+
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
 /// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to
@@ -835,6 +1004,8 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
     )
     .into_bytes();
     match c {
+        // Characters WinAnsi has no code for: the bundled Latin face, embedded.
+        Content::Text(t) if uses_latin_face(t) => draw_latin_face(doc, t, taken, &mut res, &mut out)?,
         Content::Text(t) => {
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);

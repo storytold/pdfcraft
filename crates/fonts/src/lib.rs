@@ -21,8 +21,8 @@ mod std14;
 mod std14_metrics;
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
-    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
-    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_font, document_latin_fonts, document_thai_font, ui_arabic_fonts,
+    ui_chinese_fonts, ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
@@ -53,16 +53,29 @@ pub fn cjk_width(s: &str, size: f64) -> f64 {
         .sum()
 }
 
-/// Approximate advance of `s` in Inter Regular at `size` points.
-pub fn inter_width(s: &str, size: f64) -> f64 {
+fn face_width(bytes: &[u8], s: &str, size: f64) -> f64 {
     use skrifa::MetadataProvider as _;
-    let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return helvetica_width(s, size) };
+    let Ok(font) = skrifa::FontRef::new(bytes) else { return helvetica_width(s, size) };
     let loc = skrifa::instance::LocationRef::default();
     let upem = font.metrics(skrifa::instance::Size::unscaled(), loc).units_per_em.max(1) as f64;
     let scale = size / upem;
     let charmap = font.charmap();
     let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
     s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
+}
+
+/// Approximate advance of `s` in Inter Regular at `size` points.
+pub fn inter_width(s: &str, size: f64) -> f64 {
+    face_width(INTER_REGULAR, s, size)
+}
+
+/// Advance of `s` at `size` points in the bundled Latin document face ([`document_latin_fonts`]):
+/// Inter Regular, or Inter SemiBold when `bold`. These are the advances an embedded copy of the
+/// face writes as its widths, so text laid out with this measure lines up when drawn. Characters
+/// the face lacks measure zero: callers check coverage first and refuse such text.
+pub fn latin_face_width(bold: bool, s: &str, size: f64) -> f64 {
+    let face = document_latin_font(bold);
+    face_width(face.bytes, s, size)
 }
 
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
@@ -335,6 +348,21 @@ mod tests {
         assert_eq!(m, "the standard fonts can't draw \"签\" (U+7B7E) in the comment; only Western European characters can be written there for now");
         assert!(undrawable_message("the reason", '\u{7}').contains("\"\\u{7}\" (U+0007)"));
         assert!(undrawable_message("x", '𠀋').contains("(U+2000B)"));
+    }
+
+    #[test]
+    fn latin_face_width_measures_turkish_in_each_weight() {
+        // Regular agrees with `inter_width`, which measures the same face.
+        let s = "Ağaç ışık Şule İğne";
+        assert!((latin_face_width(false, s, 12.0) - inter_width(s, 12.0)).abs() < 1e-9);
+        for bold in [false, true] {
+            for c in ['ğ', 'ı', 'ş', 'İ', 'Ğ', 'Ş'] {
+                assert!(latin_face_width(bold, &c.to_string(), 12.0) > 0.0, "{c:?} bold={bold}");
+            }
+            assert_eq!(latin_face_width(bold, "", 12.0), 0.0);
+        }
+        // SemiBold is a different face, with its own (wider) advances.
+        assert!(latin_face_width(true, s, 12.0) > latin_face_width(false, s, 12.0));
     }
 
     #[test]

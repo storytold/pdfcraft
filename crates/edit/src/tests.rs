@@ -3722,6 +3722,82 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     }
 }
 
+#[test]
+fn turkish_added_text_is_embedded_in_inter_not_refused() {
+    let mut doc = fixture();
+    let turkish_str = "Ağaç ışık Şule İğne";
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: turkish_str.into(), bold: false, italic: false, ..AddedText::default() };
+    // 1. first_undrawable is None for Turkish text in regular, bold, and italic
+    assert_eq!(first_undrawable(&text), None);
+    assert_eq!(first_undrawable(&AddedText { bold: true, ..text.clone() }), None);
+    assert_eq!(first_undrawable(&AddedText { italic: true, ..text.clone() }), None);
+
+    // 2. add_content succeeds and records the item
+    let idx = add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let items = list_added(&doc);
+    assert_eq!(items.len(), 1);
+    match &items[idx].content {
+        Content::Text(t) => assert_eq!(t.text, turkish_str),
+        _ => panic!("expected Content::Text"),
+    }
+
+    // 3. The page font resource is an embedded Type0 font
+    let pages = pdfcraft_model::pages(&doc);
+    let res = doc.resolve(pages[0].dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts_dict = fonts.as_dict().unwrap();
+    assert!(fonts_dict.iter().any(|(k, _)| k.starts_with(b"PCFull")), "embedded font registered");
+
+    // 4. A Western European WinAnsi item on the same page still works with Type1 WinAnsi
+    let win_ansi_text = AddedText { rect: [72.0, 500.0, 300.0, 550.0], text: "Café — 5€ ™".into(), ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(win_ansi_text)).unwrap();
+
+    // 5. Unsupported characters (like Chinese or controls) are still refused
+    let mixed_unsupported = AddedText { text: "Ağaç 中".into(), ..text.clone() };
+    assert_eq!(first_undrawable(&mixed_unsupported), Some('中'));
+    assert!(add_content(&mut doc, 0, &Content::Text(mixed_unsupported)).is_err());
+
+    let control_unsupported = AddedText { text: "ğ\r\n".into(), ..text };
+    assert_eq!(first_undrawable(&control_unsupported), Some('\r'));
+    assert!(add_content(&mut doc, 0, &Content::Text(control_unsupported)).is_err());
+}
+
+#[test]
+fn mixed_turkish_and_arabic_is_supported_and_drawn() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mixed_text = AddedText {
+        rect: [72.0, 600.0, 300.0, 700.0],
+        text: "ğggsadas مرحبا".into(),
+        ..AddedText::default()
+    };
+    // 1. first_undrawable is None for mixed Turkish and Arabic
+    assert_eq!(first_undrawable(&mixed_text), None);
+
+    // 2. add_content succeeds and records the item
+    let idx = add_content(&mut doc, 0, &Content::Text(mixed_text.clone())).unwrap();
+    let items = list_added(&doc);
+    assert_eq!(items.len(), 1);
+    match &items[idx].content {
+        Content::Text(t) => assert_eq!(t.text, "ğggsadas مرحبا"),
+        _ => panic!("expected Content::Text"),
+    }
+
+    // 3. Both embedded Latin (PCFull) and shaped Arabic (PCAr) fonts are registered and drawn
+    let pages = pdfcraft_model::pages(&doc);
+    let res = doc.resolve(pages[0].dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts_dict = fonts.as_dict().unwrap();
+    assert!(fonts_dict.iter().any(|(k, _)| k.starts_with(b"PCFull")), "embedded Latin font registered");
+    assert!(fonts_dict.iter().any(|(k, _)| k.starts_with(b"PCAr")), "shaped Arabic font registered");
+
+    let stream = streams(&doc, 0).join("");
+    assert!(stream.contains("/PCFull"), "Latin font used in stream: {stream}");
+    assert!(stream.contains("/PCAr"), "Arabic font used in stream: {stream}");
+}
+
 fn xobject(doc: &Document, page: usize, name: &[u8]) -> Option<pdfcraft_cos::ObjRef> {
     let p = &pdfcraft_model::pages(doc)[page];
     let res = doc.resolve(p.dict.get(b"Resources")?);
