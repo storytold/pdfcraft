@@ -90,7 +90,7 @@ fn a_crashed_session_is_offered_and_recovered_unsaved() {
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();
     assert!(doc.dirty, "recovered changes are unsaved");
-    assert_eq!(doc.path.as_deref(), Some("/docs/work.pdf"), "Save goes back to the original file");
+    assert_eq!(doc.path.as_deref(), Some("/docs/work.pdf"), "the original path is kept, as what Save offers (#3923)");
     assert_eq!(doc.info.pages.len(), 2, "the edit survived the crash");
     assert_eq!(s.list().len(), 1, "the entry stays until the document is saved or closed");
 }

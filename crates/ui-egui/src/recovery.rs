@@ -5,6 +5,9 @@
 //! `<key>.pdf` plus `<key>.json` (name, original path, time). Saving, discarding or closing a
 //! document removes its entry. At startup the app offers snapshots even when their metadata is
 //! missing or damaged; those recover without an original path, so saving asks for a destination.
+//! A recovered document's original path is only a suggestion: the folder is the user's, but
+//! anyone who can write it can name any file in a sidecar, so the first Save after recovering
+//! asks where, starting at that path, and later saves write where the user chose (#3923).
 //!
 //! Encrypted documents are stored encrypted (the working file is), so recovery never writes
 //! plaintext of a protected document to disk. The web build has no recovery store yet.
@@ -32,7 +35,8 @@ pub const AUTOSAVE_SECS: f64 = 60.0;
 pub struct RecoveryMeta {
     pub key: String,
     pub name: String,
-    /// Where the document was saved before (Save writes back there after recovery).
+    /// Where the document was saved before. After recovery the first Save offers it in the
+    /// Save As dialog rather than writing it unasked (#3923).
     pub path: Option<String>,
     /// Seconds since the Unix epoch when the snapshot was taken.
     pub saved_at: u64,
@@ -210,8 +214,7 @@ impl RecoveryStore {
                 continue;
             }
             let Some(key) = path.file_stem().and_then(std::ffi::OsStr::to_str) else { continue };
-            let meta = std::fs::read(path.with_extension("json"))
-                .and_then(|b| serde_json::from_slice::<RecoveryMeta>(&b).map_err(std::io::Error::other))
+            let meta = read_meta(&path.with_extension("json"))
                 .and_then(|m| if m.key == key { Ok(m) } else { Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "snapshot key mismatch")) });
             out.push(meta.unwrap_or_else(|e| {
                 log::warn!("recovering snapshot without metadata: {}: {e}", path.display());
@@ -241,7 +244,7 @@ impl RecoveryStore {
     /// recovered without metadata), so damaged metadata doesn't stay behind. The PDF is untouched.
     pub fn repair_meta(&self, meta: &RecoveryMeta) {
         let path = self.dir.join(format!("{}.json", meta.key));
-        let readable = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<RecoveryMeta>(&b).ok()).is_some_and(|m| m.key == meta.key);
+        let readable = read_meta(&path).is_ok_and(|m| m.key == meta.key);
         if readable {
             return;
         }
@@ -276,6 +279,22 @@ impl RecoveryStore {
     }
 }
 
+/// The most a sidecar may hold. One PdfCraft writes is a name, a path and a few fields, well under
+/// this; anything longer is not one of ours (#3923).
+const MAX_META_BYTES: u64 = 64 * 1024;
+
+/// A sidecar's metadata, read through [`MAX_META_BYTES`] so a planted file can't make the start-up
+/// listing read gigabytes. A longer file is refused, and its snapshot recovers without metadata.
+fn read_meta(path: &Path) -> std::io::Result<RecoveryMeta> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    File::open(path)?.take(MAX_META_BYTES.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_META_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "recovery metadata is too large"));
+    }
+    serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -306,6 +325,9 @@ impl PdfCraftApp {
 
     /// Drop a document's recovery entry (it was saved, discarded or closed).
     pub(crate) fn forget_recovery(&mut self, doc: pdfcraft_engine::DocId) {
+        // Saved (to a destination the user chose), closed or reloaded from its file: the path is
+        // no longer only what the sidecar said.
+        self.recovered_paths.remove(&doc);
         if let (Some(store), Some(key)) = (&self.recovery, self.recovery_keys.remove(&doc)) {
             store.remove(&key);
         }
@@ -381,6 +403,9 @@ impl PdfCraftApp {
     pub(crate) fn finish_recovery(&mut self, meta: &RecoveryMeta) {
         let Some(id) = self.views.last().map(|v| v.id) else { return };
         self.session.mark_recovered(id, meta.path.clone());
+        if meta.path.is_some() {
+            self.recovered_paths.insert(id);
+        }
         self.recovery_keys.insert(id, meta.key.clone());
         // A snapshot recovered without readable metadata gets a fresh sidecar now, so the
         // damaged one doesn't linger until the next autosave (or forever, if none comes).
@@ -421,13 +446,13 @@ mod idle_tests {
     use super::*;
     use std::time::Duration;
 
-    struct TestDir(PathBuf);
+    pub(super) struct TestDir(PathBuf);
 
     impl TestDir {
         /// A new folder of this test's own. The tests run on parallel threads of one process, and
         /// two can read the same clock time (it moves in microseconds on macOS), so a counter
         /// tells their folders apart; the time keeps runs of the process apart.
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -437,7 +462,7 @@ mod idle_tests {
         }
 
         /// The folder.
-        fn path(&self) -> &Path {
+        pub(super) fn path(&self) -> &Path {
             &self.0
         }
     }
@@ -571,5 +596,75 @@ mod idle_tests {
             }
             assert_eq!(delay, Duration::MAX);
         }
+    }
+}
+
+#[cfg(test)]
+mod sidecar_tests {
+    use super::idle_tests::TestDir;
+    use super::*;
+    use crate::SaveTarget;
+
+    /// #3923: a sidecar names a file the user can write (here, one that is not the document's).
+    /// After Recover, Save asks where instead of writing that file; the file the user picks is
+    /// the document's file from then on.
+    #[test]
+    fn the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path() {
+        let dir = TestDir::new();
+        let store = RecoveryStore::new(dir.path().join("recovery"));
+        let named = dir.path().join("named.pdf");
+        std::fs::write(&named, b"someone else's file").unwrap();
+        {
+            let mut crashed = PdfCraftApp::new();
+            crashed.enable_recovery(store.clone());
+            let bytes = crashed.session.create_blank(200.0, 300.0, 1).unwrap();
+            crashed.open_bytes("work.pdf", Some(named.to_string_lossy().into_owned()), bytes.to_vec()).unwrap();
+            assert!(crashed.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+            crashed.autosave_now();
+        }
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.enable_recovery(store.clone());
+        let keys: Vec<String> = app.recoverable.iter().map(|m| m.key.clone()).collect();
+        assert_eq!(keys.len(), 1);
+        app.recover(&keys);
+        assert_eq!(app.views.len(), 1);
+        let chosen = dir.path().join("chosen.pdf");
+        app.pick_override = Some(vec![chosen.to_string_lossy().into_owned()]);
+
+        assert!(!app.save_active(SaveTarget::InPlace), "Save asks instead of writing the sidecar's path");
+        app.process_picked();
+        assert_eq!(std::fs::read(&named).unwrap(), b"someone else's file", "the named file is untouched");
+        assert!(std::fs::read(&chosen).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
+
+        // The chosen file is the document's file now: the next Save writes it without asking.
+        app.pick_override = None;
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        assert!(app.save_active(SaveTarget::InPlace));
+    }
+
+    /// #3923: a sidecar longer than any PdfCraft writes is not read whole; its snapshot is
+    /// offered without metadata, so it has no path to save to.
+    #[test]
+    fn an_oversized_sidecar_is_not_read() {
+        let dir = TestDir::new();
+        let store = RecoveryStore::new(dir.path());
+        let meta = RecoveryMeta {
+            key: "planted".into(),
+            // Over 64 KiB, and still valid metadata that names a file.
+            name: "x".repeat(70_000),
+            path: Some(dir.path().join("named.pdf").to_string_lossy().into_owned()),
+            saved_at: 1,
+            encrypted: false,
+            instance: None,
+        };
+        store.write(&meta, b"%PDF-1.7\n").unwrap();
+        let listed = store.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!((listed[0].name.as_str(), listed[0].path.as_deref()), ("planted.pdf", None));
+        // A sidecar of ordinary size is still read.
+        store.write(&RecoveryMeta { name: "work.pdf".into(), ..meta.clone() }, b"%PDF-1.7\n").unwrap();
+        assert_eq!(store.list()[0].path, meta.path);
     }
 }

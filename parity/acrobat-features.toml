@@ -550,8 +550,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/recovery.rs::a_crashed_session_is_offered_and_recovered_unsaved", "crates/ui-egui/tests/it/recovery.rs::discarding_removes_the_autosaves", "crates/ui-egui/tests/it/recovery.rs::a_running_instances_autosaves_are_not_offered_to_a_second_instance", "crates/engine/src/tests.rs::recovered_documents_reopen_unsaved_at_their_original_path"]
-notes = "A running instance holds an exclusively locked instance file in the recovery folder and names it in its snapshots, so a second instance neither offers nor discards what the first is autosaving (#2166); the OS releases the lock when the process dies. Where the folder can't be written or the platform has no file locks, snapshots are offered as before."
+evidence = ["crates/ui-egui/tests/it/recovery.rs::a_crashed_session_is_offered_and_recovered_unsaved", "crates/ui-egui/tests/it/recovery.rs::discarding_removes_the_autosaves", "crates/ui-egui/tests/it/recovery.rs::a_running_instances_autosaves_are_not_offered_to_a_second_instance", "crates/engine/src/tests.rs::recovered_documents_reopen_unsaved_at_their_original_path", "crates/ui-egui/src/recovery.rs::the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path", "crates/ui-egui/src/recovery.rs::an_oversized_sidecar_is_not_read"]
+notes = "A recovered document keeps its original path only as a suggestion: the first Save asks where, starting there, and the file chosen is its file from then on, since anyone who can write the recovery folder can name any file in a sidecar (#3923); sidecars longer than 64 KiB are not read, and their snapshot is offered without metadata. A running instance holds an exclusively locked instance file in the recovery folder and names it in its snapshots, so a second instance neither offers nor discards what the first is autosaving (#2166); the OS releases the lock when the process dies. Where the folder can't be written or the platform has no file locks, snapshots are offered as before."
 
 [[feature]]
 id = "core.encrypted-autosave"

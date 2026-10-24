@@ -896,6 +896,9 @@ pub struct PdfCraftApp {
     /// Entries left by a previous session, offered in the Recovery dialog.
     pub recoverable: Vec<RecoveryMeta>,
     recovery_keys: std::collections::HashMap<DocId, String>,
+    /// Recovered documents whose path came from a recovery sidecar and no save has confirmed
+    /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
+    recovered_paths: std::collections::HashSet<DocId>,
     last_autosave: f64,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
@@ -1225,6 +1228,7 @@ impl PdfCraftApp {
             recovery: None,
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
+            recovered_paths: Default::default(),
             last_autosave: 0.0,
             allow_quit: false,
             deferred_commands: Vec::new(),

@@ -673,7 +673,9 @@ impl PdfCraftApp {
                 (_, _, Some(p)) => p.clone(),
                 // An email attachment's temporary copy is no place to keep work: ask, as for a new
                 // document (`is_mail_temp_copy`).
-                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
+                // Neither is a path read back from a recovery sidecar until a save confirms it:
+                // anyone who can write the recovery folder can name any file there (#3923).
+                (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) && !self.recovered_paths.contains(&id) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
