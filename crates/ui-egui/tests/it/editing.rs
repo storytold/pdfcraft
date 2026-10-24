@@ -3332,6 +3332,59 @@ fn the_read_mode_command_applies_an_open_paragraph_and_puts_edit_text_down() {
     assert_eq!(texts_of(s, 0), ["Chapter One"], "the page shows it");
 }
 
+/// Opens "Page 1" in the inline editor and types `text` over it.
+fn open_and_retype(text: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the line opens for editing");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = text.into();
+    h.run_steps(2);
+    h
+}
+
+/// Presses and releases the button labelled `label` in separate frames, as a mouse does.
+fn press_and_release(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let at = h.get_by_role_and_label(Role::Button, label).rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(4);
+}
+
+#[test]
+fn the_check_button_beside_the_editor_applies_the_text() {
+    let mut h = open_and_retype("Chapter One");
+    press_and_release(&mut h, "Apply");
+    let s = h.state();
+    assert!(s.views[0].line_editor.is_none(), "the editor closes");
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Edit text"));
+    assert_eq!(texts_of(s, 0), ["Chapter One"]);
+}
+
+#[test]
+fn the_cross_button_beside_the_editor_cancels_the_text() {
+    let mut h = open_and_retype("Chapter One");
+    // Pressing the button takes the focus from the text, which must not apply it as a click away.
+    press_and_release(&mut h, "Cancel");
+    let s = h.state();
+    assert!(s.views[0].line_editor.is_none(), "the editor closes");
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), None, "nothing was applied");
+    assert_eq!(texts_of(s, 0), ["Page 1"]);
+}
+
 #[test]
 fn text_tool_clicking_source_text_edits_instead_of_adding_a_copy() {
     let mut h = harness(1, |_| {});

@@ -1,6 +1,6 @@
 //! Edit a PDF ▸ Edit text & images: boxes around the paragraphs and images already on the page.
-//! Click a paragraph to edit it in place (⌘Enter or clicking away applies and rewraps it to the
-//! box, Esc cancels); drag it to move it, or drag the handle on its left or right edge to rewrap
+//! Click a paragraph to edit it in place (⌘Enter, ✓ beside the frame or clicking away applies and
+//! rewraps it to the box, Esc or ✕ cancels); drag it to move it, or drag the handle on its left or right edge to rewrap
 //! it to a new width. Click an image to select it: drag to move, drag a corner to resize (keeping
 //! its proportions), right-click for rotate, flip, replace, save and delete; Delete removes it.
 
@@ -1554,7 +1554,8 @@ fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: 
 /// The inline editor; returns the edit once the text is applied.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
     // Clicks outside the document (the Format text panel) keep the paragraph open.
-    let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
+    let viewport = view.viewport_rect();
+    let outside = ctx.input(|i| i.pointer.latest_pos()).is_some_and(|p| !viewport.contains(p));
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
@@ -1635,6 +1636,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            let (apply_clicked, cancel_clicked) = confirm_buttons(ctx, live.expand(2.0), viewport);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
             if let Some(p) = ui.input(|i| i.pointer.hover_pos())
@@ -1702,9 +1704,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
-                if esc {
+                // A click on ✕ also takes the focus from the text, in the same pass: it cancels
+                // before that counts as a click away.
+                if esc || cancel_clicked {
                     done = Some(false);
-                } else if apply || (r.lost_focus() && !outside && !hold) {
+                } else if apply || apply_clicked || (r.lost_focus() && !outside && !hold) {
                     done = Some(true);
                 }
             });
@@ -1726,6 +1730,35 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         }
         None => None,
     }
+}
+
+/// ✓ (apply) and ✕ (cancel) beside the open paragraph's `frame`: right of its top-right corner,
+/// clear of the strip that takes hold of the frame, or above that corner (below it at the top of
+/// the view) when the view has no room on the right. Returns whether each was clicked.
+fn confirm_buttons(ctx: &egui::Context, frame: Rect, viewport: Rect) -> (bool, bool) {
+    let id = egui::Id::new("edit-text-buttons");
+    // The last pass's size; the first pass guesses two 24-point buttons in a 2-point frame.
+    let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(58.0, 30.0), |r| r.size());
+    let gap = FRAME_REACH + 4.0;
+    let pos = if frame.right() + gap + size.x <= viewport.right() {
+        Pos2::new(frame.right() + gap, frame.top())
+    } else if frame.top() - gap - size.y >= viewport.top() {
+        Pos2::new(frame.right() - size.x, frame.top() - gap - size.y)
+    } else {
+        Pos2::new(frame.right() - size.x, frame.bottom() + gap)
+    };
+    let t = crate::theme::Tokens::get(ctx);
+    let (mut apply, mut cancel) = (false, false);
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).constrain(false).show(ctx, |ui| {
+        egui::Frame::NONE.fill(t.card).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(2).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+            ui.horizontal(|ui| {
+                apply = crate::icons::button(ui, "check", 24.0, false, tl!("Apply")).clicked();
+                cancel = crate::icons::button(ui, "x", 24.0, false, tl!("Cancel")).clicked();
+            });
+        });
+    });
+    (apply, cancel)
 }
 
 /// The edit a closed paragraph editor applies, or `None` when nothing in it changed.
