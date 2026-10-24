@@ -1997,21 +1997,39 @@ fn new_text_keeps_a_foreign_box_face() {
     assert!(ap_content(&doc, d).contains("/Cour 12 Tf"));
 }
 
-/// A redaction mark without `/QuadPoints` marks `/Rect` (Table 195), outlined like one with
-/// quadrilaterals; an array `/OC` of three numbers gives the outline colour.
+/// A redaction mark without `/QuadPoints` marks `/Rect` (Table 195). While marked it is outlined
+/// only when it names an outline colour (an array `/OC` of three numbers); without one it draws
+/// nothing. Marks with quadrilaterals are outlined in `/C` as before.
 #[test]
-fn redaction_marks_without_quadpoints_outline_their_rect() {
+fn redaction_marks_without_quadpoints_outline_their_rect_in_their_oc_colour() {
     let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /IC [0 0 0] /OC [1 0 0] /C [0 0 1] >>");
     assert_eq!(ap, "1 0 0 RG\n1 w\n45.5 539.5 m 164.5 539.5 l 164.5 470.5 l 45.5 470.5 l h S\n");
-    let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /C [0 0 1] >>");
-    assert!(ap.starts_with("0 0 1 RG\n"), "/C without /OC: {ap}");
+    // No /OC colour: nothing to draw while marked (no /C outline, no /IC fill, no overlay text).
+    let blank = |annot: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] {annot} >>");
+        let doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        with_missing_appearances(&doc).is_none()
+    };
     // An /OC that isn't three finite numbers is no colour; an optional-content dictionary keeps its meaning.
-    for oc in ["[1 0]", "[(a) 0 0]", "<< /Type /OCG /Name (L) >>"] {
-        let (ap, _) = display_of(&format!("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /OC {oc} >>"));
-        assert!(ap.starts_with("0.89 0.13 0.13 RG\n"), "{oc}: {ap}");
+    for annot in [
+        "/C [0.9 0.1 0.1]",
+        "/IC [0 0 0] /OverlayText (REDACTED) /DA (1 1 1 rg /Helv 10 Tf) /C [0.9 0.1 0.1]",
+        "/OC [1 0]",
+        "/OC [(a) 0 0]",
+        "/OC << /Type /OCG /Name (L) >>",
+    ] {
+        assert!(blank(annot), "{annot}");
     }
-    // The interior colour and overlay text wait for the redaction to be applied.
-    let annot = "<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /IC [0 0 0] /OverlayText (X) /DA (1 1 1 rg /Helv 10 Tf) >>";
-    let (ap, _) = display_of(annot);
+    // With /OC, the interior colour and overlay text still wait for the redaction to be applied.
+    let (ap, _) =
+        display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /OC [1 0 0] /IC [0 0 0] /OverlayText (X) /DA (1 1 1 rg /Helv 10 Tf) >>");
     assert!(!ap.contains(" f\n") && !ap.contains("Tj"), "{ap}");
+    // With quadrilaterals and no /OC: the /C outline, as before.
+    let (ap, _) = display_of("<< /Type /Annot /Subtype /Redact /Rect [45 470 165 540] /QuadPoints [45 540 165 540 45 470 165 470] /C [0 0 1] >>");
+    assert_eq!(ap, "0 0 1 RG\n1 w\n45 540 m 165 540 l 165 470 l 45 470 l h S\n");
 }

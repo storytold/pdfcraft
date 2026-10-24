@@ -466,15 +466,7 @@ pub(crate) fn build_in(d: &Dict, dr_face: Option<pdfcraft_fonts::Std14>) -> Opti
             }
         }
         b"Redact" => {
-            // While marked: the outline of each area (the fill comes when applied). Without
-            // `/QuadPoints`, `/Rect` is the area (Table 195), outlined just inside its edges.
-            let q = match d.get(b"QuadPoints") {
-                Some(_) => nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?,
-                None => {
-                    let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
-                    vec![x0, y1, x1, y1, x0, y0, x1, y0]
-                }
-            };
+            // While marked: the outline of each area (the fill comes when applied).
             // An array `/OC` of three numbers is the outline colour some writers give a mark;
             // `/OC` as ISO 32000-2 defines it (Table 166) is an optional-content dictionary, which
             // this leaves alone.
@@ -482,6 +474,16 @@ pub(crate) fn build_in(d: &Dict, dr_face: Option<pdfcraft_fonts::Std14>) -> Opti
                 [r, g, b] if c.iter().all(|x| x.is_finite()) => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
                 _ => None,
             });
+            let q = match d.get(b"QuadPoints") {
+                Some(_) => nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?,
+                // Without `/QuadPoints`, `/Rect` is the area (Table 195): outlined just inside its
+                // edges when the mark names an outline colour, else not drawn while marked.
+                None => {
+                    outline?;
+                    let [x0, y0, x1, y1] = [rect[0] + 0.5, rect[1] + 0.5, rect[2] - 0.5, rect[3] - 0.5];
+                    vec![x0, y1, x1, y1, x0, y0, x1, y0]
+                }
+            };
             let col = outline.or(stroke).unwrap_or([0.89, 0.13, 0.13]);
             c.push_str(&format!("{}1 w\n", rg_stroke(col)));
             for quad in q.as_chunks::<8>().0.iter() {
