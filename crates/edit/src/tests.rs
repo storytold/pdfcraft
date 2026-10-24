@@ -481,6 +481,42 @@ fn flattening_draws_appearances_into_the_page_and_removes_the_comments() {
     assert!(marks_present(&doc).is_empty(), "flattened content is not a removable mark");
 }
 
+/// #2368: a widget with /NoRotate on a rotated page is shown upright, turned with the page's
+/// /Rotate about its rectangle's upper-left corner (§12.5.3, as MuPDF and Poppler draw it).
+/// Flattening drew its appearance at the rectangle as it is, so the widget turned sideways and
+/// moved; a neighbour without the flag is unchanged, and so is everything on an unrotated page.
+#[test]
+fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
+    let page = stream("", " ");
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 15 >>\nstream\n0 0 100 50 re f\nendstream";
+    for (rotate, plain, upright) in [
+        (0, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 1 0 0 1 100 500 cm /PCFl1 Do Q"),
+        (90, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 0 1 -1 0 150 550 cm /PCFl1 Do Q"),
+        (180, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q -1 0 0 -1 100 600 cm /PCFl1 Do Q"),
+        (270, "q 1 0 0 1 100 500 cm /PCFl0 Do Q", "q 0 -1 1 0 50 550 cm /PCFl1 Do Q"),
+    ] {
+        let widget =
+            |flags: i64| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{flags}) /Rect [100 500 200 550] /F {flags} /AP << /N 7 0 R >> >>");
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Rotate {rotate} /Resources << >> /Contents 6 0 R /Annots [4 0 R 5 0 R] >>"
+            ),
+            &widget(4),
+            &widget(4 | 16),
+            &page,
+            form,
+        ]);
+        assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+        let doc = reopen(&doc);
+        let s = streams(&doc, 0);
+        let flat = s.last().unwrap();
+        assert!(flat.contains(plain), "/Rotate {rotate}: {flat}");
+        assert!(flat.contains(upright), "/Rotate {rotate}: {flat}");
+    }
+}
+
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]
