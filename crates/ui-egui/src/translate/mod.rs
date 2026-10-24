@@ -236,11 +236,7 @@ impl TranslationPopup {
             });
         });
 
-        // Dismiss on clicks outside the popup
-        if area_res.response.clicked_elsewhere() {
-            keep_open = false;
-        }
-
+        // Dismiss on clicks outside the popup (excluding combo box dropdown menus and tooltips)
         if ui.input(|i| i.pointer.any_pressed())
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
         {
