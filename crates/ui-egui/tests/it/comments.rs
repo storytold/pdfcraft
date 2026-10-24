@@ -1011,6 +1011,15 @@ fn text_boxes_are_typed_into_on_the_page() {
     assert_eq!(comments(&h)[0].contents.as_deref(), Some("Abnahme ok, Restpunkte siehe Liste"));
 }
 
+/// The empty editor of a new text box is as wide as its hint, which reads on one line.
+#[test]
+fn a_new_text_boxs_hint_reads_on_one_line() {
+    let mut h = harness_with_step_dt(1.0 / 60.0, |app| app.set_option("quick", "freetext").unwrap());
+    click_pt(&mut h, (40.0, 120.0));
+    let editor = field(&h, "Type text").rect();
+    assert!(editor.width() > 2.0 * editor.height(), "one line wide: {editor:?}");
+}
+
 #[test]
 fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
     let mut h = harness(|app| app.set_option("quick", "square").unwrap());

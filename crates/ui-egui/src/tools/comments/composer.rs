@@ -250,9 +250,10 @@ pub(crate) fn inline_text(
     let pad = 2.0 * zoom;
     let text_color = color32(color);
     let back = fill.map_or(Color32::WHITE, color32);
-    // As wide as the longest line, at least the box's own width, wrapping past the widest a box
-    // is sized to (or past the box, when it is wider).
-    let longest = ctx.fonts_mut(|f| f.layout_no_wrap(it.text.clone(), font.clone(), text_color).size().x);
+    // As wide as the longest line (the hint's, before any is typed), at least the box's own
+    // width, wrapping past the widest a box is sized to (or past the box, when it is wider).
+    let shown = if it.text.is_empty() { tl!("Type text").to_string() } else { it.text.clone() };
+    let longest = ctx.fonts_mut(|f| f.layout_no_wrap(shown, font.clone(), text_color).size().x);
     let floor = old.map_or(size as f32 * zoom, |r| (r.width() - 2.0 * pad).max(1.0));
     let ceiling = if it.size.is_some() { floor } else { (pdfcraft_engine::annot_text::TEXT_BOX_MAX_WIDTH as f32 * zoom - 2.0 * pad).max(floor) };
     let width = (longest + font.size * 0.5).clamp(floor, ceiling);
