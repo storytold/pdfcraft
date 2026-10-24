@@ -1933,3 +1933,53 @@ fn annots_of(doc: &Document) -> Vec<Dict> {
         .filter(|d| d.get(b"Subtype") != Some(&Object::name("Widget")))
         .collect()
 }
+
+/// Check boxes sharing one name with different on states (`/A`, `/B`) are one field whose value
+/// picks the box. Importing `B` turned on the first box's state instead, whatever the data said.
+fn check_box_pair(value: &str) -> Document {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".to_string(),
+        "<< /Fields [5 0 R] >>".to_string(),
+        format!("<< /FT /Btn /T (choice) /V /{value} /Kids [6 0 R 7 0 R] >>"),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [50 700 64 714] /AS /{} /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+            if value == "A" { "A" } else { "Off" }
+        ),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [80 700 94 714] /AS /{} /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+            if value == "B" { "B" } else { "Off" }
+        ),
+        "<< /Length 0 >>\nstream\n\nendstream".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn a_check_box_group_value_selects_its_own_box_on_import() {
+    let src = check_box_pair("B");
+    assert_eq!(values(&src), vec![("choice".to_string(), vec!["B".to_string()])]);
+    let exports = [
+        ("xfdf", export_xfdf(&src, false, true, "form.pdf").into_bytes()),
+        ("fdf", export_fdf(&src, false, true, "form.pdf").unwrap()),
+        ("xml", export_data(&src, Format::Xml).into_bytes()),
+    ];
+    for (format, data) in exports {
+        let mut dst = check_box_pair("Off");
+        let report = import(&mut dst, &data);
+        assert_eq!(values(&dst), values(&src), "{format}: {report:?}: {}", String::from_utf8_lossy(&data));
+    }
+}
