@@ -131,6 +131,22 @@ impl PdfCraftApp {
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     view.comments.comment_added();
                 }
+                // Fill & Sign's Repeat holds a page index and that page's geometry: a page-list
+                // edit makes them stale, while comment edits keep them.
+                if matches!(
+                    edit,
+                    Edit::RotatePages { .. }
+                        | Edit::DeletePages { .. }
+                        | Edit::MovePages { .. }
+                        | Edit::ReversePages { .. }
+                        | Edit::InsertBlankPage { .. }
+                        | Edit::DuplicatePages { .. }
+                        | Edit::ReplacePages { .. }
+                        | Edit::SetPageBox { .. }
+                        | Edit::InsertPagesFrom { .. }
+                ) {
+                    view.last_fill_sig = None;
+                }
                 // Keep the pages the user acted on selected, where they now are.
                 match edit {
                     Edit::MovePages { pages, to } => {
@@ -236,6 +252,8 @@ impl PdfCraftApp {
                     self.views[i].document_changed(&doc.info);
                 }
                 self.views[i].comments.selected = None;
+                // Undo or redo may move the pages under it, or take the placement itself.
+                self.views[i].last_fill_sig = None;
                 let label = crate::i18n::edit_label(&label);
                 if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);
@@ -832,6 +850,8 @@ impl PdfCraftApp {
                 {
                     let view = &mut self.views[i];
                     view.document_changed(&d.info);
+                    // The placement Fill & Sign would repeat may be gone with the edits.
+                    view.last_fill_sig = None;
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
@@ -1500,6 +1520,24 @@ mod tests {
         assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
         assert!(app.save_active(SaveTarget::InPlace));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fill_and_sign_repeat_survives_comment_edits_but_not_page_list_edits() {
+        let mut app = crate::PdfCraftApp::new();
+        app.open_bytes("one.pdf", None, one_page_pdf()).unwrap();
+        let sig = crate::fill_sign::SavedSig::Typed("Ada".into());
+        app.views[0].last_fill_sig = Some((0, [50.0, 50.0], false, sig.clone()));
+        let page = app.session.get(app.views[0].id).unwrap().info.pages[0].clone();
+        let placed = crate::fill_sign::place(0, &page, [50.0, 50.0], &sig, false, "Ada").unwrap();
+        assert!(app.apply_edit(placed));
+        assert!(app.views[0].last_fill_sig.is_some(), "placing it (a comment edit) keeps it");
+        assert!(app.apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 200.0, height: 300.0 }));
+        assert!(app.views[0].last_fill_sig.is_none(), "page 0 is another page now");
+        // Revert takes the placement with the unsaved edits.
+        app.views[0].last_fill_sig = Some((0, [50.0, 50.0], false, sig));
+        app.revert_active();
+        assert!(app.views[0].last_fill_sig.is_none(), "revert clears it");
     }
 }
 

@@ -2428,6 +2428,11 @@ animation effects	Off	Ki
 	This document is trying to open a local file:	Ez a dokumentum egy helyi fájlt próbál megnyitni:
 	Move tag earlier	Címke korábbra helyezése
 	Move tag later	Címke későbbre helyezése
+	Refresh	Frissítés
+	Repeat on pages	Ismétlés az oldalakon
+	Show on other pages too	Megjelenítés más oldalakon is
+	There are no other pages in that range.	Ebben a tartományban nincs más oldal.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Helyezze be az USB-tokent vagy az intelligens kártyát, majd frissítsen a digitális azonosítók listázásához.
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	A(z) „{from}“ aláírt változatát (a {rev}. változatot) tekinti meg. Ez egy pillanatkép: az itteni módosítások nem érintik az eredetit.

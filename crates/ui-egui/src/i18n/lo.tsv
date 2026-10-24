@@ -2429,3 +2429,10 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+
+# Digital signature on several pages; digital IDs on a token.
+	Refresh	ໂຫຼດຄືນໃໝ່
+	Repeat on pages	ເຮັດຊ້ຳໃນໜ້າ
+	Show on other pages too	ສະແດງໃນໜ້າອື່ນນຳ
+	There are no other pages in that range.	ບໍ່ມີໜ້າອື່ນໃນຂອບເຂດນັ້ນ.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	ໃສ່ໂທເຄັນ USB ຫຼື ສະມາດກາດ, ແລ້ວໂຫຼດຄືນໃໝ່ເພື່ອສະແດງ ID ດິຈິຕອນຂອງມັນ.

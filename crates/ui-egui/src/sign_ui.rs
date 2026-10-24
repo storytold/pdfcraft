@@ -113,6 +113,9 @@ pub struct SignDraft {
     pub error: Option<String>,
     /// Sign with a Digital ID ▸ Remove was clicked for this list entry: asking to confirm.
     pub confirm_remove: Option<usize>,
+    /// Show a new visible signature on other pages too, in the same place: these pages.
+    pub also_on: bool,
+    pub also: crate::marks_ui::PageRange,
 }
 
 impl SignDraft {
@@ -135,6 +138,8 @@ impl SignDraft {
             new_id: NewIdDraft::default(),
             error: None,
             confirm_remove: None,
+            also_on: false,
+            also: Default::default(),
         }
     }
 }
@@ -287,6 +292,16 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::Sign);
     }
 
+    /// Validate signatures against the roots Windows trusts too (Acrobat: Windows Integration),
+    /// so a DSC issued under a CA installed in Windows shows as valid. Elsewhere: nothing.
+    pub fn trust_os_roots(&mut self) {
+        #[cfg(target_os = "windows")]
+        match sign::windows::trusted_roots() {
+            Ok(roots) => self.session.set_system_trust(roots),
+            Err(e) => self.notify_fmt("The Windows trusted root certificates couldn't be read: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
         self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
@@ -434,6 +449,20 @@ impl PdfCraftApp {
             _ => None,
         };
         let choice = d.graphic.clone();
+        // The other pages, each with the rectangle in the same place as on the signed page.
+        let also = match (d.also_on, d.rect, &d.field, self.session.get(doc_id)) {
+            (true, Some(rect), None, Some(doc)) => match doc.info.pages.get(d.page) {
+                Some(from) => d
+                    .also
+                    .pages(doc.info.pages.len())
+                    .into_iter()
+                    .filter(|&p| p != d.page)
+                    .filter_map(|p| doc.info.pages.get(p).map(|to| (p, crate::fill_sign::same_rect(from, to, rect))))
+                    .collect(),
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
         let opts = SignOptions {
             field: d.field.clone(),
             page: d.page,
@@ -445,6 +474,7 @@ impl PdfCraftApp {
             // The labels the preview shows: in the interface language, or all in English.
             appearance_labels: appearance_labels(crate::i18n::current()).0,
             graphic,
+            also,
             ..SignOptions::default()
         };
         // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
@@ -756,10 +786,20 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.add_space(10.0);
     }
     let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(unused_mut))]
+    let mut refresh = false;
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
             d.error = None;
+        }
+        // A USB token or smart card plugged in while the dialog is open.
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if widgets::pill_button(ui, tl!("Refresh"), false)
+            .on_hover_text(tl!("Insert the USB token or smart card, then refresh to list its digital IDs."))
+            .clicked()
+        {
+            refresh = true;
         }
         if d.confirm_remove.is_none() && ui.add_enabled_ui(removable.is_some(), |ui| widgets::pill_button(ui, tl!("Remove"), false)).inner.clicked() {
             d.confirm_remove = removable;
@@ -776,6 +816,19 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     });
     if let Some(i) = remove {
         app.remove_digital_id(i);
+    }
+    if refresh {
+        // Keep the chosen ID (by path: the OS key store entries are listed again); the first
+        // usable one only if it has gone.
+        let chosen = app.sign_draft.as_ref().and_then(|d| d.selected).and_then(|i| app.digital_ids.get(i)).map(|e| e.path.clone());
+        app.refresh_os_key_store_ids();
+        let ids = &app.digital_ids;
+        if let Some(d) = app.sign_draft.as_mut() {
+            d.selected = chosen
+                .and_then(|path| ids.iter().position(|e| e.path == path && e.unusable.is_none()))
+                .or_else(|| ids.iter().position(|e| e.unusable.is_none()));
+            d.confirm_remove = None;
+        }
     }
     close
 }
@@ -985,6 +1038,7 @@ fn preview(
 
 fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
+    let page_count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.info.pages.len());
     // The time as the signature will show it (signing takes the session clock then).
     let date = sign::pdf::display_date(&app.session.signing_date());
     let Some(d) = app.sign_draft.as_mut() else { return true };
@@ -1047,6 +1101,13 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 pick = true;
             }
         });
+        // A new visible signature can show on other pages too (one signature, a widget each).
+        if d.rect.is_some() && d.field.is_none() && page_count > 1 {
+            ui.add(widgets::checkbox(&mut d.also_on, tl!("Show on other pages too")));
+            if d.also_on {
+                d.also.ui(ui, page_count);
+            }
+        }
         ui.add_space(6.0);
     } else {
         ui.label(egui::RichText::new(tl!("The signature will be invisible.")).color(t.text_muted));

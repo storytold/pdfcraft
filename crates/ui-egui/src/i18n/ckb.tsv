@@ -2713,3 +2713,9 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	دووبارەکردنەوە لە پەڕەکاندا
+	Show on other pages too	لە پەڕەکانی تریشدا پیشان بدە
+	There are no other pages in that range.	هیچ پەڕەیەکی تر لەو مەودایەدا نییە.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	تۆکنی USB یان کارتی زیرەک بخەرە ناوەوە، پاشان نوێی بکەرەوە بۆ پیشاندانی ناسنامە دیجیتاڵییەکانی.

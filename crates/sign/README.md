@@ -20,7 +20,8 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   no fix, so `rsa` is only used to verify). ECDSA signs with deterministic nonces (RFC 6979).
 - **Signing:** PAdES B-B (`ETSI.CAdES.detached`, signing-certificate-v2, SHA-256/384, no SHA-1).
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
-  or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
+  or invisible; `SignOptions::also` shows one signature on several pages, a widget per page);
+  certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
   where the large name would be: drawn strokes, filled outlines (a typed signature) or RGBA
   pixels (an image XObject with a soft mask), checked and size-capped first. On a page shown
   turned (`/Rotate`, inherited or not), a new visible signature reads upright as displayed: its

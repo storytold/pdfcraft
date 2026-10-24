@@ -2409,6 +2409,11 @@ animation effects	Off	Wyłączone
 	This document is trying to open a local file:	Ten dokument próbuje otworzyć plik lokalny:
 	Move tag earlier	Przenieś znacznik wcześniej
 	Move tag later	Przenieś znacznik później
+	Refresh	Odśwież
+	Repeat on pages	Powtórz na stronach
+	Show on other pages too	Pokaż także na innych stronach
+	There are no other pages in that range.	W tym zakresie nie ma innych stron.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Włóż token USB lub kartę inteligentną, a następnie odśwież, aby wyświetlić jej identyfikatory cyfrowe.
 	Turn upside down (180°)	Obróć do góry nogami (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Etykieta 4 × 6 cali (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Przycina każdą stronę do zadrukowanego obszaru, obraca ją pionowo i dopasowuje do arkusza bez rozciągania. Jedna etykieta na arkusz.

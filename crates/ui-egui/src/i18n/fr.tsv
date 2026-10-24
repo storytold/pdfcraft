@@ -2429,6 +2429,10 @@ animation effects	Off	Désactivés
 	This document is trying to open a local file:	Ce document tente d’ouvrir un fichier local :
 	Move tag earlier	Déplacer la balise plus tôt
 	Move tag later	Déplacer la balise plus tard
+	Repeat on pages	Répéter sur les pages
+	Show on other pages too	Afficher aussi sur d’autres pages
+	There are no other pages in that range.	Il n’y a pas d’autres pages dans cette plage.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Insérez le jeton USB ou la carte à puce, puis actualisez pour afficher ses identifiants numériques.
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Vous consultez la version signée de «{from}» (révision {rev}). Il s'agit d'un instantané : les modifications effectuées ici n'affecteront pas l'original.

@@ -1634,15 +1634,30 @@ fn dss_parts(doc: &Document, old: &Document) -> HashSet<u32> {
     parts
 }
 
+/// Whether `d` is a signature field or a widget of one: `/FT /Sig` on itself or, for a kid
+/// widget without its own `/FT` (ISO 32000-2 §12.7.4), on its `/Parent`. A parent that existed
+/// when signed must have been a signature object then, so a relabel cannot pose as signing.
+fn sig_field(doc: &Document, old: &Document, d: &Dict) -> bool {
+    match d.name(b"FT") {
+        Some(ft) => ft == b"Sig",
+        // ponytail: one level of /Parent, which is what signers write; deeper inheritance reads as form fill.
+        None => d.get(b"Parent").and_then(Object::as_ref).is_some_and(|p| {
+            let was = old.try_get(p.num).ok().filter(|o| !matches!(**o, Object::Null));
+            doc.get(p).as_dict().is_some_and(|pd| pd.name(b"FT") == Some(b"Sig"))
+                && was.as_ref().is_none_or(|o| o.as_dict().is_some_and(is_signature_dict))
+        }),
+    }
+}
+
 /// What adding `added` annotations amounts to: signing (signature widgets only), form fill
 /// (other widgets) or comments.
-fn added_annots(doc: &Document, added: &[ObjRef]) -> &'static str {
+fn added_annots(doc: &Document, old: &Document, added: &[ObjRef]) -> &'static str {
     let kinds: Vec<(bool, bool)> = added
         .iter()
         .map(|r| {
             let o = doc.get(*r);
             let d = o.as_dict();
-            (d.is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")), d.is_some_and(|d| d.name(b"FT") == Some(b"Sig")))
+            (d.is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")), d.is_some_and(|d| sig_field(doc, old, d)))
         })
         .collect();
     if !kinds.is_empty() && kinds.iter().all(|(w, s)| *w && *s) {
@@ -1680,7 +1695,9 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     }
     let old_fields = refs(old, before.get(b"Fields"));
     let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
-    if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
+    // A field with kid widgets is not itself a widget, so judge the fields as fields.
+    let signing = added.iter().all(|r| doc.get(*r).as_dict().is_some_and(|d| sig_field(doc, old, d)));
+    if signing { kind::SIGNATURE } else { kind::FORM_FILL }
 }
 
 /// Dictionary entries in a stable order, without `keys`.
@@ -1788,7 +1805,7 @@ fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Di
         Some(b) => {
             let was = refs(old, b.get(b"Annots"));
             let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-            added_annots(doc, &added)
+            added_annots(doc, old, &added)
         }
         None => kind::PAGE_CONTENT,
     }
@@ -1835,7 +1852,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
                 Some(b) => {
                     let was = refs(old, b.get(b"Annots"));
                     let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, &added)
+                    added_annots(doc, old, &added)
                 }
                 None => kind::COMMENTS,
             };
@@ -1844,7 +1861,10 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         _ => {}
     }
     match d.name(b"Subtype") {
-        Some(b"Widget") => return if d.name(b"FT") == Some(b"Sig") && signature_ok { kind::SIGNATURE } else { kind::FORM_FILL },
+        Some(b"Widget") => {
+            let was_sig = before.is_none_or(|b| sig_field(old, old, b));
+            return if sig_field(doc, old, d) && was_sig { kind::SIGNATURE } else { kind::FORM_FILL };
+        }
         Some(b"Link") => return kind::LINKS,
         Some(_) if ty == Some(b"Annot") || d.contains(b"Rect") => return kind::COMMENTS,
         _ => {}
@@ -1951,6 +1971,9 @@ pub struct SignOptions {
     pub appearance_labels: AppearanceLabels,
     /// A drawing, typed signature or image shown where the large name would be.
     pub graphic: Option<crate::graphic::Graphic>,
+    /// Show a new visible signature on these other pages (0-based) too, each at its rectangle:
+    /// one signature whose field has a widget per page. Repeated pages and `page` are skipped.
+    pub also: Vec<(usize, [f64; 4])>,
 }
 
 /// What an encrypted document's permissions (ISO 32000-2 §7.6.4.2, Table 22) allow when it was
@@ -2065,10 +2088,14 @@ fn sign_inner(
         .field
         .as_deref()
         .map(|n| sig_fields(&doc).into_iter().find(|f| f.name == n).ok_or_else(|| SignError::Pdf(format!("there is no signature field {n:?}"))));
-    // `turn`: how far the appearance is turned to read upright (`/MK /R`, counterclockwise).
-    let (widget, rect, turn) = match existing {
+    // Each widget with `turn`: how far its appearance is turned to read upright (`/MK /R`,
+    // counterclockwise).
+    let (widgets, rect) = match existing {
         Some(f) => {
             let f = f?;
+            if !opts.also.is_empty() {
+                return Err(SignError::Pdf("an existing signature field can't be shown on other pages".into()));
+            }
             if f.signature(&doc).is_some() {
                 return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
             }
@@ -2081,7 +2108,7 @@ fn sign_inner(
             let rect = nums(&doc, &wd, b"Rect").filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
             // The field's own rotation, as a form author set it: an existing field is not
             // reoriented, so one without `/MK /R` is drawn as before.
-            (wr.unwrap_or(fr), rect.unwrap_or([0.0; 4]), mk_rotation(&doc, &wd))
+            (vec![(wr.unwrap_or(fr), mk_rotation(&doc, &wd))], rect.unwrap_or([0.0; 4]))
         }
         None => {
             let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
@@ -2091,37 +2118,78 @@ fn sign_inner(
                 .clone()
                 .unwrap_or_else(|| (1..).map(|i| format!("Signature{i}")).find(|n| !taken.contains(n)).unwrap_or_default());
             let rect = opts.rect.unwrap_or([0.0; 4]);
-            let mut w = Dict::new();
-            w.set(b"Type".to_vec(), Object::name("Annot"));
-            w.set(b"Subtype".to_vec(), Object::name("Widget"));
-            w.set(b"FT".to_vec(), Object::name("Sig"));
-            w.set(b"T".to_vec(), PdfString::text(&fname));
-            w.set(b"V".to_vec(), Object::Ref(sig));
-            w.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|x| Object::Real(*x)).collect()));
-            w.set(b"P".to_vec(), Object::Ref(page));
-            // Print + Locked.
-            w.set(b"F".to_vec(), Object::Int(4 | 128));
-            // On a page shown turned, the signature reads upright as the page is displayed: the
-            // widget is turned back by the page's rotation (ISO 32000-2 §12.5.6.19, `/MK /R`).
-            let turn = pdfcraft_model::pages(&doc).get(opts.page).map_or(0, |p| p.rotation(&doc));
-            if turn != 0 {
-                let mut mk = Dict::new();
-                mk.set(b"R".to_vec(), Object::Int(turn));
-                w.set(b"MK".to_vec(), Object::Dict(mk));
-            }
-            let wr = doc.add(Object::Dict(w));
-            // Page /Annots (indirect arrays are updated in place).
-            let pd = doc.get(page).as_dict().cloned().unwrap_or_default();
-            match pd.get(b"Annots") {
-                Some(Object::Ref(ar)) => {
-                    let mut a = doc.get(*ar).as_array().cloned().unwrap_or_default();
-                    a.push(Object::Ref(wr));
-                    doc.set(*ar, Object::Array(a));
+            // The other pages the signature shows on (each page once, never the signed one).
+            // On a page shown turned, the signature reads upright as the page is displayed: each
+            // widget is turned back by its page's rotation (ISO 32000-2 §12.5.6.19, `/MK /R`).
+            let turns: Vec<i64> = pdfcraft_model::pages(&doc).iter().map(|p| p.rotation(&doc)).collect();
+            let turn = |p: usize| turns.get(p).copied().unwrap_or(0);
+            let mut seen = HashSet::from([opts.page]);
+            let mut placed = vec![(page, rect, turn(opts.page))];
+            for &(p, r) in &opts.also {
+                if !seen.insert(p) {
+                    continue;
                 }
-                other => {
-                    let mut a = other.and_then(|o| o.as_array().cloned()).unwrap_or_default();
-                    a.push(Object::Ref(wr));
-                    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(a)))?;
+                if opts.rect.is_none() {
+                    return Err(SignError::Pdf("only a visible signature can be shown on other pages".into()));
+                }
+                let pr = *pages.get(p).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", p.saturating_add(1))))?;
+                placed.push((pr, r, turn(p)));
+            }
+            let widget_dict = |page: ObjRef, rect: [f64; 4], turn: i64| {
+                let mut w = Dict::new();
+                w.set(b"Type".to_vec(), Object::name("Annot"));
+                w.set(b"Subtype".to_vec(), Object::name("Widget"));
+                w.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|x| Object::Real(*x)).collect()));
+                w.set(b"P".to_vec(), Object::Ref(page));
+                // Print + Locked.
+                w.set(b"F".to_vec(), Object::Int(4 | 128));
+                if turn != 0 {
+                    let mut mk = Dict::new();
+                    mk.set(b"R".to_vec(), Object::Int(turn));
+                    w.set(b"MK".to_vec(), Object::Dict(mk));
+                }
+                w
+            };
+            let mut field = Dict::new();
+            field.set(b"FT".to_vec(), Object::name("Sig"));
+            field.set(b"T".to_vec(), PdfString::text(&fname));
+            field.set(b"V".to_vec(), Object::Ref(sig));
+            let (field_ref, widgets) = if placed.len() == 1 {
+                // One page: the field and its widget are one dictionary, as Acrobat writes it.
+                let t = turn(opts.page);
+                let mut w = widget_dict(page, rect, t);
+                for (k, v) in field.iter() {
+                    w.set(k.clone(), v.clone());
+                }
+                let wr = doc.add(Object::Dict(w));
+                (wr, vec![(page, wr, t)])
+            } else {
+                // Several pages: one field whose widgets (its /Kids) share the signature.
+                let fr = doc.add(Object::Dict(field.clone()));
+                let mut widgets = Vec::with_capacity(placed.len());
+                for &(p, r, t) in &placed {
+                    let mut w = widget_dict(p, r, t);
+                    w.set(b"Parent".to_vec(), Object::Ref(fr));
+                    widgets.push((p, doc.add(Object::Dict(w)), t));
+                }
+                field.set(b"Kids".to_vec(), Object::Array(widgets.iter().map(|(_, w, _)| Object::Ref(*w)).collect()));
+                doc.set(fr, Object::Dict(field));
+                (fr, widgets)
+            };
+            for &(page, wr, _) in &widgets {
+                // Page /Annots (indirect arrays are updated in place).
+                let pd = doc.get(page).as_dict().cloned().unwrap_or_default();
+                match pd.get(b"Annots") {
+                    Some(Object::Ref(ar)) => {
+                        let mut a = doc.get(*ar).as_array().cloned().unwrap_or_default();
+                        a.push(Object::Ref(wr));
+                        doc.set(*ar, Object::Array(a));
+                    }
+                    other => {
+                        let mut a = other.and_then(|o| o.as_array().cloned()).unwrap_or_default();
+                        a.push(Object::Ref(wr));
+                        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(a)))?;
+                    }
                 }
             }
             // AcroForm /Fields and /SigFlags (signatures exist, append only).
@@ -2136,7 +2204,7 @@ fn sign_inner(
                 Some(Object::Array(a)) => a.clone(),
                 _ => Vec::new(),
             };
-            fields.push(Object::Ref(wr));
+            fields.push(Object::Ref(field_ref));
             af.set(b"Fields".to_vec(), Object::Array(fields));
             af.set(b"SigFlags".to_vec(), Object::Int(3));
             match af_ref {
@@ -2144,7 +2212,7 @@ fn sign_inner(
                 // Inline (or new) AcroForms stay in the catalog.
                 None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
             }
-            (wr, rect, turn)
+            (widgets.into_iter().map(|(_, w, t)| (w, t)).collect::<Vec<_>>(), rect)
         }
     };
     if opts.field.is_some() {
@@ -2157,12 +2225,23 @@ fn sign_inner(
             doc.update_dict(r, |af| af.set(b"SigFlags".to_vec(), Object::Int(3)))?;
         }
     }
-    // The appearance.
-    let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
-    let ap_ref = doc.add(Object::Stream(ap));
-    let mut apd = Dict::new();
-    apd.set(b"N".to_vec(), Object::Ref(ap_ref));
-    doc.update_dict(widget, |w| w.set(b"AP".to_vec(), Object::Dict(apd)))?;
+    // The appearance: one for each rotation, shared by the widgets turned alike (scaled to each
+    // /Rect when sizes differ).
+    let mut drawn: Vec<(i64, ObjRef)> = Vec::new();
+    for (w, turn) in widgets {
+        let ap_ref = match drawn.iter().find(|(t, _)| *t == turn) {
+            Some(&(_, r)) => r,
+            None => {
+                let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
+                let r = doc.add(Object::Stream(ap));
+                drawn.push((turn, r));
+                r
+            }
+        };
+        let mut apd = Dict::new();
+        apd.set(b"N".to_vec(), Object::Ref(ap_ref));
+        doc.update_dict(w, |d| d.set(b"AP".to_vec(), Object::Dict(apd)))?;
+    }
     // Write with the placeholders, then patch them.
     let save = SaveOptions { mod_date: Some(opts.date.clone()), object_streams: false, ..SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;

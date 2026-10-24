@@ -2434,6 +2434,11 @@ animation effects	Off	Izklopljeni
 	This document is trying to open a local file:	Ta dokument poskuša odpreti lokalno datoteko:
 	Move tag earlier	Premakni oznako prej
 	Move tag later	Premakni oznako pozneje
+	Refresh	Osveži
+	Repeat on pages	Ponovi na straneh
+	Show on other pages too	Prikaži tudi na drugih straneh
+	There are no other pages in that range.	V tem obsegu ni drugih strani.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Vstavite žeton USB ali pametno kartico in osvežite, da prikažete njene digitalne ID-je.
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ogledate si podpisano različico dokumenta „{from}“ (revizija {rev}). To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
