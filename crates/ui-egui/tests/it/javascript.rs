@@ -30,6 +30,69 @@ fn form() -> Vec<u8> {
     out
 }
 
+#[test]
+fn opening_form_script_policy_notice_is_visible() {
+    use pdfcraft_engine::{Edit, Session};
+    use std::sync::Arc;
+    let mut maker = Session::new();
+    maker.set_javascript(false);
+    let id = maker.open("source.pdf", None, Arc::new(form()), None).unwrap();
+    maker.apply(id, Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("saved".into()) }).unwrap();
+    maker.apply(id, Edit::SetDocumentScript { name: "open".into(), script: Some("getField('greeting').value = 'initialized';".into()) }).unwrap();
+    let bytes = maker.save_bytes(id).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("source.pdf", None, (*bytes).clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(value(&h, "greeting"), ["saved"]);
+    h.get_by_label_contains("Automatic AcroForm scripts are disabled");
+}
+
+#[test]
+fn signed_form_shows_signature_and_opening_script_policy() {
+    use pdfcraft_engine::{Edit, Session, SignOptions, sign};
+    use std::sync::Arc;
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let signer = sign::pkcs12::open(&p12, "test").unwrap();
+    for certify in [None, Some(1), Some(2), Some(3)] {
+        let mut maker = Session::new();
+        maker.set_javascript(false);
+        let id = maker.open("source.pdf", None, Arc::new(form()), None).unwrap();
+        maker.apply(id, Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("saved".into()) }).unwrap();
+        maker
+            .apply(
+                id,
+                Edit::SetDocumentScript {
+                    name: "open".into(),
+                    script: Some("getField('greeting').value = 'initialized'; app.alert('unexpected');".into()),
+                },
+            )
+            .unwrap();
+        let signed = maker.sign(id, &signer, SignOptions { certify, ..Default::default() }).unwrap();
+        let original = signed.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("signed.pdf", None, (*signed).clone()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        let id = h.state().active_ids().unwrap().1;
+        let doc = h.state().session.get(id).unwrap();
+        assert!(doc.is_signed());
+        assert_eq!(doc.bytes, original);
+        assert!(!doc.dirty);
+        assert_eq!(value(&h, "greeting"), ["saved"]);
+        assert!(h.state().toast.is_none(), "opening scripts must not alert");
+        h.get_by_label("Signature panel");
+        h.get_by_label_contains("At least one signature has problems.");
+        h.get_by_label_contains("Automatic AcroForm scripts are disabled");
+    }
+}
+
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();

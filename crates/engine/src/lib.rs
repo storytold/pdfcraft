@@ -440,6 +440,8 @@ pub struct Document {
     /// XFA forms: what was approximated, rewritten or could not be written to the XFA data
     /// (also in `info.warnings`, kept there when the document is re-read).
     pub xfa_warnings: Vec<String>,
+    /// Keep the automatic-script policy notice through refreshes, edits and saves.
+    acroform_open_notice: bool,
     /// What the last successful [`Session::apply`] wrote that its fonts can't draw: kept as typed,
     /// drawn with `?` in its place (see [`TextNotice`]). The interface shows it; tools return it.
     pub edit_notices: Vec<TextNotice>,
@@ -3742,6 +3744,7 @@ impl Session {
         // Acrobat; what they change is one more revision, still nothing to save.
         let mut script_output = js::JsOutput::default();
         let mut ran_away = false;
+        let mut acroform_open_notice = false;
         let xfa_template = match (&xfa, &cos) {
             (Some(_), Ok(Ok(c))) => xfa::template(c),
             _ => None,
@@ -3786,13 +3789,20 @@ impl Session {
                 }
                 None => (bytes, info, Ok(Ok(cos))),
             },
+            (None, Ok(Ok(cos))) if !context.js_off => {
+                // No automatic evaluator is started: cooperative limits and abandoning a
+                // thread cannot bound native operations or memory use. Preserve saved values.
+                // Show the policy for forms without decoding script sources just for a notice.
+                acroform_open_notice = !info.fields.is_empty();
+                (bytes, info, Ok(Ok(cos)))
+            }
             (_, cos) => (bytes, info, cos),
         };
         // The catalog leads to no page, but the reader found pages by scanning: gather the page
         // objects into a page tree as one more revision, or page edits address none of them
         // (#1656). Kept only when the reader then shows the same pages, and never on a signed
         // document, where writing the repair could rewrite the file under its signatures.
-        let (bytes, info, cos) = match cos {
+        let (bytes, mut info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
                 let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
@@ -3813,9 +3823,13 @@ impl Session {
             }
             cos => (bytes, info, cos),
         };
+        if acroform_open_notice && !info.warnings.iter().any(|w| w == js::OPEN_SCRIPTS_SKIPPED) {
+            info.warnings.push(js::OPEN_SCRIPTS_SKIPPED.into());
+        }
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
         let mut document = Self::build_document(&context.trust, name, path, bytes, info, cos, render_password, password, xfa);
+        document.acroform_open_notice = acroform_open_notice;
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -3923,6 +3937,7 @@ impl Session {
             xfa_scripts_off: false,
             fonts_stale: false,
             xfa_warnings: Vec::new(),
+            acroform_open_notice: false,
             edit_notices: Vec::new(),
         }
     }
@@ -4415,6 +4430,9 @@ impl Session {
             }
         }
         note_warnings(&mut info.warnings, &doc.xfa_warnings);
+        if doc.acroform_open_notice && !info.warnings.iter().any(|w| w == js::OPEN_SCRIPTS_SKIPPED) {
+            info.warnings.push(js::OPEN_SCRIPTS_SKIPPED.into());
+        }
         // As in `build_document`: the inspection reads only `/Info`, so fields stated only in XMP
         // are filled in again after every full refresh.
         for (field, value) in info_fields(&mut info, &editor.cos) {

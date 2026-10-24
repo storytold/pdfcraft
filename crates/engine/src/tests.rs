@@ -4641,6 +4641,137 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
 }
 
 #[test]
+fn form_open_scripts_preserve_fields_and_appearances_on_open() {
+    let text = |name: &str, y: u32, extra: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [20 {y} 180 {}] /P 3 0 R /F 4 {extra} >>", y + 20)
+    };
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(00_init) 11 0 R] >> >> /OpenAction 12 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R] /CO [6 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 9 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] /AA << /O 14 0 R >> >>".to_string(),
+        text("AutoDate", 250, "/V (22.07.2024) /DV (22.07.2024) /AP << /N 10 0 R >>"),
+        text("Stage", 220, "/V (doc+open+page) /DV (default_stage)"),
+        text("Summary", 190, "/V (old) /AA << /C << /S /JavaScript /JS (event.value = getField('Stage').value + ':' + getField('Stale').value;) >> >>"),
+        text("Stale", 160, "/V (dirty) /DV (clean)"),
+        "<< >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /Font << /Helv 9 0 R >> >> /Length 43 >>\nstream\nBT /Helv 12 Tf 2 4 Td (22.07.2024) Tj ET\nendstream".to_string(),
+        "<< /S /JavaScript /JS (function stampFormat\\(\\) { return 'dd.mm.yyyy'; } if \\(event.name == 'Open'\\) { getField\\('Stage'\\).value = 'doc'; }) >>".to_string(),
+        "<< /S /JavaScript /JS (try { var f = this.getField\\('AutoDate'\\); if \\(f != null\\) { f.value = util.printd\\(stampFormat\\(\\), new Date\\(\\)\\); } } catch \\(e\\) { console.println\\('Date update error: ' + e\\); }) /Next 13 0 R >>".to_string(),
+        "<< /S /JavaScript /JS (getField\\('Stage'\\).value += '+open'; this.resetForm\\(['Stale', 'Stage']\\);) >>".to_string(),
+        "<< /S /JavaScript /JS (getField\\('Stage'\\).value += '+page';) >>".to_string(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let bytes = Arc::new(pdf);
+
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("auto_date.pdf", None, bytes.clone(), None).unwrap();
+    let value = |s: &Session, id: DocId, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+    let auto_date = value(&s, id, "AutoDate");
+    assert_eq!(auto_date.len(), 1);
+    assert_eq!(auto_date[0], "22.07.2024", "opening must retain the saved date");
+    assert_eq!(auto_date[0].len(), 10, "{auto_date:?}");
+    assert!(auto_date[0].chars().enumerate().all(|(i, c)| if i == 2 || i == 5 { c == '.' } else { c.is_ascii_digit() }), "{auto_date:?}");
+    assert_eq!(value(&s, id, "Stage"), ["doc+open+page"]);
+    assert_eq!(value(&s, id, "Stale"), ["dirty"]);
+    assert_eq!(value(&s, id, "Summary"), ["old"]);
+    let rendered = &page_texts(&s, id)[0];
+    assert!(rendered.contains(&auto_date[0]), "rendered page must show the saved date: {rendered:?}");
+    assert_eq!(s.get(id).unwrap().bytes, bytes, "opening must not write a script revision");
+    assert!(!s.get(id).unwrap().dirty);
+    assert!(s.get(id).unwrap().info.warnings.iter().any(|w| w.contains("Automatic AcroForm scripts are disabled")));
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(s.get(id).unwrap().info.warnings.iter().any(|w| w.contains("Automatic AcroForm scripts are disabled")), "the notice survives refreshes");
+
+    s.set_javascript(false);
+    let off_id = s.open("auto_date_off.pdf", None, bytes, None).unwrap();
+    assert_eq!(value(&s, off_id, "AutoDate"), ["22.07.2024"]);
+    assert_eq!(value(&s, off_id, "Stage"), ["doc+open+page"]);
+    assert_eq!(value(&s, off_id, "Stale"), ["dirty"]);
+    assert!(page_texts(&s, off_id)[0].contains("22.07.2024"));
+}
+
+fn form_with_open_script(script: &str) -> Arc<Vec<u8>> {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "open", Some(script)).unwrap();
+    Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap())
+}
+
+#[test]
+fn form_open_scripts_do_not_forward_viewer_requests() {
+    let bytes = form_with_open_script(
+        "getField('price').value = 7; app.launchURL('https://example.invalid'); print(); this.submitForm({cURL: 'https://example.invalid/form'}); app.alert('unasked');",
+    );
+    let mut s = Session::new();
+    let id = s.open("requests.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "price").unwrap().value, ["2.5"], "{:?}", doc.js_output);
+    assert!(doc.js_output.requests.is_empty(), "{:?}", doc.js_output);
+    assert!(doc.js_output.alerts.is_empty(), "no modal prompts on open");
+    assert!(doc.js_output.is_empty(), "no automatic evaluation or output");
+    // Explicit console execution still uses the existing viewer consent path.
+    let out = s.run_javascript(id, "print();", None).unwrap();
+    assert!(out.requests.contains(&js::Request::Print));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["7"], "explicit evaluation remains available");
+}
+
+#[test]
+fn form_open_scripts_preserve_signed_bytes_and_values() {
+    let bytes = form_with_open_script("getField('price').value = 7;");
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    for certify in [None, Some(1), Some(2), Some(3)] {
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("signed.pdf", None, bytes.clone(), None).unwrap();
+        let signed = s.sign(id, &digital_id, SignOptions { certify, ..Default::default() }).unwrap();
+        s.set_javascript(true);
+        let id = s.open("signed.pdf", None, signed.clone(), None).unwrap();
+        let doc = s.get(id).unwrap();
+        assert!(doc.is_signed());
+        assert_eq!(doc.form.iter().find(|f| f.name == "price").unwrap().value, ["2.5"]);
+        assert_eq!(doc.bytes, signed);
+        assert!(doc.info.warnings.iter().any(|w| w.contains("saved field values were preserved")));
+    }
+}
+
+#[test]
+fn form_open_scripts_do_not_start_calculations() {
+    let bytes = form_with_open_script("if (event.name == 'Open') getField('price').value = 7; if (event.name == 'Calculate') print();");
+    let mut s = Session::new();
+    let id = s.open("calculation.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "price").unwrap().value, ["2.5"]);
+    assert!(doc.js_output.requests.is_empty());
+    assert!(doc.js_output.is_empty());
+}
+
+#[test]
+fn form_open_scripts_do_not_evaluate_throwing_scripts() {
+    let bytes = form_with_open_script(
+        "if (event.name == 'Open') getField('price').value = 7; if (event.name == 'Calculate') throw new Error('calculation failed');",
+    );
+    let mut s = Session::new();
+    let id = s.open("failed.pdf", None, bytes.clone(), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "price").unwrap().value, ["2.5"]);
+    assert_eq!(doc.bytes, bytes, "opening must not evaluate or write a calculation");
+    assert!(doc.js_output.requests.is_empty());
+    assert!(doc.js_output.is_empty(), "even throwing scripts must not be evaluated");
+}
+
+#[test]
 fn edit_history_does_not_replay_field_script_side_effects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();

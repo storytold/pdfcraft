@@ -223,6 +223,14 @@ impl Scripts for JsRunner {
     }
 }
 
+fn reset_targets(fields: &[Field], names: &[String]) -> Option<Vec<String>> {
+    (!names.is_empty())
+        .then(|| fields.iter().map(|f| &f.name).filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect())
+}
+
+/// The opening policy notice shared with frontends; it must remain visible beside a form banner.
+pub const OPEN_SCRIPTS_SKIPPED: &str = "Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.";
+
 /// A document-level JavaScript: its name and source.
 pub fn document_scripts(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     pdfcraft_forms::document_scripts_named(cos)
@@ -308,10 +316,8 @@ impl Session {
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
-        for names in resets {
-            let all: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-            let names = (!names.is_empty())
-                .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
+        for names in &resets {
+            let names = reset_targets(&fields, names);
             edits.push(Edit::ResetForm { names });
         }
         if !edits.is_empty() {
