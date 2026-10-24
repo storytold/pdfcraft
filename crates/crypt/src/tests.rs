@@ -121,6 +121,32 @@ fn strings_and_streams_round_trip_and_are_scrambled() {
     }
 }
 
+thread_local! {
+    /// Crypt filter names compared or looked up, on this thread.
+    pub(crate) static FILTER_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn crypt_filters_are_looked_up_once_per_handler() {
+    let plain = new(Algorithm::Aes128, "", "o", -1);
+    let mut d = plain.dict().clone();
+    let n = 5_000;
+    let mut filters: Vec<_> = (0..n).map(|i| (format!("F{i}").into_bytes(), Method::Identity)).collect();
+    filters.append(&mut d.crypt_filters);
+    d.crypt_filters = filters;
+    FILTER_COMPARES.with(|c| c.set(0));
+    let h = SecurityHandler::open(d, ID, None).unwrap();
+    let strings = 1_000;
+    let enc = plain.encrypt_string(7, 0, b"secret");
+    for _ in 0..strings {
+        assert_eq!(h.decrypt_string(7, 0, &enc), b"secret");
+        assert_eq!(h.decrypt_stream(7, 0, &plain.encrypt_stream(7, 0, b"s", StreamKind::Normal), StreamKind::Normal), b"s");
+    }
+    assert_eq!(h.decrypt_stream(7, 0, b"x", StreamKind::Named(b"F3")), b"x");
+    let compares = FILTER_COMPARES.with(|c| c.get());
+    assert!(compares <= 2 * n + 3 * strings, "{compares} filter name comparisons");
+}
+
 #[test]
 fn identity_crypt_filters_leave_data_alone() {
     let mut d = new(Algorithm::Aes256, "", "o", -1).dict().clone();

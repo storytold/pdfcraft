@@ -5,7 +5,7 @@
 //! [`detect`] is a pure function over the page's words and drawn shapes; [`page_shapes`] reads
 //! the shapes from a page's content, [`raster::shapes`] from a picture of the page (a scan).
 
-use pdfcraft_content::{Matrix, parse};
+use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{Document, Object};
 
 pub mod raster;
@@ -136,11 +136,10 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
         },
         None => Vec::new(),
     };
-    let mut data = Vec::new();
+    let mut pieces = Vec::new();
     for o in list {
         if let Object::Stream(s) = &*doc.resolve(&o) {
-            data.extend(s.decoded().unwrap_or_default());
-            data.push(b'\n');
+            pieces.push(s.decoded().unwrap_or_default());
         }
     }
     let mut ctm = Matrix::IDENTITY;
@@ -149,7 +148,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut subpaths: Vec<DetectionPath> = Vec::new();
     let mut path = DetectionPath::default();
     let mut cur: Option<[f64; 2]> = None;
-    for op in parse(&data).ops {
+    for op in Pieces::join(&pieces).parse().ops {
         match op.op.as_slice() {
             b"q" => stack.push(ctm),
             b"Q" => ctm = stack.pop().unwrap_or(ctm),
@@ -308,7 +307,7 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
         .iter()
         .filter(|w| w.rect[1] >= rect[3] - 1.0 && w.rect[1] - rect[3] < 24.0 && w.rect[0] < rect[2] && w.rect[2] > rect[0] - 4.0)
         .collect();
-    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(|a, b| a.total_cmp(b)) else { return String::new() };
+    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(f64::total_cmp) else { return String::new() };
     let mut on: Vec<&&Word> = above.iter().filter(|w| (mid(w.rect) - line).abs() < 3.0).collect();
     on.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
     clean(&on.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "))

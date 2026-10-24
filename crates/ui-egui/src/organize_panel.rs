@@ -62,10 +62,12 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             close = true;
         }
     });
-    ui.add_space(2.0);
+    ui.add_space(4.0);
     ui.separator();
+    ui.add_space(6.0);
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.add_space(2.0);
         widgets::section_title(ui, tl!("Pages selected"));
         let current = view.current;
         let picked = view.organize_range.show(ui, &view.selected, n, current, |ui| {
@@ -166,13 +168,17 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     } else if back {
         view.organize = false;
         app.left = LeftPanel::AllTools;
-        app.mode = crate::Mode::AllTools;
     }
     match act {
         Some(Act::Edit(edit)) => view.pending_edit = Some(*edit),
         Some(Act::View(action)) => view.pending_action = Some(action),
         Some(Act::Command(command)) => app.run_command(command),
         None => {}
+    }
+    // Leaving the workspace needs the whole app, so it waits until the view is done with: leaving
+    // Edit puts Edit text down and applies a paragraph still open on the page.
+    if back && !close {
+        app.enter_mode(crate::Mode::AllTools);
     }
 }
 

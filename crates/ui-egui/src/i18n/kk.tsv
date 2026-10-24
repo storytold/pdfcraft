@@ -102,6 +102,8 @@
 	Next view	Келесі көрініс
 	Page display	Беттерді көрсету
 	Continuous scrolling	Үздіксіз айналдыру
+	Show gaps between pages	Беттер арасындағы бос орындарды көрсету
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Беттердің шеттерін біріктіру үшін олардың арасындағы бос орындарды жасырыңыз. PDF ішіндегі жиектер өзгеріссіз қалады.
 	Two-page view	Екі беттік көрініс
 	Single page	Бір бет
 	Show cover page in two-page view	Екі беттік көріністе мұқаба бетін көрсету
@@ -479,6 +481,36 @@
 	Could not save: {e}	Сақтау мүмкін болмады: {e}
 	Earlier in tab order	Табуляция реті бойынша алдыңғы
 	Later in tab order	Табуляция реті бойынша кейінгі
+	Calculation order	Есептеу реті
+	Fix order	Ретті түзету
+	Move only what must move, so every field calculates after the fields it reads.	Әр өріс өзі оқитын өрістерден кейін есептелуі үшін тек жылжуы қажет нәрсені ғана жылжытады.
+	Earlier in calculation order	Есептеу реті бойынша алдыңғы
+	Later in calculation order	Есептеу реті бойынша кейінгі
+	Too early	Тым ерте
+	Reads {name}, which calculates later, so it shows an old value.	{name} өрісін оқиды, ол кейінірек есептеледі, сондықтан ескі мәнді көрсетеді.
+	Loop	Цикл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} өрістерін оқиды, олар оны қайта оқиды. Ешбір рет циклды түзете алмайды: формулалардың бірін өзгертіңіз.
+	Not in order	Ретте жоқ
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF ішінде сақталған есептеу ретінде жоқ: басқа PDF қарау құралдары оны есептемеуі мүмкін.
+	Back to Prepare a form	Форманы дайындауға оралу
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Бұл формада мәнін есептейтін өріс әлі жоқ. Өріс сипаттарының «Есептеу» қойындысында оған есептеу беріңіз, сонда ол осында көрсетіледі.
+	{names} and {last}	{names} және {last}
+	{field} reads no other field	{field} басқа өрісті оқымайды
+	{field} reads {fields}	{field} мыналарды оқиды: {fields}
+	No field reads it	Оны ешбір өріс оқымайды
+	The order saved in the PDF needs tidying	PDF-те сақталған ретті ретке келтіру керек
+	Moves only what must move	Тек жылжуы тиістіні ғана жылжытады
+	Every field calculates after the fields it reads.	Әр өріс өзі оқитын өрістерден кейін есептеледі.
+	Every field outside a loop calculates after the fields it reads.	Циклден тыс әр өріс өзі оқитын өрістерден кейін есептеледі.
+	{field} reads its own value	{field} өз мәнін оқиды
+	{fields} read each other	{fields} бірін-бірі оқиды
+	No order can fix a loop. Change one of the formulas.	Ешбір рет циклді түзете алмайды. Формулалардың бірін өзгертіңіз.
+	Edit {field}'s formula	{field} формуласын өңдеу
+	Order · top calculates first	Рет · жоғарғысы бірінші есептеледі
+	Script	Скрипт
+	Links on page	Беттегі байланыстар
+	Show on the page which fields each field reads	Әр өріс қай өрістерді оқитынын бетте көрсету
+	Drag a field to move it, or select it and press {up} or {down}.	Өрісті жылжыту үшін сүйреңіз немесе оны таңдап, {up} не {down} пернесін басыңыз.
 	From:	Бастап:
 	To:	Дейін:
 	High Resolution	Жоғары ажыратымдылық
@@ -539,6 +571,7 @@
 	Discard private data of other applications	Басқа қосымшалардың жеке деректерін алып тастау
 	Discard hidden text	Жасырын мәтінді алып тастау
 	Use Flate to encode streams that are not encoded	Кодталмаған ағындарды Flate көмегімен кодтау
+	In streams that use LZW encoding, use Flate instead	LZW кодталған ағындарда оның орнына Flate қолдану
 	Remove invalid links and bookmarks	Жарамсыз сілтемелерді және бетбелгілерді алып тастау
 	Remove unreferenced named destinations	Сілтеме берілмеген атаулы межелерді алып тастау
 	Compress document structure (object streams)	Құжат құрылымын сығу (нысан ағындары)
@@ -768,6 +801,7 @@
 	Insert Page Number	Бет нөмірін енгізу
 	Insert Date	Күнді енгізу
 	Start page number	Бастапқы бет нөмірі
+	Shrink the page content to make room for the header and footer	Жоғарғы және төменгі колонтитулға орын босату үшін бет мазмұнын кішірейту
 	Source	Дереккөз
 	Fit to page	Бетке сыйдыру
 	Rotation	Бұрылу
@@ -1134,6 +1168,7 @@
 	Off	Өшірулі
 	Flip on long edge	Ұзын жиек бойынша аудару
 	Flip on short edge	Қысқа жиек бойынша аудару
+	Printer default	Принтер әдепкісі
 	Paper:	Қағаз:
 	Pages to Print	Басып шығарылатын беттер
 	More options:	Қосымша параметрлер:
@@ -1275,6 +1310,8 @@
 	This document has no layers.	Бұл құжатта қабаттар жоқ.
 	This document has no attachments.	Бұл құжатта тіркемелер жоқ.
 	Hide layer	Қабатты жасыру
+	Layer options	Қабат параметрлері
+	Reset to Initial Visibility	Бастапқы көрінуді қалпына келтіру
 	Show layer	Қабатты көрсету
 	Set layer visibility	Қабаттың көрінісін орнату
 	on page {label}	{label} бетінде
@@ -1851,6 +1888,7 @@
 	Delete field	Өрісті жою
 	Duplicate field	Өрістің көшірмесін жасау
 	Set tab order	Қойынды ретін орнату
+	Set calculation order	Есептеу ретін орнату
 	Change initial view	Бастапқы көріністі өзгерту
 	Set alternate text	Балама мәтінді орнату
 	Mark figure as decorative	Кескінді декоративті деп белгілеу
@@ -1925,6 +1963,10 @@
 	Perimeter	Периметр
 	Area	Аудан
 	Drawing scale	Сызба масштабы
+	Scale	Масштаб
+	Common scales	Жиі қолданылатын масштабтар
+	Enter a scale such as 1:50.	1:50 сияқты масштабты енгізіңіз.
+	Applying a scale switches units to m / mm.	Масштабты қолдану өлшем бірліктерін m / mm етіп ауыстырады.
 	Snapping	Түйістіру
 	Export measurements	Өлшемдерді экспорттау
 	Open a PDF to measure it.	Өлшеу үшін PDF құжатын ашыңыз.
@@ -2076,6 +2118,7 @@ calendar date	October	Қазан
 calendar date	November	Қараша
 calendar date	December	Желтоқсан
 	Reopen the files that were open when PdfCraft last closed	PdfCraft соңғы рет жабылғанда ашық болған файлдарды қайта ашу
+	Restore the last view (page, zoom and page display) when a document is opened again	Құжат қайта ашылғанда соңғы көріністі (бет, масштаб және бет көрсетілімі) қалпына келтіру
 	Clear Recent Files	Соңғы файлдарды тазарту
 	Remove from Recent	Соңғылардан алып тастау
 	Remove {name} from Recent	{name} дегенді соңғылардан алып тастау
@@ -2245,6 +2288,7 @@ key	Space	Бос орын
 	Looking for printers…	Принтерлер ізделуде…
 	Sending sheet {s} of {n} to {printer}…	{n} парақтың {s}-парағы {printer} құрылғысына жіберілуде…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтерлер табылмады. Принтердің орнатылғанын және басып шығару кезегі қызметінің жұмыс істеп тұрғанын тексеріп, «Басып шығару» терезесін қайта ашыңыз.
+	Reading the printer's settings…	Принтер параметрлері оқылуда…
 	Sending to {printer}…	{printer} құрылғысына жіберілуде…
 	Enter permissions password…	Рұқсаттар құпиясөзін енгізу…
 	Permissions password	Рұқсаттар құпиясөзі
@@ -2253,6 +2297,7 @@ key	Space	Бос орын
 	Couldn't unlock {name}: {e}	{name} құлпын ашу мүмкін болмады: {e}
 	This document has no restrictions to lift	Бұл құжатта алып тасталатын шектеулер жоқ
 	The document's security settings don't allow copying text and images	Құжаттың қауіпсіздік параметрлері мәтін мен суреттерді көшіруге рұқсат бермейді
+	The document's security settings don't allow printing	Құжаттың қауіпсіздік параметрлері басып шығаруға рұқсат бермейді
 	Add the files to combine	Біріктірілетін файлдарды қосыңыз
 	Leave out files that can't be read?	Оқылмайтын файлдарды қалдырып кету керек пе?
 	These files can't be read, so they won't be in the combined PDF:	Бұл файлдар оқылмайды, сондықтан біріктірілген PDF-ке кірмейді:
@@ -2279,6 +2324,9 @@ key	Space	Бос орын
 	Printer paper and scaling may differ. Check driver settings.	Принтер қағазы мен масштабы өзгеше болуы мүмкін. Драйвер параметрлерін тексеріңіз.
 	Drawing scale changes. Use Actual size for full-scale plans.	Сызба масштабы өзгереді. Толық масштабты жоспарлар үшін Нақты өлшемді пайдаланыңыз.
 	Reload documents when their files change on disk	Дискідегі файлдары өзгергенде құжаттарды қайта жүктеу
+	Don't show again	Қайта көрсетпеу
+	Show a notice when a document is secured	Құжат қорғалған кезде хабарландыру көрсету
+	Always use my default zoom and page layout	Әрқашан әдепкі масштаб пен бет орналасуын пайдалану
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Бұл файл дискіде өзгертілді. «Қайта жүктеу» жаңа нұсқаны көрсетіп, сақталмаған өзгерістеріңізді тастайды; «Сақтау» оны осы нұсқамен алмастырады.
 	Reload	Қайта жүктеу
 	Couldn't reload {name}: {e}	{name} қайта жүктеу мүмкін болмады: {e}
@@ -2328,6 +2376,13 @@ animation effects	Off	Өшірулі
 	no unused output name	бос шығыс атауы жоқ
 	no output folder was chosen	шығыс қалтасы таңдалмады
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF жүктелді|{n} PDF жүктелді
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} есептеу енді жаңа атауды пайдаланады.|{n} есептеу енді жаңа атауды пайдаланады.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Есептеу ретінде ештеңе есептемейтін {n} жазба бар. «Ретті түзету» оны жояды.|Есептеу ретінде ештеңе есептемейтін {n} жазба бар. «Ретті түзету» оларды жояды.
+@plural	{fields} reads it|{fields} read it	Оны {fields} оқиды|Оны {fields} оқиды
+@plural	{n} field shows an old value|{n} fields show old values	{n} өріс ескі мәнді көрсетеді|{n} өріс ескі мәндерді көрсетеді
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} өзі оқитын {fields} өрісінен бұрын есептеледі.|{field} өзі оқитын {fields} өрістерінен бұрын есептеледі.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Тағы {n} өріс тым ерте есептеледі.|Тағы {n} өріс тым ерте есептеледі.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} PDF-те сақталған ретте жоқ, сондықтан басқа PDF қаралымдары оны есептемеуі мүмкін.|{fields} PDF-те сақталған ретте жоқ, сондықтан басқа PDF қаралымдары оларды есептемеуі мүмкін.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}|{n} өріс атауы алдыңғы файлдармен қайшы келеді және қайта аталады: {list}
 	Scan	Сканерлеу
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Ақ қағаз парағына қол қойып, оны жарық әрі біркелкі жарықта суретке түсіріңіз (жарқылды қосыңыз). Суретті таңдаңыз немесе осында тастаңыз: PdfCraft қолтаңбаны тауып, қағазды алып тастайды.
@@ -2432,3 +2487,45 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Attach a file…	Файл тіркеу…
+	Delete attachment	Тіркемені жою
+	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз
+	Attach {name}	{name} тіркеу
+	Delete attachment {key}	{key} тіркемесін жою
+	Font	Қаріп
+	Bulleted list	Таңбалауыш тізім
+	Numbered list	Нөмірленген тізім
+	Alignment	Туралау
+	Superscript	Жоғарғы индекс
+	Subscript	Төменгі индекс
+	Paragraph spacing	Абзац аралығы
+	Less	Азырақ
+	Other options	Басқа параметрлер
+	Thumbnail size	Нобай өлшемі
+	Smaller thumbnails	Кішірек нобайлар
+	Larger thumbnails	Үлкенірек нобайлар
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Пікір пішінін өзгерту
+
+# Prepare a form ▸ Text field table
+	Add text field table	Мәтін өрістерінің кестесін қосу
+	Text field table	Мәтін өрістерінің кестесі
+	Text Field Table	Мәтін өрістерінің кестесі
+	Columns	Бағандар
+	Row spacing	Жолдар аралығы
+	Column spacing	Бағандар аралығы
+	First row number	Бірінші жол нөмірі
+	Column widths	Баған ендері
+	Distribute evenly	Біркелкі бөлу
+	Field names	Өріс атаулары
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N немесе {row} — жол нөмірі, {col} — баған нөмірі, {seq} — ұяшық нөмірі. Олардың ешқайсысы болмаса, жол нөмірі соңына қосылады.
+	Column {n}	{n}-баған
+	Add fields	Өрістерді қосу
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	жолдар тым аласа: аймақты биіктетіңіз немесе жолдар санын не жолдар аралығын азайтыңыз
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	баған тым тар: аймақты кеңейтіңіз, бағанға көбірек ен беріңіз немесе бағандар санын не бағандар аралығын азайтыңыз
+	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
+	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
+	a field named {name} already exists	{name} атты өріс бар
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Бүгін

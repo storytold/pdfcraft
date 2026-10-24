@@ -25,6 +25,9 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# UTC/calendar display (combine modified-time stamp, the form date picker) goes through chrono
+# (no hand-rolled calendar code); std-only, so it stays wasm-safe.
+chrono = { workspace = true }
 # Hands rendered rasters to egui as its pixels, without copying; already in the tree through egui and wgpu.
 bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 
@@ -50,11 +53,13 @@ pollster = "1.0"
 fontconfig-parser = "0.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Where the pointer is while files are dragged over the window (winit doesn't say): safe AppKit
-# calls only. All three are already in the tree through arboard and rfd.
+# Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
+# The Objective-C wrappers and block support are already in the tree through arboard and rfd.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
+block2 = "0.6"
+plist = "1.10"
 # A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE); already in
 # the tree through pdfcraft-cli.
 rustix = { version = "1", features = ["fs"] }
@@ -83,3 +88,7 @@ skrifa = "0.44"
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Only synthetic attribute fixtures use xattr; product reads/writes use rustix.
+xattr = "1.6"

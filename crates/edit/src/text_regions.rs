@@ -2,10 +2,23 @@
 
 use super::*;
 
+// The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
+// A glyph budget worth 64 full batches (15,360 glyphs with the production batch size).
+// Lowering the internal batch size for tests lowers the budget by the same ratio.
+const MAX_STYLED_FALLBACK_BATCHES: usize = 64;
+
+struct FallbackGroup {
+    face: &'static CraftFont,
+    seen: std::collections::HashSet<char>,
+    glyphs: Vec<Type3Glyph>,
+    positions: Vec<usize>,
+}
+
 fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
     a.scope == b.scope
+        && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
             let ay = at.0.get(axis + 1).copied().unwrap_or(0.0);
@@ -27,14 +40,105 @@ fn frame_row_rect(row: &[usize], lines: &[TextLine]) -> Option<[f64; 4]> {
     row.iter().filter_map(|i| lines.get(*i)).map(TextLine::frame_rect).reduce(union)
 }
 
+/// The left edge the rest of the page's text sits on, ignoring the rows of `block`. A single row
+/// that does not share it is not merely an indented or full-width left-aligned line, so its own
+/// centre is the only remaining explanation for where it sits.
+fn neighbour_left(lines: &[TextLine], block: &TextBlock) -> Option<f64> {
+    let mut edges: HashMap<i64, usize> = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        if block.lines.contains(&i) {
+            continue;
+        }
+        // Quarter-point buckets: equal edges found through different runs still agree.
+        *edges.entry((line.rect[0] * 4.0).round() as i64).or_insert(0) += 1;
+    }
+    let (best, _) = edges.into_iter().max_by_key(|(_, count)| *count)?;
+    Some(best as f64 / 4.0)
+}
+
+/// Whether a block reads as centred, and so must keep its centre when it grows or wraps.
+///
+/// Several ragged rows whose left edges disagree while their centres agree are centred. A one row
+/// block cannot say that: all of its left edges are the same, so the ragged test never fires and a
+/// centred title would be taken for left-aligned and grow to the right (#2581). Fall back to the
+/// page instead — a lone row sitting on the page's own centre, and not on the edge the rest of the
+/// text uses, is a centred title. A full-width left-aligned line still lines up with that edge, so
+/// it is not mistaken for one.
+pub(super) fn is_centred(block: &TextBlock, lines: &[TextLine], page_centre: f64, size: f64) -> bool {
+    let centre = (block.rect[0] + block.rect[2]) / 2.0;
+    let lefts: Vec<_> = block.rows.iter().filter_map(|r| row_rect(r, lines).map(|r| r[0])).collect();
+    if block.rows.len() > 1 {
+        let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);
+        return left_span > size * 0.5
+            && block.rows.iter().all(|row| row_rect(row, lines).is_some_and(|r| ((r[0] + r[2]) / 2.0 - centre).abs() < size));
+    }
+    lefts
+        .first()
+        .is_some_and(|left| (centre - page_centre).abs() < size && neighbour_left(lines, block).is_none_or(|edge| (*left - edge).abs() > size * 0.5))
+}
+
 pub(super) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     group_layout(lines, true)
 }
 
 /// Exporters currently represent a block with one style. Keep their style boundaries until
 /// they support rich runs, while edit selection may encompass the complete visual region.
+/// Dotted-leader entries stay on one row and use the title run's style.
 pub(super) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
-    group_layout(lines, false)
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    let mut offset = 0;
+    for row in lines.chunk_by(|a, b| same_plane(a, b) && (a.origin.baseline - b.origin.baseline).abs() < a.size.min(b.size) * 0.2) {
+        let mut text = String::new();
+        for (i, line) in row.iter().enumerate() {
+            if !text.ends_with(char::is_whitespace)
+                && !line.text.starts_with(char::is_whitespace)
+                && i.checked_sub(1).and_then(|i| row.get(i)).is_some_and(|prev| line.rect[0] - prev.rect[2] > line.size * 0.12)
+            {
+                text.push(' ');
+            }
+            text.push_str(&line.text);
+        }
+        if leader_entry(&text)
+            && let Some(first) = row.first()
+        {
+            // Tab leaders are a single reading row, even when the title, dots and page
+            // number are separate text objects far apart. Do not merge neighbouring entries.
+            blocks.extend(group_layout(lines.get(start..offset).unwrap_or_default(), false));
+            let mut line = first.clone();
+            line.text = text;
+            line.rect = row.iter().map(|line| line.rect).reduce(union).unwrap_or(first.rect);
+            blocks.extend(group_layout(std::slice::from_ref(&line), false));
+            start = offset + row.len();
+        }
+        offset += row.len();
+    }
+    blocks.extend(group_layout(lines.get(start..).unwrap_or_default(), false));
+    blocks
+}
+
+/// Dotted leaders end in a page number, with a title before the dots. A dot in an article
+/// number, or an ellipsis in ordinary prose, is not enough to make a contents entry.
+fn leader_entry(text: &str) -> bool {
+    let text = text.trim_end();
+    let prefix = text.trim_end_matches(|c: char| {
+        c.is_ascii_digit() || matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm' | 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M')
+    });
+    if prefix.len() == text.len() {
+        return false;
+    }
+    let title = prefix.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '.' | '…'));
+    let dots = prefix
+        .get(title.len()..)
+        .unwrap_or_default()
+        .chars()
+        .map(|c| match c {
+            '.' => 1,
+            '…' => 3,
+            _ => 0,
+        })
+        .sum::<usize>();
+    dots >= 3 && title.chars().any(char::is_alphabetic)
 }
 
 /// Text-space units → user space along the baseline. It is the vertical scale ([`Origin::k`])
@@ -51,13 +155,49 @@ fn invisible(line: &TextLine) -> bool {
 }
 
 fn same_style(a: &TextLine, b: &TextLine) -> bool {
-    same_font(a, b.font.as_bytes(), b.face.as_deref())
-        && a.base_font == b.base_font
+    same_font(a, b.font.as_bytes(), &b.base_font, b.face.as_deref())
+        // With no `/BaseFont` (or only a subset tag) there is no name to compare: the resource or
+        // fallback face `same_font` matched is the whole identity, so keep the lines together.
+        && (same_base_font(&a.base_font, &b.base_font)
+            || (strip_subset_tag(&a.base_font).is_empty() && strip_subset_tag(&b.base_font).is_empty()))
         && a.bold == b.bold
         && a.italic == b.italic
         && a.color == b.color
         && (a.rotation() - b.rotation()).abs() < 0.01
         && (a.size - b.size).abs() < 0.01
+}
+
+/// Does a row open with a list marker? A bullet or a dash, or an ordered marker — digits (or a
+/// single letter) followed by `.` or `)` and then a space or the row's end, so prose such as
+/// `1.5` or `Dr. Smith` is left alone.
+fn opens_with_marker(text: &str) -> bool {
+    let Some(first) = text.chars().next() else { return false };
+    if matches!(first, '•' | '◦' | '▪' | '‣' | '⁃' | '*' | '-' | '–' | '—') {
+        return true;
+    }
+    if !first.is_ascii_digit() && !first.is_ascii_alphabetic() {
+        return false;
+    }
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    let letters = text.chars().take_while(char::is_ascii_alphabetic).count();
+    // Both runs are ASCII characters, so their length in characters is their length in bytes:
+    // the slice below starts on a character boundary.
+    let rest = if digits > 0 {
+        &text[digits..]
+    } else if letters == 1 {
+        &text[1..]
+    } else {
+        return false;
+    };
+    let mut after = rest.chars();
+    matches!(after.next(), Some('.' | ')')) && after.next().is_none_or(char::is_whitespace)
+}
+
+/// A row that opens with a list marker opens its own item: joining it to the row above is what
+/// let an edit of one paragraph delete every item after it (#2564). The other error, splitting
+/// an ordinary paragraph, costs one more paragraph to click and never any text — so err this way.
+fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
+    row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
@@ -71,7 +211,18 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             scanned
                 && (mixed || same_style(prev, line))
                 && same_plane(prev, line)
-                && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.min(line.size) * 0.2
+                // A superscript or subscript run (a footnote marker, say) sits on the same visual
+                // row as the text around it, raised or lowered by `Ts` from the body baseline
+                // (#3252). That shift is typically up to half the body size, not the marker's own
+                // smaller size — but the wider tolerance only applies between a run and a
+                // distinctly smaller or larger one, with no horizontal overlap (`gap >= 0.0`):
+                // two equal-size runs can land within it too, at a baseline shift tight columns
+                // or compressed text (`Tz`) can produce between genuinely separate rows, and the
+                // original 20% tolerance is what keeps those apart.
+                && ((prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.min(line.size) * 0.2
+                    || (gap >= 0.0
+                        && prev.size.min(line.size) < prev.size.max(line.size) * 0.9
+                        && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.max(line.size) * 0.5))
                 && gap >= -prev.size.min(line.size) * 0.2
                 && gap < prev.size.max(line.size) * 1.5
                 // Separate same-style text objects that merely touch or overlap, with no space
@@ -94,17 +245,34 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
         let (Some(rect), Some(frame)) = (row_rect(&row, lines), frame_row_rect(&row, lines)) else { continue };
         let joins = blocks.last().is_some_and(|block| {
+            // A bullet of its own opens a list item (#2564): such a row is a new paragraph, and
+            // letting it join is what made an edit of the row above delete this item and the ones
+            // after it.
+            if starts_list_item(&row, lines) {
+                return false;
+            }
             let Some(prev_row) = block.rows.last() else { return false };
             let Some(prev) = prev_row.first().and_then(|i| lines.get(*i)) else { return false };
             let Some(pr) = frame_row_rect(prev_row, lines) else { return false };
             let gap = prev.frame_origin().1 - first.frame_origin().1;
             let tol = prev.size.max(first.size).max(1.0);
-            let aligned =
-                (pr[0] - frame[0]).abs() < tol || ((pr[0] + pr[2] - frame[0] - frame[2]) / 2.0).abs() < tol || (pr[2] - frame[2]).abs() < tol;
+            // The block opens with a list marker and this row sits further right: the item's text
+            // is at a hanging indent, so the row it wrapped onto continues it (#2564). A row at
+            // the block's own left edge is already covered by the match on `pr[0]`. Both boxes are
+            // in the frame, as the rest of this comparison is, so turned text matches too.
+            let hanging = frame[0] > pr[0]
+                && frame[0] - pr[0] <= tol * 3.0
+                && block.lines.first().and_then(|&i| lines.get(i)).is_some_and(|l| opens_with_marker(l.text.trim_start()));
+            let aligned = (pr[0] - frame[0]).abs() < tol
+                || ((pr[0] + pr[2] - frame[0] - frame[2]) / 2.0).abs() < tol
+                || (pr[2] - frame[2]).abs() < tol
+                || hanging;
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
+                // The rewrite sets every row in the first one's horizontal scale.
+                && (prev.origin.state.scale - first.origin.state.scale).abs() < 1e-6
                 && aligned
                 && first.size.min(prev.size) >= first.size.max(prev.size) * 0.4
                 && gap > first.size.min(prev.size) * 0.8
@@ -244,6 +412,7 @@ pub(super) fn rewrite_styled_block(
     lines: &[TextLine],
     text: Option<&str>,
     style: &BlockStyle,
+    max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = match text {
@@ -386,14 +555,27 @@ pub(super) fn rewrite_styled_block(
     // Each tuple is a character, its source style and an encodable resource name.
     let mut chars = Vec::new();
     let mut substituted = None;
-    let mut fallback_names: std::collections::BTreeMap<(String, char), String> = std::collections::BTreeMap::new();
+    let mut fallback_groups: Vec<FallbackGroup> = Vec::new();
+    let mut fallback_names: std::collections::BTreeMap<(String, bool, char), usize> = std::collections::BTreeMap::new();
+    let mut fallback_glyphs = 0_usize;
+    let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
+    let fallback_budget = per_font.saturating_mul(MAX_STYLED_FALLBACK_BATCHES);
     let mut full_faces: HashMap<String, String> = HashMap::new();
     let mut programs: HashMap<String, Option<std::sync::Arc<Vec<u8>>>> = HashMap::new();
     for (range, index) in styled_spans {
         let source = lines.get(index).unwrap_or(first);
-        for ch in draft.get(range).unwrap_or_default().chars() {
+        let start = range.start;
+        for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
             if ch == '\n' {
                 chars.push((ch, index, source.font.clone()));
+                continue;
+            }
+            // A carriage return breaks the row too. Before `\n` the pair is one break, so the
+            // CR stays a `\r` the rows skip. Either way it keeps its place among the draft's
+            // characters, which rows are counted in.
+            if ch == '\r' {
+                let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
                 continue;
             }
             let s = ch.to_string();
@@ -449,24 +631,40 @@ pub(super) fn rewrite_styled_block(
             } else {
                 let family = source_family(&source.base_font);
                 if needs_type3(&s) {
-                    let key = (source.base_font.rsplit('+').next().unwrap_or(&source.base_font).to_owned(), ch);
-                    if let Some(name) = fallback_names.get(&key) {
-                        chars.push((ch, index, name.clone()));
-                        continue;
+                    let key = (source.base_font.clone(), source.bold, ch);
+                    let group_index = if let Some(index) = fallback_names.get(&key) {
+                        *index
+                    } else {
+                        // Keep the old per-character face choice: a serif Japanese character
+                        // and a Cyrillic character may need different faces even in one style.
+                        // Hebrew uses the separate RTL path before reaching this writer.
+                        let (faces, _) = type3_faces(&s, family, source.bold)?;
+                        let face =
+                            fallback_face(&faces, &[ch], |face, ch| japanese_glyph_from(face, ch).is_ok()).ok_or_else(|| no_fallback_font(&s))?;
+                        let index = fallback_groups.iter().position(|group| std::ptr::eq(group.face, face)).unwrap_or_else(|| {
+                            let index = fallback_groups.len();
+                            fallback_groups.push(FallbackGroup { face, seen: Default::default(), glyphs: Vec::new(), positions: Vec::new() });
+                            index
+                        });
+                        fallback_names.insert(key, index);
+                        index
+                    };
+                    let group = fallback_groups.get_mut(group_index).ok_or_else(|| EditError::Invalid("the fallback face is missing".into()))?;
+                    if group.seen.insert(ch) {
+                        if fallback_glyphs >= fallback_budget {
+                            return Err(EditError::Invalid(format!(
+                                "the replacement needs more than {fallback_budget} fallback glyphs; edit a smaller paragraph or load a complete font"
+                            )));
+                        }
+                        let (path, width) = type3_glyph(group.face, ch)?.ok_or_else(|| no_glyph_for(group.face, ch))?;
+                        let code = u8::try_from((group.glyphs.len() % per_font).saturating_add(1))
+                            .map_err(|_| EditError::Invalid("replacement text has too many unique characters".into()))?;
+                        group.glyphs.push(Type3Glyph { code, ch, path, width });
+                        fallback_glyphs = fallback_glyphs.saturating_add(1);
                     }
-                    if fallback_names.len() >= MAX_TYPE3_GLYPHS {
-                        return Err(EditError::Invalid("the replacement has too many fallback glyphs".into()));
-                    }
-                    let fallback = type3_font(doc, &mut fonts, &s, family, source.bold, MAX_TYPE3_GLYPHS)?;
-                    let name = fallback.names.first().cloned().ok_or_else(no_japanese_font)?;
-                    let dict = fonts
-                        .get(name.as_bytes())
-                        .and_then(|f| doc.resolve(f).as_dict().cloned())
-                        .ok_or_else(|| EditError::Invalid("the fallback font could not be loaded".into()))?;
-                    metrics.insert(name.clone(), Metrics::from_dict(doc, &dict));
-                    substituted = Some(fallback.family.to_string());
-                    fallback_names.insert(key, name.clone());
-                    name
+                    group.positions.push(chars.len());
+                    // Filled from the prepared font/code map before measuring or drawing.
+                    String::new()
                 } else {
                     let base = family.base_font(source.bold, source.italic);
                     let name = format!("PCEd{}", base.replace('-', ""));
@@ -483,6 +681,24 @@ pub(super) fn rewrite_styled_block(
             };
             chars.push((ch, index, name));
         }
+    }
+    // All fallback outlines have now succeeded. Batch by actual face, preserving source
+    // style indices; the existing writer then coalesces adjacent equal-font/style characters.
+    for group in fallback_groups {
+        let fallback = write_type3_glyphs(doc, &mut fonts, group.face, false, group.glyphs, per_font);
+        for name in &fallback.names {
+            let font = fonts
+                .get(name.as_bytes())
+                .and_then(|f| doc.dict(f))
+                .ok_or_else(|| EditError::Invalid("the fallback font could not be loaded".into()))?;
+            metrics.insert(name.clone(), Metrics::from_dict(doc, &font));
+        }
+        for position in group.positions {
+            let item = chars.get_mut(position).ok_or_else(|| EditError::Invalid("the fallback character is missing".into()))?;
+            let (font, _) = fallback.codes.get(&item.0).ok_or_else(|| EditError::Invalid("the fallback glyph is missing".into()))?;
+            item.2 = fallback.names.get(*font).cloned().ok_or_else(|| EditError::Invalid("the fallback font is missing".into()))?;
+        }
+        substituted = Some(fallback.family.to_owned());
     }
     let size_of = |source: &TextLine, index: usize| {
         overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
@@ -579,6 +795,11 @@ pub(super) fn rewrite_styled_block(
     let mut at = 0;
     while at < chars.len() {
         let Some(item) = chars.get(at) else { break };
+        // The CR of a CRLF: the `\n` after it breaks the row.
+        if item.0 == '\r' {
+            at += 1;
+            continue;
+        }
         if item.0 == '\n' {
             row_ranges.push(row_start..row_start + row.len());
             rows.push(std::mem::take(&mut row));
@@ -616,7 +837,7 @@ pub(super) fn rewrite_styled_block(
         row_ranges.push(row_start..row_start + row.len());
         rows.push(row);
     }
-    let streams = content_streams(doc, &p.dict);
+    let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
@@ -644,6 +865,17 @@ pub(super) fn rewrite_styled_block(
         }
     };
     let o = &lead.origin;
+    let mut drop = coincident_ops(lines, &members);
+    drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
+    let start = lead.ops.first().copied().unwrap_or(o.bt_op);
+    let split = ops
+        .get(o.bt_op..start)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
+    // What is in force where the rewrite is drawn, and what the text after it expects.
+    let after = if split { &o.state } else { &o.bt_state };
     for (row, _) in rows.iter().zip(&kept).filter(|(_, k)| !**k) {
         let text: String = row.iter().map(|v| v.0).collect();
         if pdfcraft_fonts::source_shaping::required(&text) && row.first().is_some_and(|first| row.iter().any(|v| v.1 != first.1 || v.2 != first.2)) {
@@ -685,12 +917,8 @@ pub(super) fn rewrite_styled_block(
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
     block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(tx), n(ty)]));
-    let centre = (block.rect[0] + block.rect[2]) / 2.0;
-    let lefts: Vec<_> = block.rows.iter().filter_map(|r| row_rect(r, lines).map(|r| r[0])).collect();
-    let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);
-    let centered = block.rows.len() > 1
-        && left_span > first.size * 0.5
-        && block.rows.iter().all(|row| row_rect(row, lines).is_some_and(|r| ((r[0] + r[2]) / 2.0 - centre).abs() < first.size));
+    let crop = p.crop(doc);
+    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
@@ -758,30 +986,70 @@ pub(super) fn rewrite_styled_block(
             tm[4] += ax;
             tm[5] += ay;
             let mut segment_width = segment_advances.get(&(row_index, pos)).copied().unwrap_or(0.0);
+            // Each run in its own graphics state, restating what its source set inside its text
+            // object (`gs`, stroke, line width, `Tr`; #3508/#3509) from the state the rewrite is
+            // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
+            block_ops.push(Op::new("q", vec![]));
+            block_ops.extend(state.paint_ops(after));
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();
                 properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&string)));
                 block_ops.push(Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
                 state.font = Some((resource.clone(), size_of(source, item.1)));
-                // Absolute glyph matrices preserve marks and contextual positions; font-program
-                // codes are separate from Unicode and ToUnicode/ActualText keep logical text.
+                // One text object for the run: each glyph is placed where shaping put it by a TJ
+                // adjustment from where the glyph before it ends (its advance in the embedded
+                // font's widths), and raised by the text rise for a mark set above or below
+                // (ISO 32000-1 §9.4.3, §9.3.7). Font-program codes are separate from Unicode;
+                // ToUnicode and ActualText keep the logical text.
                 let size = size_of(source, item.1);
-                let mut extra = 0.0;
-                for (i, glyph) in shaped.glyphs.iter().enumerate() {
-                    let mut matrix = tm;
-                    let x = (glyph.position[0] * size + extra) * state.scale;
-                    let y = glyph.position[1] * size;
-                    matrix[4] += matrix[0] * x + matrix[2] * y;
-                    matrix[5] += matrix[1] * x + matrix[3] * y;
-                    let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
-                    block_ops.push(Op::new("BT", vec![]));
-                    block_ops.extend(state.ops());
-                    block_ops.push(Op::new("Tm", matrix.map(n).to_vec()));
-                    block_ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(code.to_be_bytes().to_vec()))]));
-                    block_ops.push(Op::new("ET", vec![]));
-                    extra += state.char_spacing * glyph.text.chars().count() as f64 + state.word_spacing * glyph.text.matches(' ').count() as f64;
+                let per_unit = 1000.0 / size;
+                if !per_unit.is_finite() {
+                    return Err(EditError::Invalid("the shaped text has no size".into()));
                 }
+                let shown = fonts
+                    .get(resource.as_bytes())
+                    .and_then(|f| doc.resolve(f).as_dict().cloned())
+                    .map(|d| Metrics::from_dict(doc, &d))
+                    .ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
+                // Spacing is part of each glyph's position, so the run itself has none.
+                let (char_spacing, word_spacing, rise) = (state.char_spacing, state.word_spacing, state.rise);
+                state.char_spacing = 0.0;
+                state.word_spacing = 0.0;
+                block_ops.push(Op::new("BT", vec![]));
+                block_ops.extend(state.ops());
+                block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
+                // `pen`: where the next glyph would start, in thousandths of the font size.
+                let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
+                let mut shown_glyphs: Vec<Object> = Vec::new();
+                for (i, glyph) in shaped.glyphs.iter().enumerate() {
+                    let target = (glyph.position[0] * size + extra) * per_unit;
+                    let glyph_rise = rise + glyph.position[1] * size;
+                    if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
+                        if !shown_glyphs.is_empty() {
+                            block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
+                        }
+                        if (glyph_rise - raised).abs() > 1e-9 {
+                            block_ops.push(Op::new("Ts", vec![n(glyph_rise)]));
+                            raised = glyph_rise;
+                        }
+                    }
+                    if (target - pen).abs() > 1e-6 {
+                        shown_glyphs.push(n(pen - target));
+                    }
+                    let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
+                    shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
+                    pen = target + shown.width(u32::from(code)) * 1000.0;
+                    extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
+                }
+                if !shown_glyphs.is_empty() {
+                    block_ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
+                }
+                if (raised - rise).abs() > 1e-9 {
+                    block_ops.push(Op::new("Ts", vec![n(rise)]));
+                }
+                block_ops.push(Op::new("ET", vec![]));
+                (state.char_spacing, state.word_spacing) = (char_spacing, word_spacing);
                 block_ops.push(Op::new("EMC", vec![]));
                 segment_width = (shaped.advance * size + extra) * state.scale * source.origin.k;
             } else {
@@ -809,6 +1077,7 @@ pub(super) fn rewrite_styled_block(
                 block_ops.push(Op::new("l", vec![n(x1), n(y1)]));
                 block_ops.push(Op::new("S", vec![]));
             }
+            block_ops.push(Op::new("Q", vec![]));
             x += segment_width;
             pos = end;
         }
@@ -819,16 +1088,6 @@ pub(super) fn rewrite_styled_block(
         };
     }
     block_ops.push(Op::new("Q", vec![]));
-    let mut drop = coincident_ops(lines, &members);
-    drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    let start = lead.ops.first().copied().unwrap_or(o.bt_op);
-    let split = ops
-        .get(o.bt_op..start)
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-        .any(|(i, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(o.bt_op + i)));
-    let after = if split { &o.state } else { &o.bt_state };
     block_ops.extend(after.ops());
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));

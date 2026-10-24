@@ -359,6 +359,9 @@ impl Space {
     }
 }
 
+/// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
+const MAX_LOOKUP: usize = 64 << 10;
+
 fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
@@ -383,17 +386,26 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
             Some(b"CalGray") => Ok(Space::Gray),
             Some(b"CalRGB") => Ok(Space::Rgb),
             Some(b"Indexed" | b"I") => {
-                let base = space(doc, a.get(1))?;
-                if matches!(base, Space::Indexed(..)) {
+                // Checked before recursing: Indexed is the only space that recurses, so refusing
+                // an Indexed base here also ends a cyclic base reference.
+                let nested = match a.get(1).map(|b| doc.resolve(b)).as_deref() {
+                    Some(Object::Array(b)) => matches!(b.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+                    Some(Object::Name(n)) => matches!(n.as_slice(), b"Indexed" | b"I"),
+                    _ => false,
+                };
+                if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
+                let base = space(doc, a.get(1))?;
                 let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),
                 };
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
-                    Some(Object::Stream(t)) => t.decoded().map_err(|e| e.to_string())?,
+                    Some(Object::Stream(t)) => {
+                        t.decoded_within(MAX_LOOKUP).map_err(|_| "an indexed colour space with an oversized or damaged lookup table".to_string())?
+                    }
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
                 Ok(Space::Indexed(Box::new(base), hival, table))
@@ -453,7 +465,7 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Vec<u8
     Some(gray_plane(doc, m, w, h)?.into_iter().map(|v| 255 - v).collect())
 }
 
-/// A one-component mask image as 8-bit values (its `/Decode` inversion applied), scaled to
+/// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000, JBIG2 and CCITT masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>> {
     let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
@@ -479,14 +491,11 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize) -> Option<Vec<u8>>
             unpack(&m.decoded().ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
-    let invert = m
-        .dict
-        .get(b"Decode")
-        .map(|d| doc.resolve(d))
-        .and_then(|d| d.as_array().map(|a| a.first().and_then(Object::as_f64) > a.get(1).and_then(Object::as_f64)))
-        .unwrap_or(false);
-    if invert {
-        px.iter_mut().for_each(|v| *v = 255 - *v);
+    if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {
+        for value in &mut px {
+            let t = f64::from(*value) / 255.0;
+            *value = (((1.0 - t) * lo + t * hi).clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
     }
     if (mw, mh) == (w, h) {
         return Some(px);

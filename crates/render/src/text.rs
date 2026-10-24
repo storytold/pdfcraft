@@ -38,6 +38,22 @@ impl TextFilter {
 
 mod search;
 
+/// Whether `(x, y)` lies in or on the convex quadrilateral `quad`, whichever way it winds. A
+/// quad with a NaN corner, or no area, holds nothing.
+fn quad_contains(quad: &[[f32; 2]; 4], x: f32, y: f32) -> bool {
+    let (mut positive, mut negative) = (false, false);
+    for (k, a) in quad.iter().enumerate() {
+        let b = quad[(k + 1) % 4];
+        let cross = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+        positive |= cross > 0.0;
+        negative |= cross < 0.0;
+        if cross.is_nan() {
+            return false;
+        }
+    }
+    positive != negative
+}
+
 /// One glyph on the page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextGlyph {
@@ -160,7 +176,26 @@ impl PageText {
     }
 
     /// Index of the glyph nearest to a view-space point (for selection anchors).
+    ///
+    /// A glyph whose drawn em box (`quad`) holds the point wins. Skewed or turned text has bounding
+    /// boxes wider than the glyphs, so the box of the letter before overlaps this one and would
+    /// otherwise be found first (#3693). Failing that, the nearest bounding box wins, and a tie
+    /// goes to the glyph whose centre is closer.
     pub fn nearest(&self, x: f32, y: f32) -> Option<usize> {
+        let centre_distance = |g: &TextGlyph| {
+            let (cx, cy) = (g.quad.iter().map(|q| q[0]).sum::<f32>() / 4.0, g.quad.iter().map(|q| q[1]).sum::<f32>() / 4.0);
+            (cx - x).powi(2) + (cy - y).powi(2)
+        };
+        let inside = self
+            .glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| quad_contains(&g.quad, x, y))
+            .min_by(|a, b| centre_distance(a.1).total_cmp(&centre_distance(b.1)))
+            .map(|(i, _)| i);
+        if inside.is_some() {
+            return inside;
+        }
         self.glyphs
             .iter()
             .enumerate()
@@ -180,10 +215,10 @@ impl PageText {
                     0.0
                 };
                 // Prefer the same line: vertical distance weighs more.
-                (i, dx + dy * 3.0)
+                (i, dx + dy * 3.0, centre_distance(g))
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i)
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)))
+            .map(|(i, _, _)| i)
     }
 
     /// The word around glyph `i` as its first and last glyph (double-click): it stops at word
@@ -385,6 +420,15 @@ const MAX_CELLS: i64 = 4096;
 /// their unmarked redraws (the text reads twice, as it would without `/ActualText`).
 const MAX_REDRAW_WORK: usize = 1 << 22;
 
+/// Most replacement text bytes the redraw dedupe in `TextDevice::finish` copies on one page.
+const MAX_REDRAW_TEXT: usize = 1 << 22;
+
+#[cfg(test)]
+thread_local! {
+    /// Replacement text bytes given to redraws on this thread.
+    static REDRAW_TEXT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn cell(v: f32) -> i64 {
     // Glyph boxes are finite (`draw_glyph` and `merge` drop the rest); `as` saturates.
     (v / CELL).floor() as i64
@@ -455,11 +499,11 @@ impl TextDevice {
             return;
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
-            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(char::is_control)));
             return;
         };
-        let originals = drawn.iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())).map(|d| (d.2.text.clone(), d.2.rect)).collect();
-        let at = if text.chars().all(|c| c.is_control()) {
+        let originals = drawn.iter().filter(|d| !d.2.text.chars().all(char::is_control)).map(|d| (d.2.text.clone(), d.2.rect)).collect();
+        let at = if text.chars().all(char::is_control) {
             None
         } else {
             self.glyphs.push(glyph);
@@ -529,6 +573,7 @@ impl TextDevice {
         redraws.sort_by_key(|(range, _)| range.start);
         let glyphs = std::mem::take(&mut self.glyphs);
         let mut redraws = redraws.into_iter().peekable();
+        let mut text_left = MAX_REDRAW_TEXT;
         let mut i = 0;
         while let Some(g) = glyphs.get(i) {
             let Some((range, k)) = redraws.next_if(|(range, _)| range.start == i) else {
@@ -537,8 +582,19 @@ impl TextDevice {
                 continue;
             };
             let run = glyphs.get(range.clone()).unwrap_or_default();
-            let text = self.replaced.get(k).map(|r| r.text.clone()).unwrap_or_default();
-            if !text.chars().all(|c| c.is_control()) {
+            let replacement = self.replaced.get(k).map_or("", |r| r.text.as_str());
+            // Each redraw takes its own copy of the replacement, and one long replacement can
+            // have many redraws: past the budget a redraw keeps its glyphs, as past the work budget.
+            let Some(left) = text_left.checked_sub(replacement.len()) else {
+                self.glyphs.extend_from_slice(run);
+                i = range.end.max(i + 1);
+                continue;
+            };
+            text_left = left;
+            let text = replacement.to_owned();
+            #[cfg(test)]
+            REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
+            if !text.chars().all(char::is_control) {
                 match merge(run, text) {
                     Some(glyph) => self.glyphs.push(glyph),
                     None => self.glyphs.extend_from_slice(run),
@@ -547,6 +603,13 @@ impl TextDevice {
             i = range.end.max(i + 1);
         }
     }
+}
+
+/// Whether `PDFCRAFT_TEXT_DEBUG` is set. `draw_glyph` runs once per glyph and `getenv` scans the
+/// whole environment under a lock, so read it once.
+fn text_debug() -> bool {
+    static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DEBUG.get_or_init(|| std::env::var_os("PDFCRAFT_TEXT_DEBUG").is_some())
 }
 
 impl<'a> Device<'a> for TextDevice {
@@ -567,7 +630,7 @@ impl<'a> Device<'a> for TextDevice {
             Some(hayro::hayro_interpret::hayro_cmap::BfString::String(s)) => s,
             None if replaced => String::new(),
             None => {
-                if std::env::var_os("PDFCRAFT_TEXT_DEBUG").is_some() {
+                if text_debug() {
                     eprintln!(
                         "NOUNICODE {} {:?}",
                         if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" },
@@ -577,13 +640,13 @@ impl<'a> Device<'a> for TextDevice {
                 return;
             }
         };
-        if !replaced && text.chars().all(|c| c.is_control()) {
+        if !replaced && text.chars().all(char::is_control) {
             return;
         }
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
         // box spans descender (−200) to ascender (800), the advance gives the width.
         let t = transform * glyph_transform;
-        if std::env::var_os("PDFCRAFT_TEXT_DEBUG").is_some() {
+        if text_debug() {
             let kind = if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" };
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
         }
@@ -1405,7 +1468,15 @@ fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    Segments on the same baseline that nearly touch are merged (text drawn out of order).
 /// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
-///    that overlaps it vertically (so columns read left, then right).
+///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
+///    the nearest block below the last one, overlapping it horizontally and at most 2.5 heights of
+///    its last line below it, comes next, unless an unread block sits above it in its own span, sits
+///    beside it on its left, or shares its first line (the first lines overlap by at least 30% of the
+///    taller one: a table or form row, which reads across, even with labels and values in different
+///    sizes or on shifted baselines).
+///    Known limit: when a paragraph in the next column starts on the same line as the continuation
+///    (text on a baseline grid), it counts as a row and the top-most rule applies, so the column
+///    order of #3658 is lost there. Telling prose from a row in that case needs more evidence.
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
 ///    text comes out in logical order.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
@@ -1420,13 +1491,15 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
 fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // Drop "fake bold" duplicates: the same character redrawn at (almost) the same place. A redraw
     // also overlaps most of its own width: a narrow letter in condensed text (80 Tz and below) sits
-    // closer than a fifth of its height to its double, as the second "l" of "Alle" (#1467).
+    // closer than a fifth of its height to its double, as the second "l" of "Alle" (#1467), and
+    // OCR layers squeeze words to 20 Tz and below (#2457). Only a zero-width mark, which has no
+    // width to overlap, is matched by its height alone.
     let mut keep = vec![true; glyphs.len()];
     for i in 1..glyphs.len() {
         let g = &glyphs[i];
         let h = (g.rect[3] - g.rect[1]).max(0.1);
         let w = g.rect[2] - g.rect[0];
-        let dx = if w > 0.05 * h { (h * 0.2).min(w * 0.5) } else { h * 0.2 };
+        let dx = if w > 0.0 { (h * 0.2).min(w * 0.5) } else { h * 0.2 };
         for j in (i.saturating_sub(4)..i).rev() {
             let p = &glyphs[j];
             if keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2 {
@@ -1567,19 +1640,65 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
 
     // 3. Block order.
     let mut remaining: Vec<usize> = (0..blocks.len()).collect();
-    let mut block_order = Vec::with_capacity(blocks.len());
+    let mut block_order: Vec<usize> = Vec::with_capacity(blocks.len());
+    // A block to the left of `cb` that shares at least half the height of the shorter one: it reads first.
+    let beside_left = |cb: &[f32; 4], lb: &[f32; 4]| {
+        let v = lb[3].min(cb[3]) - lb[1].max(cb[1]);
+        lb[2] <= cb[0] + 1.0 && v > 0.5 * (lb[3] - lb[1]).min(cb[3] - cb[1])
+    };
+    // The box of a block's first line. Every block is created with one segment, so the block's own box is a fallback
+    // that is never used.
+    let first_line = |b: usize| blocks[b].0.first().and_then(|&s| segs.get(s)).map_or(blocks[b].1, |s| s.bbox);
     while let Some(&top) = remaining.iter().min_by(|a, b| blocks[**a].1[1].total_cmp(&blocks[**b].1[1])) {
-        let tb = blocks[top].1;
-        let pick = remaining
-            .iter()
-            .copied()
-            .filter(|c| {
-                let cb = blocks[*c].1;
-                let v = cb[3].min(tb[3]) - cb[1].max(tb[1]);
-                cb[2] <= tb[0] + 1.0 && v > 0.5 * (cb[3] - cb[1]).min(tb[3] - tb[1])
-            })
-            .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
-            .unwrap_or(top);
+        // A column goes on past a paragraph gap (#3658): the nearest block below the one just read that overlaps it
+        // horizontally comes next, if the gap above it is at most two and a half heights of the last line read (a
+        // footer, a footnote or a caption under a figure is further) and no other unread block
+        // - sits above it in its own horizontal span (the rest of a column above a full-width heading or footnote),
+        // - is beside it on its left, or
+        // - shares its first line: their first lines overlap by at least 30% of the taller one (a table or form row,
+        //   which reads across, even with labels and values in different sizes or on shifted baselines; a line that
+        //   only touches it, or a small superscript or footnote marker, is not a row).
+        let next_in_column = block_order.last().and_then(|&prev| {
+            let pb = blocks[prev].1;
+            // The gap is measured in the height of the block's last line, which borders it.
+            let pl = blocks[prev].0.last().and_then(|&s| segs.get(s)).map_or(pb, |s| s.bbox);
+            let tol = (pl[3] - pl[1]).max(0.1) * 0.5;
+            let c = remaining
+                .iter()
+                .copied()
+                .filter(|&c| {
+                    let cb = blocks[c].1;
+                    let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
+                    let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
+                    cb[1] >= pb[3] - tol && overlap > minw * 0.3
+                })
+                .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
+            let cb = blocks[c].1;
+            if cb[1] - pb[3] >= tol * 5.0 {
+                return None;
+            }
+            let cl = first_line(c);
+            let blocked = remaining.iter().any(|&r| {
+                if r == c {
+                    return false;
+                }
+                let rb = blocks[r].1;
+                let rl = first_line(r);
+                let shared = rl[3].min(cl[3]) - rl[1].max(cl[1]);
+                let row = shared > 0.3 * (rl[3] - rl[1]).max(cl[3] - cl[1]);
+                (rb[1] < cb[1] && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb) || row
+            });
+            (!blocked).then_some(c)
+        });
+        let pick = next_in_column.unwrap_or_else(|| {
+            let tb = blocks[top].1;
+            remaining
+                .iter()
+                .copied()
+                .filter(|c| beside_left(&tb, &blocks[*c].1))
+                .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+                .unwrap_or(top)
+        });
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
     }
@@ -1599,8 +1718,25 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             place_glyphs(&glyphs, &height, &segs[si], &mut sc);
             let h = segs[si].h;
             // Word gaps relative to this line's typical letter gap (handles tracking).
+            // Long runs of repeated punctuation belong to leaders, not letter tracking: a TOC leader
+            // must not raise the threshold above the word gaps in its title (#3086).
             sc.gaps.clear();
-            sc.gaps.extend(sc.placed.windows(2).map(|w| glyphs[w[1]].rect[0] - glyphs[w[0]].rect[2]));
+            sc.gaps.extend(sc.placed.windows(2).enumerate().filter_map(|(w, pair)| {
+                let &[p, c] = pair else { return None };
+                let (p, c) = (glyphs.get(p)?, glyphs.get(c)?);
+                if p.text == c.text && p.text.chars().all(|ch| !ch.is_alphanumeric() && !ch.is_whitespace()) {
+                    // Keep short tracked punctuation, including an ellipsis with a final period.
+                    // Treat five or more matching glyphs as a leader. Three neighbours on each
+                    // side suffice to classify this pair, bounding work even on long runs.
+                    let same = |&&i: &&usize| glyphs.get(i).is_some_and(|g| g.text == p.text);
+                    let before = sc.placed.get(..w).unwrap_or_default().iter().rev().take(3).take_while(same).count();
+                    let after = sc.placed.get(w.saturating_add(2)..).unwrap_or_default().iter().take(3).take_while(same).count();
+                    if before + after >= 3 {
+                        return None;
+                    }
+                }
+                Some(c.rect[0] - p.rect[2])
+            }));
             sc.gaps.sort_by(f32::total_cmp);
             let typical = sc.gaps.get(sc.gaps.len() / 3).copied().unwrap_or(0.0).max(0.0);
             let threshold = (typical + h * WORD_GAP).max(h * WORD_GAP);
@@ -1703,6 +1839,37 @@ mod tests {
         }
     }
 
+    /// WSCAD writes `/ToUnicode /Identity-H`, a name rather than a CMap stream, on Type 0 fonts
+    /// whose two-byte codes are UTF-16 code units. The codes read as that Unicode text (as in
+    /// Acrobat), so the page's text can be selected and found; before, it had none. Controls (here a
+    /// DEL and a C1 control at the line ends) are not text.
+    #[test]
+    fn identity_to_unicode_names_give_text() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        for name in ["Identity-H", "Identity-V"] {
+            let mut doc = Document::with_version("1.4");
+            let cid = doc.add_object(dictionary! {
+                "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "RobotoMono-Regular",
+                "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+                "DW" => 600, "CIDToGIDMap" => "Identity"
+            });
+            let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "RobotoMono-Regular", "Encoding" => "Identity-H", "DescendantFonts" => vec![Object::Reference(cid)], "ToUnicode" => name });
+            let operators = "BT /F1 12 Tf 1 0 0 1 20 250 Tm <004400650063006B0062006C006100740074007F> Tj 1 0 0 1 20 200 Tm <005A00FC0072006900630068002020AC0085> Tj ET";
+            let content = doc.add_object(Stream::new(dictionary! {}, operators.as_bytes().to_vec()));
+            let pages = doc.new_object_id();
+            let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+            doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+            let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+            doc.trailer.set("Root", catalog);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+            let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+            assert_eq!(text.plain_text(), "Deckblatt\nZürich €", "{name}");
+            assert_eq!(text.find("zürich"), vec![9..15], "{name}: glyphs 9 to 14");
+        }
+    }
+
     /// One page per text matrix, each showing `codes` in Helvetica whose `/ToUnicode` maps the
     /// codes in `unicode` (a `bfchar` body) to several characters.
     fn ligature_pages(unicode: &str, codes: &str, matrices: &[&str]) -> Pdf {
@@ -1777,6 +1944,39 @@ mod tests {
 
     fn marked_text(pdf: &Pdf, page: usize) -> PageText {
         extract_page(pdf, page, &InterpreterSettings::default()).unwrap()
+    }
+
+    #[test]
+    fn redraws_of_a_long_replacement_share_a_text_budget() {
+        let long = "0041".repeat(32 * 1024);
+        let redraws = 200;
+        let content = format!(
+            "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText <FEFF{long}>>> BDC (x) Tj EMC {} ET",
+            "1 0 0 1 100 150 Tm (x) Tj ".repeat(redraws)
+        );
+        let pdf = marked_pages(&[&content]);
+        REDRAW_TEXT_BYTES.with(|c| c.set(0));
+        let text = marked_text(&pdf, 0);
+        let given = REDRAW_TEXT_BYTES.with(|c| c.get());
+        assert!(given <= MAX_REDRAW_TEXT, "{given} bytes of replacement text given to {redraws} redraws");
+        assert!(text.plain_text().starts_with("AAAA"));
+        // A short replacement still covers its redraw.
+        let pdf = marked_pages(&["BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (fi)>> BDC (x) Tj EMC 1 0 0 1 100 150 Tm (x) Tj ET"]);
+        REDRAW_TEXT_BYTES.with(|c| c.set(0));
+        assert_eq!(marked_text(&pdf, 0).plain_text(), "fi");
+        assert_eq!(REDRAW_TEXT_BYTES.with(|c| c.get()), 2);
+    }
+
+    #[test]
+    fn text_after_an_inline_image_survives_a_non_ascii_byte_before_a_later_ei() {
+        // Everyday content both ways: a string with a byte above 0x7F, and a later word holding
+        // a capital "EI". The end-of-data look-ahead used to read the string's bytes as image
+        // data, so the image swallowed the rest of the page.
+        let pdf = marked_pages(&[
+            "BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \0 EI BT /F1 20 Tf 1 0 0 1 20 200 Tm (Gr\u{fc}\u{df}e) Tj 1 0 0 1 20 150 Tm (EINGANG) Tj ET",
+        ]);
+
+        assert!(marked_text(&pdf, 0).plain_text().contains("EINGANG"), "the text after the inline image was not extracted");
     }
 
     #[test]
@@ -1869,6 +2069,121 @@ mod tests {
         }
     }
 
+    /// Issue #3109: text drawn in clipping mode (`7 Tr`) sets the clip for a subsequent fill,
+    /// shading or image without painting the glyphs directly, and must still reach `TextDevice`
+    /// with the same boxes and search ranges as modes 0–6.
+    #[test]
+    fn clipping_mode_text_is_extracted_and_searchable_like_other_rendering_modes() {
+        let fill_through = " 0 0 1 rg 0 0 300 300 re f";
+        let mut pages: Vec<String> =
+            (0..=7).map(|mode| format!("q BT /F1 24 Tf {mode} Tr 72 150 Td () Tj [(Hello) -200 (World)] TJ ET{fill_through} Q")).collect();
+        // Page 8: /ActualText wrapping 7 Tr clip-only text.
+        pages.push(format!("q /Span <</ActualText (Hello World)>> BDC BT /F1 24 Tf 7 Tr 72 150 Td (Glyphs) Tj ET EMC{fill_through} Q"));
+        // Page 9: 0 Tr underpainting followed by 7 Tr at the same position (outline/gradient overlay) deduplicates.
+        pages.push(format!("BT /F1 24 Tf 0 Tr 72 150 Td (Hello World) Tj ET q BT /F1 24 Tf 7 Tr 72 150 Td (Hello World) Tj ET{fill_through} Q"));
+        // Page 10: 90° turned 7 Tr text.
+        pages.push(format!("q BT /F1 24 Tf 7 Tr 0 1 -1 0 150 100 Tm (Hello World) Tj ET{fill_through} Q"));
+        // Page 11: 7 Tr without any fill-through (visually blank, still extractable).
+        pages.push("BT /F1 24 Tf 7 Tr 72 150 Td (Hello World) Tj ET".into());
+
+        let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+        let pdf = marked_pages(&refs);
+        let control = marked_text(&pdf, 0);
+        assert_eq!(control.plain_text(), "Hello World");
+        let control_rects = control.line_rects(0..5);
+        assert_eq!(control_rects.len(), 1);
+        for mode in 0..=7 {
+            let text = marked_text(&pdf, mode);
+            assert_eq!(text.plain_text(), "Hello World", "mode {mode} Tr");
+            assert_eq!(text.find("hello"), vec![0..5], "mode {mode} Tr");
+            assert_eq!(text.find_opts("Hello", true, true), vec![0..5], "mode {mode} Tr");
+            assert_eq!(
+                text.find_with(|chars| chars.starts_with(&['H', 'e', 'l', 'l', 'o']).then_some(0..5).into_iter().collect()),
+                vec![0..5],
+                "mode {mode} Tr"
+            );
+            assert_eq!(text.line_rects(0..5), control_rects, "mode {mode} Tr");
+            assert_eq!(text.glyphs, control.glyphs, "mode {mode} Tr");
+        }
+        let actual = marked_text(&pdf, 8);
+        assert_eq!(actual.plain_text(), "Hello World");
+        assert_eq!(actual.find("Hello"), vec![0..1]);
+
+        let deduped = marked_text(&pdf, 9);
+        assert_eq!(deduped.plain_text(), "Hello World");
+
+        let turned = marked_text(&pdf, 10);
+        assert_eq!(turned.plain_text(), "Hello World");
+        assert_eq!(turned.find("World"), vec![6..11]);
+
+        let unfilled = marked_text(&pdf, 11);
+        assert_eq!(unfilled.plain_text(), "Hello World");
+
+        // Visual check: page 7 (`7 Tr` + blue fill-through) paints blue only inside the clipped
+        // glyph outlines, whereas page 11 (`7 Tr` alone) paints no ink at all.
+        let mut renderer = crate::PageRenderer::new(std::sync::Arc::new(pdf.data().as_ref().to_vec()), crate::RenderConfig::default());
+        let filled_px = renderer.render(crate::RenderRequest { page: 7, kind: crate::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(filled_px.error.is_none());
+        let blue_pixels = filled_px.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 32 && p[1] < 32 && p[2] > 200).count();
+        let white_pixels = filled_px.rgba.as_chunks::<4>().0.iter().filter(|p| p[..3] == [255, 255, 255]).count();
+        assert!(blue_pixels > 50 && white_pixels > 80_000, "blue={blue_pixels}, white={white_pixels}");
+
+        let unfilled_px = renderer.render(crate::RenderRequest { page: 11, kind: crate::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(unfilled_px.error.is_none());
+        assert!(unfilled_px.rgba.as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]));
+    }
+
+    #[test]
+    fn clipping_mode_filter_keeps_titles_and_excludes_ocr() {
+        let pdf = marked_pages(&[
+            "q BT /F1 24 Tf 7 Tr 30 200 Td (Clipped heading) Tj ET 0 0 1 rg 0 0 300 300 re f Q BT /F1 12 Tf 3 Tr 30 100 Td (Hidden OCR) Tj ET",
+            "q /Span <</ActualText (Accessible heading)>> BDC BT /F1 24 Tf 7 Tr 30 200 Td (Clipped heading) Tj ET EMC 0 0 1 rg 0 0 300 300 re f Q",
+        ]);
+        assert!(marked_text(&pdf, 0).plain_text().contains("Hidden OCR"));
+        for (page, expected) in [(0, "Clipped heading"), (1, "Accessible heading")] {
+            let text = extract_page_filtered(&pdf, page, &InterpreterSettings::default(), TextFilter { images: true, ..Default::default() }).unwrap();
+            assert_eq!(text.plain_text(), expected);
+            assert!(!text.find("heading").is_empty());
+        }
+    }
+
+    /// ISO 32000-2 §9.3.6: Type 3 text under `7 Tr` is not rendered (vendored hayro-interpret
+    /// patch 64), but it is still clipping text, not an invisible text layer: the filter that
+    /// drops OCR layers keeps it, as it keeps clipping text in other fonts.
+    #[test]
+    fn clipping_mode_type3_text_is_kept_by_the_ocr_filter() {
+        let font = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] \
+                    /CharProcs << /A 6 0 R >> /Encoding << /Type /Encoding /Differences [65 /A] >> \
+                    /FirstChar 65 /LastChar 65 /Widths [1000] >>";
+        let glyph = "1000 0 100 0 900 800 d1 100 0 800 800 re f";
+        let content = "BT /T3 24 Tf 7 Tr 30 200 Td (AAA) Tj ET BT /T3 12 Tf 3 Tr 30 100 Td (A) Tj ET";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            font.to_string(),
+            format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len()),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let all = extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), TextFilter::default()).unwrap();
+        assert_eq!(all.plain_text().matches('A').count(), 4, "{:?}", all.plain_text());
+        let filtered = extract_page_filtered(&pdf, 0, &InterpreterSettings::default(), TextFilter { images: true, ..Default::default() }).unwrap();
+        assert_eq!(filtered.plain_text().trim(), "AAA", "the 7 Tr text stays, the 3 Tr layer goes");
+    }
+
     /// One page per `(encoding, content)`, in Helvetica (`/F1`).
     fn encoded_pages(pages: &[(lopdf::Object, &[u8])]) -> Pdf {
         use lopdf::{Document, Object, Stream, dictionary};
@@ -1921,6 +2236,64 @@ mod tests {
         assert_eq!(texts(0), ["a", "-", "b", " ", "c"], "WinAnsi 0xAD and 0xA0");
         assert_eq!(texts(1), ["a", " ", "b"], "MacRoman 0xCA");
         assert_eq!(texts(2), ["a", "\u{ad}", "b", "\u{a0}", "c"], "a named glyph keeps its glyph list value");
+    }
+
+    /// #3169, #3170: glyph names outside the Adobe Glyph List still read as text. Ligature
+    /// (`f_i`) and suffixed (`hyphen.case`) names go by the glyph list specification's full
+    /// mapping. A name that only numbers the glyph (`c251` small caps, `C39`, `C174`, `C39.sc`)
+    /// reads as nothing, not as a guess from the code (review on #3239: with `/C1` at 233,
+    /// StandardEncoding's 233 would read `Ø` for a glyph drawn as `é`), and so do a ZapfDingbats
+    /// name (`a12`) and a name with no meaning left (`foo`).
+    #[test]
+    fn glyph_names_outside_the_glyph_list_still_read_as_text() {
+        use lopdf::{Object, dictionary};
+        let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+        let differences = Object::Dictionary(dictionary! {
+            "Type" => "Encoding",
+            "Differences" => vec![
+                Object::Integer(30), name("f_i"), name("f_l"), Object::Integer(2), name("hyphen.case"),
+                Object::Integer(39), name("C39"), Object::Integer(97), name("c251"), Object::Integer(174), name("C174"),
+                Object::Integer(88), name("a12"), name("foo"), name("uni00660069"),
+                Object::Integer(61), name("C39.sc"), Object::Integer(233), name("C1"),
+            ],
+        });
+        // One glyph per line: the test font has none of these glyphs, so they have no width, and
+        // on one line a later `fi` would sit on the first and be dropped as its fake-bold copy.
+        let mut content = b"BT /F1 20 Tf 20 290 Td".to_vec();
+        for code in *b"\x1e\x1f\x02'a\xaeXYZ=\xe9" {
+            content.extend_from_slice(b" (");
+            content.push(code);
+            content.extend_from_slice(b") Tj 0 -25 Td");
+        }
+        content.extend_from_slice(b" ET");
+        let pdf = encoded_pages(&[(differences, &content[..])]);
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines, ["fi", "fl", "-", "fi"], "{text:?}");
+    }
+
+    /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex
+    /// digits only, and map a name with lowercase ones to nothing ("uni20ac" in its examples).
+    /// Names upstream's own lookup can't read (several groups, a suffix) show it: lowercase reads
+    /// as nothing, uppercase as its characters. A bare `uni20ac` or `u1040c` is still read by
+    /// upstream's lenient `unicode_from_name`, outside this mapping.
+    #[test]
+    fn glyph_names_with_lowercase_hex_read_as_nothing() {
+        use lopdf::{Object, dictionary};
+        let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+        let differences = Object::Dictionary(dictionary! {
+            "Type" => "Encoding",
+            "Differences" => vec![Object::Integer(65), name("uni20ac0308"), name("uni20AC0308"), name("u1040c.alt"), name("u1040C.alt"), name("f_uni20ac"), name("f_uni20AC")],
+        });
+        let pdf = encoded_pages(&[(
+            differences,
+            &b"BT /F1 20 Tf 20 180 Td (A) Tj 0 -25 Td (B) Tj 0 -25 Td (C) Tj 0 -25 Td (D) Tj 0 -25 Td (E) Tj 0 -25 Td (F) Tj ET"[..],
+        )]);
+        // One glyph per line, so each name's text stays its own (and a name read as nothing
+        // leaves no line).
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines, ["\u{20ac}\u{308}", "\u{1040c}", "f", "f\u{20ac}"], "{text:?}");
     }
 
     #[test]
@@ -2052,6 +2425,62 @@ mod tests {
         TextGlyph { text: t.into(), rect, quad: [[x0, y0], [x1, y0], [x1, rect[3]], [x0, rect[3]]], direction: [1.0, 0.0] }
     }
 
+    /// A glyph whose em box is `w` × `h` at `origin`, advancing along `dir` with its up edge along
+    /// `up` (a unit step of each), as a sheared or turned text matrix draws it.
+    fn tilted(t: &str, origin: [f32; 2], dir: [f32; 2], up: [f32; 2], w: f32, h: f32) -> TextGlyph {
+        let p = |a: f32, b: f32| [origin[0] + dir[0] * a + up[0] * b, origin[1] + dir[1] * a + up[1] * b];
+        let quad = [p(0.0, 0.0), p(w, 0.0), p(w, h), p(0.0, h)];
+        let xs = quad.map(|q| q[0]);
+        let ys = quad.map(|q| q[1]);
+        let rect = [
+            xs.iter().copied().fold(f32::MAX, f32::min),
+            ys.iter().copied().fold(f32::MAX, f32::min),
+            xs.iter().copied().fold(f32::MIN, f32::max),
+            ys.iter().copied().fold(f32::MIN, f32::max),
+        ];
+        TextGlyph { text: t.into(), rect, quad, direction: dir }
+    }
+
+    /// #3693: pointing at the middle of a glyph in sheared or turned text finds that glyph, not
+    /// the one before it whose bounding box overlaps it.
+    #[test]
+    fn nearest_finds_the_glyph_under_the_pointer_in_sheared_and_turned_text() {
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        // (writing direction, up edge) in view space (y down): upright, sheared 0.35, turned 45°.
+        for (dir, up) in [([1.0, 0.0], [0.0, -1.0]), ([1.0, 0.0], [0.35, -1.0]), ([s, -s], [-s, -s])] {
+            let mut advance = 0.0;
+            let glyphs: Vec<TextGlyph> = "film in the list of tiny jilt flit"
+                .chars()
+                .map(|c| {
+                    let w = if "filjt ".contains(c) { 3.0 } else { 6.0 };
+                    let g = tilted(&c.to_string(), [50.0 + dir[0] * advance, 300.0 + dir[1] * advance], dir, up, w, 14.0);
+                    advance += w;
+                    g
+                })
+                .collect();
+            let t = layout(glyphs.clone());
+            assert_eq!(t.glyphs.len(), glyphs.len(), "layout kept every glyph");
+            for (i, g) in glyphs.iter().enumerate() {
+                let cx = g.quad.iter().map(|q| q[0]).sum::<f32>() / 4.0;
+                let cy = g.quad.iter().map(|q| q[1]).sum::<f32>() / 4.0;
+                assert_eq!(t.nearest(cx, cy), Some(i), "dir {dir:?} up {up:?}: glyph {i} ({})", g.text);
+            }
+            // Past either end of the line, the end glyph is still the nearest.
+            let (first, last) = (&glyphs[0], &glyphs[glyphs.len() - 1]);
+            assert_eq!(t.nearest(first.quad[0][0] - dir[0] * 8.0, first.quad[0][1] - dir[1] * 8.0), Some(0));
+            assert_eq!(t.nearest(last.quad[1][0] + dir[0] * 8.0, last.quad[1][1] + dir[1] * 8.0), Some(glyphs.len() - 1));
+        }
+    }
+
+    #[test]
+    fn a_degenerate_or_nan_quad_holds_no_point() {
+        assert!(!quad_contains(&[[1.0, 1.0]; 4], 1.0, 1.0));
+        assert!(!quad_contains(&[[0.0, 0.0], [1.0, 0.0], [f32::NAN, 1.0], [0.0, 1.0]], 0.5, 0.5));
+        assert!(quad_contains(&[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]], 4.0, 2.0));
+        // Wound the other way.
+        assert!(quad_contains(&[[0.0, 0.0], [0.0, 4.0], [4.0, 4.0], [4.0, 0.0]], 2.0, 2.0));
+    }
+
     #[test]
     fn lines_words_and_search() {
         // "Hello world" on line 1, "Next" on line 2.
@@ -2175,6 +2604,49 @@ mod tests {
         }
     }
 
+    /// #2457: OCR text layers squeeze each word into its box down to 20 Tz and below, where a
+    /// narrow letter is less than a twentieth of its height wide. Doubled letters, and letters
+    /// repeated two or three places on, are still letters there, not redraws.
+    #[test]
+    fn ocr_condensed_double_letters_are_kept() {
+        // Helvetica advances, in thousandths of an em.
+        let adv = |c: char| match c {
+            'M' => 833.0,
+            'K' | 'B' => 667.0,
+            'W' => 944.0,
+            'I' | 't' | 'f' => 278.0,
+            'i' | 'l' => 222.0,
+            'm' => 833.0,
+            'r' => 333.0,
+            's' => 500.0,
+            _ => 556.0,
+        };
+        for scale in [0.2, 0.1, 0.05] {
+            for word in ["Hallo", "Mitte", "Wille", "Kommission", "Illustration", "still", "Brunnen", "Kaffee"] {
+                let mut v = Vec::new();
+                let mut x = 10.0;
+                for c in word.chars() {
+                    let w = adv(c) / 100.0 * scale;
+                    v.push(g(&c.to_string(), x, 10.0, x + w));
+                    x += w;
+                }
+                assert_eq!(layout(v.clone()).plain_text(), word, "at {scale} horizontal scaling");
+                // Each letter drawn twice at the same place is still one letter.
+                let bold: Vec<TextGlyph> = v.iter().flat_map(|c| [c.clone(), c.clone()]).collect();
+                assert_eq!(layout(bold).plain_text(), word, "fake bold at {scale} horizontal scaling");
+                // And redrawn a quarter of its own width to the right (the match reaches half of it).
+                let shifted: Vec<TextGlyph> = v
+                    .iter()
+                    .flat_map(|c| {
+                        let d = (c.rect[2] - c.rect[0]) * 0.25;
+                        [c.clone(), g(&c.text, c.rect[0] + d, 10.0, c.rect[2] + d)]
+                    })
+                    .collect();
+                assert_eq!(layout(shifted).plain_text(), word, "shifted fake bold at {scale} horizontal scaling");
+            }
+        }
+    }
+
     #[test]
     fn two_columns_read_left_then_right_even_if_drawn_interleaved() {
         let mut v = Vec::new();
@@ -2187,12 +2659,282 @@ mod tests {
         assert_eq!(t.plain_text(), "Left1\nLeft2\nRight1\nRight2");
     }
 
+    /// Lays out one-word lines, each `(text, x, y)`, 10 pt high: 14 pt apart is a line in a paragraph, 24 pt a
+    /// paragraph gap.
+    fn lines(at: &[(&str, f32, f32)]) -> String {
+        let mut v = Vec::new();
+        for &(s, x, y) in at {
+            word(&mut v, s, x, y, 6.0);
+        }
+        layout(v).plain_text()
+    }
+
+    #[test]
+    fn a_column_reads_on_past_a_paragraph_gap() {
+        // #3658: a heading and paragraph A at the top of the left column, a paragraph gap, then paragraph B, which
+        // goes on at the top of the right column, and paragraph C below it.
+        let two = [
+            ("Heading", 10.0, 10.0),
+            ("A1", 10.0, 30.0),
+            ("A2", 10.0, 44.0),
+            ("A3", 10.0, 58.0),
+            ("B1", 10.0, 82.0),
+            ("B2", 10.0, 96.0),
+            ("B3", 200.0, 30.0),
+            ("B4", 200.0, 44.0),
+            ("C1", 200.0, 68.0),
+            ("C2", 200.0, 82.0),
+        ];
+        assert_eq!(lines(&two), "Heading\nA1\nA2\nA3\nB1\nB2\nB3\nB4\nC1\nC2");
+        // Three columns, each with a gap at a different height.
+        let three = [
+            ("A1", 10.0, 10.0),
+            ("A2", 10.0, 24.0),
+            ("B1", 10.0, 48.0),
+            ("C1", 150.0, 10.0),
+            ("D1", 150.0, 38.0),
+            ("D2", 150.0, 52.0),
+            ("E1", 290.0, 10.0),
+            ("E2", 290.0, 24.0),
+            ("E3", 290.0, 38.0),
+            ("F1", 290.0, 62.0),
+        ];
+        assert_eq!(lines(&three), "A1\nA2\nB1\nC1\nD1\nD2\nE1\nE2\nE3\nF1");
+    }
+
+    #[test]
+    fn a_column_reads_on_past_a_line_that_only_touches_it() {
+        // The #3658 page with a right-column paragraph whose first line touches B1's by 1 pt or 0.1 pt, or whose
+        // second line carries a 6 pt footnote marker reaching up beside B2: none of them is a row with B1.
+        let page = |extra: &[(&str, f32, f32, f32)]| {
+            let mut v = Vec::new();
+            let left = [("H", 10.0, 10.0), ("A1", 10.0, 30.0), ("A2", 10.0, 44.0), ("A3", 10.0, 58.0), ("B1", 10.0, 82.0), ("B2", 10.0, 96.0)];
+            for &(s, x, y) in left.iter().chain(&[("R1", 200.0, 30.0), ("R2", 200.0, 44.0)]) {
+                word(&mut v, s, x, y, 6.0);
+            }
+            for &(s, x, y, h) in extra {
+                for (i, c) in s.chars().enumerate() {
+                    let x0 = x + i as f32 * h * 0.6;
+                    v.push(em_box(&c.to_string(), x0, y, x0 + h * 0.6, y + h));
+                }
+            }
+            layout(v).plain_text().replace('\n', " ")
+        };
+        assert_eq!(page(&[("S1", 200.0, 91.0, 10.0), ("S2", 200.0, 105.0, 10.0)]), "H A1 A2 A3 B1 B2 R1 R2 S1 S2", "1 pt touch");
+        assert_eq!(page(&[("S1", 200.0, 72.1, 10.0), ("S2", 200.0, 86.1, 10.0)]), "H A1 A2 A3 B1 B2 R1 R2 S1 S2", "0.1 pt touch");
+        let marker = page(&[("S1", 200.0, 68.0, 10.0), ("x", 200.0, 96.0, 10.0), ("9", 206.5, 90.0, 6.0), ("S2y", 214.0, 96.0, 10.0)]);
+        assert!(marker.starts_with("H A1 A2 A3 B1 B2 R1 R2 S1 "), "footnote marker: {marker}");
+    }
+
+    #[test]
+    fn a_full_width_line_ends_the_columns_above_it() {
+        // Two columns, a full-width heading, two more columns and a full-width footnote. The left column stops at the
+        // heading and the footnote: the right column above each one reads first.
+        let page = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 48.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 38.0),
+            ("Fullwidthheading", 10.0, 80.0),
+            ("L4", 10.0, 110.0),
+            ("L5", 10.0, 124.0),
+            ("L6", 10.0, 148.0),
+            ("R3", 200.0, 110.0),
+            ("R4", 200.0, 138.0),
+            ("Fullwidthfootnote", 10.0, 200.0),
+        ];
+        // The two full-width lines run past the right column (x = 286 and 304) at 18 pt a letter.
+        let mut v = Vec::new();
+        for &(s, x, y) in &page {
+            word(&mut v, s, x, y, if s.len() > 2 { 18.0 } else { 6.0 });
+        }
+        assert_eq!(layout(v).plain_text(), "L1\nL2\nL3\nR1\nR2\nFullwidthheading\nL4\nL5\nL6\nR3\nR4\nFullwidthfootnote");
+    }
+
+    #[test]
+    fn table_rows_apart_still_read_across() {
+        // Rows a paragraph gap apart whose cells start level read row by row, as before #3658.
+        let rows = [("Name", 10.0, 10.0), ("Qty", 100.0, 10.0), ("Apple", 10.0, 34.0), ("12", 100.0, 34.0), ("Pear", 10.0, 58.0), ("7", 100.0, 58.0)];
+        assert_eq!(lines(&rows), "Name\nQty\nApple\n12\nPear\n7");
+    }
+
+    #[test]
+    fn form_rows_in_mixed_sizes_still_read_across() {
+        // 8 pt labels beside 12 pt values on one baseline, rows 30 pt apart: the tops differ by 4 pt, but the first
+        // lines overlap, so each row reads label then value.
+        let mut v = Vec::new();
+        let sized = |v: &mut Vec<TextGlyph>, s: &str, x: f32, base: f32, h: f32| {
+            for (i, c) in s.chars().enumerate() {
+                let x0 = x + i as f32 * h * 0.6;
+                v.push(em_box(&c.to_string(), x0, base - h, x0 + h * 0.6, base));
+            }
+        };
+        for (i, (label, value)) in [("Name", "Alice"), ("Street", "Main"), ("City", "Oslo")].into_iter().enumerate() {
+            let base = 20.0 + 30.0 * i as f32;
+            sized(&mut v, label, 10.0, base, 8.0);
+            sized(&mut v, value, 100.0, base, 12.0);
+        }
+        assert_eq!(layout(v).plain_text(), "Name\nAlice\nStreet\nMain\nCity\nOslo");
+        // Values drawn 6 pt below their labels, rows a paragraph gap apart.
+        let offset =
+            [("Name", 10.0, 10.0), ("Val1", 100.0, 16.0), ("Addr", 10.0, 40.0), ("Val2", 100.0, 46.0), ("City", 10.0, 70.0), ("Val3", 100.0, 76.0)];
+        assert_eq!(lines(&offset), "Name\nVal1\nAddr\nVal2\nCity\nVal3");
+    }
+
+    #[test]
+    fn a_column_does_not_jump_to_a_distant_footer_footnote_or_caption() {
+        // A page number far below the left column reads after the right column.
+        let footer = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 48.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 24.0),
+            ("R3", 200.0, 48.0),
+            ("Pg7", 10.0, 400.0),
+        ];
+        assert_eq!(lines(&footer), "L1\nL2\nR1\nR2\nL3\nR3\nPg7");
+        // So does a footnote under the left column only, with the page number under the right one.
+        let footnote = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 48.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 24.0),
+            ("R3", 200.0, 48.0),
+            ("Note", 10.0, 380.0),
+            ("Pg7", 200.0, 400.0),
+        ];
+        assert_eq!(lines(&footnote), "L1\nL2\nR1\nR2\nL3\nR3\nNote\nPg7");
+        // A caption under a full-width figure (no text from 70 to 250), as narrow as the left column, reads after both
+        // columns above the figure and before the columns below it.
+        let caption = [
+            ("L1", 10.0, 10.0),
+            ("L2", 10.0, 24.0),
+            ("L3", 10.0, 38.0),
+            ("R1", 200.0, 10.0),
+            ("R2", 200.0, 24.0),
+            ("R3", 200.0, 38.0),
+            ("Cap", 10.0, 260.0),
+            ("M1", 10.0, 290.0),
+            ("M2", 10.0, 304.0),
+            ("N1", 200.0, 290.0),
+            ("N2", 200.0, 304.0),
+        ];
+        assert_eq!(lines(&caption), "L1\nL2\nL3\nR1\nR2\nR3\nCap\nM1\nM2\nN1\nN2");
+    }
+
+    #[test]
+    fn many_column_paragraphs_order_in_bounded_time() {
+        // 2000 paragraphs in two columns, the right one offset by half a paragraph: every block is a column
+        // continuation, and choosing each one scans the remaining blocks.
+        let mut v = Vec::new();
+        for i in 0..1000u16 {
+            let y = 10.0 + 24.0 * f32::from(i);
+            word(&mut v, "L", 10.0, y, 6.0);
+            word(&mut v, "R", 200.0, y + 12.0, 6.0);
+        }
+        let start = std::time::Instant::now();
+        let text = layout(v).plain_text();
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        // Compared without printing 4000 characters on failure.
+        let expected = format!("{}{}", "L\n".repeat(1000), "R\n".repeat(999) + "R");
+        assert!(text == expected, "the first R reads after {:?} lines, not 1000", text.find('R').map(|i| i / 2));
+    }
+
     #[test]
     fn tracked_text_keeps_letters_together() {
         let mut v = Vec::new();
         word(&mut v, "CHAPTER", 10.0, 10.0, 9.0); // 3pt tracking between 6pt-wide letters
         word(&mut v, "FOUR", 10.0 + 7.0 * 9.0 + 5.0, 10.0, 9.0);
         assert_eq!(layout(v).plain_text(), "CHAPTER FOUR");
+    }
+
+    #[test]
+    fn toc_leaders_do_not_hide_word_gaps() {
+        use lopdf::{Document, Object, Stream, dictionary};
+        for dots in [0, 5, 10, 20, 40, 60] {
+            for (words, expected) in [
+                ("(Was)-333(ist)-333(OTRS?)", "Was ist OTRS?"),
+                ("(Das)-333(OTRS)-333(Web-Interface)", "Das OTRS Web-Interface"),
+                ("(Neuen)-333(Zugang)-333(beantragen)", "Neuen Zugang beantragen"),
+            ] {
+                // The issue's LaTeX TJ spacing, without embedding the corpus PDF or a font asset.
+                let mut doc = Document::with_version("1.7");
+                let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Times-Roman" });
+                let operators = format!("BT /F1 10 Tf 10 100 Td [{words}-441{}-1663(7)] TJ ET", "-500(.)".repeat(dots));
+                let content = doc.add_object(Stream::new(dictionary! {}, operators.into_bytes()));
+                let pages = doc.new_object_id();
+                let page = doc.add_object(dictionary! {
+                    "Type" => "Page", "Parent" => pages,
+                    "MediaBox" => vec![0.into(), 0.into(), 800.into(), Object::Integer(200)],
+                    "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } }, "Contents" => content
+                });
+                doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+                let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+                doc.trailer.set("Root", catalog);
+                let mut bytes = Vec::new();
+                doc.save_to(&mut bytes).unwrap();
+                let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+                let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+                assert_eq!(text.plain_text(), format!("{expected} {}7", ". ".repeat(dots)), "{dots} leader dots");
+                let hits = text.find_opts(expected, true, true);
+                assert_eq!(hits.len(), 1, "{expected:?}, {dots} leader dots");
+                assert_eq!(text.text_of(hits[0].clone()), expected);
+                assert_eq!(text.line_rects(hits[0].clone()).len(), 1);
+                assert_eq!(text.find(&expected.to_lowercase()), hits);
+                assert!(text.find(&expected.replace(' ', "")).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn short_tracked_ellipses_remain_searchable() {
+        for dots in [3, 4] {
+            let mut v = Vec::new();
+            for i in 0..dots {
+                let x = 10.0 + i as f32 * 4.0;
+                v.push(g(".", x, 10.0, x + 2.0));
+            }
+            let ellipsis = ".".repeat(dots);
+            let text = layout(v.clone());
+            assert_eq!(text.plain_text(), ellipsis);
+            assert_eq!(text.find(&ellipsis), vec![0..dots]);
+            v.insert(0, g("A", 0.0, 10.0, 6.0));
+            let x = 12.0 + dots as f32 * 4.0;
+            v.push(g("B", x, 10.0, x + 6.0));
+            let text = layout(v);
+            let expected = format!("A {ellipsis} B");
+            assert_eq!(text.plain_text(), expected);
+            assert_eq!(text.find(&expected), vec![0..dots + 2]);
+        }
+    }
+
+    #[test]
+    fn leaders_preserve_tracking_in_letters_numbers_and_punctuation() {
+        for advance in [9.0, 12.0] {
+            for leader in [".", "-", "…"] {
+                let mut v = Vec::new();
+                word(&mut v, "CHAPTER-1", 10.0, 10.0, advance);
+                let x = 10.0 + 9.0 * advance + 5.0;
+                word(&mut v, "1.4", x, 10.0, advance);
+                let mut x = x + 3.0 * advance + 5.0;
+                for _ in 0..60 {
+                    v.push(g(leader, x, 10.0, x + 2.5));
+                    x += 11.0;
+                }
+                let text = layout(v);
+                assert_eq!(text.plain_text(), format!("CHAPTER-1 1.4 {}", vec![leader; 60].join(" ")));
+                assert_eq!(text.find("chapter-1 1.4"), vec![0..12]);
+            }
+        }
+        // Decimal punctuation and repeated letters/digits still use their original tracking estimate.
+        for value in ["1.4", "1111", "llll"] {
+            let mut v = Vec::new();
+            word(&mut v, value, 10.0, 10.0, 12.0);
+            assert_eq!(layout(v).plain_text(), value);
+        }
     }
 
     #[test]

@@ -136,6 +136,8 @@
 	Next view	Наступний вигляд
 	Page display	Відображення сторінок
 	Continuous scrolling	Безперервне прокручування
+	Show gaps between pages	Показувати проміжки між сторінками
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Приховайте проміжки, щоб з’єднати краї сторінок. Поля всередині PDF залишаться без змін.
 	Two-page view	Дві сторінки
 	Single page	Одна сторінка
 	Show cover page in two-page view	Показувати обкладинку в режимі двох сторінок
@@ -517,6 +519,36 @@
 	Could not save: {e}	Не вдалося зберегти: {e}
 	Earlier in tab order	Раніше в порядку табуляції
 	Later in tab order	Пізніше в порядку табуляції
+	Calculation order	Порядок обчислень
+	Fix order	Виправити порядок
+	Move only what must move, so every field calculates after the fields it reads.	Переміщує лише те, що потрібно, щоб кожне поле обчислювалося після полів, які воно читає.
+	Earlier in calculation order	Раніше в порядку обчислень
+	Later in calculation order	Пізніше в порядку обчислень
+	Too early	Зарано
+	Reads {name}, which calculates later, so it shows an old value.	Читає {name}, яке обчислюється пізніше, тому показує старе значення.
+	Loop	Цикл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читає {names}, які своєю чергою читають його. Жоден порядок не виправить цикл: змініть одну з формул.
+	Not in order	Поза порядком
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Відсутнє в порядку обчислень, збереженому в PDF: інші переглядачі PDF можуть його не обчислювати.
+	Back to Prepare a form	Назад до «Підготувати форму»
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Жодне поле цієї форми поки не обчислює своє значення. Задайте полю обчислення на вкладці «Обчислення» його властивостей, і воно з’явиться тут.
+	{names} and {last}	{names} і {last}
+	{field} reads no other field	{field} не читає інших полів
+	{field} reads {fields}	{field} читає {fields}
+	No field reads it	Жодне поле його не читає
+	The order saved in the PDF needs tidying	Порядок, збережений у PDF, потребує впорядкування
+	Moves only what must move	Переміщує лише те, що треба
+	Every field calculates after the fields it reads.	Кожне поле обчислюється після полів, які воно читає.
+	Every field outside a loop calculates after the fields it reads.	Кожне поле поза циклом обчислюється після полів, які воно читає.
+	{field} reads its own value	{field} читає власне значення
+	{fields} read each other	{fields} читають одне одного
+	No order can fix a loop. Change one of the formulas.	Жоден порядок не виправить цикл. Змініть одну з формул.
+	Edit {field}'s formula	Змінити формулу {field}
+	Order · top calculates first	Порядок · верхнє обчислюється першим
+	Script	Скрипт
+	Links on page	Зв’язки на сторінці
+	Show on the page which fields each field reads	Показувати на сторінці, які поля читає кожне поле
+	Drag a field to move it, or select it and press {up} or {down}.	Перетягніть поле, щоб перемістити його, або виберіть його й натисніть {up} чи {down}.
 	From:	Від:
 	To:	До:
 	High Resolution	Висока роздільна здатність
@@ -577,6 +609,7 @@
 	Discard private data of other applications	Видалити приватні дані інших застосунків
 	Discard hidden text	Видалити прихований текст
 	Use Flate to encode streams that are not encoded	Кодувати незакодовані потоки за допомогою Flate
+	In streams that use LZW encoding, use Flate instead	Використовувати Flate замість LZW у потоках із кодуванням LZW
 	Remove invalid links and bookmarks	Видалити недійсні посилання й закладки
 	Remove unreferenced named destinations	Видалити іменовані призначення без посилань
 	Compress document structure (object streams)	Стиснути структуру документа (потоки об’єктів)
@@ -809,6 +842,7 @@
 	Insert Page Number	Вставити номер сторінки
 	Insert Date	Вставити дату
 	Start page number	Початковий номер сторінки
+	Shrink the page content to make room for the header and footer	Зменшити вміст сторінки, щоб звільнити місце для колонтитулів
 	Source	Джерело
 	Fit to page	За розміром сторінки
 	Rotation	Поворот
@@ -1187,6 +1221,7 @@
 	Off	Вимкнено
 	Flip on long edge	Перевертати за довгим краєм
 	Flip on short edge	Перевертати за коротким краєм
+	Printer default	За замовчуванням принтера
 	Paper:	Папір:
 	Pages to Print	Сторінки для друку
 	More options:	Додаткові параметри:
@@ -1330,6 +1365,8 @@
 	This document has no layers.	Цей документ не має шарів.
 	This document has no attachments.	Цей документ не має вкладень.
 	Hide layer	Приховати шар
+	Layer options	Параметри шарів
+	Reset to Initial Visibility	Відновити початкову видимість
 	Show layer	Показати шар
 	Set layer visibility	Задати видимість шару
 	on page {label}	на сторінці {label}
@@ -1618,6 +1655,7 @@
 	Looking for printers…	Пошук принтерів…
 	Sending sheet {s} of {n} to {printer}…	Надсилання аркуша {s} із {n} на {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтери не знайдено. Перевірте, що принтер установлено, а диспетчер друку працює, і знову відкрийте «Друк».
+	Reading the printer's settings…	Читання налаштувань принтера…
 	Sending to {printer}…	Надсилання на {printer}…
 	Choose a folder for the searchable files	Виберіть теку для файлів із пошуком
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файли об’єднуються згори донизу. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
@@ -1762,6 +1800,7 @@
 	This document has no restrictions to lift	Цей документ не має обмежень, які можна зняти
 	The document's security settings don't allow this change	Налаштування захисту документа не дозволяють цю зміну
 	The document's security settings don't allow copying text and images	Налаштування захисту документа не дозволяють копіювати текст і зображення
+	The document's security settings don't allow printing	Налаштування захисту документа не дозволяють друк
 	Open a document first	Спочатку відкрийте документ
 	Security will be removed when you save	Захист буде знято під час збереження
 	Click text or an image to edit it	Клацніть текст або зображення для редагування
@@ -1925,6 +1964,7 @@
 	Delete field	Видалити поле
 	Duplicate field	Дублювати поле
 	Set tab order	Задати порядок табуляції
+	Set calculation order	Задати порядок обчислень
 	Change initial view	Змінити початковий вигляд
 	Set alternate text	Задати альтернативний текст
 	Mark figure as decorative	Позначити рисунок як декоративний
@@ -1999,6 +2039,10 @@
 	Perimeter	Периметр
 	Area	Площа
 	Drawing scale	Масштаб креслення
+	Scale	Масштаб
+	Common scales	Поширені масштаби
+	Enter a scale such as 1:50.	Введіть масштаб, наприклад 1:50.
+	Applying a scale switches units to m / mm.	Застосування масштабу перемикає одиниці на м / мм.
 	Snapping	Прив’язування
 	Export measurements	Експортувати вимірювання
 	Open a PDF to measure it.	Відкрийте PDF для вимірювання.
@@ -2152,6 +2196,7 @@ calendar date	October	жовтня
 calendar date	November	листопада
 calendar date	December	грудня
 	Reopen the files that were open when PdfCraft last closed	Знову відкривати файли, які були відкриті під час останнього закриття PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Відновлювати останній вигляд (сторінку, масштаб і показ сторінок) під час повторного відкриття документа
 	Clear Recent Files	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
@@ -2302,6 +2347,9 @@ key	Space	Пробіл
 	Printer paper and scaling may differ. Check driver settings.	Папір і масштаб принтера можуть відрізнятися. Перевірте налаштування драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Масштаб креслення змінюється. Для друку в початковому масштабі виберіть Фактичний розмір.
 	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
+	Don't show again	Більше не показувати
+	Show a notice when a document is secured	Показувати сповіщення, коли документ захищено
+	Always use my default zoom and page layout	Завжди використовувати мій типовий масштаб і макет сторінок
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Цей файл змінено на диску. «Перезавантажити» покаже нову версію й відкине незбережені зміни; «Зберегти» замінить її цією версією.
 	Reload	Перезавантажити
 	Couldn't reload {name}: {e}	Не вдалося перезавантажити {name}: {e}
@@ -2363,6 +2411,13 @@ animation effects	Off	Вимкнено
 	no unused output name	немає вільної назви для вихідного файлу
 	no output folder was chosen	не вибрано теку для виводу
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Завантажено {n} PDF-файл|Завантажено {n} PDF-файли|Завантажено {n} PDF-файлів
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} обчислення тепер використовує нову назву.|{n} обчислення тепер використовують нову назву.|{n} обчислень тепер використовують нову назву.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	У порядку обчислень є {n} запис, який нічого не обчислює. «Виправити порядок» його видалить.|У порядку обчислень є {n} записи, які нічого не обчислюють. «Виправити порядок» їх видалить.|У порядку обчислень є {n} записів, які нічого не обчислюють. «Виправити порядок» їх видалить.
+@plural	{fields} reads it|{fields} read it	{fields} читає його|{fields} читають його|{fields} читають його
+@plural	{n} field shows an old value|{n} fields show old values	{n} поле показує старе значення|{n} поля показують старі значення|{n} полів показують старі значення
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} обчислюється раніше за {fields}, яке воно читає.|{field} обчислюється раніше за {fields}, які воно читає.|{field} обчислюється раніше за {fields}, які воно читає.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ще {n} поле обчислюється зарано.|Ще {n} поля обчислюються зарано.|Ще {n} полів обчислюються зарано.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть його не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.|{fields} немає в порядку, збереженому в PDF, тож інші переглядачі PDF можуть їх не обчислити.
 	Scan	Сканувати
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Розпишіться на аркуші білого паперу та сфотографуйте його за яскравого рівномірного освітлення (зі спалахом). Виберіть фото або перетягніть його сюди: PdfCraft знайде підпис і прибере папір.
 	Choose photo…	Вибрати фото…
@@ -2456,3 +2511,45 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Attach a file…	Прикріпити файл…
+	Delete attachment	Видалити вкладення
+	Attaching files is not available on the web yet	Прикріплення файлів у веб-версії поки недоступне
+	Attach {name}	Прикріпити {name}
+	Delete attachment {key}	Видалити вкладення {key}
+	Font	Шрифт
+	Bulleted list	Маркований список
+	Numbered list	Нумерований список
+	Alignment	Вирівнювання
+	Superscript	Надрядковий
+	Subscript	Підрядковий
+	Paragraph spacing	Інтервал між абзацами
+	Less	Менше
+	Other options	Інші параметри
+	Thumbnail size	Розмір мініатюр
+	Smaller thumbnails	Зменшити мініатюри
+	Larger thumbnails	Збільшити мініатюри
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Змінити форму коментаря
+
+# Prepare a form ▸ Text field table
+	Add text field table	Додати таблицю текстових полів
+	Text field table	Таблиця текстових полів
+	Text Field Table	Таблиця текстових полів
+	Columns	Стовпці
+	Row spacing	Інтервал між рядками
+	Column spacing	Інтервал між стовпцями
+	First row number	Номер першого рядка
+	Column widths	Ширина стовпців
+	Distribute evenly	Розподілити рівномірно
+	Field names	Імена полів
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N або {row} — номер рядка, {col} — номер стовпця, {seq} — номер клітинки. Якщо їх немає, номер рядка додається в кінці.
+	Column {n}	Стовпець {n}
+	Add fields	Додати поля
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	рядки занадто низькі: збільште висоту області, зменште кількість рядків або інтервал між ними
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	стовпець занадто вузький: розширте область, дайте стовпцю більше ширини, зменште кількість стовпців або інтервал між ними
+	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
+	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
+	a field named {name} already exists	поле з іменем {name} уже існує
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Сьогодні

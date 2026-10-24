@@ -125,6 +125,8 @@
 	About PdfCraft	O aplikaci PdfCraft
 	Auto	Automaticky
 	Continuous scrolling	Plynulé posouvání
+	Show gaps between pages	Zobrazovat mezery mezi stránkami
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skrytím mezer spojíte okraje stránek. Okraje uvnitř PDF zůstanou beze změny.
 	Single page	Jednostránkové zobrazení
 	Two-page view	Dvoustránkové zobrazení
 	Show cover page in two-page view	Zobrazit titulní stránku ve dvoustránkovém zobrazení
@@ -137,7 +139,11 @@
 	Fit one full page	Celá jedna stránka
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Používá se, když PDF nepožaduje rozložení ani zvětšení. Plynulé posouvání mezi stránkami neskáče.
 	Reopen the files that were open when PdfCraft last closed	Znovu otevřít soubory, které byly otevřené při posledním zavření aplikace PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Při opětovném otevření dokumentu obnovit poslední zobrazení (stránku, zvětšení a rozložení stránek)
 	Reload documents when their files change on disk	Znovu načítat dokumenty při změně jejich souborů na disku
+	Don't show again	Znovu nezobrazovat
+	Show a notice when a document is secured	Zobrazit upozornění, když je dokument zabezpečený
+	Always use my default zoom and page layout	Vždy používat mé výchozí zvětšení a rozvržení stránky
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tento soubor se na disku změnil. Znovu načíst zobrazí novou verzi a zahodí neuložené změny; Uložit ji nahradí touto verzí.
 	Reload	Znovu načíst
 	Couldn't reload {name}: {e}	Soubor {name} nelze znovu načíst: {e}
@@ -599,6 +605,36 @@ key	Space	Mezerník
 	Could not save: {e}	Nelze uložit: {e}
 	Earlier in tab order	Dříve v pořadí tabulátoru
 	Later in tab order	Později v pořadí tabulátoru
+	Calculation order	Pořadí výpočtů
+	Fix order	Opravit pořadí
+	Move only what must move, so every field calculates after the fields it reads.	Přesune jen to, co musí, aby se každé pole počítalo až po polích, která čte.
+	Earlier in calculation order	Dříve v pořadí výpočtů
+	Later in calculation order	Později v pořadí výpočtů
+	Too early	Příliš brzy
+	Reads {name}, which calculates later, so it shows an old value.	Čte {name}, které se počítá později, takže ukazuje starou hodnotu.
+	Loop	Smyčka
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Čte {names}, která ho čtou zpět. Žádné pořadí smyčku neopraví: změňte jeden ze vzorců.
+	Not in order	Mimo pořadí
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Chybí v pořadí výpočtů uloženém v PDF: jiné prohlížeče PDF ho možná nepočítají.
+	Back to Prepare a form	Zpět na Připravit formulář
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Žádné pole tohoto formuláře zatím nepočítá svou hodnotu. Zadejte poli výpočet na kartě Výpočet v jeho vlastnostech a zobrazí se zde.
+	{names} and {last}	{names} a {last}
+	{field} reads no other field	{field} nečte žádné jiné pole
+	{field} reads {fields}	{field} čte {fields}
+	No field reads it	Žádné pole ho nečte
+	The order saved in the PDF needs tidying	Pořadí uložené v PDF je potřeba uklidit
+	Moves only what must move	Přesune jen to, co musí
+	Every field calculates after the fields it reads.	Každé pole se počítá až po polích, která čte.
+	Every field outside a loop calculates after the fields it reads.	Každé pole mimo smyčku se počítá až po polích, která čte.
+	{field} reads its own value	{field} čte svou vlastní hodnotu
+	{fields} read each other	{fields} čtou jedno druhé
+	No order can fix a loop. Change one of the formulas.	Smyčku žádné pořadí neopraví. Změňte jeden ze vzorců.
+	Edit {field}'s formula	Upravit vzorec pole {field}
+	Order · top calculates first	Pořadí · horní se počítá první
+	Script	Skript
+	Links on page	Vazby na stránce
+	Show on the page which fields each field reads	Ukázat na stránce, která pole čte každé pole
+	Drag a field to move it, or select it and press {up} or {down}.	Pole přesunete přetažením, nebo ho vyberte a stiskněte {up} nebo {down}.
 	From:	Od:
 	To:	Do:
 	High Resolution	Vysoké rozlišení
@@ -659,6 +695,7 @@ key	Space	Mezerník
 	Discard private data of other applications	Zahodit soukromá data jiných aplikací
 	Discard hidden text	Zahodit skrytý text
 	Use Flate to encode streams that are not encoded	Kódovat nekódované proudy metodou Flate
+	In streams that use LZW encoding, use Flate instead	Proudy kódované LZW kódovat metodou Flate
 	Remove invalid links and bookmarks	Odebrat neplatné odkazy a záložky
 	Remove unreferenced named destinations	Odebrat nepoužívané pojmenované cíle
 	Compress document structure (object streams)	Komprimovat strukturu dokumentu (proudy objektů)
@@ -886,6 +923,7 @@ key	Space	Mezerník
 	Insert Page Number	Vložit číslo stránky
 	Insert Date	Vložit datum
 	Start page number	Počáteční číslo stránky
+	Shrink the page content to make room for the header and footer	Zmenšit obsah stránky, aby se vešlo záhlaví a zápatí
 	Source	Zdroj
 	Fit to page	Přizpůsobit stránce
 	Rotation	Otočení
@@ -1257,6 +1295,7 @@ key	Space	Mezerník
 	Off	Vypnuto
 	Flip on long edge	Převrátit podle delší strany
 	Flip on short edge	Převrátit podle kratší strany
+	Printer default	Podle tiskárny
 	Paper:	Papír:
 	Pages to Print	Stránky k tisku
 	More options:	Další možnosti:
@@ -1400,6 +1439,8 @@ key	Space	Mezerník
 	This document has no layers.	Tento dokument nemá žádné vrstvy.
 	This document has no attachments.	Tento dokument nemá žádné přílohy.
 	Hide layer	Skrýt vrstvu
+	Layer options	Možnosti vrstev
+	Reset to Initial Visibility	Obnovit počáteční viditelnost
 	Show layer	Zobrazit vrstvu
 	Set layer visibility	Nastavit viditelnost vrstvy
 	on page {label}	na stránce {label}
@@ -1811,6 +1852,7 @@ key	Space	Mezerník
 	Only the document's owner can change its security (open it with the permissions password)	Zabezpečení může změnit jen vlastník dokumentu (otevřete ho heslem oprávnění)
 	The document's security settings don't allow this change	Nastavení zabezpečení dokumentu tuto změnu nedovoluje
 	The document's security settings don't allow copying text and images	Nastavení zabezpečení dokumentu nedovoluje kopírovat text a obrázky
+	The document's security settings don't allow printing	Nastavení zabezpečení dokumentu nedovoluje tisk
 	Open a document first	Nejdřív otevřete dokument
 	Security will be removed when you save	Zabezpečení se odebere při uložení
 	Click text or an image to edit it	Kliknutím na text nebo obrázek ho upravíte
@@ -1974,6 +2016,7 @@ key	Space	Mezerník
 	Delete field	Odstranit pole
 	Duplicate field	Duplikovat pole
 	Set tab order	Nastavit pořadí tabulátoru
+	Set calculation order	Nastavit pořadí výpočtů
 	Change initial view	Změnit úvodní zobrazení
 	Set alternate text	Nastavit alternativní text
 	Mark figure as decorative	Označit obrázek jako dekorativní
@@ -2048,6 +2091,10 @@ key	Space	Mezerník
 	Perimeter	Obvod
 	Area	Plocha
 	Drawing scale	Měřítko výkresu
+	Scale	Měřítko
+	Common scales	Běžná měřítka
+	Enter a scale such as 1:50.	Zadejte měřítko, například 1:50.
+	Applying a scale switches units to m / mm.	Použití měřítka přepne jednotky na m / mm.
 	Snapping	Přichytávání
 	Export measurements	Exportovat měření
 	Open a PDF to measure it.	Otevřete PDF, které chcete měřit.
@@ -2271,6 +2318,7 @@ certificate	Subject	Subjekt
 	Looking for printers…	Hledání tiskáren…
 	Sending sheet {s} of {n} to {printer}…	Odesílání listu {s} z {n} na {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nebyly nalezeny žádné tiskárny. Zkontrolujte, že je tiskárna nainstalovaná a zařazování tisku běží, a pak znovu otevřete Tisk.
+	Reading the printer's settings…	Načítání nastavení tiskárny…
 	Sending to {printer}…	Odesílání na {printer}…
 	Fill colour	Barva výplně
 	Fill colour: none	Barva výplně: žádná
@@ -2396,25 +2444,32 @@ animation effects	Off	Vypnuto
 	Couldn't print from the browser ({e}); downloaded {name} to print instead	Z prohlížeče nelze tisknout ({e}); místo toho byl k tisku stažen soubor {name}
 	Tools panel side	Strana panelu nástrojů
 	Add comment	Přidat komentář
-	Change tag properties	Změnit vlastnosti značky
+	Change tag properties	Změnit vlastnosti tagu
 # Accessibility structure tags.
-	Tags panel	Panel značek
-	Tags	Značky
-	Tag type	Typ značky
+	Tags panel	Panel tagů
+	Tags	Tagy
+	Tag type	Typ tagu
 	Actual text	Skutečný text
-	Find a tag	Najít značku
-	Collapse tag	Sbalit značku
-	Expand tag	Rozbalit značku
+	Find a tag	Najít tag
+	Collapse tag	Sbalit tag
+	Expand tag	Rozbalit tag
 	Revert changes	Vrátit změny
-	Save tag properties	Uložit vlastnosti značky
-	This document has no editable structure tags.	Tento dokument nemá upravitelné značky struktury.
-	{n} tags	{n} značek
-	Save or revert changes before selecting another tag.	Před výběrem jiné značky změny uložte nebo vraťte.
+	Save tag properties	Uložit vlastnosti tagu
+	This document has no editable structure tags.	Tento dokument nemá žádné upravitelné tagy struktury.
+	{n} tags	Tagy: {n}
+	Save or revert changes before selecting another tag.	Před výběrem jiného tagu změny uložte nebo vraťte.
 	Left out: {names}	Vynecháno: {names}
 	already a PDF	již je PDF
 	no unused output name	žádný volný název výstupního souboru
 	no output folder was chosen	nebyla vybrána výstupní složka
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Stažen {n} soubor PDF|Staženy {n} soubory PDF|Staženo {n} souborů PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} výpočet nyní používá nový název.|{n} výpočty nyní používají nový název.|{n} výpočtů nyní používá nový název.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Pořadí výpočtů má {n} položku, která nic nepočítá. „Opravit pořadí“ ji odstraní.|Pořadí výpočtů má {n} položky, které nic nepočítají. „Opravit pořadí“ je odstraní.|Pořadí výpočtů má {n} položek, které nic nepočítají. „Opravit pořadí“ je odstraní.
+@plural	{fields} reads it|{fields} read it	{fields} ho čte|{fields} ho čtou|{fields} ho čtou
+@plural	{n} field shows an old value|{n} fields show old values	{n} pole ukazuje starou hodnotu|{n} pole ukazují staré hodnoty|{n} polí ukazuje staré hodnoty
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se počítá před {fields}, které čte.|{field} se počítá před {fields}, která čte.|{field} se počítá před {fields}, která čte.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ještě {n} pole se počítá příliš brzy.|Ještě {n} pole se počítají příliš brzy.|Ještě {n} polí se počítá příliš brzy.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} chybí v pořadí uloženém v PDF, takže ho jiné prohlížeče PDF nemusí vypočítat.|{fields} chybí v pořadí uloženém v PDF, takže je jiné prohlížeče PDF nemusí vypočítat.|{fields} chybí v pořadí uloženém v PDF, takže je jiné prohlížeče PDF nemusí vypočítat.
 	Scan	Skenovat
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podepište se na bílý list papíru a vyfoťte ho při jasném, rovnoměrném světle (použijte blesk). Vyberte fotografii nebo ji sem přetáhněte: PdfCraft najde podpis a odstraní papír.
 	Choose photo…	Vybrat fotografii…
@@ -2454,8 +2509,8 @@ animation effects	Off	Vypnuto
 	Not now	Teď ne
 	Open this local PDF?	Otevřít tento místní soubor PDF?
 	This document is trying to open a local file:	Tento dokument se pokouší otevřít místní soubor:
-	Move tag earlier	Přesunout značku dříve
-	Move tag later	Přesunout značku později
+	Move tag earlier	Přesunout tag dříve
+	Move tag later	Přesunout tag později
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Prohlížíte si podepsanou verzi dokumentu „{from}“ (revize {rev}). Je to snímek: změny zde neovlivní originál.
@@ -2463,19 +2518,19 @@ animation effects	Off	Vypnuto
 	Turn upside down (180°)	Otočit vzhůru nohama (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Štítek 4 × 6 in (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Ořízne každou stránku na potištěnou oblast, otočí ji svisle a přizpůsobí listu bez deformace. Jeden štítek na list.
-	Find untagged content	Najít neoznačený obsah
-	No untagged content was found.	Nebyl nalezen žádný neoznačený obsah.
-	Found {n} untagged content problems.	Nalezeno problémů s neoznačeným obsahem: {n}.
-	Tag form fields	Označit pole formuláře
+	Find untagged content	Najít neoznačkovaný obsah
+	No untagged content was found.	Nebyl nalezen žádný neoznačkovaný obsah.
+	Found {n} untagged content problems.	Nalezeno problémů s neoznačkovaným obsahem: {n}.
+	Tag form fields	Označkovat formulářová pole
 	Mark as artifact	Označit jako artefakt
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Odeberte tuto značku listu z pořadí čtení a označte její přímý obsah jako artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Odebrat tento koncový tag z pořadí čtení a jeho přímý obsah označit jako artefakt
 	Mark content as artifact	Označit obsah jako artefakt
 	Word count	Počet slov
 	Current page only	Pouze aktuální stránka
-	Exclude tagged tables	Vynechat označené tabulky
-	Exclude tagged code blocks	Vynechat označené bloky kódu
+	Exclude tagged tables	Vynechat označkované tabulky
+	Exclude tagged code blocks	Vynechat označkované bloky kódu
 	Exclude image/OCR text	Vynechat text obrázků a OCR
-	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Vynechávání využívá tagy PDF. Neoznačené tabulky a kód zůstávají zahrnuty. Vynechání obrázků odstraní i neviditelný text.
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Vynechávání využívá tagy PDF. Neoznačkované tabulky a kód zůstávají zahrnuty. Vynechání obrázků odstraní i neviditelný text.
 	Words	Slova
 	Characters	Znaky
 	Characters without spaces	Znaky bez mezer
@@ -2508,3 +2563,278 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Attach a file…	Připojit soubor…
+	Delete attachment	Odstranit přílohu
+	Attaching files is not available on the web yet	Připojování souborů zatím na webu není k dispozici
+	Attach {name}	Připojit {name}
+	Delete attachment {key}	Odstranit přílohu {key}
+	Font	Písmo
+	Bulleted list	Odrážkový seznam
+	Numbered list	Číslovaný seznam
+	Alignment	Zarovnání
+	Superscript	Horní index
+	Subscript	Dolní index
+	Paragraph spacing	Mezera mezi odstavci
+	Less	Méně
+	Other options	Další možnosti
+	Thumbnail size	Velikost miniatur
+	Smaller thumbnails	Menší miniatury
+	Larger thumbnails	Větší miniatury
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Změnit tvar komentáře
+
+# What the layers below word for themselves (engine `WORDINGS` lists): accessibility findings and
+# the saved report, PDF/A problems, signature details and the changes they name, pages to print,
+# history labels. Terms: timestamp = "časové razítko", timestamp authority = "autorita časových
+# razítek", signer = "podepisující osoba", byte range = "rozsah bajtů".
+	A font isn't embedded	Písmo není vložené
+	A {} action isn't allowed	Akce {} není povolena
+	A {} annotation has additional actions	Anotace {} má další akce
+	A {} annotation has no appearance stream	Anotace {} nemá datový proud vzhledu
+	A {} annotation isn't set to print, or is hidden	Anotace {} není nastavena k tisku nebo je skrytá
+	Accessibility Report	Zpráva o přístupnosti
+	Change Author	Změnit: Autor
+	Change Keywords	Změnit: Klíčová slova
+	Change Subject	Změnit: Předmět
+	Change Title	Změnit: Název
+	Create links	Vytvořit odkazy
+	Detailed Report	Podrobná zpráva
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Je použit DeviceCMYK, ale výstupní záměr PDF/A není profil CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Je použit DeviceRGB, ale výstupní záměr PDF/A není profil RGB
+	Field "{}" on page {p} has no description (tooltip)	Pole „{}“ na stránce {p} nemá popis (popisek nástroje)
+	Filename	Název souboru
+	Flatten Fill & Sign	Sloučit Vyplnit a podepsat se stránkou
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Písmo (bez názvu) na stránce {p} nemapuje své znaky na Unicode
+	Font {} on page {p} doesn't map its characters to Unicode	Písmo {} na stránce {p} nemapuje své znaky na Unicode
+	Form field on page {p} isn't tagged	Formulářové pole na stránce {p} není označkované
+	H{n} follows an H{d}; headings should not skip levels	H{n} následuje po H{d}; nadpisy by neměly přeskakovat úrovně
+	No document language is set	Není nastaven jazyk dokumentu
+	No page has text: the document appears to be images of pages	Žádná stránka nemá text: dokument se zdá být tvořen obrázky stránek
+	Page {p} doesn't tab in structure order	Stránka {p} nepřechází tabulátorem v pořadí struktury
+	Page {p}: {n} untagged content item	Stránka {p}: neoznačkované položky obsahu: {n}
+	Page {p}: {n} untagged content items	Stránka {p}: neoznačkované položky obsahu: {n}
+	Page {} has additional actions	Stránka {} má další akce
+	PdfCraft can't check this signature yet: {}.	PdfCraft zatím nedokáže tento podpis ověřit: {}.
+	Report created	Zpráva vytvořena
+	Rule Name	Název pravidla
+	Save as {level}	Uložit jako {level}
+	Signature is invalid	Podpis je neplatný
+	Signature is valid	Podpis je platný
+	Signature validity is unknown	Platnost podpisu je neznámá
+	Signing time is from the clock on the signer's computer.	Čas podpisu pochází z hodin v počítači podepisující osoby.
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	Podpis ECDSA není v kanonickém DER (přebytečné bajty, výplň nebo chybějící bajt znaménka); přesto byl načten.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	Podpis ECDSA tvoří holé hodnoty r a s místo sekvence DER; přesto byl načten.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	Hodnota podpisu RSA nemá délku modulu klíče (úvodní nulové bajty chybí nebo přebývají); přesto byla načtena.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo podpisu RSA nemá parametr NULL (starší podepisovací programy jej tak zapisují); přesto byl načten.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Certifikát {} nepovoluje pod sebou tolik certifikátů CA (délka cesty), proto se nepoužije k ručení za {}.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Certifikát {} není certifikát CA, který smí vydávat certifikáty, proto se nepoužije k ručení za {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Certifikát {} má kritická rozšíření, která PdfCraft nezná, proto se nepoužije k ručení za {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Certifikát {} nebyl v době podpisu platný, proto se nepoužije k ručení za {}.
+	The checker found problems which may prevent the document from being fully accessible.	Kontrola našla problémy, které mohou bránit plné přístupnosti dokumentu.
+	The document has been altered or corrupted since the signature was applied.	Dokument byl od připojení podpisu změněn nebo poškozen.
+	The document has been altered or corrupted since the timestamp was applied.	Dokument byl od připojení časového razítka změněn nebo poškozen.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	Dokument byl od připojení tohoto podpisu změněn způsobem, který podpis nepovoluje ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Dokument byl od připojení tohoto časového razítka změněn způsobem, který razítko nepovoluje ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	Dokument byl od připojení tohoto podpisu upraven, ale změny jsou povolené ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Dokument byl od připojení tohoto časového razítka upraven, ale změny jsou povolené ({}).
+	The document has no tags (structure tree)	Dokument nemá tagy (strom struktury)
+	The document has no title	Dokument nemá název
+	The document isn't marked as tagged (MarkInfo Marked)	Dokument není označen jako označkovaný (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	Dokument není označkovaný, a tak není označkovaný ani žádný jeho obsah
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	Informace o odvolání vložené v dokumentu ukazují, že certifikát podepisující osoby nebyl odvolán.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Vložené časové razítko je platné a jeho autorita je důvěryhodná; důvěryhodný čas je {}.
+	The font {} isn't embedded	Písmo {} není vložené
+	The metadata doesn't identify the file as {}	Metadata neoznačují soubor jako {}
+	The security settings don't allow screen readers to read the text	Nastavení zabezpečení nedovoluje čtečkám obrazovky číst text
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Algoritmus podpisu a algoritmus otisku v SignerInfo uvádějí různé hashe; podpis byl vytvořen tím ze SignerInfo.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	Podpis nese neověřené časové razítko ({}): autorita časových razítek není ve vašem seznamu důvěryhodných certifikátů, proto se místo něj použije čas podpisu uvedený podepisující osobou.
+	The signature contents are not hexadecimal.	Obsah podpisu není šestnáctkový.
+	The signature could not be checked ({}).	Podpis nebylo možné zkontrolovat ({}).
+	The signature could not be read ({}).	Podpis nebylo možné načíst ({}).
+	The signature could not be verified ({}).	Podpis nebylo možné ověřit ({}).
+	The signature has no valid byte range.	Podpis nemá platný rozsah bajtů.
+	The signature includes an embedded timestamp.	Podpis obsahuje vložené časové razítko.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	Podpis je kódován v BER (neurčité délky) místo DER; byl načten benevolentně.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	Podpis používá zastaralý formát adbe.x509.rsa_sha1.
+	The signature value does not match the signer's certificate: the signature is corrupt.	Hodnota podpisu neodpovídá certifikátu podepisující osoby: podpis je poškozený.
+	The signature's byte range does not exclude exactly its contents.	Rozsah bajtů podpisu nevynechává přesně jeho obsah.
+	The signature's byte range does not match the file.	Rozsah bajtů podpisu neodpovídá souboru.
+	The signature's timestamp token could not be verified ({}).	Časové razítko podpisu nebylo možné ověřit ({}).
+	The signature's timestamp token does not cover the signature value.	Časové razítko podpisu nepokrývá hodnotu podpisu.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Podepsaný obsah je složený (segmentovaný) OCTET STRING, jak BER dovoluje; přesto byl načten.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	Certifikát podepisující osoby nepovoluje digitální podpisy (jeho použití klíče nezahrnuje digitální podpis ani nepopiratelnost).
+	The signer's certificate has been revoked ({}).	Certifikát podepisující osoby byl odvolán ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Certifikát podepisující osoby má kritická rozšíření, která PdfCraft nezná ({}).
+	The signer's certificate is not in the signature.	Certifikát podepisující osoby není v podpisu.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Certifikát podepisující osoby není vydán k podepisování dokumentů (jeho rozšířené použití klíče nezahrnuje podepisování dokumentů).
+	The signer's certificate was not valid at the time of signing.	Certifikát podepisující osoby nebyl v době podpisu platný.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Identita podepisující osoby je neznámá, protože není ve vašem seznamu důvěryhodných certifikátů a žádný z jejích nadřazených certifikátů není důvěryhodný.
+	The signer's identity is valid.	Identita podepisující osoby je platná.
+	The timestamp authority's certificate was not valid at the time of timestamping.	Certifikát autority časových razítek nebyl v době vystavení razítka platný.
+	The timestamp authority's certificate is not issued for time stamping.	Certifikát autority časových razítek není vystaven pro vydávání časových razítek.
+	The timestamp contents are not hexadecimal.	Obsah časového razítka není šestnáctkový.
+	The timestamp has no valid byte range.	Časové razítko nemá platný rozsah bajtů.
+	The timestamp token could not be read ({}).	Časové razítko nebylo možné načíst ({}).
+	The timestamp token is valid and its authority is trusted.	Časové razítko je platné a jeho autorita je důvěryhodná.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Časové razítko je platné, ale autorita časových razítek není ve vašem seznamu důvěryhodných certifikátů.
+	The timestamp's byte range does not exclude exactly its contents.	Rozsah bajtů časového razítka nevynechává přesně jeho obsah.
+	The timestamp's byte range does not match the file.	Rozsah bajtů časového razítka neodpovídá souboru.
+	The window shows the file name, not the title (Initial View > Show)	Okno zobrazuje název souboru, ne název dokumentu (Počáteční zobrazení > Zobrazit)
+	This document has not been modified since this signature was applied.	Tento dokument nebyl od připojení tohoto podpisu upraven.
+	This document has not been modified since this timestamp was applied.	Tento dokument nebyl od připojení tohoto časového razítka upraven.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Tento podpis používá RIPEMD-160, zastaralý 160bitový hashovací algoritmus, který se už pro podpisy nedoporučuje. Podpis se stále ověří, ale nelze na něj spoléhat.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Tento podpis používá SHA-1, slabý hashovací algoritmus, u kterého byly prokázány kolize. Stále se ověří, protože jej používá mnoho dokumentů podepsaných před lety, ale nelze na něj spoléhat.
+	Unsigned signature field	Nepodepsané podpisové pole
+	alternate text hides an annotation inside it	alternativní text skrývá anotaci uvnitř
+	alternate text on an element with no page content	alternativní text u prvku bez obsahu stránky
+	comments	komentáře
+	document security store	úložiště zabezpečení dokumentu
+	document structure	struktura dokumentu
+	form fill	vyplnění formuláře
+	its alternate text is inside another element's and will never be read	jeho alternativní text je uvnitř alternativního textu jiného prvku a nikdy nebude přečten
+	links	odkazy
+	metadata	metadata
+	no alternate text	chybí alternativní text
+	no header cells (TH)	chybí buňky záhlaví (TH)
+	no summary	chybí souhrn
+	not in a TR	není v TR
+	not in a Table, THead, TBody or TFoot	není v Table, THead, TBody ani TFoot
+	not in an L (list)	není v L (seznam)
+	not in an LI (list item)	není v LI (položka seznamu)
+	other changes	jiné změny
+	page content	obsah stránek
+	page {n} is out of range (1–{count})	stránka {n} je mimo rozsah (1–{count})
+	pages added or removed	přidané nebo odebrané stránky
+	rows have between {min} and {max} columns	řádky mají {min} až {max} sloupců
+	the first heading is an H{n}; headings should not skip levels	první nadpis je H{n}; nadpisy by neměly přeskakovat úrovně
+	the signed version could not be read	podepsanou verzi nebylo možné načíst
+	{n} pages and no bookmarks	Počet stránek: {n}, žádné záložky
+	{page} is not a page number or label	{page} není číslo ani označení stránky
+	{ty} element on page {p}: {what}	Prvek {ty} na stránce {p}: {what}
+	{ty} element: {what}	Prvek {ty}: {what}
+	{} annotation on page {p} isn't tagged	Anotace {} na stránce {p} není označkovaná
+	{} annotations aren't allowed	Anotace {} nejsou povoleny
+	… and {n} more	… a další ({n})
+
+# Labels other catalogs carry (shared buttons, tooltips with key caps, the folder picker).
+	 on page {label}	 na stránce {label}
+	of	z
+	Add the PDFs to combine	Přidejte soubory PDF ke sloučení
+	Added the first {n} PDFs in {folder}	Přidány první soubory PDF ze složky {folder} (počet: {n})
+	Always	Vždy
+	Automatically	Automaticky
+	Choose a file…	Vybrat soubor…
+	Choose a folder…	Vybrat složku…
+	Choose…	Vybrat…
+	Color	Barva
+	Comment	Komentář
+	Comment and review	Komentovat a revidovat
+	Copied to clipboard	Zkopírováno do schránky
+	Copy to clipboard	Kopírovat do schránky
+	Create folder	Vytvořit složku
+	Disabled	Vypnuto
+	Document properties (⌘D)	Vlastnosti dokumentu (⌘D)
+	Drop PDFs or folders here, or choose them.	Přetáhněte sem soubory PDF nebo složky, nebo je vyberte.
+	Duplicate	Duplikovat
+	Enabled	Zapnuto
+	Error	Chyba
+	Every PDF in the folder	Všechny soubory PDF ve složce
+	Every PDF in the folder and the folders inside it	Všechny soubory PDF ve složce a jejích podsložkách
+	Folder	Složka
+	Help…	Nápověda…
+	Import	Importovat
+	Information	Informace
+	Loading…	Načítání…
+	Mouse wheel scroll speed	Rychlost posouvání kolečkem myši
+	Move	Přesunout
+	Never	Nikdy
+	New bookmark (⌘B)	Nová záložka (⌘B)
+	Next	Další
+	Next (⌘G)	Další (⌘G)
+	No PDFs found in {folder}	Ve složce {folder} nebyly nalezeny žádné soubory PDF
+	No results	Žádné výsledky
+	On	Zapnuto
+	Open a PDF (⌘O)	Otevřít PDF (⌘O)
+	Open folder	Otevřít složku
+	Organize	Uspořádat
+	Page {n}	Stránka {n}
+	Page {n} of {total}	Stránka {n} z {total}
+	Paste	Vložit
+	Previous	Předchozí
+	Previous (⇧⌘G)	Předchozí (⇧⌘G)
+	Print (⌘P)	Tisk (⌘P)
+	Refresh	Obnovit
+	Rotate view clockwise (⇧⌘+)	Otočit zobrazení po směru hodinových ručiček (⇧⌘+)
+	Save changes?	Uložit změny?
+	Save file	Uložit soubor
+	Search results	Výsledky hledání
+	Select all	Vybrat vše
+	Success	Hotovo
+	System	Podle systému
+	The password must have at least 6 characters.	Heslo musí mít alespoň 6 znaků.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Standardní písma nedokážou vykreslit „{c}“ ({code}). Jako text lze zatím přidat jen západoevropské znaky.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tento soubor se na disku změnil. Načtěte ho znovu, abyste viděli novou verzi; neuložené změny budou ztraceny.
+	Theme	Motiv
+	Warning	Upozornění
+	Zoom in (⌘+)	Přiblížit (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Přiblížit / oddálit (také sevřením prstů nebo posouváním s ⌘)
+	Zoom out (⌘−)	Oddálit (⌘−)
+@plural	{n} comment|{n} comments	{n} komentář|{n} komentáře|{n} komentářů
+@plural	{n} file|{n} files	{n} soubor|{n} soubory|{n} souborů
+@plural	{n} result|{n} results	{n} výsledek|{n} výsledky|{n} výsledků
+theme	Appearance	Vzhled
+
+# The date picker's weekday heads.
+calendar weekday	Su	Ne
+calendar weekday	Mo	Po
+calendar weekday	Tu	Út
+calendar weekday	We	St
+calendar weekday	Th	Čt
+calendar weekday	Fr	Pá
+calendar weekday	Sa	So
+
+# A certificate's fields in the certificate viewer.
+certificate	Issued to	Vydáno pro
+certificate	Issued by	Vydal
+certificate	Valid from	Platný od
+certificate	Valid to	Platný do
+certificate	Intended usage	Zamýšlené použití
+certificate	Serial number	Sériové číslo
+certificate	Issuer	Vydavatel
+certificate	Validity starts	Začátek platnosti
+certificate	Validity ends	Konec platnosti
+certificate	Public key	Veřejný klíč
+certificate	Basic constraints	Základní omezení
+certificate	Key usage	Použití klíče
+certificate	Self-signed	Samopodepsaný
+certificate	SHA-1 digest	Otisk SHA-1
+certificate	SHA-256 digest	Otisk SHA-256
+certificate	Version	Verze
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Podepsané atributy podpisu neobsahují typ obsahu, který CMS vyžaduje; přesto byl podpis načten.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Tento podpis používá klíč RSA kratší než 2048 bitů, který už se pro podpisy nepovažuje za dostatečně silný. Ověření stále projde, ale nelze se na něj spoléhat.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Podepsané atributy podpisu neobsahují otisk zprávy, takže se podpis na dokument nevztahuje.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Podepsané atributy podpisu uvádějí jiný typ obsahu než data, takže nejde o podpis dokumentu.
+	Remove {standard} identification	Odebrat identifikaci {standard}
+
+# Prepare a form ▸ Text field table
+	Add text field table	Přidat tabulku textových polí
+	Text field table	Tabulka textových polí
+	Text Field Table	Tabulka textových polí
+	Columns	Sloupce
+	Row spacing	Mezera mezi řádky
+	Column spacing	Mezera mezi sloupci
+	First row number	Číslo prvního řádku
+	Column widths	Šířky sloupců
+	Distribute evenly	Rozložit rovnoměrně
+	Field names	Názvy polí
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N nebo {row} je číslo řádku, {col} číslo sloupce a {seq} číslo buňky. Bez nich se číslo řádku přidá na konec.
+	Column {n}	Sloupec {n}
+	Add fields	Přidat pole
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	řádky jsou příliš nízké: zvětšete výšku oblasti nebo použijte méně řádků či menší mezeru mezi řádky
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	sloupec je příliš úzký: rozšiřte oblast, dejte sloupci více místa nebo použijte méně sloupců či menší mezeru mezi sloupci
+	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
+	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
+	a field named {name} already exists	pole s názvem {name} už existuje
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Dnes

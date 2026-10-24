@@ -13,6 +13,7 @@
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
 
+mod attachments;
 mod boxes;
 mod dedupe;
 mod import;
@@ -24,6 +25,7 @@ mod transition;
 pub mod view;
 mod xmp;
 
+pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name};
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use dedupe::dedupe_resources;
 pub use import::{
@@ -33,8 +35,8 @@ pub use import::{
 };
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
-    Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark, move_bookmark,
-    rename_bookmark, set_bookmark_open, set_bookmark_page, top_level_bookmarks,
+    Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark,
+    move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
@@ -72,36 +74,74 @@ fn pages_root(doc: &Document) -> Result<ObjRef, OrganizeError> {
 
 /// All leaf pages in order, with their effective inherited attributes.
 fn walk(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
-    let root = pages_root(doc)?;
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    // (node, inherited attributes from ancestors)
-    let mut stack: Vec<(ObjRef, Dict)> = vec![(root, Dict::new())];
-    while let Some((node, inherited)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > 1_000_000 {
-            continue; // cycles in broken trees
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        let mut attrs = inherited.clone();
-        for k in INHERITABLE {
-            if let Some(v) = d.get(k) {
-                attrs.set(k.to_vec(), v.clone());
+    Ok(PageWalk::new(doc, pages_root(doc)?).collect())
+}
+
+/// For each of `INHERITABLE`, the nearest node that sets it, shared rather than copied.
+type Owners = [Option<std::sync::Arc<Object>>; 4];
+
+/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
+/// never one entry per child, and carries inherited attributes as the nodes that set them, so a
+/// child listed many times or shared between nodes is skipped by the seen check before anything
+/// is queued or copied (`pdfcraft_model::pages` walks the same way). Cycles in broken trees end
+/// at the seen check and at most a million nodes are visited.
+struct PageWalk<'a> {
+    doc: &'a Document,
+    seen: std::collections::HashSet<ObjRef>,
+    pending: Vec<(std::sync::Arc<Object>, usize, Owners)>,
+}
+
+impl<'a> PageWalk<'a> {
+    fn new(doc: &'a Document, top: ObjRef) -> Self {
+        let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
+        Self { doc, seen: Default::default(), pending: vec![(top, 0, Default::default())] }
+    }
+}
+
+impl Iterator for PageWalk<'_> {
+    type Item = (ObjRef, Dict);
+
+    fn next(&mut self) -> Option<(ObjRef, Dict)> {
+        while let Some((kids, next, inherited)) = self.pending.last_mut() {
+            let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
+                self.pending.pop();
+                continue;
+            };
+            let node = kid.as_ref();
+            *next += 1;
+            let Some(node) = node else { continue };
+            if self.seen.len() >= 1_000_000 {
+                self.pending.clear();
+                return None;
             }
-        }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            for k in kids.iter().rev() {
-                if let Some(r) = k.as_ref() {
-                    stack.push((r, attrs.clone()));
+            if !self.seen.insert(node) {
+                continue;
+            }
+            let obj = self.doc.get(node);
+            let Some(d) = obj.as_dict() else { continue };
+            let mut owners = inherited.clone();
+            for (k, owner) in INHERITABLE.iter().zip(&mut owners) {
+                if d.contains(k) {
+                    *owner = Some(obj.clone());
                 }
             }
-        } else {
-            out.push((node, attrs));
+            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+            if is_pages {
+                if let Some(kids) = d.get(b"Kids") {
+                    self.pending.push((self.doc.resolve(kids), 0, owners));
+                }
+            } else {
+                let mut attrs = Dict::new();
+                for (k, owner) in INHERITABLE.iter().zip(&owners) {
+                    if let Some(v) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|o| o.get(k)) {
+                        attrs.set(k.to_vec(), v.clone());
+                    }
+                }
+                return Some((node, attrs));
+            }
         }
+        None
     }
-    Ok(out)
 }
 
 /// Leaf pages in document order.
@@ -216,6 +256,12 @@ pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Resu
 }
 
 /// Delete pages. Refuses to delete every page.
+///
+/// # Errors
+///
+/// This operation is not transactional: an error can leave `doc` partially modified. Callers
+/// that need atomic edits (including replacement) must use a working clone and keep it only on
+/// success; discard the working clone on error. The engine does this for its history boundary.
 pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     check(indices, all.len())?;
@@ -365,43 +411,42 @@ fn prune_legacy(doc: &Document, dests: &mut Dict, gone: &[ObjRef], dead: &mut Ve
 /// Prune a name tree held in `slot` (a reference, or a dictionary written inline). A reference is
 /// updated in place and yields `None`; an inline dictionary that changed is handed back.
 fn prune_tree_slot(doc: &mut Document, slot: &Object, gone: &[ObjRef], dead: &mut Vec<Vec<u8>>) -> Result<Option<Dict>, OrganizeError> {
-    let mut seen = Vec::new();
-    match slot {
+    let mut stack = Vec::new();
+    let inline = match slot {
         Object::Ref(r) => {
-            prune_tree_ref(doc, *r, gone, dead, &mut seen)?;
-            Ok(None)
+            stack.push(*r);
+            None
         }
         Object::Dict(d) => {
             let mut node = d.clone();
-            Ok(prune_tree_node(doc, &mut node, gone, dead, &mut seen)?.then_some(node))
+            prune_tree_node(doc, &mut node, gone, dead, &mut stack).then_some(node)
         }
-        _ => Ok(None),
+        _ => None,
+    };
+    // Name trees consist of shallow indirect nodes: graph depth must not become call-stack
+    // depth. Visit each indirect node once, even when cyclic or shared. Unlike the depth-limited
+    // outline::name_tree lookup, deletion must inspect every reachable node to remove references
+    // to freed pages. Both walks use seen sets to stop cycles.
+    let mut seen = std::collections::HashSet::new();
+    while let Some(r) = stack.pop() {
+        if !seen.insert(r) {
+            continue;
+        }
+        let Some(mut node) = doc.get(r).as_dict().cloned() else { continue };
+        if prune_tree_node(doc, &mut node, gone, dead, &mut stack) {
+            doc.update_dict(r, |d| *d = node)?;
+        }
     }
+    Ok(inline)
 }
 
-fn prune_tree_ref(doc: &mut Document, r: ObjRef, gone: &[ObjRef], dead: &mut Vec<Vec<u8>>, seen: &mut Vec<ObjRef>) -> Result<(), OrganizeError> {
-    if seen.contains(&r) {
-        return Ok(());
-    }
-    seen.push(r);
-    let Some(mut node) = doc.get(r).as_dict().cloned() else { return Ok(()) };
-    if prune_tree_node(doc, &mut node, gone, dead, seen)? {
-        doc.update_dict(r, |d| *d = node)?;
-    }
-    Ok(())
-}
-
-/// Drop the /Names pairs of one name-tree node that go to a `gone` page, then do the same for its
-/// /Kids. True when `node` itself changed (kids held by reference are written back here).
-fn prune_tree_node(
-    doc: &mut Document,
-    node: &mut Dict,
-    gone: &[ObjRef],
-    dead: &mut Vec<Vec<u8>>,
-    seen: &mut Vec<ObjRef>,
-) -> Result<bool, OrganizeError> {
+/// Drop the /Names pairs going to a `gone` page, and queue /Kids for the iterative walk.
+/// True when `node` itself changed; child nodes are written back by the caller.
+fn prune_tree_node(doc: &Document, node: &mut Dict, gone: &[ObjRef], dead: &mut Vec<Vec<u8>>, stack: &mut Vec<ObjRef>) -> bool {
     let mut changed = false;
-    if let Some(pairs) = node.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
+    if let Some(names) = node.get(b"Names").map(|n| doc.resolve(n))
+        && let Some(pairs) = names.as_array()
+    {
         let mut kept = Vec::with_capacity(pairs.len());
         for pair in pairs.chunks(2) {
             match pair {
@@ -418,13 +463,16 @@ fn prune_tree_node(
             changed = true;
         }
     }
-    let kids = node.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-    for kid in kids {
-        if let Some(r) = kid.as_ref() {
-            prune_tree_ref(doc, r, gone, dead, seen)?;
+    if let Some(children) = node.get(b"Kids").map(|k| doc.resolve(k))
+        && let Some(kids) = children.as_array()
+    {
+        for kid in kids.iter().rev() {
+            if let Some(r) = kid.as_ref() {
+                stack.push(r);
+            }
         }
     }
-    Ok(changed)
+    changed
 }
 
 /// Take widgets out of the form: out of their field's /Kids, or out of /AcroForm /Fields when
@@ -612,10 +660,21 @@ pub fn check_custom_key(name: &str) -> Result<(), OrganizeError> {
     Ok(())
 }
 
-/// Read a document-information entry as text.
+/// Read a document-information entry as text: `/Info`, else the XMP packet (Title, Author,
+/// Subject, Keywords, Creator and Producer, see `xmp`).
 pub fn info(doc: &Document, key: &str) -> Option<String> {
-    let info = doc.trailer().get(b"Info").map(|o| doc.resolve(o))?;
-    info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text()))
+    let in_info = doc
+        .trailer()
+        .get(b"Info")
+        .map(|o| doc.resolve(o))
+        .and_then(|info| info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())));
+    // Files that state it only in their XMP packet (#2373).
+    in_info.filter(|v| !v.trim_matches('\0').trim().is_empty()).or_else(|| xmp::info_value(doc, key))
+}
+
+/// Whether the document information has an entry `key`, of any type.
+pub fn has_info(doc: &Document, key: &str) -> bool {
+    doc.trailer().get(b"Info").map(|o| doc.resolve(o)).is_some_and(|info| info.as_dict().is_some_and(|d| d.get(key.as_bytes()).is_some()))
 }
 
 /// Set (or clear, with an empty value) a document-information entry.
@@ -645,17 +704,77 @@ fn set_info_entry(doc: &mut Document, key: &[u8], entry: Option<Object>) -> Resu
             })?;
         }
         _ => {
-            let Some(v) = entry else { return Ok(()) };
             let mut d = match doc.trailer().get(b"Info") {
                 Some(Object::Dict(d)) => d.clone(),
                 _ => Dict::new(),
             };
-            d.set(key.to_vec(), v);
+            match entry {
+                Some(v) => d.set(key.to_vec(), v),
+                None => {
+                    if d.remove(key).is_none() {
+                        return Ok(());
+                    }
+                }
+            }
             let r = doc.add(d);
             doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
         }
     }
     Ok(())
+}
+
+/// A standard a document can declare it meets, for [`remove_standard_id`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standard {
+    PdfA,
+    PdfX,
+}
+
+impl Standard {
+    pub fn label(self) -> &'static str {
+        match self {
+            Standard::PdfA => "PDF/A",
+            Standard::PdfX => "PDF/X",
+        }
+    }
+}
+
+/// Remove what identifies the document as meeting `standard`: the `pdfaid:` XMP properties of
+/// ISO 19005, or ISO 15930's `GTS_PDFXVersion` and `GTS_PDFXConformance` in the document
+/// information and as `pdfxid:` XMP properties. Output intents and other metadata stay. Refused
+/// when the document declares nothing of the kind.
+pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), OrganizeError> {
+    let (props, info_keys): (&[&str], &[&str]) = match standard {
+        Standard::PdfA => (&["pdfaid:part", "pdfaid:conformance", "pdfaid:amd", "pdfaid:rev"], &[]),
+        Standard::PdfX => (&["pdfxid:GTS_PDFXVersion", "pdfxid:GTS_PDFXConformance"], &["GTS_PDFXVersion", "GTS_PDFXConformance"]),
+    };
+    let mut removed = xmp::remove_properties(doc, props)?;
+    for key in info_keys {
+        if info(doc, key).is_some() {
+            set_info_entry(doc, key.as_bytes(), None)?;
+            removed = true;
+        }
+    }
+    if removed { Ok(()) } else { Err(OrganizeError::Invalid(format!("the document doesn't declare {}", standard.label()))) }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Steps taken on this thread by loops whose cost follows the input's shape, so a test can
+    /// bound the work a hostile document causes without timing it.
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count `n` steps of input-shaped work (see [`WORK`]).
+#[cfg(test)]
+fn work(n: usize) {
+    WORK.with(|w| w.set(w.get().saturating_add(n)));
+}
+
+/// The steps counted on this thread since the last call.
+#[cfg(test)]
+fn take_work() -> usize {
+    WORK.with(|w| w.replace(0))
 }
 
 #[cfg(test)]

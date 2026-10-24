@@ -23,6 +23,8 @@ egui = { workspace = true }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
+# The log timestamp goes through chrono (no hand-rolled calendar code).
+chrono = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
@@ -54,8 +56,9 @@ winit = { version = "0.30", default-features = false, features = ["wayland"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
-# shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it).
-winsafe = { version = "0.0.29", default-features = false, features = ["user"] }
+# shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
+# and `advapi` for the session id that names the single-instance socket (#3338).
+winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
 # Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (src/motion.rs), through WinRT's
 # `UISettings`, whose bindings are safe to call (winsafe's `SystemParametersInfo` is an unsafe
 # fn). Already in the tree through wgpu's DX12 backend; this adds one small namespace to it.

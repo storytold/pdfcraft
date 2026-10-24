@@ -24,6 +24,10 @@ pub struct CompareState {
     pub leader: usize,
     /// Each half's scroll offset last frame, to tell which one moved.
     pub prev_scroll: [egui::Vec2; 2],
+    /// Show: whether the text changes are in the list and the shading, and whether the visual
+    /// differences (counted, never listed) are shaded (Acrobat's Filter).
+    pub show_text: bool,
+    pub show_visual: bool,
 }
 
 /// Visual differences are shaded orange.
@@ -36,6 +40,7 @@ pub enum PanelAction {
     Report,
     Clear,
     SideBySide(bool),
+    Show { text: bool, visual: bool },
 }
 
 pub fn colour(kind: Kind) -> Color32 {
@@ -106,6 +111,14 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
         ui.painter().rect_filled(dot, egui::CornerRadius::same(2), VISUAL);
         ui.label(crate::i18n::fmt(tl!("{n} {kind}"), &[("n", &s.visual.len().to_string()), ("kind", tl!("Visual"))]));
     });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Show:"));
+        let (mut text, mut visual) = (s.show_text, s.show_visual);
+        let text_changed = ui.add(widgets::checkbox(&mut text, tl!("Text"))).changed();
+        if ui.add(widgets::checkbox(&mut visual, tl!("Visual"))).changed() || text_changed {
+            action = Some(PanelAction::Show { text, visual });
+        }
+    });
     ui.add_space(6.0);
     // Side by side, or the new file alone.
     ui.horizontal(|ui| {
@@ -129,7 +142,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
         }
     });
     ui.separator();
-    for (i, ch) in c.changes.iter().enumerate().take(2000) {
+    for (i, ch) in c.changes.iter().enumerate().filter(|_| s.show_text).take(2000) {
         let text = match ch.kind {
             Kind::Replaced => format!("\"{}\" → \"{}\"", ch.old.text, ch.new.text),
             Kind::Inserted => format!("+ \"{}\"", ch.new.text),
@@ -163,6 +176,17 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
 }
 
 impl PdfCraftApp {
+    /// Set gaps for the active document and both visible comparison panes, leaving other tabs alone.
+    pub(crate) fn set_active_page_gaps(&mut self, show: bool) {
+        let Some((index, id)) = self.active_ids() else { return };
+        let partner = side_by_side(self, index).and_then(|(old, _)| self.views.get(old).map(|v| v.id));
+        for view in &mut self.views {
+            if view.id == id || partner == Some(view.id) {
+                view.set_page_gaps(show);
+            }
+        }
+    }
+
     /// Compare the chosen older document with the active one and show the differences.
     pub fn run_compare(&mut self) {
         let Some((i, new)) = self.active_ids() else { return };
@@ -170,38 +194,6 @@ impl PdfCraftApp {
         match self.session.compare(old, new) {
             Ok(result) => {
                 let visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
-                self.views[i].compare_marks = result
-                    .changes
-                    .iter()
-                    .flat_map(|ch| ch.new.rects.iter().map(move |r| (ch.new.page, r.map(|v| v as f32), colour(ch.kind))))
-                    .collect();
-                // Visual differences not already covered by a text change.
-                let text_marks = self.views[i].compare_marks.clone();
-                for (p, r) in &visual {
-                    let r = r.map(|v| v as f32);
-                    let covered = text_marks.iter().any(|(mp, m, _)| *mp == *p && m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3]);
-                    if !covered {
-                        self.views[i].compare_marks.push((*p, r, VISUAL));
-                    }
-                }
-                // The old file's pages too: what was deleted or replaced, and the visual
-                // differences, so both versions read with their own shading.
-                if let Some(oi) = self.views.iter().position(|v| v.id == old) {
-                    let mut marks: Vec<(usize, [f32; 4], Color32)> = result
-                        .changes
-                        .iter()
-                        .filter(|ch| ch.kind != Kind::Inserted)
-                        .flat_map(|ch| ch.old.rects.iter().map(move |r| (ch.old.page, r.map(|v| v as f32), colour(ch.kind))))
-                        .collect();
-                    for (p, r) in &visual {
-                        let r = r.map(|v| v as f32);
-                        let covered = marks.iter().any(|(mp, m, _)| *mp == *p && m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3]);
-                        if !covered {
-                            marks.push((*p, r, VISUAL));
-                        }
-                    }
-                    self.views[oi].compare_marks = marks;
-                }
                 let n = result.changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
                 let side_by_side = self.views.iter().any(|v| v.id == old) && self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0);
@@ -214,7 +206,10 @@ impl PdfCraftApp {
                     side_by_side,
                     leader: 1,
                     prev_scroll: [egui::Vec2::ZERO; 2],
+                    show_text: true,
+                    show_visual: true,
                 });
+                self.shade_compare(i);
                 self.right = Some(RightPanel::Compare);
                 self.notify(if n == 0 {
                     tl!("The text is the same").to_string()
@@ -252,6 +247,11 @@ impl PdfCraftApp {
                 s.side_by_side = on;
                 s.leader = 1;
             }
+            PanelAction::Show { text, visual } => {
+                s.show_text = text;
+                s.show_visual = visual;
+                self.shade_compare(index);
+            }
             PanelAction::Mark => match self.session.mark_differences(old, new) {
                 Ok(n) => {
                     if let Some(info) = self.session.get(new).map(|d| d.info.clone()) {
@@ -283,6 +283,50 @@ impl PdfCraftApp {
             }
         }
     }
+}
+
+impl PdfCraftApp {
+    /// Shade the comparison on the new file's pages (view `index`) and, when it is open, the old
+    /// file's, with the kinds of change the filter shows.
+    fn shade_compare(&mut self, index: usize) {
+        let Some(s) = self.compare.as_ref() else { return };
+        let old = s.old;
+        let (old_marks, new_marks) = (shading(s, true), shading(s, false));
+        if let Some(v) = self.views.get_mut(index) {
+            v.compare_marks = new_marks;
+        }
+        if let Some(v) = self.views.iter_mut().find(|v| v.id == old) {
+            v.compare_marks = old_marks;
+        }
+    }
+}
+
+/// One half's shading: its side of the text changes (the old file has no side of an insertion)
+/// and the visual differences no text change there covers, so both versions read with their own
+/// shading. Hidden kinds are left out after the overlap test, so hiding the text does not uncover
+/// the visual differences a text change explains.
+fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
+    let overlaps = |p: usize, r: [f32; 4], marks: &[(usize, [f32; 4], Color32)]| {
+        marks.iter().any(|(mp, m, _)| *mp == p && m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3])
+    };
+    let mut text = Vec::new();
+    for ch in s.result.changes.iter().filter(|ch| !(old && ch.kind == Kind::Inserted)) {
+        let side = if old { &ch.old } else { &ch.new };
+        text.extend(side.rects.iter().map(|r| (side.page, r.map(|v| v as f32), colour(ch.kind))));
+    }
+    let mut visual = Vec::new();
+    for (p, r) in &s.visual {
+        let r = r.map(|v| v as f32);
+        // The old file's half also skips a region overlapping one it already shades.
+        if !overlaps(*p, r, &text) && !(old && overlaps(*p, r, &visual)) {
+            visual.push((*p, r, VISUAL));
+        }
+    }
+    let mut out = if s.show_text { text } else { Vec::new() };
+    if s.show_visual {
+        out.extend(visual);
+    }
+    out
 }
 
 /// The two halves of a side-by-side comparison, as view indexes (old, new), when the active
@@ -318,23 +362,37 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
     let leader = app.compare.as_ref().map_or(1, |c| c.leader);
     let (lead, follow) = if leader == 0 { (old, new) } else { (new, old) };
     // The follower takes the leader's zoom and layout before either is drawn.
-    let (zoom, fit, layout, continuous, rotation) = {
+    let (zoom, fit, layout, continuous, page_gaps, rotation) = {
         let v = &app.views[lead];
-        (v.zoom, v.fit, v.layout, v.continuous, v.rotation)
+        (v.zoom, v.fit, v.layout, v.continuous, v.show_page_gaps, v.rotation)
     };
     {
         let v = &mut app.views[follow];
-        if v.zoom != zoom || v.fit != fit || v.layout != layout || v.continuous != continuous || v.rotation != rotation {
+        if v.zoom != zoom
+            || v.fit != fit
+            || v.layout != layout
+            || v.continuous != continuous
+            || v.show_page_gaps != page_gaps
+            || v.rotation != rotation
+        {
             v.zoom = zoom;
             v.fit = fit;
             v.layout = layout;
             v.continuous = continuous;
+            v.show_page_gaps = page_gaps;
             v.rotation = rotation;
         }
     }
     let names = [old, new].map(|i| app.session.get(app.views[i].id).map(|d| d.name.clone()).unwrap_or_default());
+    // Drawing a half can close its own tab (its snapshot bar's Close, #3915), which shifts or
+    // removes the indexes below. Each half is found again by id, and the frame stops when one is gone.
+    let ids = [app.views[old].id, app.views[new].id];
+    let find = |app: &PdfCraftApp, id| app.views.iter().position(|v| v.id == id);
     ui.painter().vline(rect.min.x + half_w, rect.y_range(), egui::Stroke::new(gap, t.border));
-    for (k, (r, index)) in [(left, old), (right, new)].into_iter().enumerate() {
+    for (k, r) in [left, right].into_iter().enumerate() {
+        // Both halves must still be open: once either has closed, the pair is over.
+        let (Some(old_index), Some(new_index)) = (find(app, ids[0]), find(app, ids[1])) else { return };
+        let index = if k == 0 { old_index } else { new_index };
         let caption = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), caption_h));
         ui.painter().rect_filled(caption, 0.0, t.panel);
         let label = crate::i18n::fmt(if k == 0 { tl!("Old file: {name}") } else { tl!("New file: {name}") }, &[("name", &names[k])]);
@@ -351,6 +409,8 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
         crate::canvas::document_area(app, index, &mut child);
     }
     // After both drew: the leader's scroll, when it moved, is the follower's next offset.
+    let (Some(old), Some(new)) = (find(app, ids[0]), find(app, ids[1])) else { return };
+    let follow = if leader == 0 { new } else { old };
     let offsets = [app.views[old].last_scroll, app.views[new].last_scroll];
     if let Some(c) = app.compare.as_mut() {
         let lead_k = if leader == 0 { 0 } else { 1 };

@@ -78,6 +78,8 @@
 	Single page	Một trang
 	Two-page view	Chế độ hai trang
 	Continuous scrolling	Cuộn liên tục
+	Show gaps between pages	Hiện khoảng cách giữa các trang
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Ẩn khoảng cách để nối các mép trang. Lề bên trong PDF vẫn giữ nguyên.
 	Page display	Hiển thị trang
 	Default page display	Hiển thị trang mặc định
 	Default zoom	Thu phóng mặc định
@@ -589,6 +591,7 @@ theme	Appearance	Giao diện
 	Flip horizontal	Lật ngang
 	Flip on long edge	Lật theo cạnh dài
 	Flip on short edge	Lật theo cạnh ngắn
+	Printer default	Mặc định của máy in
 	Flip vertical	Lật dọc
 	Folders	Thư mục
 	Font Size:	Cỡ chữ:
@@ -625,6 +628,8 @@ theme	Appearance	Giao diện
 	Height:	Chiều cao:
 	Hide field highlights	Ẩn tô sáng trường
 	Hide layer	Ẩn lớp
+	Layer options	Tùy chọn lớp
+	Reset to Initial Visibility	Đặt lại khả năng hiển thị ban đầu
 	Hide menu bar	Ẩn thanh trình đơn
 	Hide password	Ẩn mật khẩu
 	Hide toolbars	Ẩn thanh công cụ
@@ -681,6 +686,36 @@ theme	Appearance	Giao diện
 	Larger pages	Trang lớn hơn
 	Later	Để sau
 	Later in tab order	Muộn hơn theo thứ tự tab
+	Calculation order	Thứ tự tính toán
+	Fix order	Sửa thứ tự
+	Move only what must move, so every field calculates after the fields it reads.	Chỉ di chuyển những gì cần di chuyển, để mỗi trường được tính sau các trường mà nó đọc.
+	Earlier in calculation order	Sớm hơn theo thứ tự tính toán
+	Later in calculation order	Muộn hơn theo thứ tự tính toán
+	Too early	Quá sớm
+	Reads {name}, which calculates later, so it shows an old value.	Đọc {name}, trường được tính sau, nên hiển thị giá trị cũ.
+	Loop	Vòng lặp
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Đọc {names}, các trường này lại đọc ngược nó. Không thứ tự nào sửa được vòng lặp: hãy đổi một trong các công thức.
+	Not in order	Không có trong thứ tự
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Không có trong thứ tự tính toán lưu trong PDF: các trình xem PDF khác có thể không tính trường này.
+	Back to Prepare a form	Quay lại Chuẩn bị biểu mẫu
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Chưa có trường nào trong biểu mẫu này tự tính giá trị. Hãy đặt phép tính cho một trường ở thẻ Tính toán trong thuộc tính của nó, trường đó sẽ hiện ở đây.
+	{names} and {last}	{names} và {last}
+	{field} reads no other field	{field} không đọc trường nào khác
+	{field} reads {fields}	{field} đọc {fields}
+	No field reads it	Không trường nào đọc nó
+	The order saved in the PDF needs tidying	Thứ tự lưu trong PDF cần được sắp xếp lại
+	Moves only what must move	Chỉ di chuyển những gì cần thiết
+	Every field calculates after the fields it reads.	Mọi trường đều được tính sau các trường mà nó đọc.
+	Every field outside a loop calculates after the fields it reads.	Mọi trường ngoài vòng lặp đều được tính sau các trường mà nó đọc.
+	{field} reads its own value	{field} đọc chính giá trị của nó
+	{fields} read each other	{fields} đọc lẫn nhau
+	No order can fix a loop. Change one of the formulas.	Không thứ tự nào sửa được vòng lặp. Hãy thay đổi một trong các công thức.
+	Edit {field}'s formula	Sửa công thức của {field}
+	Order · top calculates first	Thứ tự · trên cùng được tính trước
+	Script	Tập lệnh
+	Links on page	Liên kết trên trang
+	Show on the page which fields each field reads	Hiện trên trang các trường mà mỗi trường đọc
+	Drag a field to move it, or select it and press {up} or {down}.	Kéo một trường để di chuyển, hoặc chọn nó rồi nhấn {up} hoặc {down}.
 	Layers	Các lớp
 	Layers Panel and Page	Bảng Các lớp và trang
 	Layout and Magnification	Bố cục và độ phóng đại
@@ -934,6 +969,9 @@ theme	Appearance	Giao diện
 	Redaction code:	Mã xóa nội dung nhạy cảm:
 	Reload	Tải lại
 	Reload documents when their files change on disk	Tải lại tài liệu khi tệp của chúng thay đổi trên đĩa
+	Don't show again	Không hiển thị lại
+	Show a notice when a document is secured	Hiển thị thông báo khi tài liệu được bảo mật
+	Always use my default zoom and page layout	Luôn dùng thu phóng và bố cục trang mặc định của tôi
 	Remove checkmark	Bỏ dấu kiểm
 	Remove invalid links and bookmarks	Gỡ các liên kết và dấu trang không hợp lệ
 	Remove page	Gỡ trang
@@ -1106,6 +1144,7 @@ theme	Appearance	Giao diện
 	Start	Bắt đầu
 	Start Checking	Bắt đầu kiểm tra
 	Start page number	Số trang bắt đầu
+	Shrink the page content to make room for the header and footer	Thu nhỏ nội dung trang để chừa chỗ cho đầu trang và chân trang
 	Status	Trạng thái
 	Steps	Các bước
 	Strength: {s}	Độ mạnh: {s}
@@ -1136,6 +1175,7 @@ theme	Appearance	Giao diện
 	The document now conforms to {level}; save it to keep the changes	Tài liệu hiện tuân thủ {level}; hãy lưu để giữ các thay đổi
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Tài liệu mở không cần mật khẩu; mật khẩu này cần để thay đổi các hạn chế. Mật khẩu được áp dụng khi bạn lưu.
 	The document's security settings don't allow copying text and images	Cài đặt bảo mật của tài liệu không cho phép sao chép văn bản và hình ảnh
+	The document's security settings don't allow printing	Cài đặt bảo mật của tài liệu không cho phép in
 	The document's security settings don't allow this change	Cài đặt bảo mật của tài liệu không cho phép thay đổi này
 	The existing action will be preserved.	Hành động hiện có sẽ được giữ nguyên.
 	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Phông chữ mà PdfCraft dùng để ghi không thể vẽ “{c}” ({code}), nên nó hiển thị là ? trong mọi trình xem PDF. Văn bản vẫn được lưu.
@@ -1230,6 +1270,7 @@ theme	Appearance	Giao diện
 	Update	Cập nhật
 	Use 72 DPI (one point per pixel)	Dùng 72 DPI (một điểm cho mỗi điểm ảnh)
 	Use Flate to encode streams that are not encoded	Dùng Flate để mã hóa các luồng chưa được mã hóa
+	In streams that use LZW encoding, use Flate instead	Dùng Flate thay cho LZW trong các luồng mã hóa LZW
 	Use a Digital ID from a file	Dùng Digital ID từ một tệp
 	Use custom DPI	Dùng DPI tùy chỉnh
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Dùng DPI nhúng của từng hình ảnh; dùng 72 DPI khi không có.
@@ -1401,6 +1442,10 @@ theme	Appearance	Giao diện
 	Draw freehand	Vẽ tự do
 	Drawing	Bản vẽ
 	Drawing scale	Tỷ lệ bản vẽ
+	Scale	Tỷ lệ
+	Common scales	Tỷ lệ thông dụng
+	Enter a scale such as 1:50.	Nhập một tỷ lệ như 1:50.
+	Applying a scale switches units to m / mm.	Áp dụng tỷ lệ sẽ chuyển đơn vị sang m / mm.
 	Drop-down list	Danh sách thả xuống
 	Duplicate pages	Nhân bản trang
 	Edit a PDF	Chỉnh sửa một PDF
@@ -1686,6 +1731,7 @@ theme	Appearance	Giao diện
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo của chữ ký RSA không có tham số NULL (các trình ký cũ ghi như vậy); nó vẫn được đọc.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Chứng chỉ của {} không cho phép có nhiều chứng chỉ CA ở dưới nó như vậy (độ dài đường dẫn), nên nó không được dùng để bảo chứng cho {}.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Chứng chỉ của {} không phải là chứng chỉ CA được phép cấp chứng chỉ, nên nó không được dùng để bảo chứng cho {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Chứng chỉ của {} có các phần mở rộng quan trọng mà PdfCraft không nhận ra, nên nó không được dùng để bảo chứng cho {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Chứng chỉ của {} không hợp lệ tại thời điểm ký, nên nó không được dùng để bảo chứng cho {}.
 	The checker found problems which may prevent the document from being fully accessible.	Trình kiểm tra tìm thấy các vấn đề có thể khiến tài liệu không thể tiếp cận đầy đủ.
 	The document has been altered or corrupted since the signature was applied.	Tài liệu đã bị thay đổi hoặc hỏng kể từ khi chữ ký được áp dụng.
@@ -1719,6 +1765,9 @@ theme	Appearance	Giao diện
 	The signature value does not match the signer's certificate: the signature is corrupt.	Giá trị chữ ký không khớp với chứng chỉ của người ký: chữ ký bị hỏng.
 	The signature's byte range does not exclude exactly its contents.	Dải byte của chữ ký không loại trừ chính xác nội dung của nó.
 	The signature's byte range does not match the file.	Dải byte của chữ ký không khớp với tệp.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Các thuộc tính đã ký của chữ ký không có loại nội dung, điều mà CMS yêu cầu; chữ ký vẫn được đọc.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Các thuộc tính đã ký của chữ ký không có giá trị băm thông điệp, nên chữ ký không bao phủ tài liệu.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Các thuộc tính đã ký của chữ ký chỉ định một loại nội dung khác với dữ liệu, nên đây không phải là chữ ký của tài liệu.
 	The signature's timestamp token could not be verified ({}).	Không thể xác minh mã thông báo dấu thời gian của chữ ký ({}).
 	The signature's timestamp token does not cover the signature value.	Mã thông báo dấu thời gian của chữ ký không bao phủ giá trị chữ ký.
 	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Nội dung được ký là một OCTET STRING dạng cấu trúc (phân đoạn), như BER cho phép; nó vẫn được đọc.
@@ -1731,6 +1780,7 @@ theme	Appearance	Giao diện
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Danh tính của người ký không rõ vì nó chưa được đưa vào danh sách chứng chỉ tin cậy của bạn và không chứng chỉ cấp trên nào của nó là chứng chỉ tin cậy.
 	The signer's identity is valid.	Danh tính của người ký hợp lệ.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Chứng chỉ của cơ quan cấp dấu thời gian không hợp lệ tại thời điểm đóng dấu thời gian.
+	The timestamp authority's certificate is not issued for time stamping.	Chứng chỉ của cơ quan cấp dấu thời gian không được cấp cho mục đích đóng dấu thời gian.
 	The timestamp contents are not hexadecimal.	Nội dung dấu thời gian không phải là thập lục phân.
 	The timestamp has no valid byte range.	Dấu thời gian không có dải byte hợp lệ.
 	The timestamp token could not be read ({}).	Không thể đọc mã thông báo dấu thời gian ({}).
@@ -1744,6 +1794,7 @@ theme	Appearance	Giao diện
 	This document has not been modified since this timestamp was applied.	Tài liệu này chưa bị sửa đổi kể từ khi dấu thời gian này được áp dụng.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Chữ ký này dùng RIPEMD-160, một thuật toán băm 160 bit cũ không còn được khuyến nghị cho chữ ký. Nó vẫn xác thực được, nhưng không nên dựa vào nó.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Chữ ký này dùng SHA-1, một thuật toán băm yếu: các va chạm trong nó đã được chứng minh. Nó vẫn xác thực được vì nhiều tài liệu được ký từ nhiều năm trước dùng nó, nhưng không nên dựa vào nó.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Chữ ký này dùng khóa RSA ngắn hơn 2048 bit, không còn được coi là đủ mạnh cho chữ ký. Nó vẫn xác thực được, nhưng không nên dựa vào nó.
 	Undo {action}	Hoàn tác {action}
 	Unsigned signature field	Trường chữ ký chưa ký
 	Unsigned signature field: {name}	Trường chữ ký chưa ký: {name}
@@ -2271,6 +2322,7 @@ comment menu	Edit	Sửa
 	Set status Rejected	Đặt trạng thái Đã từ chối
 	Set status Unmarked	Đặt trạng thái Chưa đánh dấu
 	Set tab order	Đặt thứ tự tab
+	Set calculation order	Đặt thứ tự tính toán
 	Set the image of {name}	Đặt hình ảnh của {name}
 	Shadings	Chuyển sắc
 	Show a field	Hiện một trường
@@ -2588,6 +2640,13 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} tên trường trùng với các tệp trước và sẽ được đổi tên: {list}
 @plural	{n} object selected|{n} objects selected	Đã chọn {n} đối tượng
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Đã tải xuống {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} phép tính giờ dùng tên mới.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Thứ tự tính toán có {n} mục không tính gì. "Sửa thứ tự" sẽ xóa chúng.
+@plural	{fields} reads it|{fields} read it	{fields} đọc nó
+@plural	{n} field shows an old value|{n} fields show old values	{n} trường hiển thị giá trị cũ
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} được tính trước {fields} mà nó đọc.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Còn {n} trường khác được tính quá sớm.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} không có trong thứ tự lưu trong PDF, nên các trình xem PDF khác có thể không tính.
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
@@ -2660,6 +2719,7 @@ key	Space	Space
 	Redaction mark appearance	Hình thức dấu xóa nội dung nhạy cảm
 	Remove Crop	Bỏ xén
 	Remove this leaf tag from reading order and mark its direct content as an artifact	Xóa thẻ lá này khỏi thứ tự đọc và đánh dấu nội dung trực tiếp của nó là thành phần trang trí
+	Remove {standard} identification	Gỡ thông tin nhận dạng {standard}
 	Resolution:	Độ phân giải:
 	Save anyway	Vẫn lưu
 	Save over the changed file?	Lưu đè lên tệp đã thay đổi?
@@ -2683,7 +2743,58 @@ key	Space	Space
 	Words	Từ
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi được mở hoặc lưu lần cuối. Lưu lúc này sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
 @id	file.word_count	Đếm từ…
+	Bulleted list	Danh sách dấu đầu dòng
+	Numbered list	Danh sách đánh số
+	Alignment	Căn lề
+	Paragraph spacing	Khoảng cách đoạn
+	Superscript	Chỉ số trên
+	Subscript	Chỉ số dưới
+	Less	Ít hơn
+	Other options	Tùy chọn khác
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Attach a file…	Đính kèm tệp…
+	Delete attachment	Xóa tệp đính kèm
+	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
+	Attach {name}	Đính kèm {name}
+	Delete attachment {key}	Xóa tệp đính kèm {key}
+	Thumbnail size	Kích thước hình thu nhỏ
+	Smaller thumbnails	Giảm kích thước hình thu nhỏ
+	Larger thumbnails	Tăng kích thước hình thu nhỏ
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Đổi hình dạng nhận xét
+
+# AI-assisted additions for reading printer options off the GUI thread (#1818) (2026-10-16); not reviewed by a native speaker.
+	Reading the printer's settings…	Đang đọc cài đặt của máy in…
+
+# Prepare a form ▸ Text field table
+	Add text field table	Thêm bảng trường văn bản
+	Text field table	Bảng trường văn bản
+	Text Field Table	Bảng trường văn bản
+	Columns	Cột
+	Row spacing	Khoảng cách hàng
+	Column spacing	Khoảng cách cột
+	First row number	Số hàng đầu tiên
+	Column widths	Độ rộng cột
+	Distribute evenly	Phân bố đều
+	Field names	Tên trường
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N hoặc {row} là số hàng, {col} là số cột, {seq} là số ô. Nếu không có cái nào, số hàng được thêm vào cuối.
+	Column {n}	Cột {n}
+	Add fields	Thêm các trường
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	các hàng quá thấp: hãy làm vùng cao hơn, hoặc dùng ít hàng hơn hay khoảng cách hàng nhỏ hơn
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	một cột quá hẹp: hãy làm vùng rộng hơn, cho cột thêm độ rộng, hoặc dùng ít cột hơn hay khoảng cách cột nhỏ hơn
+	field names can't contain a period: {name}	tên trường không được chứa dấu chấm: {name}
+	two cells would both be named {name}	hai ô sẽ cùng có tên {name}
+	a field named {name} already exists	đã có trường tên {name}
+	a table has 1 to {max} rows	một bảng có từ 1 đến {max} hàng
+	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
+	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Hôm nay
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
