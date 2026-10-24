@@ -54,6 +54,28 @@ pub enum Clip {
         rgba: Vec<u8>,
     },
     Text(String),
+    /// Files copied in Explorer, Finder or a file manager, by path.
+    Files(Vec<std::path::PathBuf>),
+}
+
+/// The files copied to the system clipboard (Explorer, Finder, a file manager), if any.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_clipboard_files() -> Vec<std::path::PathBuf> {
+    clean_file_list(arboard::Clipboard::new().and_then(|mut cb| cb.get().file_list()).unwrap_or_default())
+}
+
+/// A copied file list as paths to open. On Linux the list arrives as text/uri-list, whose lines
+/// end in CR LF (RFC 2483), and arboard splits it at LF alone: the CR stays on each path.
+#[cfg(not(target_arch = "wasm32"))]
+fn clean_file_list(paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    paths
+        .into_iter()
+        .map(|p| match p.to_str() {
+            Some(s) => std::path::PathBuf::from(s.trim_end_matches(['\r', '\n'])),
+            None => p,
+        })
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect()
 }
 
 /// An image on the system clipboard, or else its text.
@@ -137,6 +159,7 @@ impl PdfCraftApp {
                 self.session.create_from_images(&[("Clipboard.png".into(), png)])
             }
             Clip::Text(t) => self.session.create_from_text("Clipboard", &t),
+            Clip::Files(_) => return Err("the clipboard holds files, not an image or text".into()),
         };
         self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string()))
     }
@@ -296,5 +319,17 @@ impl PdfCraftApp {
             Ok(()) => saved(self, name),
             Err(e) => self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::path::PathBuf;
+
+    /// A file list from a GTK or Qt file manager keeps the CR of each CR LF line end.
+    #[test]
+    fn copied_file_lists_lose_their_line_ends() {
+        let pasted = vec![PathBuf::from("/tmp/a.pdf\r"), PathBuf::from("/tmp/b c.pdf"), PathBuf::from("\r")];
+        assert_eq!(super::clean_file_list(pasted), [PathBuf::from("/tmp/a.pdf"), PathBuf::from("/tmp/b c.pdf")]);
     }
 }

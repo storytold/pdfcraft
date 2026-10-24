@@ -2971,6 +2971,8 @@ impl PdfCraftApp {
         Ok(())
     }
 
+    /// The window's keyboard shortcuts for this frame: modal prompts first, then the registry's
+    /// commands, then ⌘V's pastes (copied files on Home, pictures on a page) and the canvas keys.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
         let pasted = self.paste_key_released(ctx);
@@ -3002,6 +3004,8 @@ impl PdfCraftApp {
             return;
         }
         self.registry_shortcuts(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        let pasted = pasted && !self.paste_files_key(ctx, pasted);
         // (Esc closes a Combine file shown large first.)
         if self.full_screen && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.set_full_screen(ctx, false);
