@@ -955,7 +955,8 @@ fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>
     let Some(area) = flows.get(main).map(|f| bounds(&f.ids)) else { return nothing() };
     let mut lines = Vec::new();
     for (fi, flow) in flows.iter_mut().enumerate() {
-        if fi == main {
+        // Upside-down text (a half turn) is not turned a quarter, and keeps its own flow.
+        if fi == main || !matches!(flow.quarter, Some(1 | 3)) {
             continue;
         }
         let (mut ids, mut line_of, mut space_before) = (Vec::new(), Vec::new(), Vec::new());
@@ -1625,7 +1626,9 @@ fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
 ///    text comes out in logical order. A block whose first line sits on the baseline of the line read
 ///    just before it, to its right and less than [`SAME_LINE_GAP`] heights away, continues that line
-///    after a space (a label and its value, words drawn out of order or in another size).
+///    after a space (a label and its value, words drawn out of order or in another size). A block of
+///    several lines does so only after a line narrower than [`SAME_LINE_GAP`] heights (a label):
+///    beside a wider one it is the next column.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let (order, line_of, space_before) = arrange(&glyphs);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
@@ -1913,11 +1916,15 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             // A block whose first line sits on the baseline of the line just read, to its right, goes on that line
             // (a label and its value, a word drawn out of order or set in another size). Same-baseline segments
             // are always in different blocks. A column of several lines is read after the column to its left
-            // ends, so their lines don't meet, and one-line paragraphs of two columns that share a baseline are
-            // further apart than `same_line` allows. Right-to-left lines are left alone: their blocks still read
-            // left first.
+            // ends, so their lines don't meet. A paragraph of several lines that starts beside a line as wide as
+            // `SAME_LINE_GAP` heights or more is the next column, not that line's value, so it starts a line of
+            // its own; only a narrower line (a label) takes it. One-line paragraphs of two columns that share a
+            // baseline cannot be told from a table row, and are further apart than `same_line` allows unless the
+            // left one fills its column. Right-to-left lines are left alone: their blocks still read left first.
+            let paragraph = blocks[b].0.len() > 1;
+            let label = |p: &Seg| p.bbox[2] - p.bbox[0] < SAME_LINE_GAP * p.h;
             let joined = match last {
-                Some((p, p_rtl)) if k == 0 && !p_rtl && !has_rtl => segs.get(p).filter(|p| same_line(p, &segs[si])),
+                Some((p, p_rtl)) if k == 0 && !p_rtl && !has_rtl => segs.get(p).filter(|p| same_line(p, &segs[si]) && (!paragraph || label(p))),
                 _ => None,
             };
             let start = order.len();
@@ -2823,6 +2830,21 @@ mod tests {
         sized(&mut v, "rightone", 300.0, 100.0, 12.0);
         sized(&mut v, "righttwo", 300.0, 114.0, 12.0);
         assert_eq!(layout(v).plain_text(), "07 leftone\nlefttwo\nrightone\nrighttwo");
+        // Two columns of prose 20 pt apart, where a one-line paragraph that fills the left column shares its baseline
+        // with the first line of a paragraph in the right one: the paragraph is the next column, not the line's value.
+        let mut v = Vec::new();
+        for (k, y) in [100.0, 112.0, 124.0].iter().enumerate() {
+            sized(&mut v, &format!("leftparagraphlinenumber{k}xxxxxxxxxxxxxxx"), 72.0, *y, 10.0);
+        }
+        sized(&mut v, "leftlastonelinexxxxxxxxxxxxxxxxxxxxxxxx", 72.0, 160.0, 10.0);
+        for (k, y) in [100.0, 112.0, 124.0].iter().enumerate() {
+            sized(&mut v, &format!("rightparagraphline{k}"), 326.0, *y, 10.0);
+        }
+        sized(&mut v, "rightsecondpara", 326.0, 160.0, 10.0);
+        sized(&mut v, "rightsecondparaline2", 326.0, 172.0, 10.0);
+        let t = layout(v).plain_text();
+        assert!(t.lines().any(|l| l == "leftlastonelinexxxxxxxxxxxxxxxxxxxxxxxx"), "{t}");
+        assert!(t.lines().any(|l| l == "rightsecondpara"), "{t}");
         // Half a height lower is another line.
         let mut v = Vec::new();
         sized(&mut v, "first", 90.0, 100.0, 14.0);
@@ -2943,6 +2965,9 @@ mod tests {
         assert_eq!(page("", up), "Alpha\nBeta\nup\nGamma\nDelta");
         assert_eq!(page(up, ""), "Alpha\nBeta\nup\nGamma\nDelta", "drawn before the text");
         assert_eq!(page("", down), "Alpha\nBeta\ndn\nGamma\nDelta");
+        // Upside-down text inside the text's area, under "Beta", is not turned a quarter and keeps its own flow.
+        let upside_down = "BT /F1 12 Tf -1 0 0 -1 110 660 Tm (ud) Tj ET\n";
+        assert_eq!(page("", upside_down), "Alpha\nBeta\nGamma\nDelta\nud");
         // A stamp up the left margin, beside "Beta" and "Gamma": laid out with the text, it would read after "Alpha".
         let stamp = "BT /F1 10 Tf 0 1 -1 0 30 640 Tm (arXiv stamp) Tj ET\n";
         assert_eq!(page("", stamp), "Alpha\nBeta\nGamma\nDelta\narXiv stamp");
