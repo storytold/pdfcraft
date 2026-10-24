@@ -236,14 +236,19 @@ impl TranslationPopup {
             });
         });
 
-        // Dismiss on clicks outside the popup (excluding combo box dropdown menus and tooltips)
+        // Dismiss on clicks outside the popup (excluding the translation combo box dropdown menus and tooltips)
         if ui.input(|i| i.pointer.any_pressed())
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
         {
             let rect = area_res.response.rect;
             if !rect.contains(pos) {
-                let on_subpopup =
-                    ui.ctx().layer_id_at(pos).is_some_and(|lid| lid.order == egui::Order::Foreground || lid.order == egui::Order::Tooltip);
+                let area_id = Id::new("doc-translation-popup");
+                let target_popup_id = area_id.with("target_lang_combo").with("popup");
+                let source_popup_id = area_id.with("source_lang_combo").with("popup");
+                let on_subpopup = ui
+                    .ctx()
+                    .layer_id_at(pos)
+                    .is_some_and(|lid| lid.id == target_popup_id || lid.id == source_popup_id || lid.order == egui::Order::Tooltip);
                 if !on_subpopup {
                     keep_open = false;
                 }
