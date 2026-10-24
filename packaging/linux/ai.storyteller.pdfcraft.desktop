@@ -12,3 +12,8 @@ StartupWMClass=ai.storyteller.pdfcraft
 Categories=Office;Viewer;
 Keywords=pdf;viewer;editor;annotate;sign;forms;merge;split;
 MimeType=application/pdf;
+Actions=Combine;
+
+[Desktop Action Combine]
+Name=Combine files in PdfCraft
+Exec=pdfcraft --combine %U
