@@ -2532,3 +2532,31 @@ fn no_zoom_comments_are_picked_and_resized_where_they_are_drawn() {
     crate::support::settle(&mut h);
     assert_eq!(select(&mut h, (110.0, 110.0)), Some((0, 0)), "at 100% the whole /Rect is the comment");
 }
+
+/// A 300 × 200 page with a highlight with the NoZoom flag (`/F 12`) and no appearance, whose one
+/// quadrilateral fills its 40 × 40 `/Rect`, the upper-left corner at (40, 180).
+const NO_ZOOM_HIGHLIGHT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Highlight /F 12 /Rect [40 140 80 180] /QuadPoints [40 180 80 180 40 140 80 140] /C [1 1 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.3: a NoZoom highlight's marked lines are drawn scaled about the upper-left
+/// corner of its `/Rect` like the rest of it, so at 400% it is picked in that quarter-size box,
+/// not across its whole `/QuadPoints`.
+#[test]
+fn no_zoom_highlights_are_picked_where_their_quads_are_drawn() {
+    let mut h = harness_with_bytes(NO_ZOOM_HIGHLIGHT.to_vec(), |app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    let select = |h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)| {
+        h.state_mut().views[0].comments.selected = None;
+        click_pt(h, p);
+        h.state().views[0].comments.selected
+    };
+    assert_eq!(select(&mut h, (70.0, 150.0)), None, "inside the quad, outside where it is drawn at 400%");
+    assert_eq!(select(&mut h, (45.0, 175.0)), Some((0, 0)), "picked where it is drawn");
+}

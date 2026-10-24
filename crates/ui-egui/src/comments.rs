@@ -652,16 +652,7 @@ impl PageCx<'_> {
     pub(crate) fn screen_rects<'b>(&'b self, a: &'b Annotation) -> impl Iterator<Item = Rect> + 'b {
         let quads = if is_markup(&a.subtype) { a.quads.as_slice() } else { &[] };
         let fallback = quads.is_empty().then(|| self.screen_rect(a));
-        quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .chain(fallback)
+        quads.iter().map(|q| self.quad_screen_rect(a, q)).chain(fallback)
     }
 
     /// A redaction mark's areas: one per marked quad, or its rectangle.
@@ -669,16 +660,18 @@ impl PageCx<'_> {
         if a.quads.is_empty() {
             return vec![self.screen_rect(a)];
         }
-        a.quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .collect()
+        a.quads.iter().map(|q| self.quad_screen_rect(a, q)).collect()
+    }
+
+    /// Where the `/QuadPoints` quadrilateral `q` of `a` is drawn on screen: its bounds, scaled
+    /// with `a` as [`zoomed_quad`] scales them.
+    fn quad_screen_rect(&self, a: &Annotation, q: &[f32; 8]) -> Rect {
+        let xs = [q[0], q[2], q[4], q[6]];
+        let ys = [q[1], q[3], q[5], q[7]];
+        let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+        let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+        let bounds = zoomed_quad(a, [x0, y0, x1, y1].map(f64::from), self.magnification());
+        self.xf.user_rect(self.info, self.page, bounds.map(|v| v as f32))
     }
 
     /// The topmost comment under `p`.
@@ -744,6 +737,22 @@ pub(crate) fn zoomed_rect(a: &Annotation, rect: [f64; 4], magnification: f32) ->
     }
     let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
     [x0, y1 - (y1 - y0) * s, x0 + (x1 - x0) * s, y1]
+}
+
+/// Where the user-space box `bounds` (a text markup quadrilateral's) of `a` is drawn on a page
+/// shown at `magnification`: for a comment that keeps its size on the screen, scaled by
+/// `1/magnification` about the upper-left corner of `a`'s `/Rect`, as the renderer scales its
+/// appearance (hayro-interpret patch 51), and as it is otherwise. The guards are
+/// [`zoomed_rect`]'s, and a scaled box that isn't finite leaves `bounds` as it is.
+pub(crate) fn zoomed_quad(a: &Annotation, bounds: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return bounds;
+    }
+    let r = a.rect.map(f64::from);
+    let (px, py) = (r[0].min(r[2]), r[1].max(r[3]));
+    let scaled = [px + (bounds[0] - px) * s, py + (bounds[1] - py) * s, px + (bounds[2] - px) * s, py + (bounds[3] - py) * s];
+    if scaled.iter().all(|v| v.is_finite()) { scaled } else { bounds }
 }
 
 /// The `/Rect` that [`zoomed_rect`] draws in the user-space box `shown`: its inverse, for a box
