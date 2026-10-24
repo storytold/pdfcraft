@@ -48,7 +48,6 @@
 	Lines +/−	新增 / 删除行数
 	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	仅在您信任此文档时继续。链接地址可能携带文档中的信息，例如您在表单中输入的内容。
 	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	请使用单面打印。保持纸张顺序，沿裁切标记切开，然后按从左到右、从上到下的顺序叠放各摞纸张。
-
 	Menu	菜单
 	File	文件
 	Edit	编辑
@@ -419,14 +418,12 @@
 	of the following fields:	以下字段的：
 	Simplified field notation:	简化字段表示法：
 	Field names with + - * / and parentheses; put \\ before spaces in names.	字段名支持 + - * / 和括号；名称中的空格前加 \\。
-
 # Document font selection
 	Finding document fonts…	正在查找文档字体…
 	Installed fonts…	已安装字体…
 	Keep source fonts	保留原始字体
 	Load font…	加载字体…
 	No openly licensed document fonts found. Load a font file.	未找到采用开放许可证的字体。请加载字体文件。
-
 	Format text	设置文本格式
 	Bold	粗体
 	Italic	斜体
@@ -1898,7 +1895,6 @@
 	Digitally sign	数字签名
 	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	在 PdfCraft 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
-
 	Measure distance	测量距离
 	Measure perimeter	测量周长
 	Measure area	测量面积
@@ -1943,7 +1939,6 @@
 	{n} measurements use an unsupported format and are left out.	{n} 个测量使用了不支持的格式，已被排除。
 	This area has too many overlapping paths; intersection snapping is limited.	此区域有太多重叠路径；交点吸附受到限制。
 	This measurement needs at least {n} points.	此测量至少需要 {n} 个点。
-
 # Remaining dialogs, generated history labels and diagnostics. Translated from the English meaning.
 	{0}: {1}	{0}：{1}
 	{dpi} pixels/inch	{dpi} 像素/英寸
@@ -2122,7 +2117,6 @@
 	Update header & footer	更新页眉和页脚
 	Update watermark	更新水印
 	Your name	您的姓名
-
 # Additional UI labels, including newer workspace and security prompts.
 	Change {what}	更改{what}
 	Cut and stack	裁切后堆叠
@@ -2211,7 +2205,6 @@
 	This printer offers no settings of its own.	此打印机没有专属设置。
 	Scroll tabs left	向左滚动选项卡
 	Scroll tabs right	向右滚动选项卡
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	共享字段属性
 	{n} fields selected	已选择 {n} 个字段
@@ -2232,7 +2225,6 @@
 	The field {name} no longer exists.	字段 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	已选择 {n} 个对象
 	Drag the selection to move it. Esc clears the selection.	拖动选区即可移动。按 Esc 清除选择。
@@ -2248,7 +2240,6 @@
 	Fill colour	填充颜色
 	No fill	无填充
 	Fill colour: none	填充颜色：无
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2270,7 +2261,6 @@ key	Space	空格
 	Expand all pages	展开所有页面
 	Remove page	删除页面
 	Remove {n} pages	删除 {n} 页
-
 # Shared panel docking
 	Reset panel layout	重置面板布局
 	Float panel	浮动面板
@@ -2280,7 +2270,6 @@ key	Space	空格
 	Resize panel window	调整面板窗口大小
 	Tools	工具
 	Inspector	检查器
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	PDF 页面：{size}
 	Match page at 100%	匹配页面并设为 100%
@@ -2360,7 +2349,6 @@ animation effects	Off	关
 	Ink sensitivity	墨迹灵敏度
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	框内未找到签名。请将框移到签名上，或提高墨迹灵敏度。
 	Couldn't use the photo: {e}	无法使用该照片：{e}
-
 # PDF tab context menu (#1233)
 	Close Tab	关闭标签页
 	Reopen Closed Tab	重新打开已关闭的标签页
@@ -2381,7 +2369,6 @@ animation effects	Off	关
 	Restore	还原
 	Use system title bar	使用系统标题栏
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	用简单的标题栏显示窗口按钮，而不是在标签栏中。GNOME 不为应用绘制标题栏，因此此标题栏不会跟随其主题。
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	允许
 	Only allow this if you trust the source document.	仅在您信任源文档时才允许此操作。
@@ -2393,7 +2380,6 @@ animation effects	Off	关
 	This document is trying to open a local file:	此文档正尝试打开本地文件：
 	Move tag earlier	将标签前移
 	Move tag later	将标签后移
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的已签名版本（修订版本 {rev}）。这是快照：在此处所做的更改不会影响原始文档。
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的修订版本 {rev}。这是快照：在此处所做的更改不会影响原始文档。
@@ -2459,7 +2445,6 @@ animation effects	Off	关
 	Larger thumbnails	放大缩略图
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	更改注释形状
-
 # Prepare a form ▸ Text field table
 	Add text field table	添加文本字段表格
 	Text field table	文本字段表格
@@ -2479,3 +2464,10 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+	Open from cloud…	从云端打开…
+	Open local file…	打开本地文件…
+	Open from cloud	从云端打开
+	Save as to cloud…	另存为到云端…
+	Save as to cloud	另存为到云端
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此文件已在磁盘上更改。请重新加载以查看新版本；未保存的更改将会丢失。
+	Mouse wheel scroll speed	鼠标滚轮滚动速度

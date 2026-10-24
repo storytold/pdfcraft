@@ -2384,7 +2384,6 @@ animation effects	Off	Өшірулі
 	Ink sensitivity	Сия сезімталдығы
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Жақтауда қолтаңба табылмады. Жақтауды қолтаңбаның үстіне жылжытыңыз немесе сия сезімталдығын арттырыңыз.
 	Couldn't use the photo: {e}	Суретті пайдалану мүмкін болмады: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Қойындыны жабу
 	Reopen Closed Tab	Жабылған қойындыны қайта ашу
@@ -2415,7 +2414,6 @@ animation effects	Off	Өшірулі
 	Restore	Қалпына келтіру
 	Use system title bar	Жүйелік тақырып жолағын пайдалану
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Терезе батырмалары үшін қойындылар жолағының орнына қарапайым тақырып жолағын көрсету. GNOME қолданбаларға тақырып жолағын салмайды, сондықтан бұл жолақ оның тақырыбына сәйкес келмейді.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Рұқсат беру
 	Only allow this if you trust the source document.	Бастапқы құжатқа сенсеңіз ғана рұқсат беріңіз.
@@ -2427,7 +2425,6 @@ animation effects	Off	Өшірулі
 	This document is trying to open a local file:	Бұл құжат жергілікті файлды ашуға әрекеттеніп жатыр:
 	Move tag earlier	Тегті ертерек жылжыту
 	Move tag later	Тегті кейінірек жылжыту
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының қол қойылған нұсқасын ({rev} нұсқа) қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының {rev} нұсқасын қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
@@ -2493,7 +2490,6 @@ animation effects	Off	Өшірулі
 	Larger thumbnails	Үлкенірек нобайлар
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Пікір пішінін өзгерту
-
 # Prepare a form ▸ Text field table
 	Add text field table	Мәтін өрістерінің кестесін қосу
 	Text field table	Мәтін өрістерінің кестесі
@@ -2513,3 +2509,10 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Open from cloud…	Бұлттан ашу…
+	Open local file…	Жергілікті файлды ашу…
+	Open from cloud	Бұлттан ашу
+	Save as to cloud…	Бұлтқа басқа атаумен сақтау…
+	Save as to cloud	Бұлтқа басқа атаумен сақтау
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Бұл файл дискіде өзгерді. Жаңа нұсқасын көру үшін оны қайта жүктеңіз; сақталмаған өзгерістер жоғалады.
+	Mouse wheel scroll speed	Тінтуір дөңгелегімен айналдыру жылдамдығы

@@ -2169,7 +2169,6 @@ action wizard	Start	ప్రారంభించు
 	This printer offers no settings of its own.	ఈ ప్రింటర్‌కు దాని స్వంత సెట్టింగ్‌లు లేవు.
 	Scroll tabs left	ట్యాబ్‌లను ఎడమకు స్క్రోల్ చేయి
 	Scroll tabs right	ట్యాబ్‌లను కుడికి స్క్రోల్ చేయి
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	ఉమ్మడి ఫీల్డ్ లక్షణాలు
 	{n} fields selected	ఎంచుకున్న ఫీల్డ్‌లు: {n}
@@ -2190,7 +2189,6 @@ action wizard	Start	ప్రారంభించు
 	The field {name} no longer exists.	{name} ఫీల్డ్ ఇకపై లేదు.
 	A selected field has no widget on any page, so the fields can't be edited together.	ఎంచుకున్న ఒక ఫీల్డ్‌కు ఏ పేజీలోనూ విడ్జెట్ లేదు, కాబట్టి ఫీల్డ్‌లను కలిపి సవరించలేము.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi వద్ద, అవి గీయగల అతిపెద్ద పరిమాణం)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} వస్తువు ఎంచుకోబడింది|{n} వస్తువులు ఎంచుకోబడ్డాయి
 	Drag the selection to move it. Esc clears the selection.	ఎంపికను కదిలించడానికి లాగండి. Esc ఎంపికను తొలగిస్తుంది.
@@ -2227,7 +2225,6 @@ key	Space	స్పేస్
 	Expand all pages	అన్ని పేజీలను విస్తరించు
 	Remove page	పేజీని తీసివేయి
 	Remove {n} pages	{n} పేజీలను తీసివేయి
-
 # Shared panel docking
 	Reset panel layout	ప్యానెల్ అమరికను రీసెట్ చేయి
 	Float panel	ప్యానెల్‌ను తేలియాడేలా చేయి
@@ -2297,7 +2294,6 @@ animation effects	Off	ఆఫ్
 	Ink sensitivity	ఇంక్ సున్నితత్వం
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	ఫ్రేమ్‌లో సంతకం కనబడలేదు. ఫ్రేమ్‌ను సంతకం మీదకు జరపండి లేదా ఇంక్ సున్నితత్వాన్ని పెంచండి.
 	Couldn't use the photo: {e}	ఫోటోను ఉపయోగించలేకపోయాం: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	ట్యాబ్‌ను మూసివేయి
 	Reopen Closed Tab	మూసివేసిన ట్యాబ్‌ను మళ్లీ తెరువు
@@ -2330,7 +2326,6 @@ animation effects	Off	ఆఫ్
 	Restore	పునరుద్ధరించు
 	Use system title bar	సిస్టమ్ శీర్షిక పట్టీని ఉపయోగించు
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	ట్యాబ్ పట్టీకి బదులుగా విండో బటన్‌ల కోసం సాధారణ శీర్షిక పట్టీని చూపించు. GNOME యాప్‌లకు శీర్షిక పట్టీలను గీయదు, కాబట్టి ఇది దాని థీమ్‌ను అనుసరించదు.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	అనుమతించు
 	Only allow this if you trust the source document.	మూల పత్రాన్ని విశ్వసిస్తే మాత్రమే దీన్ని అనుమతించండి.
@@ -2404,7 +2399,6 @@ animation effects	Off	ఆఫ్
 	Larger thumbnails	పెద్ద థంబ్‌నెయిల్‌లు
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	వ్యాఖ్య ఆకారాన్ని మార్చు
-
 # Prepare a form ▸ Text field table
 	Add text field table	టెక్స్ట్ ఫీల్డ్ పట్టిక జోడించు
 	Text field table	టెక్స్ట్ ఫీల్డ్ పట్టిక
@@ -2424,3 +2418,10 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+	Open from cloud…	క్లౌడ్ నుండి తెరవండి…
+	Open local file…	స్థానిక ఫైల్‌ను తెరవండి…
+	Open from cloud	క్లౌడ్ నుండి తెరవండి
+	Save as to cloud…	క్లౌడ్‌కు వేరే పేరుతో భద్రపరచండి…
+	Save as to cloud	క్లౌడ్‌కు వేరే పేరుతో భద్రపరచండి
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	ఈ ఫైల్ డిస్క్‌లో మారింది. కొత్త వెర్షన్‌ను చూడటానికి దాన్ని మళ్లీ లోడ్ చేయండి; సేవ్ చేయని మీ మార్పులు పోతాయి.
+	Mouse wheel scroll speed	మౌస్ వీల్ స్క్రోల్ వేగం

@@ -735,14 +735,12 @@
 	of the following fields:	из следующих полей:
 	Simplified field notation:	Упрощённая запись полей:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Имена полей с + - * / и скобками; ставьте \\ перед пробелами в именах.
-
 # Document font selection
 	Finding document fonts…	Поиск шрифтов для документа…
 	Installed fonts…	Установленные шрифты…
 	Keep source fonts	Сохранить исходные шрифты
 	Load font…	Загрузить шрифт…
 	No openly licensed document fonts found. Load a font file.	Шрифты с открытой лицензией не найдены. Загрузите файл шрифта.
-
 	Format text	Форматировать текст
 	Bold	Полужирный
 	Italic	Курсив
@@ -2115,7 +2113,6 @@
 	Couldn't reload {name}: {e}	Не удалось перезагрузить {name}: {e}
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Выберите изображение PNG или JPEG (до 4 МиБ). Прозрачность сохраняется.
 	Couldn't import the signature image: {e}	Не удалось импортировать изображение подписи: {e}
-
 @plural	{n} page|{n} pages	{n} страница|{n} страницы|{n} страниц
 @plural	{n} field|{n} fields	{n} поле|{n} поля|{n} полей
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	Имя {n} поля конфликтует с предыдущими файлами и будет переименовано: {list}|Названия {n} полей конфликтуют с предыдущими файлами и будут переименованы: {list}|Названия {n} полей конфликтуют с предыдущими файлами и будут переименованы: {list}
@@ -2160,7 +2157,6 @@
 	This printer offers no settings of its own.	У этого принтера нет собственных параметров.
 	Scroll tabs left	Прокрутить вкладки влево
 	Scroll tabs right	Прокрутить вкладки вправо
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Общие свойства полей
 	{n} fields selected	Выбрано полей: {n}
@@ -2181,7 +2177,6 @@
 	The field {name} no longer exists.	Поле {name} больше не существует.
 	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — с разрешением {dpi} dpi, максимальным, с каким их можно отрисовать)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	Выделен {n} объект|Выделено {n} объекта|Выделено {n} объектов
 	Drag the selection to move it. Esc clears the selection.	Перетащите выделение, чтобы переместить его. Esc снимает выделение.
@@ -2197,7 +2192,6 @@
 	Fill colour	Цвет заливки
 	No fill	Без заливки
 	Fill colour: none	Цвет заливки: нет
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2219,7 +2213,6 @@ key	Space	Пробел
 	Expand all pages	Развернуть все страницы
 	Remove page	Удалить страницу
 	Remove {n} pages	Удалить страницы: {n}
-
 # Shared panel docking
 	Reset panel layout	Сбросить расположение панелей
 	Float panel	Сделать панель плавающей
@@ -2229,7 +2222,6 @@ key	Space	Пробел
 	Resize panel window	Изменить размер окна панели
 	Tools	Инструменты
 	Inspector	Инспектор
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	Страница PDF: {size}
 	Match page at 100%	Подобрать бумагу, масштаб 100%
@@ -2309,7 +2301,6 @@ animation effects	Off	Выкл
 	Ink sensitivity	Чувствительность к чернилам
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	В рамке не найдена подпись. Наведите рамку на подпись или увеличьте чувствительность к чернилам.
 	Couldn't use the photo: {e}	Не удалось использовать фото: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Закрыть вкладку
 	Reopen Closed Tab	Открыть закрытую вкладку
@@ -2330,7 +2321,6 @@ animation effects	Off	Выкл
 	Restore	Восстановить
 	Use system title bar	Использовать системный заголовок окна
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показывать простой заголовок окна с кнопками вместо полосы вкладок. GNOME не рисует заголовки для приложений, поэтому этот заголовок не следует его теме.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разрешить
 	Only allow this if you trust the source document.	Разрешите это действие, только если доверяете исходному документу.
@@ -2342,7 +2332,6 @@ animation effects	Off	Выкл
 	This document is trying to open a local file:	Этот документ пытается открыть локальный файл:
 	Move tag earlier	Переместить тег раньше
 	Move tag later	Переместить тег позже
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Вы просматриваете подписанную версию документа «{from}» (ревизия {rev}). Это снимок: изменения здесь не затронут оригинал.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Вы просматриваете ревизию {rev} документа «{from}». Это снимок: изменения здесь не затронут оригинал.
@@ -2408,7 +2397,6 @@ animation effects	Off	Выкл
 	Larger thumbnails	Увеличить миниатюры
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Изменить форму комментария
-
 # Prepare a form ▸ Text field table
 	Add text field table	Добавить таблицу текстовых полей
 	Text field table	Таблица текстовых полей
@@ -2428,3 +2416,10 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Open from cloud…	Открыть из облака…
+	Open local file…	Открыть локальный файл…
+	Open from cloud	Открыть из облака
+	Save as to cloud…	Сохранить как в облаке…
+	Save as to cloud	Сохранить как в облаке
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Этот файл был изменён на диске. Перезагрузите его, чтобы увидеть новую версию; несохранённые изменения будут потеряны.
+	Mouse wheel scroll speed	Скорость прокрутки колесом мыши

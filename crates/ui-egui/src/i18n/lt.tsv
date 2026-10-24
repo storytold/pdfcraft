@@ -2667,7 +2667,6 @@ key	Space	Tarpas
 	Restore	Atkurti
 	Use system title bar	Naudoti sistemos pavadinimo juostą
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Rodyti paprastą pavadinimo juostą su lango mygtukais vietoj kortelių juostos. GNOME nepiešia programoms pavadinimo juostų, todėl ši neatitinka jo temos.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Leisti
 	Only allow this if you trust the source document.	Leiskite tai tik tuo atveju, jei pasitikite pirminiu dokumentu.
@@ -2679,7 +2678,6 @@ key	Space	Tarpas
 	This document is trying to open a local file:	Šis dokumentas bando atverti vietinį failą:
 	Move tag earlier	Perkelti žymą anksčiau
 	Move tag later	Perkelti žymą vėliau
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Jūs peržiūrite pasirašytą „{from}“ versiją ({rev} versija). Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Jūs peržiūrite „{from}“ {rev} versiją. Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
@@ -2731,7 +2729,6 @@ key	Space	Tarpas
 	Make properties default	Nustatyti ypatybes kaip numatytąsias
 	Pages selected	Pasirinkti puslapiai
 	Page properties	Puslapio ypatybės
-
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
 	Mouse wheel scroll speed	Pelės ratuko slinkimo greitis
@@ -2752,7 +2749,6 @@ theme	Appearance	Išvaizda
 	Larger thumbnails	Didesnės miniatiūros
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Keisti komentaro formą
-
 # Prepare a form ▸ Text field table
 	Add text field table	Pridėti teksto laukų lentelę
 	Text field table	Teksto laukų lentelė
@@ -2776,3 +2772,8 @@ theme	Appearance	Išvaizda
 	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
+	Open from cloud…	Atidaryti iš debesies…
+	Open local file…	Atidaryti vietinį failą…
+	Open from cloud	Atidaryti iš debesies
+	Save as to cloud…	Išsaugoti kaip debesyje…
+	Save as to cloud	Išsaugoti kaip debesyje

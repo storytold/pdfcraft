@@ -11,10 +11,17 @@ workspace = true
 
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
+# Browser transport for Open and Save against CollabCraft. Session rides the cookie; no token file.
+craft-cloud-client = { workspace = true }
+# Share dialog backend for the browser build.
+collabcraft-share = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
 egui = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "Location", "Url", "UrlSearchParams", "Response", "Event", "MessageEvent", "EventTarget"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "Location", "Url", "UrlSearchParams", "Response", "Event", "MessageEvent", "EventTarget", "Request", "RequestInit", "RequestCredentials"] }
 js-sys = "0.3"

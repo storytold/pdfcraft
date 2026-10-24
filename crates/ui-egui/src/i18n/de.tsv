@@ -715,14 +715,12 @@
 	of the following fields:	der folgenden Felder:
 	Simplified field notation:	Vereinfachte Feldschreibweise:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Feldnamen mit + - * / und Klammern; setze \\ vor Leerzeichen in Namen.
-
 # Document font selection
 	Finding document fonts…	Dokumentschriftarten werden gesucht…
 	Installed fonts…	Installierte Schriftarten…
 	Keep source fonts	Quellschriftarten beibehalten
 	Load font…	Schriftart laden…
 	No openly licensed document fonts found. Load a font file.	Keine offen lizenzierten Schriftarten gefunden. Laden Sie eine Schriftartdatei.
-
 	Format text	Text formatieren
 	Bold	Fett
 	Italic	Kursiv
@@ -2186,7 +2184,6 @@ signature pad	Type	Tippen
 certificate	Subject	Zertifikatsinhaber
 action wizard	Start	Starten
 	Reopen the files that were open when PdfCraft last closed	Beim Start die Dateien wieder öffnen, die beim letzten Beenden von PdfCraft geöffnet waren
-
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hinzufügen
 	Use {what}	{what} verwenden
@@ -2247,7 +2244,6 @@ action wizard	Start	Starten
 	For page sizes and margins.	Für Seitengrößen und Ränder.
 	Scroll tabs left	Tabs nach links scrollen
 	Scroll tabs right	Tabs nach rechts scrollen
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Gemeinsame Feldeigenschaften
 	{n} fields selected	{n} Felder ausgewählt
@@ -2268,7 +2264,6 @@ action wizard	Start	Starten
 	The field {name} no longer exists.	Das Feld {name} existiert nicht mehr.
 	A selected field has no widget on any page, so the fields can't be edited together.	Ein ausgewähltes Feld hat auf keiner Seite ein Widget, daher können die Felder nicht gemeinsam bearbeitet werden.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} mit {dpi} dpi, der größten Auflösung, in der sie gezeichnet werden können)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} Objekt ausgewählt|{n} Objekte ausgewählt
 	Drag the selection to move it. Esc clears the selection.	Ziehen Sie die Auswahl, um sie zu verschieben. Esc hebt die Auswahl auf.
@@ -2284,7 +2279,6 @@ action wizard	Start	Starten
 	Fill colour	Füllfarbe
 	No fill	Keine Füllung
 	Fill colour: none	Füllfarbe: keine
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Strg
 key	Shift	Umschalt
@@ -2306,7 +2300,6 @@ key	Space	Leertaste
 	Expand all pages	Alle Seiten ausklappen
 	Remove page	Seite entfernen
 	Remove {n} pages	{n} Seiten entfernen
-
 # Shared panel docking
 	Reset panel layout	Bereichsanordnung zurücksetzen
 	Float panel	Bereich frei platzieren
@@ -2316,7 +2309,6 @@ key	Space	Leertaste
 	Resize panel window	Größe des Bereichsfensters ändern
 	Tools	Werkzeuge
 	Inspector	Inspektor
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	PDF-Seite: {size}
 	Match page at 100%	Papier an Seite anpassen, 100%
@@ -2397,7 +2389,6 @@ animation effects	Off	Aus
 	Ink sensitivity	Tintenempfindlichkeit
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Im Rahmen wurde keine Unterschrift gefunden. Ziehen Sie den Rahmen über die Unterschrift oder erhöhen Sie die Tintenempfindlichkeit.
 	Couldn't use the photo: {e}	Das Foto kann nicht verwendet werden: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Tab schließen
 	Reopen Closed Tab	Geschlossenen Tab wieder öffnen
@@ -2418,7 +2409,6 @@ animation effects	Off	Aus
 	Restore	Wiederherstellen
 	Use system title bar	System-Titelleiste verwenden
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Eine einfache Titelleiste für die Fensterknöpfe statt der Tableiste anzeigen. GNOME zeichnet für Apps keine Titelleisten, daher folgt diese nicht seinem Design.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Zulassen
 	Only allow this if you trust the source document.	Lassen Sie dies nur zu, wenn Sie dem Quelldokument vertrauen.
@@ -2430,7 +2420,6 @@ animation effects	Off	Aus
 	This document is trying to open a local file:	Dieses Dokument versucht, eine lokale Datei zu öffnen:
 	Move tag earlier	Tag früher verschieben
 	Move tag later	Tag später verschieben
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Sie sehen die signierte Version von „{from}“ (Revision {rev}). Es handelt sich um eine Momentaufnahme: Änderungen hier wirken sich nicht auf das Original aus.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Sie sehen Revision {rev} von „{from}“. Es handelt sich um eine Momentaufnahme: Änderungen hier wirken sich nicht auf das Original aus.
@@ -2496,7 +2485,6 @@ animation effects	Off	Aus
 	Larger thumbnails	Größere Miniaturen
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Kommentar umformen
-
 # Prepare a form ▸ Text field table
 	Add text field table	Textfeldtabelle hinzufügen
 	Text field table	Textfeldtabelle
@@ -2516,3 +2504,10 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+	Open from cloud…	Aus der Cloud öffnen…
+	Open local file…	Lokale Datei öffnen…
+	Open from cloud	Aus der Cloud öffnen
+	Save as to cloud…	In der Cloud speichern unter…
+	Save as to cloud	In der Cloud speichern unter
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Diese Datei wurde auf dem Datenträger geändert. Lade sie neu, um die neue Version zu sehen; deine nicht gespeicherten Änderungen gehen dabei verloren.
+	Mouse wheel scroll speed	Scrollgeschwindigkeit des Mausrads

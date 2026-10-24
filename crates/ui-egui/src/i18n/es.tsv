@@ -2244,7 +2244,6 @@ action wizard	Start	Iniciar
 	This printer offers no settings of its own.	Esta impresora no ofrece ajustes propios.
 	Scroll tabs left	Desplazar las pestañas a la izquierda
 	Scroll tabs right	Desplazar las pestañas a la derecha
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Propiedades comunes de los campos
 	{n} fields selected	{n} campos seleccionados
@@ -2265,12 +2264,10 @@ action wizard	Start	Iniciar
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
-
 # What the layers below word for themselves, now that the engine hands the wording over apart from
 # the document's own words: `pdfcraft_a11y::{WORDINGS, REPORT_WORDS}`, `pdfcraft_preflight::WORDINGS`,
 # `pdfcraft_sign::pdf::{WORDINGS, kind::ALL}`, `pdfcraft_print::WORDINGS` and the engine's
 # `EDIT_LABELS`. `spanish_covers_what_the_engine_says` keeps this section complete.
-#
 # What the checker finds (a11y::WORDINGS).
 	The security settings don't allow screen readers to read the text	La configuración de seguridad no permite que los lectores de pantalla lean el texto
 	No page has text: the document appears to be images of pages	Ninguna página tiene texto: el documento parece ser imágenes de páginas
@@ -2412,7 +2409,6 @@ action wizard	Start	Iniciar
 	Save as {level}	Guardar como {level}
 	Remove {standard} identification	Quitar la identificación {standard}
 	Create links	Crear enlaces
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} objeto seleccionado|{n} objetos seleccionados
 	Drag the selection to move it. Esc clears the selection.	Arrastra la selección para moverla. Esc borra la selección.
@@ -2428,7 +2424,6 @@ action wizard	Start	Iniciar
 	Fill colour	Color de relleno
 	No fill	Sin relleno
 	Fill colour: none	Color de relleno: ninguno
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Mayús
@@ -2450,7 +2445,6 @@ key	Space	Espacio
 	Expand all pages	Expandir todas las páginas
 	Remove page	Quitar página
 	Remove {n} pages	Quitar {n} páginas
-
 # Shared panel docking
 	Reset panel layout	Restablecer disposición de paneles
 	Float panel	Hacer flotante el panel
@@ -2460,7 +2454,6 @@ key	Space	Espacio
 	Resize panel window	Cambiar tamaño de la ventana del panel
 	Tools	Herramientas
 	Inspector	Inspector
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	Página PDF: {size}
 	Match page at 100%	Ajustar el papel a la página al 100 %
@@ -2532,7 +2525,6 @@ animation effects	Off	Desactivados
 	Ink sensitivity	Sensibilidad de la tinta
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	No se encontró ninguna firma en el marco. Mueve el marco sobre la firma o aumenta la sensibilidad de la tinta.
 	Couldn't use the photo: {e}	No se puede usar la foto: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Cerrar pestaña
 	Reopen Closed Tab	Reabrir pestaña cerrada
@@ -2564,7 +2556,6 @@ animation effects	Off	Desactivados
 	Restore	Restaurar
 	Use system title bar	Usar la barra de título del sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostrar una barra de título básica para los botones de la ventana en lugar de la barra de pestañas. GNOME no dibuja barras de título para las aplicaciones, así que esta no sigue su tema.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir
 	Only allow this if you trust the source document.	Permite esta acción solo si confías en el documento de origen.
@@ -2633,7 +2624,6 @@ animation effects	Off	Desactivados
 	Paragraph spacing	Espaciado entre párrafos
 	Less	Menos
 	Other options	Otras opciones
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
@@ -2642,13 +2632,10 @@ animation effects	Off	Desactivados
 	Larger thumbnails	Miniaturas más grandes
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Cambiar la forma del comentario
-
-#
 # Keys the other catalogs carry that this one was missing, so Spanish covers the bundled key union
 # the way Lithuanian and Vietnamese do (`lithuanian_covers_bundled_catalog_keys_including_dynamic_dialog_labels`).
 # Same clean-room rule as the header: written from the plain meaning of the English label, reusing
 # the vocabulary already in this file (ID digital, marcador, Acercar / alejar, Portapapeles).
-#
 # The date picker.
 calendar date	January	enero
 calendar date	February	febrero
@@ -2669,7 +2656,6 @@ calendar weekday	Th	Ju
 calendar weekday	Fr	Vi
 calendar weekday	Sa	Sá
 calendar weekday	Su	Do
-#
 # Certificate details, in their own context beside the plain labels.
 certificate	Issued to	Emitido a
 certificate	Issued by	Emitido por
@@ -2687,7 +2673,6 @@ certificate	Validity starts	La validez empieza
 certificate	Validity ends	La validez termina
 certificate	SHA-1 digest	Huella SHA-1
 certificate	SHA-256 digest	Huella SHA-256
-#
 # What a certificate's key may be used for (X.509 key usage), as the details list them.
 	Digital Signature	Firma digital
 	Non-Repudiation	No repudio
@@ -2698,7 +2683,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	CRL Signing	Firma de CRL
 	Encipher Only	Solo cifrado
 	Decipher Only	Solo descifrado
-#
 # Signatures, revisions and digital IDs.
 	{who}, certificate issued by {issuer}.	{who}, certificado emitido por {issuer}.
 	{who}, certificate issued by an unknown issuer.	{who}, certificado emitido por un emisor desconocido.
@@ -2709,14 +2693,12 @@ certificate	SHA-256 digest	Huella SHA-256
 	Unsigned signature field: {name}	Campo de firma sin firmar: {name}
 	Choose a digital ID.	Elige un ID digital.
 	There is no folder to save the digital ID in.	No hay ninguna carpeta donde guardar el ID digital.
-#
 # Passwords.
 	The password is incorrect.	La contraseña es incorrecta.
 	The password must have at least 6 characters.	La contraseña debe tener al menos 6 caracteres.
 	The password must have at least 8 characters.	La contraseña debe tener al menos 8 caracteres.
 	The passwords do not match.	Las contraseñas no coinciden.
 	Only the document's owner can change its security (open it with the permissions password)	Solo el propietario del documento puede cambiar su seguridad (ábrelo con la contraseña de permisos)
-#
 # Counts.
 @plural	{n} byte|{n} bytes	{n} byte|{n} bytes
 @plural	{n} pixel|{n} pixels	{n} píxel|{n} píxeles
@@ -2726,7 +2708,6 @@ certificate	SHA-256 digest	Huella SHA-256
 @plural	{n} image optimized|{n} images optimized	{n} imagen optimizada|{n} imágenes optimizadas
 @plural	{n} item discarded|{n} items discarded	{n} elemento descartado|{n} elementos descartados
 @plural	Delete {n} field|Delete {n} fields	Eliminar {n} campo|Eliminar {n} campos
-#
 # Combining PDFs from a folder.
 	Add the PDFs to combine	Añade los PDF que vas a combinar
 	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
@@ -2734,7 +2715,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
 	Added the first {n} PDFs in {folder}	Se han añadido los primeros {n} PDF de {folder}
 	No PDFs found in {folder}	No se ha encontrado ningún PDF en {folder}
-#
 # Panels, rendering and notices.
 	Panel layout could not be restored: {error}	No se ha podido restaurar la disposición de los paneles: {error}
 	Panel move was not applied: {error}	No se ha aplicado el movimiento del panel: {error}
@@ -2748,7 +2728,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	Warning	Advertencia
 	Information	Información
 	Success	Correcto
-#
 # Asking for something, and choosing it.
 	Enter a name.	Introduce un nombre.
 	Enter a page number	Introduce un número de página
@@ -2761,7 +2740,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	Open folder	Abrir carpeta
 	Save file	Guardar archivo
 	Save changes?	¿Guardar los cambios?
-#
 # Settings and their values.
 	Theme	Tema
 theme	Appearance	Aspecto
@@ -2775,7 +2753,6 @@ theme	Appearance	Aspecto
 	Disabled	Desactivado
 	Mouse wheel scroll speed	Velocidad de desplazamiento de la rueda del ratón
 	Margins (in)	Márgenes (pulg.)
-#
 # Labels and commands the catalogs name on their own.
 	Color	Color
 	Folder	Carpeta
@@ -2801,7 +2778,6 @@ theme	Appearance	Aspecto
 	 on page {label}	 en la página {label}
 	Page {n}	Página {n}
 	Page {n} of {total}	Página {n} de {total}
-#
 # Tooltips that spell their shortcut out.
 	Open a PDF (⌘O)	Abrir un PDF (⌘O)
 	Print (⌘P)	Imprimir (⌘P)
@@ -2814,7 +2790,6 @@ theme	Appearance	Aspecto
 	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
 	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
 	Save (M4)	Guardar (M4)
-
 # Prepare a form ▸ Text field table
 	Add text field table	Añadir tabla de campos de texto
 	Text field table	Tabla de campos de texto
@@ -2838,3 +2813,8 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+	Open from cloud…	Abrir desde la nube…
+	Open local file…	Abrir archivo local…
+	Open from cloud	Abrir desde la nube
+	Save as to cloud…	Guardar como en la nube…
+	Save as to cloud	Guardar como en la nube

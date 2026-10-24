@@ -14,6 +14,12 @@ workspace = true
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
 rustls-native-certs = "0.8"
 pdfcraft-ui-egui = { workspace = true }
+# How this application reaches CollabCraft. No provider credential, provider URL or provider
+# protocol live here. The service is read from the environment; nothing is compiled in.
+craft-cloud-client = { workspace = true }
+# The share dialog's backend: the half that opens a socket. Kept here so only one session exists
+# per process and a sign-in through Open/Save also reaches the share dialog.
+collabcraft-share = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or

@@ -8,7 +8,6 @@
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
-#
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Polish computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
@@ -2263,7 +2262,6 @@ calendar date	December	grudnia
 	End entity	Podmiot końcowy
 	Creator	Twórca
 	Producer	Producent
-
 # Additional labels and portable shortcuts in the current main branch.
 	Zoom in / out (also pinch or {key}-scroll)	Powiększ / pomniejsz (także gestem szczypania lub {key} i przewijaniem)
 	Open a PDF ({key})	Otwórz PDF ({key})
@@ -2276,7 +2274,6 @@ calendar date	December	grudnia
 	Previous ({key})	Poprzednie ({key})
 	Next ({key})	Następne ({key})
 	Redaction code:	Kod utajniania:
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2285,7 +2282,6 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Spacja
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} obiekt zaznaczony|{n} obiekty zaznaczone|{n} obiektów zaznaczonych
 	Drag the selection to move it. Esc clears the selection.	Przeciągnij zaznaczenie, aby je przenieść. Esc anuluje zaznaczenie.
@@ -2364,7 +2360,6 @@ animation effects	Off	Wyłączone
 	Ink sensitivity	Czułość na atrament
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	W ramce nie znaleziono podpisu. Przesuń ramkę na podpis lub zwiększ czułość na atrament.
 	Couldn't use the photo: {e}	Nie można użyć zdjęcia: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Zamknij kartę
 	Reopen Closed Tab	Otwórz ponownie zamkniętą kartę
@@ -2397,7 +2392,6 @@ animation effects	Off	Wyłączone
 	Restore	Przywróć
 	Use system title bar	Używaj systemowego paska tytułu
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Pokazuj prosty pasek tytułu z przyciskami okna zamiast paska kart. GNOME nie rysuje pasków tytułu dla aplikacji, więc ten nie pasuje do jego motywu.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Zezwól
 	Only allow this if you trust the source document.	Zezwól na to tylko wtedy, gdy ufasz dokumentowi źródłowemu.
@@ -2471,7 +2465,6 @@ animation effects	Off	Wyłączone
 	Larger thumbnails	Większe miniatury
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Zmień kształt komentarza
-
 # Signature validation: what a signature's details say and the changes after signing they name
 # (pdfcraft_engine::sign::pdf::WORDINGS and kind::ALL).
 	The signature has no valid byte range.	Podpis nie ma prawidłowego zakresu bajtów.
@@ -2543,7 +2536,6 @@ animation effects	Off	Wyłączone
 	pages added or removed	dodane lub usunięte strony
 	other changes	inne zmiany
 	the signed version could not be read	nie udało się odczytać podpisanej wersji
-
 # The rest of the interface the Polish catalog lacked.
 	Auto ({percent}%)	Automatycznie ({percent}%)
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Tryb automatyczny dopasowuje się do rozmiaru tekstu w systemie. Strony są zawsze renderowane w pełnej rozdzielczości ekranu.
@@ -2591,7 +2583,6 @@ animation effects	Off	Wyłączone
 	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
 	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
 	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-
 # Prepare a form ▸ Text field table
 	Add text field table	Dodaj tabelę pól tekstowych
 	Text field table	Tabela pól tekstowych
@@ -2611,3 +2602,10 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+	Open from cloud…	Otwórz z chmury…
+	Open local file…	Otwórz plik lokalny…
+	Open from cloud	Otwórz z chmury
+	Save as to cloud…	Zapisz jako w chmurze…
+	Save as to cloud	Zapisz jako w chmurze
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ten plik zmienił się na dysku. Wczytaj go ponownie, aby zobaczyć nową wersję; niezapisane zmiany zostaną utracone.
+	Mouse wheel scroll speed	Szybkość przewijania kółkiem myszy

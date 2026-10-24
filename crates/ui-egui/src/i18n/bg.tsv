@@ -413,14 +413,12 @@
 	of the following fields:	на следните полета:
 	Simplified field notation:	Опростен запис с полета:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Имена на полета с + - * / и скоби; поставете \\ пред интервалите в имената.
-
 # Document font selection
 	Finding document fonts…	Търсене на шрифтове за документа…
 	Installed fonts…	Инсталирани шрифтове…
 	Keep source fonts	Запазване на оригиналните шрифтове
 	Load font…	Зареждане на шрифт…
 	No openly licensed document fonts found. Load a font file.	Не са открити шрифтове с отворен лиценз. Заредете файл с шрифт.
-
 	Format text	Форматирай текст
 	Bold	Удебелен
 	Italic	Курсив
@@ -2205,7 +2203,6 @@ action wizard	Start	Старт
 	For page sizes and margins.	За размери на страници и полета.
 	Scroll tabs left	Превърти разделите наляво
 	Scroll tabs right	Превърти разделите надясно
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Общи свойства на полетата
 	{n} fields selected	Избрани полета: {n}
@@ -2226,7 +2223,6 @@ action wizard	Start	Старт
 	The field {name} no longer exists.	Полето {name} вече не съществува.
 	A selected field has no widget on any page, so the fields can't be edited together.	Едно от избраните полета няма елемент на нито една страница, затова полетата не могат да се редактират заедно.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} с {dpi} dpi, най-голямата резолюция, с която могат да бъдат изобразени)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	Избран е {n} обект|Избрани са {n} обекта
 	Drag the selection to move it. Esc clears the selection.	Плъзнете избраното, за да го преместите. Esc премахва избора.
@@ -2242,7 +2238,6 @@ action wizard	Start	Старт
 	Fill colour	Цвят на запълване
 	No fill	Без запълване
 	Fill colour: none	Цвят на запълване: няма
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2264,7 +2259,6 @@ key	Space	Интервал
 	Expand all pages	Разгъни всички страници
 	Remove page	Премахни страницата
 	Remove {n} pages	Премахни {n} страници
-
 # Shared panel docking
 	Reset panel layout	Възстанови оформлението на панелите
 	Float panel	Откачи панела
@@ -2274,7 +2268,6 @@ key	Space	Интервал
 	Resize panel window	Преоразмери прозореца на панела
 	Tools	Инструменти
 	Inspector	Инспектор
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	PDF страница: {size}
 	Match page at 100%	Хартия по страницата, мащаб 100%
@@ -2359,7 +2352,6 @@ animation effects	Off	Изключени
 	Ink sensitivity	Чувствителност към мастило
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	В рамката не е открит подпис. Преместете рамката върху подписа или увеличете чувствителността към мастило.
 	Couldn't use the photo: {e}	Снимката не може да се използва: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Затваряне на раздела
 	Reopen Closed Tab	Отваряне на затворения раздел
@@ -2380,7 +2372,6 @@ animation effects	Off	Изключени
 	Restore	Възстановяване
 	Use system title bar	Използване на системната заглавна лента
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показване на обикновена заглавна лента за бутоните на прозореца вместо лентата с раздели. GNOME не рисува заглавни ленти за приложенията, затова тази не следва темата му.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разреши
 	Only allow this if you trust the source document.	Разрешете това само ако имате доверие на изходния документ.
@@ -2392,7 +2383,6 @@ animation effects	Off	Изключени
 	This document is trying to open a local file:	Този документ се опитва да отвори локален файл:
 	Move tag earlier	Преместване на етикета по-рано
 	Move tag later	Преместване на етикета по-късно
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Разглеждате подписаната версия на „{from}“ (редакция {rev}). Това е моментна снимка: промените тук няма да засегнат оригинала.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Разглеждате редакция {rev} на „{from}“. Това е моментна снимка: промените тук няма да засегнат оригинала.
@@ -2458,7 +2448,6 @@ animation effects	Off	Изключени
 	Larger thumbnails	По-големи миниатюри
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Промяна на формата на коментара
-
 # Prepare a form ▸ Text field table
 	Add text field table	Добави таблица от текстови полета
 	Text field table	Таблица от текстови полета
@@ -2478,3 +2467,10 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+	Open from cloud…	Отваряне от облака…
+	Open local file…	Отваряне на локален файл…
+	Open from cloud	Отваряне от облака
+	Save as to cloud…	Запазване като в облака…
+	Save as to cloud	Запазване като в облака
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Този файл е променен на диска. Презаредете го, за да видите новата версия; незаписаните ви промени ще бъдат загубени.
+	Mouse wheel scroll speed	Скорост на превъртане с колелцето на мишката

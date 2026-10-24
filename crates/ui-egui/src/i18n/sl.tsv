@@ -2281,7 +2281,6 @@ key	Space	Preslednica
 	Resize panel window	Spremeni velikost okna razdelka
 	Resize panels	Spremeni velikost razdelkov
 	Tools	Orodja
-
 # Added for labels that landed alongside this catalog (2026-10-11).
 	Appearance mode	Način videza
 	Light	Svetlo
@@ -2401,7 +2400,6 @@ animation effects	Off	Izklopljeni
 	Ink sensitivity	Občutljivost za črnilo
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	V okvirju ni bilo najdenega podpisa. Premaknite okvir nad podpis ali povečajte občutljivost za črnilo.
 	Couldn't use the photo: {e}	Fotografije ni bilo mogoče uporabiti: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Zapri zavihek
 	Reopen Closed Tab	Znova odpri zaprti zavihek
@@ -2422,7 +2420,6 @@ animation effects	Off	Izklopljeni
 	Restore	Obnovi
 	Use system title bar	Uporabi sistemsko naslovno vrstico
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Prikaži preprosto naslovno vrstico za gumbe okna namesto vrstice zavihkov. GNOME aplikacijam ne riše naslovnih vrstic, zato ta ne sledi njegovi temi.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Dovoli
 	Only allow this if you trust the source document.	To dovolite le, če zaupate izvornemu dokumentu.
@@ -2434,7 +2431,6 @@ animation effects	Off	Izklopljeni
 	This document is trying to open a local file:	Ta dokument poskuša odpreti lokalno datoteko:
 	Move tag earlier	Premakni oznako prej
 	Move tag later	Premakni oznako pozneje
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ogledate si podpisano različico dokumenta „{from}“ (revizija {rev}). To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Ogledate si revizijo {rev} dokumenta „{from}“. To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
@@ -2500,7 +2496,6 @@ animation effects	Off	Izklopljeni
 	Larger thumbnails	Večje sličice
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Spremeni obliko komentarja
-
 # Prepare a form ▸ Text field table
 	Add text field table	Dodaj tabelo besedilnih polj
 	Text field table	Tabela besedilnih polj
@@ -2520,3 +2515,10 @@ animation effects	Off	Izklopljeni
 	field names can't contain a period: {name}	imena polj ne smejo vsebovati pike: {name}
 	two cells would both be named {name}	dve celici bi imeli enako ime {name}
 	a field named {name} already exists	polje z imenom {name} že obstaja
+	Open from cloud…	Odpri iz oblaka…
+	Open local file…	Odpri lokalno datoteko…
+	Open from cloud	Odpri iz oblaka
+	Save as to cloud…	Shrani kot v oblak…
+	Save as to cloud	Shrani kot v oblak
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ta datoteka se je na disku spremenila. Znova jo naložite, da vidite novo različico; neshranjene spremembe bodo izgubljene.
+	Mouse wheel scroll speed	Hitrost drsenja s kolescem miške

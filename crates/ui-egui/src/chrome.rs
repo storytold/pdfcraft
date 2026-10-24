@@ -266,7 +266,21 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.add_space(4.0);
                 let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
-                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
+                if crate::cloud::available(app) {
+                    // Cloud connected: a popup lets the user choose local or cloud.
+                    let open_resp = widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(&tip);
+                    open_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Open")));
+                    egui::Popup::menu(&open_resp).show(|ui| {
+                        if ui.button(tl!("Open local file…")).clicked() {
+                            app.execute("file.open");
+                            ui.close();
+                        }
+                        if ui.button(tl!("Open from cloud…")).clicked() {
+                            app.execute("file.open_cloud");
+                            ui.close();
+                        }
+                    });
+                } else if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -302,6 +316,40 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     // One click to the community, from anywhere in the app.
                     if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
                         app.execute("help.discord");
+                    }
+                    // Cloud: account badge, presence, share button. Drawn only when a CollabCraft
+                    // service is connected. The layout runs right-to-left, so these appear to the
+                    // left of the theme/help controls and do not overlap the scrolling tabs.
+                    if crate::cloud::available(app) {
+                        ui.add_space(4.0);
+                        // Share button: shown only when the provider supports sharing.
+                        if crate::cloud::shares(app) {
+                            let copies = crate::cloud::copies();
+                            if let Some(fmt) = crate::cloud::share_button(app, ui, &copies) {
+                                // "Save a Copy as PDF": the only copy format PdfCraft offers.
+                                let _ = fmt; // the format id is always "pdf" for us
+                            }
+                        }
+                        if crate::esign::request_button(ui, &app.esign) {
+                            let (id, title, etag) = match crate::cloud::origin(app) {
+                                Some(origin) => (origin.entry.id.clone(), origin.entry.name.clone(), origin.entry.etag.clone()),
+                                None => (
+                                    String::new(),
+                                    app.active.and_then(|i| app.session.get(app.views.get(i)?.id)).map(|d| d.display_name()).unwrap_or_default(),
+                                    None,
+                                ),
+                            };
+                            let sender = craft_cloud::Identity {
+                                id: String::new(),
+                                display: app.cloud.account.as_ref().map(|a| a.display.clone()).unwrap_or_default(),
+                                email: None,
+                                avatar: None,
+                            };
+                            app.esign_doc = app.active_ids().map(|(_, id)| id);
+                            crate::esign::open(&mut app.esign, id, title, etag, sender);
+                        }
+                        // Who else has this document open (viewer presence only).
+                        crate::cloud::who(app, ui);
                     }
                 });
             });

@@ -9,12 +9,6 @@
 // The settings object in `persist` is one `json!` literal past the default limit of 128.
 #![recursion_limit = "256"]
 
-/// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
-/// current directory (links are not resolved, as in `last_session`).
-pub(crate) fn same_file(a: &str, b: &str) -> bool {
-    a == b || matches!((std::path::absolute(a), std::path::absolute(b)), (Ok(x), Ok(y)) if x == y)
-}
-
 /// Translate an English UI string into the current language (see [`i18n`]).
 macro_rules! tl {
     ($s:expr) => {
@@ -36,7 +30,11 @@ mod appearance;
 mod calc_order_ui;
 pub mod canvas;
 mod chrome;
+pub mod cloud;
+#[cfg(target_arch = "wasm32")]
+pub mod web_auth;
 mod combine_grid;
+pub mod esign;
 mod image_pick;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
@@ -91,7 +89,6 @@ mod editing;
 pub mod file_watch;
 mod files;
 pub mod fill_sign;
-mod fling;
 pub mod folders_ui;
 mod format_text_ui;
 pub mod forms_ui;
@@ -111,6 +108,11 @@ mod print_ui;
 mod signature_drag;
 pub mod units;
 mod web_print;
+mod fling;
+mod organize_panel;
+mod wheel_boost;
+mod window_controls;
+mod window_state;
 mod word_count_ui;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 mod redact_ui;
@@ -135,7 +137,6 @@ pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod open_worker;
-mod organize_panel;
 pub mod portable;
 mod protect;
 mod recovery;
@@ -146,12 +147,8 @@ mod tab_context;
 pub mod theme;
 pub mod ui_scale;
 pub mod updates;
-mod wheel_boost;
 mod wheel_pager;
 mod widgets;
-pub mod window_controls;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod window_state;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod open_worker_tests;
@@ -272,11 +269,9 @@ fn read_grid_file((name, source): GridFile) -> Result<(String, Vec<u8>), (String
     Ok((name, bytes))
 }
 
-/// Files dropped on a document's page grid or its Pages panel.
+/// Files dropped on a document's page grid.
 struct GridDrop {
     doc: pdfcraft_engine::DocId,
-    /// Dropped on the Pages panel (its gap decides where they go), not the page grid.
-    panel: bool,
     files: Vec<GridFile>,
     /// When to stop waiting for the pointer (egui time, seconds).
     deadline: f64,
@@ -365,6 +360,18 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+}
+
+/// Which cloud page is shown in the central panel instead of the document or home screen.
+///
+/// `None` (the common case) means the normal document / home / docking view. `Open` shows
+/// `craft_ui::cloud::open_page`; `SaveAs` shows `craft_ui::cloud::save_page`. These are the
+/// only two navigation states PdfCraft needs beyond its existing tabs — the smallest explicit
+/// addition that makes Open from cloud and Save As to cloud reachable from the UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudPage {
+    Open,
+    SaveAs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -602,6 +609,10 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    /// Opens whose bytes are ready, held while a password prompt is up so a later
+    /// plain file cannot clear that prompt by finishing in the same poll.
+    #[cfg(not(target_arch = "wasm32"))]
+    ready_opens: Vec<(PendingOpen, open_worker::ResultKind)>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -843,6 +854,25 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// Open and Save against cloud storage. Connected by the host application when a
+    /// CollabCraft service is configured; disconnected leaves the app local-only.
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Which cloud page is shown in the central panel, when any. `None` is the normal state.
+    pub cloud_page: Option<CloudPage>,
+    /// The number of open document tabs when `cloud_page` became `Some(Open)`. Used to detect
+    /// that a successful cloud open completed so the page can dismiss itself.
+    cloud_page_doc_count: usize,
+    /// Share dialog state. Connected by the host; drawn from the title bar when sharing
+    /// is available. The dialog is the same across all Craft apps.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else has the document open. Drawn beside the account badge in the title bar.
+    /// Presence is viewer presence only: PdfCraft does not host real-time collaborative
+    /// text editing.
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Request-signatures dialog. Hosted through CollabCraft; local PAdES stays in Sign.
+    pub esign: craft_ui::esign::EsignDialog,
+    /// Document the e-sign dialog was opened for (Send uses this, not the active tab).
+    esign_doc: Option<pdfcraft_engine::DocId>,
 }
 
 /// Where in a document a request to open an address came from.
@@ -914,6 +944,10 @@ fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
         *slot = n.clamp(0.0, 1.0);
     }
     Some(out)
+}
+
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
+    a == b || matches!((std::path::absolute(a), std::path::absolute(b)), (Ok(x), Ok(y)) if x == y)
 }
 
 /// What [`PdfCraftApp::open_path`] did: opened the file in a new tab, focused the tab already
@@ -995,6 +1029,8 @@ impl PdfCraftApp {
             open_worker: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ready_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -1100,6 +1136,7 @@ impl PdfCraftApp {
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
             bookmark_rename: None,
+            word_count_draft: word_count_ui::Draft::default(),
             last_opened_url: None,
             pending_link: None,
             pending_full_screen: None,
@@ -1133,7 +1170,13 @@ impl PdfCraftApp {
             text_style: content_ui::default_style(),
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
-            word_count_draft: word_count_ui::Draft::default(),
+            cloud: craft_ui::cloud::CloudFiles::new(),
+            cloud_page: None,
+            cloud_page_doc_count: 0,
+            share: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new().badges_only(),
+            esign: craft_ui::esign::EsignDialog::new(),
+            esign_doc: None,
         }
     }
 
@@ -1245,19 +1288,12 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_pending_opens(&mut self) {
-        let pending_opens = std::mem::take(&mut self.pending_opens);
-        let mut remaining = pending_opens.into_iter();
+        let mut ready = Vec::new();
         let mut waiting = Vec::new();
-        while let Some(pending) = remaining.next() {
-            // A tool, password prompt or file picker belongs to the document just admitted.
-            // Keep later replies queued so another open cannot change its recipient.
-            if self.modal_open() || self.pickers.pending() {
-                waiting.push(pending);
-                waiting.extend(remaining);
-                break;
-            }
+        let pending_opens = std::mem::take(&mut self.pending_opens);
+        for pending in pending_opens {
             match pending.receiver.try_recv() {
-                Ok(result) if result.token == pending.token => self.finish_pending_open(pending, result.kind),
+                Ok(result) if result.token == pending.token => ready.push((pending, result.kind)),
                 Ok(_) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1265,10 +1301,12 @@ impl PdfCraftApp {
                 }
             }
         }
-        // A completion may schedule another open; preserve those requests as well as the
-        // earlier waiting replies, without consuming a blocked receiver's result.
-        waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+        self.ready_opens.extend(ready);
+        while self.password_prompt.is_none() && !self.ready_opens.is_empty() {
+            let (pending, kind) = self.ready_opens.remove(0);
+            self.finish_pending_open(pending, kind);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1286,15 +1324,11 @@ impl PdfCraftApp {
             open_worker::ResultKind::Failed(reason) => {
                 self.notify_fmt("Couldn't open {name}: {reason}", &[("name", &pending.name), ("reason", &reason)]);
             }
-            open_worker::ResultKind::Conversion(bytes) => match self.open_converted(&pending.name, &bytes) {
-                Some(Ok(())) => {
-                    if let Some(command) = pending.then {
-                        self.execute(command);
-                    }
+            open_worker::ResultKind::Conversion(bytes) => {
+                if let Some(Err(error)) = self.open_converted(&pending.name, &bytes) {
+                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]);
                 }
-                Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
-                None => {}
-            },
+            }
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
                 Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
@@ -1420,7 +1454,7 @@ impl PdfCraftApp {
             && self.left == LeftPanel::Tool("organize")
             && let Some(view) = self.views.last_mut()
         {
-            view.open_organize();
+            view.organize = true;
         }
         if activate && let Some(mode) = self.mode_override {
             // Explicit mode options do not reset independent --tool / --left choices.
@@ -1489,29 +1523,11 @@ impl PdfCraftApp {
         (self.dialog.is_none() && self.session.get(view.id)?.allows_assembly()).then_some(view.id)
     }
 
-    /// The document whose Pages panel is under the pointer and may take pages, if any.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn panel_target(&self, ctx: &egui::Context) -> Option<pdfcraft_engine::DocId> {
-        let view = self.active.and_then(|i| self.views.get(i))?;
-        let pointer = ctx.input(|i| i.pointer.hover_pos())?;
-        let over = view.pages_panel.is_some_and(|panel| panel.contains(pointer));
-        (over && self.dialog.is_none() && self.session.get(view.id)?.allows_assembly()).then_some(view.id)
-    }
-
-    /// Files dropped on the Pages panel, or while the page grid shows, are inserted into the
-    /// document rather than opened: they are kept until [`Self::finish_grid_drop`] knows the
-    /// gap. Returns the files not taken.
+    /// Files dropped while the page grid shows are inserted into it rather than opened: they
+    /// are kept until [`Self::finish_grid_drop`] knows the gap. Returns the files not taken.
     #[cfg(not(target_arch = "wasm32"))]
     fn drop_on_grid(&mut self, dropped: Vec<egui::DroppedFileHandle>, ctx: &egui::Context) -> Vec<egui::DroppedFileHandle> {
-        if dropped.is_empty() {
-            return dropped;
-        }
-        // The panel first: the grid takes files dropped anywhere in the window.
-        let (id, panel) = match (self.panel_target(ctx), self.grid_target()) {
-            (Some(id), _) => (id, true),
-            (None, Some(id)) => (id, false),
-            (None, None) => return dropped,
-        };
+        let Some(id) = self.grid_target().filter(|_| !dropped.is_empty()) else { return dropped };
         let mut files = Vec::new();
         for f in &dropped {
             let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
@@ -1528,29 +1544,22 @@ impl PdfCraftApp {
             // Where there is no telling where the pointer is during the drag, its place arrives
             // with the first move after the drop.
             ctx.request_repaint();
-            self.grid_drop = Some(GridDrop { doc: id, panel, files, deadline: ctx.input(|i| i.time) + 1.0 });
+            self.grid_drop = Some(GridDrop { doc: id, files, deadline: ctx.input(|i| i.time) + 1.0 });
         }
         Vec::new()
     }
 
-    /// Insert files dropped on the page grid or the Pages panel at the gap under the pointer,
-    /// or at the end when the pointer hasn't shown up in time.
+    /// Insert files dropped on the page grid at the gap under the pointer, or at the end when
+    /// the pointer hasn't shown up in time.
     fn finish_grid_drop(&mut self, ctx: &egui::Context) {
-        let Some(GridDrop { doc: id, panel, deadline, .. }) = &self.grid_drop else { return };
-        let (id, panel, deadline) = (*id, *panel, *deadline);
-        let still = if panel {
-            self.dialog.is_none()
-                && self.active_ids().map(|(_, active)| active) == Some(id)
-                && self.session.get(id).is_some_and(|d| d.allows_assembly())
-        } else {
-            self.grid_target() == Some(id)
-        };
-        if !still {
+        let Some(GridDrop { doc: id, deadline, .. }) = &self.grid_drop else { return };
+        let (id, deadline) = (*id, *deadline);
+        if self.grid_target() != Some(id) {
             self.grid_drop = None;
             return self.notify_tr("The document changed while you were choosing a file, so nothing was changed.");
         }
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
-        let gap = match if panel { view.panel_gap } else { view.grid_gap } {
+        let gap = match view.grid_gap {
             Some(gap) => gap,
             None if ctx.input(|i| i.time) >= deadline => usize::MAX,
             None => return ctx.request_repaint(),
@@ -1597,8 +1606,7 @@ impl PdfCraftApp {
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
-                // The tab name later names files written from the tab (Split, Extract pages).
-                if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
+                if let Err(e) = self.open_bytes(&att.name, None, bytes) {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
                 }
             }
@@ -1783,16 +1791,10 @@ impl PdfCraftApp {
         }
     }
 
-    /// The tab already showing the file at `path` (the same path, or one that names the same
-    /// file once made absolute).
-    pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
-    }
-
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
-        if let Some(i) = self.tab_showing(path) {
+        if let Some(i) = self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)) {
             self.active = Some(i);
         } else {
             #[cfg(not(target_arch = "wasm32"))]
@@ -1883,6 +1885,12 @@ impl PdfCraftApp {
         }
     }
 
+    pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
+        self.views
+            .iter()
+            .position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> OpenOutcome {
         self.open_path_then(path, None)
@@ -1892,7 +1900,7 @@ impl PdfCraftApp {
     /// return value is the programmatic open contract (#1620): callers that must know whether
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
+    pub(crate) fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
@@ -1907,11 +1915,7 @@ impl PdfCraftApp {
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
-        // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
         let stamp = file_watch::Stamp::at(path);
-        // Before the first frame there is no interaction to keep responsive; this also preserves
-        // deterministic inline startup and test flows. Once live, reading and preparation use
-        // the bounded worker and commit on the UI thread.
         if self.ctx.is_none() || self.run_inline {
             match std::fs::read(path) {
                 Ok(bytes) => {
@@ -2253,11 +2257,7 @@ impl PdfCraftApp {
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
-            if id == "organize" {
-                view.open_organize();
-            } else {
-                view.organize = false;
-            }
+            view.organize = id == "organize";
         }
     }
 
@@ -2311,7 +2311,6 @@ impl PdfCraftApp {
     /// Switches workspace because the user chose to (mode bar, Read mode command). Entering Read
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).
-    /// Read mode hides the quick toolbar, so entering it also puts the current tool down.
     pub(crate) fn switch_mode(&mut self, mode: Mode, select_tools: bool) {
         let was_read = self.mode == Mode::Read;
         if select_tools {
@@ -2321,12 +2320,6 @@ impl PdfCraftApp {
         }
         if mode == Mode::Read && !was_read {
             self.right_before_read = self.right.take();
-            // An editing tool is put down so its open paragraph is applied, as `select_mode` does.
-            if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-                self.put_down_edit_text();
-            } else {
-                self.quick_tool = QuickTool::Select;
-            }
         } else if mode != Mode::Read && was_read {
             let before = self.right_before_read.take();
             if self.right.is_none() {
@@ -2373,7 +2366,6 @@ impl PdfCraftApp {
             // Kept only while the preference is on.
             "last_session": self.reopen_last_session.then(|| self.session_to_save()),
             "reload_changed_files": self.reload_changed_files,
-            "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
@@ -2469,9 +2461,6 @@ impl PdfCraftApp {
             self.reopen_last_session = on;
         }
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
-        if let Some(on) = v["system_title_bar"].as_bool() {
-            self.system_title_bar = on;
-        }
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;
         }
@@ -2528,10 +2517,6 @@ impl PdfCraftApp {
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
-        if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
-            self.redact_prefs = prefs.clone();
-            self.redact_defaults = prefs;
-        }
         // Settings are untrusted: an unreadable value (a colour that isn't three bytes, say)
         // fails to deserialize and keeps Off.
         if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {
@@ -2550,9 +2535,6 @@ impl PdfCraftApp {
         // name is cut to a sane length.
         if let Some(author) = v["author"].as_str().map(str::trim).filter(|a| !a.is_empty()) {
             self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
-        }
-        if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
-            self.comment_prefs.hide_empty_highlight_hover = hide;
         }
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
@@ -2608,7 +2590,7 @@ impl PdfCraftApp {
         }
         if let Ok(pems) = serde_json::from_value::<Vec<String>>(v["trusted"].clone()) {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
-            self.apply_trusted_certificates(certs);
+            self.session.set_trusted_certificates(certs);
         }
     }
 
@@ -2692,7 +2674,6 @@ impl PdfCraftApp {
                     "watermark" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)),
                     "background" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Background)),
                     "export-image" => Some(Dialog::Export(export_ui::ExportKind::Image)),
-                    "word-count" => Some(Dialog::WordCount),
                     "export-text" => Some(Dialog::Export(export_ui::ExportKind::Text)),
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
@@ -2726,7 +2707,7 @@ impl PdfCraftApp {
                 self.palette_query = value.to_string();
             }
             ("page", Some(v)) => v.go_to_page(value.parse::<usize>().map_err(|e| e.to_string())?.saturating_sub(1)),
-            ("zoom", Some(v)) => v.set_zoom(DocView::parse_zoom_percent(value).ok_or("zoom must be a percentage above 0")?),
+            ("zoom", Some(v)) => v.set_zoom(value.trim_end_matches('%').parse::<f32>().map_err(|e| e.to_string())? / 100.0),
             ("layout", Some(v)) => {
                 let (layout, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
                 v.set_display(layout, continuous);
@@ -2895,21 +2876,7 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
-            ("hide-empty-highlight-hover", _) => {
-                self.comment_prefs.hide_empty_highlight_hover = match value {
-                    "true" => true,
-                    "false" => false,
-                    _ => return Err("hide-empty-highlight-hover must be true or false".into()),
-                };
-            }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
-            ("system-title-bar", _) => {
-                self.system_title_bar = match value {
-                    "true" => true,
-                    "false" => false,
-                    _ => return Err("system-title-bar must be true or false".into()),
-                };
-            }
             ("flatten-fill-sign", _) => {
                 self.flatten_fill_sign_on_save = match value {
                     "true" => true,
@@ -3065,16 +3032,6 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
-    fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
-        // ⌘C arrives as a Copy event on most platforms.
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        if !copy || ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        self.copy_selected_text(i, ctx);
-    }
-
     /// Shared permission gate for copying selected page text from menus and keyboard events.
     pub(crate) fn copy_selected_text(&mut self, i: usize, ctx: &egui::Context) -> bool {
         let Some((id, text)) = self.views.get(i).and_then(|v| Some((v.id, v.selected_text()?))).filter(|(_, text)| !text.is_empty()) else {
@@ -3085,6 +3042,19 @@ impl PdfCraftApp {
         }
         ctx.copy_text(text);
         true
+    }
+
+    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
+    fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
+        // ⌘C arrives as a Copy event on most platforms.
+        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        if !copy || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let Some((id, text)) = self.views.get(i).and_then(|v| Some((v.id, v.selected_text()?))) else { return };
+        if self.may_copy(id) {
+            ctx.copy_text(text);
+        }
     }
 
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
@@ -3137,19 +3107,11 @@ impl eframe::App for PdfCraftApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // eframe has just stored the window as it is now: not while it is minimized.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let minimized = self.ctx.as_ref().is_some_and(|c| c.input(|i| i.viewport().minimized == Some(true)));
-            self.window_state.keep(storage, minimized);
-        }
         storage.set_string("pdfcraft", self.persist());
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ctx = Some(ctx.clone());
-        #[cfg(not(target_arch = "wasm32"))]
-        self.window_state.repair(ctx);
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
@@ -3216,12 +3178,7 @@ impl eframe::App for PdfCraftApp {
         }
         // Don't replace a pending prompt or import. A startup file may need its own password
         // prompt, so its bytes stay queued until the current interaction finishes.
-        #[cfg(not(target_arch = "wasm32"))]
-        let opening = !self.pending_opens.is_empty();
-        #[cfg(target_arch = "wasm32")]
-        let opening = false;
-        if !opening
-            && self.password_prompt.is_none()
+        if self.password_prompt.is_none()
             && self.image_import.is_none()
             && self.dialog.is_none()
             && self.close_request.is_none()
@@ -3268,8 +3225,6 @@ impl eframe::App for PdfCraftApp {
             self.control = Some(control);
         }
         self.guard_quit(ctx);
-        // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
-        craft_quit::on_close_request(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_tick(ctx, now);
         // Reload documents whose files a build rewrote (#431).
@@ -3312,6 +3267,66 @@ impl eframe::App for PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        // In the browser build a login popup that has just closed signals a fresh
+        // account check.  The transport stores "pdfcraft:auth_done" in egui's
+        // ephemeral memory and requests a repaint; we consume it here, set the
+        // "pdfcraft:popup_retry" flag so the login popup does not open another
+        // window if the post-close check still returns Unauthenticated (user
+        // cancelled), then call sign_in() to force a new Job::Account.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let auth_done = egui::Id::new("pdfcraft:auth_done");
+            let popup_retry = egui::Id::new("pdfcraft:popup_retry");
+            if ctx.memory(|m| m.data.get_temp::<bool>(auth_done).unwrap_or(false)) {
+                ctx.memory_mut(|m| {
+                    m.data.remove::<bool>(auth_done);
+                    m.data.insert_temp(popup_retry, true);
+                });
+                cloud::sign_in(self);
+                // Clear the "Finish signing in…" status that sign_in() sets;
+                // from the user's perspective they already finished.
+                self.cloud.status = None;
+            }
+        }
+        // Drain answers from the cloud worker (Open, Save, account, listing).
+        // Probe only on a user cloud action, not at boot.
+        cloud::pump(self, ctx);
+        // E-sign dialog: capability probe and inbox, even when closed.
+        esign::pump(&mut self.esign, ctx);
+        if let Some(send) = esign::take_send(&mut self.esign) {
+            if let Some(id) = self.esign_doc.filter(|id| self.views.iter().any(|v| v.id == *id)) {
+                if self.commit_typing_in(id) {
+                    match self.session.save_full_bytes(id).ok().map(|b| (*b).clone()) {
+                        Some(bytes) => {
+                            self.esign.submit_request(craft_ui::esign::Request::Create {
+                                draft: Box::new(send.draft),
+                                document: bytes,
+                                idempotency_key: send.idempotency_key,
+                                send: true,
+                            });
+                        }
+                        None => {
+                            esign::note_create(
+                                &mut self.esign,
+                                Err("the document for this request is no longer open".into()),
+                            );
+                        }
+                    }
+                } else {
+                    esign::note_create(&mut self.esign, Err(String::new()));
+                }
+            } else {
+                esign::note_create(
+                    &mut self.esign,
+                    Err("the document for this request is no longer open".into()),
+                );
+            }
+        }
+        // After pump: if we were on the cloud Open page and a new document tab appeared
+        // (the open completed), dismiss the page and show the document.
+        if self.cloud_page == Some(CloudPage::Open) && self.views.len() > self.cloud_page_doc_count && self.cloud.busy.is_none() {
+            self.cloud_page = None;
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -3328,7 +3343,8 @@ impl eframe::App for PdfCraftApp {
         // The window shows the active document's name (or title, if it asks for that).
         let title = self
             .active
-            .and_then(|i| crate::canvas::tab_label(self, i))
+            .and_then(|i| self.session.get(self.views[i].id))
+            .map(|d| d.display_name())
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
             .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
         if title != self.window_title {
@@ -3375,17 +3391,35 @@ impl eframe::App for PdfCraftApp {
         }
         let t = theme::Tokens::get(&ctx);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::Read {
-                match self.active {
-                    None if self.combine_showing() => combine_ui::page(self, ui),
-                    None => home::show(self, ui),
-                    Some(index) => match compare_ui::side_by_side(self, index) {
-                        Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
-                        None => canvas::document_area(self, index, ui),
-                    },
+            match self.cloud_page {
+                // Cloud Open page: browse and select a file; dismisses once the doc is open.
+                Some(CloudPage::Open) => {
+                    cloud_page_shell(self, ui, |app, ui| {
+                        crate::cloud::open_page(app, ui);
+                    });
                 }
-            } else {
-                docking::show(self, ui);
+                // Cloud Save As page: pick a folder, name, and save; dismisses on success.
+                Some(CloudPage::SaveAs) => {
+                    let saved = cloud_page_shell(self, ui, crate::cloud::save_page);
+                    if saved {
+                        self.cloud_page = None;
+                    }
+                }
+                // Normal view: home, document, or docking workspace.
+                None => {
+                    if self.mode == Mode::Read {
+                        match self.active {
+                            None if self.combine_showing() => combine_ui::page(self, ui),
+                            None => home::show(self, ui),
+                            Some(index) => match compare_ui::side_by_side(self, index) {
+                                Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
+                                None => canvas::document_area(self, index, ui),
+                            },
+                        }
+                    } else {
+                        docking::show(self, ui);
+                    }
+                }
             }
         });
         self.process_pending_edits();
@@ -3395,6 +3429,43 @@ impl eframe::App for PdfCraftApp {
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);
     }
+}
+
+/// Wraps a cloud page (Open or Save As) in a scrollable, padded shell with a "← Back"
+/// button that dismisses the page and returns the user to the document or home screen.
+///
+/// Returns whatever `body` returns. `save_page` returns `true` when a save started, so the
+/// caller can clear `cloud_page`; `open_page` is fire-and-forget and always returns `()`.
+pub(crate) fn cloud_page_shell<R>(app: &mut PdfCraftApp, ui: &mut egui::Ui, body: impl FnOnce(&mut PdfCraftApp, &mut egui::Ui) -> R) -> R {
+    let t = theme::Tokens::get(ui.ctx());
+    let mut back = false;
+    let result = egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin { left: 36, right: 36, top: 24, bottom: 28 })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let back_label = format!("← {}", tl!("Back"));
+                        let resp = ui.button(&back_label);
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Back")));
+                        if resp.clicked() {
+                            back = true;
+                        }
+                        ui.add_space(8.0);
+                        let heading = tl!(if app.cloud_page == Some(CloudPage::SaveAs) { "Save as to cloud" } else { "Open from cloud" });
+                        ui.label(egui::RichText::new(heading).font(theme::semibold(18.0)).color(t.text));
+                    });
+                    ui.add_space(16.0);
+                    body(app, ui)
+                })
+                .inner
+        })
+        .inner;
+    if back {
+        app.cloud_page = None;
+    }
+    result
 }
 
 impl PdfCraftApp {
@@ -3413,7 +3484,12 @@ impl PdfCraftApp {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner) {
+        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+            && let Some(doc) = self.session.get(view.id)
+        {
+            view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+        }
+        if let Some(i) = partner {
             if let Some(view) = self.views.get_mut(i)
                 && let Some(doc) = self.session.get(view.id)
             {

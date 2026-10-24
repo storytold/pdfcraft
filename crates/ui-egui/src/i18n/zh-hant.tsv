@@ -2029,7 +2029,6 @@
 	Fill & Sign: remove saved initials	填寫與簽署：刪除已儲存的姓名縮寫
 	Change signature	變更簽名
 	Change initials	變更姓名縮寫
-
 	Measure distance	測量距離
 	Measure perimeter	測量周長
 	Measure area	測量面積
@@ -2122,7 +2121,6 @@
 	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft 正在不使用圖形處理器的情況下繪製，因此可能較慢。更新顯示卡驅動程式可能會有幫助。
 	Scroll tabs left	向左捲動索引標籤
 	Scroll tabs right	向右捲動索引標籤
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	共用欄位屬性
 	{n} fields selected	已選取 {n} 個欄位
@@ -2143,7 +2141,6 @@
 	The field {name} no longer exists.	欄位 {name} 已不存在。
 	A selected field has no widget on any page, so the fields can't be edited together.	某個所選欄位在任何頁面上都沒有控制項，因此無法一起編輯這些欄位。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 張以可繪製的最大尺寸 {dpi} dpi 匯出）
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	已選取 {n} 個物件
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} 個欄位名稱與先前的檔案衝突，將被重新命名: {list}
@@ -2160,7 +2157,6 @@
 	Fill colour	填充顏色
 	No fill	無填充
 	Fill colour: none	填充顏色：無
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2182,7 +2178,6 @@ key	Space	空格
 	Expand all pages	展開所有頁面
 	Remove page	刪除頁面
 	Remove {n} pages	刪除 {n} 頁
-
 # Shared panel docking
 	Reset panel layout	重設面板配置
 	Float panel	浮動面板
@@ -2259,7 +2254,6 @@ animation effects	Off	關
 	Ink sensitivity	墨跡靈敏度
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	框內找不到簽名。請將框移到簽名上，或提高墨跡靈敏度。
 	Couldn't use the photo: {e}	無法使用此相片：{e}
-
 # PDF tab context menu (#1233)
 	Close Tab	關閉分頁
 	Reopen Closed Tab	重新開啟已關閉的分頁
@@ -2291,7 +2285,6 @@ animation effects	Off	關
 	Restore	還原
 	Use system title bar	使用系統標題列
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	以簡單的標題列顯示視窗按鈕，而不是在分頁列中。GNOME 不為應用程式繪製標題列，因此此標題列不會跟隨其佈景主題。
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	允許
 	Only allow this if you trust the source document.	只有在您信任來源文件時，才允許此操作。
@@ -2445,7 +2438,6 @@ animation effects	Off	關
 	Larger thumbnails	放大縮圖
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	變更註解形狀
-
 # Prepare a form ▸ Text field table
 	Add text field table	新增文字欄位表格
 	Text field table	文字欄位表格
@@ -2465,3 +2457,10 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+	Open from cloud…	從雲端開啟…
+	Open local file…	開啟本機檔案…
+	Open from cloud	從雲端開啟
+	Save as to cloud…	另存至雲端…
+	Save as to cloud	另存至雲端
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此檔案已在磁碟上變更。請重新載入以查看新版本；未儲存的變更將會遺失。
+	Mouse wheel scroll speed	滑鼠滾輪捲動速度

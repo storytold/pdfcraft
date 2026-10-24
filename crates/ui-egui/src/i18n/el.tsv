@@ -2394,7 +2394,6 @@ animation effects	Off	Ανενεργά
 	Ink sensitivity	Ευαισθησία μελανιού
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Δεν βρέθηκε υπογραφή στο πλαίσιο. Μετακινήστε το πλαίσιο πάνω από την υπογραφή ή αυξήστε την ευαισθησία μελανιού.
 	Couldn't use the photo: {e}	Δεν ήταν δυνατή η χρήση της φωτογραφίας: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Κλείσιμο καρτέλας
 	Reopen Closed Tab	Επαναφορά κλειστής καρτέλας
@@ -2427,7 +2426,6 @@ animation effects	Off	Ανενεργά
 	Restore	Επαναφορά
 	Use system title bar	Χρήση γραμμής τίτλου συστήματος
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Εμφάνιση απλής γραμμής τίτλου για τα κουμπιά του παραθύρου αντί για τη γραμμή καρτελών. Το GNOME δεν σχεδιάζει γραμμές τίτλου για τις εφαρμογές, οπότε αυτή δεν ακολουθεί το θέμα του.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Να επιτραπεί
 	Only allow this if you trust the source document.	Επιτρέψτε το μόνο αν εμπιστεύεστε το έγγραφο προέλευσης.
@@ -2501,7 +2499,6 @@ animation effects	Off	Ανενεργά
 	Larger thumbnails	Μεγαλύτερες μικρογραφίες
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Αλλαγή σχήματος σχολίου
-
 # Prepare a form ▸ Text field table
 	Add text field table	Προσθήκη πίνακα πεδίων κειμένου
 	Text field table	Πίνακας πεδίων κειμένου
@@ -2521,3 +2518,10 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+	Open from cloud…	Άνοιγμα από το cloud…
+	Open local file…	Άνοιγμα τοπικού αρχείου…
+	Open from cloud	Άνοιγμα από το cloud
+	Save as to cloud…	Αποθήκευση ως στο cloud…
+	Save as to cloud	Αποθήκευση ως στο cloud
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Αυτό το αρχείο άλλαξε στον δίσκο. Επαναφορτώστε το για να δείτε τη νέα έκδοση· οι μη αποθηκευμένες αλλαγές θα χαθούν.
+	Mouse wheel scroll speed	Ταχύτητα κύλισης τροχού ποντικιού

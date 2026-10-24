@@ -9,7 +9,6 @@
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
-#
 # Clean-room: written from the meaning of the English labels, following common Czech desktop
 # conventions (menus are nouns, commands are infinitives); not taken from Adobe Acrobat's Czech
 # localisation or any other product's translation. Terminology: annotations are "komentáře",
@@ -159,7 +158,6 @@
 	Slash	Lomítko
 	Scroll tabs left	Posunout karty doleva
 	Scroll tabs right	Posunout karty doprava
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Společné vlastnosti polí
 	{n} fields selected	Vybráno polí: {n}
@@ -176,7 +174,6 @@
 	Import list…	Importovat seznam…
 	{n} word(s) or phrase(s)	Slova nebo fráze: {n}
 	{name} is too large for a word list (at most 1 MB).	{name} je pro seznam slov příliš velký (nejvýše 1 MB).
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	Vybrán {n} objekt|Vybrány {n} objekty|Vybráno {n} objektů
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} název pole koliduje s dřívějšími soubory a bude přejmenován: {list}|Názvy {n} polí kolidují s dřívějšími soubory a budou přejmenovány: {list}|{n} názvů polí koliduje s dřívějšími soubory a bude přejmenováno: {list}
@@ -198,7 +195,6 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Mezerník
-
 # Shared panel docking
 	Reset panel layout	Obnovit rozložení panelů
 	Float panel	Uvolnit panel
@@ -208,7 +204,6 @@ key	Space	Mezerník
 	Resize panel window	Změnit velikost okna panelu
 	Tools	Nástroje
 	Inspector	Inspektor
-
 # The rest of the interface: Home, All tools, panels, dialogs, notices and history labels.
 	Folders	Složky
 	Pin a folder…	Připnout složku…
@@ -2291,7 +2286,6 @@ certificate	Subject	Subjekt
 	A selected field has no widget on any page, so the fields can't be edited together.	Vybrané pole nemá na žádné stránce widget, takže pole nelze upravit společně.
 	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Rozpoznávání textu není nainstalováno: chybí jeho modely (spusťte `cargo xtask models` nebo nastavte PDFCRAFT_MODELS).
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 (stránky: {n}, s rozlišením {dpi} dpi, největším, v jakém je lze vykreslit)
-
 # Labels added upstream since the catalog was completed: the Combine grid, printing, the comment
 # fill colour, the bookmarks panel and document information keys in history labels.
 	Grid view	Zobrazení mřížky
@@ -2333,7 +2327,6 @@ certificate	Subject	Subjekt
 	Enhance camera image	Vylepšit snímek z kamery
 	Enhance page	Vylepšit stránku
 	Save ({key})	Uložit ({key})
-
 # Digital ID errors, the Signatures panel and the certificate viewer.
 	Enter a name.	Zadejte jméno.
 	The password must have at least 8 characters.	Heslo musí mít alespoň 8 znaků.
@@ -2357,7 +2350,6 @@ certificate	Subject	Subjekt
 	CRL Signing	Podepisování CRL
 	Encipher Only	Pouze šifrování
 	Decipher Only	Pouze dešifrování
-
 # Form action, print, panel layout, rendering, text tooltips and OCR language messages.
 	Done adding text	Dokončit přidávání textu
 	Discard this text (Esc)	Zahodit tento text (Esc)
@@ -2370,7 +2362,6 @@ certificate	Subject	Subjekt
 	Rendering…	Vykreslování…
 	Still rendering — this page is unusually complex…	Stále se vykresluje – tato stránka je neobvykle složitá…
 	English	Angličtina
-
 # Appearance preferences and the mouse wheel scroll speed (added upstream).
 	Appearance mode	Režim vzhledu
 	Light	Světlý
@@ -2385,7 +2376,6 @@ scroll speed	Fast	Rychlá
 	Animation effects	Animační efekty
 animation effects	On	Zapnuto
 animation effects	Off	Vypnuto
-
 # Counts that take plural forms: optimized images, discarded items, bytes, pixels and deleted fields.
 @plural	{n} image optimized|{n} images optimized	{n} obrázek optimalizován|{n} obrázky optimalizovány|{n} obrázků optimalizováno
 @plural	{n} item discarded|{n} items discarded	{n} položka zahozena|{n} položky zahozeny|{n} položek zahozeno
@@ -2396,14 +2386,12 @@ animation effects	Off	Vypnuto
 	Rotate page {label} counterclockwise	Otočit stránku {label} proti směru hodinových ručiček
 	Rotate page {label} clockwise	Otočit stránku {label} po směru hodinových ručiček
 	Delete page {label}	Odstranit stránku {label}
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	Stránka PDF: {size}
 	Match page at 100%	Papír podle stránky, 100 %
 	PDF scale: {scale}%	Měřítko PDF: {scale} %
 	Printer paper and scaling may differ. Check driver settings.	Papír a měřítko tiskárny se mohou lišit. Zkontrolujte nastavení ovladače.
 	Drawing scale changes. Use Actual size for full-scale plans.	Měřítko výkresu se změní. Pro plány ve skutečném měřítku použijte volbu Skutečná velikost.
-
 # Permissions password and camera clean-up modes.
 	Enter permissions password…	Zadat heslo oprávnění…
 	Permissions password	Heslo oprávnění
@@ -2470,7 +2458,6 @@ animation effects	Off	Vypnuto
 	Ink sensitivity	Citlivost na inkoust
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	V rámečku nebyl nalezen žádný podpis. Přesuňte rámeček na podpis nebo zvyšte citlivost na inkoust.
 	Couldn't use the photo: {e}	Fotografii nelze použít: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Zavřít kartu
 	Reopen Closed Tab	Znovu otevřít zavřenou kartu
@@ -2491,7 +2478,6 @@ animation effects	Off	Vypnuto
 	Restore	Obnovit
 	Use system title bar	Použít systémové záhlaví okna
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Zobrazit jednoduché záhlaví s tlačítky okna místo pruhu karet. GNOME aplikacím záhlaví nekreslí, proto toto záhlaví nesleduje jeho motiv.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Povolit
 	Only allow this if you trust the source document.	Povolte tuto akci pouze v případě, že důvěřujete zdrojovému dokumentu.
@@ -2503,7 +2489,6 @@ animation effects	Off	Vypnuto
 	This document is trying to open a local file:	Tento dokument se pokouší otevřít místní soubor:
 	Move tag earlier	Přesunout tag dříve
 	Move tag later	Přesunout tag později
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Prohlížíte si podepsanou verzi dokumentu „{from}“ (revize {rev}). Je to snímek: změny zde neovlivní originál.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Prohlížíte si revizi {rev} dokumentu „{from}“. Je to snímek: změny zde neovlivní originál.
@@ -2569,7 +2554,6 @@ animation effects	Off	Vypnuto
 	Larger thumbnails	Větší miniatury
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Změnit tvar komentáře
-
 # What the layers below word for themselves (engine `WORDINGS` lists): accessibility findings and
 # the saved report, PDF/A problems, signature details and the changes they name, pages to print,
 # history labels. Terms: timestamp = "časové razítko", timestamp authority = "autorita časových
@@ -2702,7 +2686,6 @@ animation effects	Off	Vypnuto
 	{} annotation on page {p} isn't tagged	Anotace {} na stránce {p} není označkovaná
 	{} annotations aren't allowed	Anotace {} nejsou povoleny
 	… and {n} more	… a další ({n})
-
 # Labels other catalogs carry (shared buttons, tooltips with key caps, the folder picker).
 	 on page {label}	 na stránce {label}
 	of	z
@@ -2770,7 +2753,6 @@ animation effects	Off	Vypnuto
 @plural	{n} file|{n} files	{n} soubor|{n} soubory|{n} souborů
 @plural	{n} result|{n} results	{n} výsledek|{n} výsledky|{n} výsledků
 theme	Appearance	Vzhled
-
 # The date picker's weekday heads.
 calendar weekday	Su	Ne
 calendar weekday	Mo	Po
@@ -2779,7 +2761,6 @@ calendar weekday	We	St
 calendar weekday	Th	Čt
 calendar weekday	Fr	Pá
 calendar weekday	Sa	So
-
 # A certificate's fields in the certificate viewer.
 certificate	Issued to	Vydáno pro
 certificate	Issued by	Vydal
@@ -2802,7 +2783,6 @@ certificate	Version	Verze
 	The signature's signed attributes have no message digest, so the signature does not cover the document.	Podepsané atributy podpisu neobsahují otisk zprávy, takže se podpis na dokument nevztahuje.
 	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Podepsané atributy podpisu uvádějí jiný typ obsahu než data, takže nejde o podpis dokumentu.
 	Remove {standard} identification	Odebrat identifikaci {standard}
-
 # Prepare a form ▸ Text field table
 	Add text field table	Přidat tabulku textových polí
 	Text field table	Tabulka textových polí
@@ -2822,3 +2802,8 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+	Open from cloud…	Otevřít z cloudu…
+	Open local file…	Otevřít místní soubor…
+	Open from cloud	Otevřít z cloudu
+	Save as to cloud…	Uložit jako do cloudu…
+	Save as to cloud	Uložit jako do cloudu

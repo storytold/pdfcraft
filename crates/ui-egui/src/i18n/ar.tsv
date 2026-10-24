@@ -9,13 +9,11 @@
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
-#
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Arabic computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept. Digits are Western (0-9).
-#
 # Write every entry in logical (typing) order. The interface draws text left to right, so
 # i18n/mod.rs puts each entry into display order when it loads the catalog (bidi::display_rtl);
 # spaces and a colon at either end of an entry stay at that end, next to what the code appends.
@@ -741,14 +739,12 @@
 	of the following fields:	للحقول التالية:
 	Simplified field notation:	صيغة الحقول المبسطة:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	أسماء الحقول مع + - * / والأقواس؛ ضع \\ قبل المسافات في الأسماء.
-
 # Document font selection
 	Finding document fonts…	جارٍ البحث عن خطوط المستند…
 	Installed fonts…	الخطوط المثبتة…
 	Keep source fonts	الاحتفاظ بالخطوط الأصلية
 	Load font…	تحميل خط…
 	No openly licensed document fonts found. Load a font file.	لم يُعثر على خطوط ذات ترخيص مفتوح. حمّل ملف خط.
-
 	Format text	تنسيق النص
 	Bold	غامق
 	Italic	مائل
@@ -2286,7 +2282,6 @@ certificate	Subject	صاحب الشهادة
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بدقة {dpi} dpi، وهي أكبر دقة يمكن رسمها بها)
 	Margins	الهوامش
 	For page sizes and margins.	لأحجام الصفحات والهوامش.
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	تم تحديد {n} عنصر|تم تحديد {n} عنصر|تم تحديد {n} عنصرين|تم تحديد {n} عناصر|تم تحديد {n} عنصرًا|تم تحديد {n} عنصر
 	Drag the selection to move it. Esc clears the selection.	اسحب التحديد لنقله. يمسح Esc التحديد.
@@ -2302,7 +2297,6 @@ certificate	Subject	صاحب الشهادة
 	Fill colour	لون التعبئة
 	No fill	بلا تعبئة
 	Fill colour: none	لون التعبئة: بلا
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2324,7 +2318,6 @@ key	Space	مسافة
 	Expand all pages	توسيع كل الصفحات
 	Remove page	إزالة الصفحة
 	Remove {n} pages	إزالة {n} صفحات
-
 # Shared panel docking
 	Reset panel layout	إعادة تعيين تخطيط اللوحات
 	Float panel	تعويم اللوحة
@@ -2332,7 +2325,6 @@ key	Space	مسافة
 	Panels	اللوحات
 	Resize panels	تغيير حجم اللوحات
 	Resize panel window	تغيير حجم نافذة اللوحة
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	صفحة PDF: {size}
 	Match page at 100%	مطابقة الورق للصفحة بنسبة 100%
@@ -2417,7 +2409,6 @@ animation effects	Off	معطّلة
 	Ink sensitivity	حساسية الحبر
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	لم يُعثر على توقيع داخل الإطار. حرّك الإطار فوق التوقيع أو ارفع حساسية الحبر.
 	Couldn't use the photo: {e}	تعذّر استخدام الصورة: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	إغلاق علامة التبويب
 	Reopen Closed Tab	إعادة فتح علامة التبويب المغلقة
@@ -2438,7 +2429,6 @@ animation effects	Off	معطّلة
 	Restore	استعادة
 	Use system title bar	استخدام شريط عنوان النظام
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	إظهار شريط عنوان بسيط لأزرار النافذة بدلًا من شريط الألسنة. لا يرسم GNOME أشرطة العناوين للتطبيقات، لذلك لا يتبع هذا الشريط سمته.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	السماح
 	Only allow this if you trust the source document.	لا تسمح بذلك إلا إذا كنت تثق بالمستند المصدر.
@@ -2450,7 +2440,6 @@ animation effects	Off	معطّلة
 	This document is trying to open a local file:	يحاول هذا المستند فتح ملف محلي:
 	Move tag earlier	نقل العلامة للأعلى
 	Move tag later	نقل العلامة للأسفل
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	أنت تعرض النسخة الموقعة من “{from}” (المراجعة {rev}). هذه لقطة: التغييرات هنا لن تؤثر على الأصل.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	أنت تعرض المراجعة {rev} من “{from}”. هذه لقطة: التغييرات هنا لن تؤثر على الأصل.
@@ -2771,7 +2760,6 @@ certificate	Version	الإصدار
 	Larger thumbnails	تكبير الصور المصغرة
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	إعادة تشكيل التعليق
-
 # Prepare a form ▸ Text field table
 	Add text field table	إضافة جدول حقول نصية
 	Text field table	جدول حقول نصية
@@ -2791,3 +2779,10 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Open from cloud…	فتح من السحابة…
+	Open local file…	فتح ملف محلي…
+	Open from cloud	فتح من السحابة
+	Save as to cloud…	حفظ باسم إلى السحابة…
+	Save as to cloud	حفظ باسم إلى السحابة
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	تغيّر هذا الملف على القرص. أعد تحميله لعرض النسخة الجديدة؛ ستفقد تغييراتك غير المحفوظة.
+	Mouse wheel scroll speed	سرعة التمرير بعجلة الماوس

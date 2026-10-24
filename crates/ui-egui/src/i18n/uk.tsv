@@ -8,7 +8,6 @@
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
-#
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Ukrainian computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
@@ -17,7 +16,6 @@
 
 # Integer plurals (CLDR uk): one (1, 21) | few (2–4, 22–24) | many (0, 5–19); 11–14 take many.
 # Commands use infinitives. Fixed-count templates use count-neutral wording.
-
 	Menu	Меню
 	File	Файл
 	Edit	Редагування
@@ -739,14 +737,12 @@
 	of the following fields:	таких полів:
 	Simplified field notation:	Спрощений запис полів:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Назви полів із + - * / та дужками; перед пробілами в назвах ставте \\.
-
 # Document font selection
 	Finding document fonts…	Пошук шрифтів для документа…
 	Installed fonts…	Встановлені шрифти…
 	Keep source fonts	Зберегти початкові шрифти
 	Load font…	Завантажити шрифт…
 	No openly licensed document fonts found. Load a font file.	Шрифтів із відкритою ліцензією не знайдено. Завантажте файл шрифту.
-
 	Format text	Форматувати текст
 	Bold	Напівжирний
 	Italic	Курсив
@@ -2195,7 +2191,6 @@ calendar date	December	грудня
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
 	Inserted text	Вставлений текст
-
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	Додати: {what}
 	Use {what}	Використати: {what}
@@ -2266,7 +2261,6 @@ calendar date	December	грудня
 certificate	Subject	Власник сертифіката
 	Scroll tabs left	Прокрутити вкладки ліворуч
 	Scroll tabs right	Прокрутити вкладки праворуч
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Спільні властивості полів
 	{n} fields selected	Вибрано полів: {n}
@@ -2287,7 +2281,6 @@ certificate	Subject	Власник сертифіката
 	The field {name} no longer exists.	Поле {name} більше не існує.
 	A selected field has no widget on any page, so the fields can't be edited together.	Одне з вибраних полів не має віджета на жодній сторінці, тому поля не можна редагувати разом.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — з роздільністю {dpi} dpi, найбільшою, з якою їх можна відобразити)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	Виділено {n} об’єкт|Виділено {n} об’єкти|Виділено {n} об’єктів
 	Drag the selection to move it. Esc clears the selection.	Перетягніть виділення, щоб перемістити його. Esc скасовує виділення.
@@ -2303,7 +2296,6 @@ certificate	Subject	Власник сертифіката
 	Fill colour	Колір заливки
 	No fill	Без заливки
 	Fill colour: none	Колір заливки: немає
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2325,7 +2317,6 @@ key	Space	Пробіл
 	Expand all pages	Розгорнути всі сторінки
 	Remove page	Видалити сторінку
 	Remove {n} pages	Видалити сторінки: {n}
-
 # Shared panel docking
 	Reset panel layout	Скинути розташування панелей
 	Float panel	Відкріпити панель
@@ -2333,7 +2324,6 @@ key	Space	Пробіл
 	Panels	Панелі
 	Resize panels	Змінити розмір панелей
 	Resize panel window	Змінити розмір вікна панелі
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	Сторінка PDF: {size}
 	Match page at 100%	Підібрати папір, масштаб 100%
@@ -2418,7 +2408,6 @@ animation effects	Off	Вимкнено
 	Ink sensitivity	Чутливість до чорнила
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	У рамці не знайдено підпису. Наведіть рамку на підпис або збільште чутливість до чорнила.
 	Couldn't use the photo: {e}	Не вдалося використати фото: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Закрити вкладку
 	Reopen Closed Tab	Відкрити закриту вкладку
@@ -2439,7 +2428,6 @@ animation effects	Off	Вимкнено
 	Restore	Відновити
 	Use system title bar	Використовувати системний заголовок вікна
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показувати простий заголовок вікна з кнопками замість панелі вкладок. GNOME не малює заголовки для програм, тому цей заголовок не відповідає його темі.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Дозволити
 	Only allow this if you trust the source document.	Дозволяйте це лише тоді, коли довіряєте вихідному документу.
@@ -2451,7 +2439,6 @@ animation effects	Off	Вимкнено
 	This document is trying to open a local file:	Цей документ намагається відкрити локальний файл:
 	Move tag earlier	Перемістити тег раніше
 	Move tag later	Перемістити тег пізніше
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ви переглядаєте підписану версію документа «{from}» (редакція {rev}). Це знімок: зміни тут не вплинуть на оригінал.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Ви переглядаєте редакцію {rev} документа «{from}». Це знімок: зміни тут не вплинуть на оригінал.
@@ -2517,7 +2504,6 @@ animation effects	Off	Вимкнено
 	Larger thumbnails	Збільшити мініатюри
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Змінити форму коментаря
-
 # Prepare a form ▸ Text field table
 	Add text field table	Додати таблицю текстових полів
 	Text field table	Таблиця текстових полів
@@ -2537,3 +2523,10 @@ animation effects	Off	Вимкнено
 	field names can't contain a period: {name}	імена полів не можуть містити крапку: {name}
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
+	Open from cloud…	Відкрити з хмари…
+	Open local file…	Відкрити локальний файл…
+	Open from cloud	Відкрити з хмари
+	Save as to cloud…	Зберегти як у хмарі…
+	Save as to cloud	Зберегти як у хмарі
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Цей файл змінено на диску. Перезавантажте його, щоб побачити нову версію; незбережені зміни буде втрачено.
+	Mouse wheel scroll speed	Швидкість прокручування коліщатком миші

@@ -367,14 +367,12 @@
 	of the following fields:	dos seguintes campos:
 	Simplified field notation:	Notação simplificada de campo:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Nomes de campos com + - * / e parênteses; coloque \\ antes de espaços em nomes.
-
 # Document font selection
 	Finding document fonts…	Buscando fontes para o documento…
 	Installed fonts…	Fontes instaladas…
 	Keep source fonts	Manter fontes originais
 	Load font…	Carregar fonte…
 	No openly licensed document fonts found. Load a font file.	Nenhuma fonte com licença aberta encontrada. Carregue um arquivo de fonte.
-
 	Format text	Formatar texto
 	Bold	Negrito
 	Italic	Itálico
@@ -2144,7 +2142,6 @@ action wizard	Start	Iniciar
 	Slash	Barra
 	Scroll tabs left	Rolar as abas para a esquerda
 	Scroll tabs right	Rolar as abas para a direita
-
 # Labels added on main while this catalog was being completed (merged 2026-10-09)
 	% of all commits	% de todos os commits
 	+Bin	+Bin
@@ -2244,7 +2241,6 @@ action wizard	Start	Iniciar
 	−Bin	−Bin
 	−LOC	−LOC
 comment menu	Edit	Editar
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Propriedades comuns dos campos
 	{n} fields selected	{n} campos selecionados
@@ -2265,7 +2261,6 @@ comment menu	Edit	Editar
 	The field {name} no longer exists.	O campo {name} não existe mais.
 	A selected field has no widget on any page, so the fields can't be edited together.	Um campo selecionado não tem widget em nenhuma página, então os campos não podem ser editados juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, o maior tamanho em que podem ser desenhadas)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} objeto selecionado|{n} objetos selecionados
 	Drag the selection to move it. Esc clears the selection.	Arraste a seleção para movê-la. Esc limpa a seleção.
@@ -2281,7 +2276,6 @@ comment menu	Edit	Editar
 	Fill colour	Cor de preenchimento
 	No fill	Sem preenchimento
 	Fill colour: none	Cor de preenchimento: nenhuma
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2303,7 +2297,6 @@ key	Space	Espaço
 	Expand all pages	Expandir todas as páginas
 	Remove page	Remover página
 	Remove {n} pages	Remover {n} páginas
-
 # Shared panel docking
 	Reset panel layout	Redefinir disposição dos painéis
 	Float panel	Tornar painel flutuante
@@ -2313,7 +2306,6 @@ key	Space	Espaço
 	Resize panel window	Redimensionar janela do painel
 	Tools	Ferramentas
 	Inspector	Inspetor
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	Página PDF: {size}
 	Match page at 100%	Ajustar papel à página a 100%
@@ -2410,7 +2402,6 @@ animation effects	Off	Desativados
 	Ink sensitivity	Sensibilidade à tinta
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Nenhuma assinatura encontrada no quadro. Mova o quadro sobre a assinatura ou aumente a sensibilidade à tinta.
 	Couldn't use the photo: {e}	Não foi possível usar a foto: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Fechar aba
 	Reopen Closed Tab	Reabrir aba fechada
@@ -2431,7 +2422,6 @@ animation effects	Off	Desativados
 	Restore	Restaurar
 	Use system title bar	Usar a barra de título do sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostrar uma barra de título simples para os botões da janela em vez da barra de abas. O GNOME não desenha barras de título para os aplicativos, então esta não segue o tema dele.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir
 	Only allow this if you trust the source document.	Permita esta ação somente se confiar no documento de origem.
@@ -2443,7 +2433,6 @@ animation effects	Off	Desativados
 	This document is trying to open a local file:	Este documento está tentando abrir um arquivo local:
 	Move tag earlier	Mover tag para antes
 	Move tag later	Mover tag para depois
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Você está vendo a versão assinada de “{from}” (revisão {rev}). É um instantâneo: as alterações aqui não afetarão o original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Você está vendo a revisão {rev} de “{from}”. É um instantâneo: as alterações aqui não afetarão o original.
@@ -2495,7 +2484,6 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
-
 # Remaining keys from the current catalog union, translated from their English meaning (2026-10-21).
 	 on page {label}	 na página {label}
 	A font isn't embedded	Uma fonte não está incorporada
@@ -2774,7 +2762,6 @@ theme	Appearance	Aparência
 	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
 	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
 	Remove {standard} identification	Remove {standard} identification
-
 # Prepare a form ▸ Text field table
 	Add text field table	Adicionar tabela de campos de texto
 	Text field table	Tabela de campos de texto
@@ -2794,9 +2781,13 @@ theme	Appearance	Aparência
 	field names can't contain a period: {name}	nomes de campo não podem conter ponto: {name}
 	two cells would both be named {name}	duas células teriam o nome {name}
 	a field named {name} already exists	já existe um campo chamado {name}
-
 # Prepare a form ▸ Text field table: limits (AI-assisted, not separately native-reviewed)
 	a table has 1 to {max} rows	uma tabela tem de 1 a {max} linhas
 	a table has 1 to {max} columns	uma tabela tem de 1 a {max} colunas
 	the first row number can be at most {max}	o número da primeira linha pode ser no máximo {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	a área, o espaçamento e as larguras das colunas devem ser números, o espaçamento 0 ou mais e cada largura maior que 0
+	Open from cloud…	Abrir da nuvem…
+	Open local file…	Abrir arquivo local…
+	Open from cloud	Abrir da nuvem
+	Save as to cloud…	Salvar como na nuvem…
+	Save as to cloud	Salvar como na nuvem

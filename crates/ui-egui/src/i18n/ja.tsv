@@ -8,7 +8,6 @@
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
-#
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Japanese computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
@@ -742,14 +741,12 @@
 	of the following fields:	対象フィールド:
 	Simplified field notation:	簡易フィールド表記:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	フィールド名と + - * / および括弧を使用できます。名前に含まれる空白の前には \\ を付けてください。
-
 # Document font selection
 	Finding document fonts…	文書用フォントを検索中…
 	Installed fonts…	インストール済みフォント…
 	Keep source fonts	元のフォントを保持
 	Load font…	フォントを読み込む…
 	No openly licensed document fonts found. Load a font file.	オープンライセンスのフォントが見つかりません。フォントファイルを読み込んでください。
-
 	Format text	テキストの書式
 	Bold	太字
 	Italic	斜体
@@ -2042,7 +2039,6 @@
 	Fill & Sign: remove saved initials	入力と署名：保存済みのイニシャルを削除
 	Change signature	署名を変更
 	Change initials	イニシャルを変更
-
 	Measure distance	距離を測定
 	Measure perimeter	周長を測定
 	Measure area	面積を測定
@@ -2242,7 +2238,6 @@ signature pad	Type	入力
 	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。
 	Scroll tabs left	タブを左にスクロール
 	Scroll tabs right	タブを右にスクロール
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	共通のフィールドプロパティ
 	{n} fields selected	{n} 個のフィールドを選択中
@@ -2263,7 +2258,6 @@ signature pad	Type	入力
 	The field {name} no longer exists.	フィールド {name} はもう存在しません。
 	A selected field has no widget on any page, so the fields can't be edited together.	選択したフィールドの一つがどのページにもウィジェットを持たないため、まとめて編集できません。
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 件は描画できる最大サイズの {dpi} dpi で書き出しました）
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n}個のオブジェクトを選択中
 	Drag the selection to move it. Esc clears the selection.	選択範囲をドラッグして移動します。Escで選択を解除します。
@@ -2279,7 +2273,6 @@ signature pad	Type	入力
 	Fill colour	塗りつぶし色
 	No fill	塗りつぶしなし
 	Fill colour: none	塗りつぶし色: なし
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2301,7 +2294,6 @@ key	Space	スペース
 	Expand all pages	すべてのページを展開
 	Remove page	ページを削除
 	Remove {n} pages	{n} ページを削除
-
 # Shared panel docking
 	Reset panel layout	パネル配置をリセット
 	Float panel	パネルをフロート化
@@ -2311,7 +2303,6 @@ key	Space	スペース
 	Resize panel window	パネルウィンドウのサイズを変更
 	Tools	ツール
 	Inspector	インスペクター
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	PDFページ: {size}
 	Match page at 100%	ページに合わせて100%に設定
@@ -2396,7 +2387,6 @@ animation effects	Off	オフ
 	Ink sensitivity	インクの感度
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	枠内に署名が見つかりません。枠を署名に合わせるか、インクの感度を上げてください。
 	Couldn't use the photo: {e}	写真を使用できません: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	タブを閉じる
 	Reopen Closed Tab	閉じたタブを再度開く
@@ -2417,7 +2407,6 @@ animation effects	Off	オフ
 	Restore	元のサイズに戻す
 	Use system title bar	システムのタイトルバーを使う
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	タブバーの代わりに、ウィンドウボタン用のシンプルなタイトルバーを表示します。GNOME はアプリのタイトルバーを描画しないため、このタイトルバーは GNOME のテーマに従いません。
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	許可
 	Only allow this if you trust the source document.	元の文書を信頼できる場合にのみ許可してください。
@@ -2429,7 +2418,6 @@ animation effects	Off	オフ
 	This document is trying to open a local file:	この文書はローカルファイルを開こうとしています：
 	Move tag earlier	タグを前へ移動
 	Move tag later	タグを後へ移動
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	「{from}」の署名済みバージョン（リビジョン {rev}）を表示しています。これはスナップショットであり、ここでの変更は元の文書に影響しません。
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	「{from}」のリビジョン {rev} を表示しています。これはスナップショットであり、ここでの変更は元の文書に影響しません。
@@ -2495,7 +2483,6 @@ animation effects	Off	オフ
 	Larger thumbnails	サムネイルを大きく
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	コメントの形状を変更
-
 # Prepare a form ▸ Text field table
 	Add text field table	テキストフィールドの表を追加
 	Text field table	テキストフィールドの表
@@ -2515,3 +2502,10 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Open from cloud…	クラウドから開く…
+	Open local file…	ローカルファイルを開く…
+	Open from cloud	クラウドから開く
+	Save as to cloud…	クラウドに名前を付けて保存…
+	Save as to cloud	クラウドに名前を付けて保存
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	このファイルはディスク上で変更されました。再読み込みすると新しいバージョンが表示されますが、未保存の変更は失われます。
+	Mouse wheel scroll speed	マウスホイールのスクロール速度

@@ -8,7 +8,6 @@
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
-#
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Italian computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
@@ -738,14 +737,12 @@
 	of the following fields:	dei seguenti campi:
 	Simplified field notation:	Notazione semplificata dei campi:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Nomi dei campi con + - * / e parentesi; anteponi \\ agli spazi nei nomi.
-
 # Document font selection
 	Finding document fonts…	Ricerca dei caratteri per il documento…
 	Installed fonts…	Caratteri installati…
 	Keep source fonts	Mantieni i caratteri originali
 	Load font…	Carica carattere…
 	No openly licensed document fonts found. Load a font file.	Nessun carattere con licenza aperta trovato. Carica un file di carattere.
-
 	Format text	Formatta testo
 	Bold	Grassetto
 	Italic	Corsivo
@@ -2035,7 +2032,6 @@
 	Fill & Sign: remove saved initials	Compila e firma: rimuovi iniziali salvate
 	Change signature	Cambia firma
 	Change initials	Cambia iniziali
-
 	Measure distance	Misura distanza
 	Measure perimeter	Misura perimetro
 	Measure area	Misura area
@@ -2163,7 +2159,6 @@
 @plural	{n} page|{n} pages	{n} pagina|{n} pagine
 @plural	{n} field|{n} fields	{n} campo|{n} campi
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nome di campo è in conflitto con i file precedenti e verrà rinominato: {list}|{n} nomi di campo sono in conflitto con i file precedenti e verranno rinominati: {list}
-
 # Labels added on main after this catalog was written (merged 2026-10-09)
 	A button	Un pulsante
 	A link	Un collegamento
@@ -2251,7 +2246,6 @@ action wizard	Start	Avvia
 certificate	Subject	Titolare
 comment menu	Edit	Modifica
 signature pad	Type	Digita
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Proprietà comuni dei campi
 	{n} fields selected	{n} campi selezionati
@@ -2274,7 +2268,6 @@ signature pad	Type	Digita
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} dpi, la dimensione massima a cui si possono disegnare)
 	Margins	Margini
 	For page sizes and margins.	Per formati pagina e margini.
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} oggetto selezionato|{n} oggetti selezionati
 	Drag the selection to move it. Esc clears the selection.	Trascina la selezione per spostarla. Esc annulla la selezione.
@@ -2290,7 +2283,6 @@ signature pad	Type	Digita
 	Fill colour	Colore riempimento
 	No fill	Nessun riempimento
 	Fill colour: none	Colore riempimento: nessuno
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Maiusc
@@ -2312,7 +2304,6 @@ key	Space	Spazio
 	Expand all pages	Espandi tutte le pagine
 	Remove page	Rimuovi pagina
 	Remove {n} pages	Rimuovi {n} pagine
-
 # Shared panel docking
 	Reset panel layout	Ripristina disposizione pannelli
 	Float panel	Rendi pannello flottante
@@ -2320,7 +2311,6 @@ key	Space	Spazio
 	Panels	Pannelli
 	Resize panels	Ridimensiona pannelli
 	Resize panel window	Ridimensiona finestra pannello
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	Pagina PDF: {size}
 	Match page at 100%	Adatta il foglio alla pagina al 100%
@@ -2405,7 +2395,6 @@ animation effects	Off	Disattivati
 	Ink sensitivity	Sensibilità all’inchiostro
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Nessuna firma trovata nella cornice. Sposta la cornice sulla firma o aumenta la sensibilità all’inchiostro.
 	Couldn't use the photo: {e}	Impossibile usare la foto: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Chiudi scheda
 	Reopen Closed Tab	Riapri scheda chiusa
@@ -2426,7 +2415,6 @@ animation effects	Off	Disattivati
 	Restore	Ripristina
 	Use system title bar	Usa la barra del titolo di sistema
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostra una barra del titolo semplice per i pulsanti della finestra invece della barra delle schede. GNOME non disegna le barre del titolo per le app, quindi questa non segue il suo tema.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Consenti
 	Only allow this if you trust the source document.	Consenti questa operazione solo se ti fidi del documento di origine.
@@ -2438,7 +2426,6 @@ animation effects	Off	Disattivati
 	This document is trying to open a local file:	Questo documento sta tentando di aprire un file locale:
 	Move tag earlier	Sposta tag prima
 	Move tag later	Sposta tag dopo
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Stai visualizzando la versione firmata di “{from}” (revisione {rev}). È un'istantanea: le modifiche qui non influiscono sull'originale.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Stai visualizzando la revisione {rev} di “{from}”. È un'istantanea: le modifiche qui non influiscono sull'originale.
@@ -2490,7 +2477,6 @@ animation effects	Off	Disattivati
 	Make properties default	Imposta proprietà come predefinite
 	Pages selected	Pagine selezionate
 	Page properties	Proprietà pagina
-
 # Entries the other catalogs had and Italian lacked (2026-10-14)
 	Tools	Strumenti
 	Inspector	Ispettore
@@ -2707,10 +2693,8 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Larger thumbnails	Miniature più grandi
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Modifica la forma del commento
-
 # Entries the other catalogs had and Italian lacked (2026-10-21)
 	The password must have at least 8 characters.	La password deve contenere almeno 8 caratteri.
-
 # Entries from #1523 that the catalog lacked.
 	Color	Colore
 	Comment	Commento
@@ -2723,7 +2707,6 @@ certificate	SHA-256 digest	Impronta SHA-256
 	System	Sistema
 	Zoom in / out (also pinch or ⌘-scroll)	Ingrandisci / riduci (anche con il pizzico o ⌘+scorrimento)
 	of	di
-
 # Prepare a form ▸ Text field table
 	Add text field table	Aggiungi tabella di campi di testo
 	Text field table	Tabella di campi di testo
@@ -2747,3 +2730,10 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Open from cloud…	Apri dal cloud…
+	Open local file…	Apri file locale…
+	Open from cloud	Apri dal cloud
+	Save as to cloud…	Salva con nome nel cloud…
+	Save as to cloud	Salva con nome nel cloud
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Questo file è cambiato sul disco. Ricaricalo per vedere la nuova versione; le modifiche non salvate andranno perse.
+	Mouse wheel scroll speed	Velocità di scorrimento della rotellina del mouse

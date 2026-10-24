@@ -719,7 +719,6 @@
 	Keep source fonts	Eredeti betűtípusok megtartása
 	Load font…	Betűtípus betöltése…
 	No openly licensed document fonts found. Load a font file.	Nem található nyílt licencű betűtípus. Töltsön be egy betűtípusfájlt.
-
 	Format text	Szöveg formázása
 	Bold	Félkövér
 	Italic	Dőlt
@@ -2173,7 +2172,6 @@ action wizard	Start	Indítás
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
 	Remove from Recent	Eltávolítás a legutóbbiak közül
 	Remove {name} from Recent	{name} eltávolítása a legutóbbiak közül
-
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hozzáadása
 	Use {what}	{what} használata
@@ -2241,7 +2239,6 @@ action wizard	Start	Indítás
 	For page sizes and margins.	Oldalméretekhez és margókhoz.
 	Scroll tabs left	Lapok görgetése balra
 	Scroll tabs right	Lapok görgetése jobbra
-
 # Shared field properties (Prepare a form).
 	Shared Field Properties	Közös mezőtulajdonságok
 	{n} fields selected	{n} mező kijelölve
@@ -2262,7 +2259,6 @@ action wizard	Start	Indítás
 	The field {name} no longer exists.	A(z) {name} mező már nem létezik.
 	A selected field has no widget on any page, so the fields can't be edited together.	Az egyik kijelölt mezőnek egyik oldalon sincs widgetje, ezért a mezők nem szerkeszthetők együtt.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} {dpi} dpi felbontással, a legnagyobb méretben, amelyben megjeleníthetők)
-
 # Multi-object selection and movement (#844)
 @plural	{n} object selected|{n} objects selected	{n} objektum kijelölve|{n} objektum kijelölve
 	Drag the selection to move it. Esc clears the selection.	A kijelölés áthelyezéséhez húzza azt. Az Esc törli a kijelölést.
@@ -2278,7 +2274,6 @@ action wizard	Start	Indítás
 	Fill colour	Kitöltőszín
 	No fill	Nincs kitöltés
 	Fill colour: none	Kitöltőszín: nincs
-
 # Keyboard key names, distinct from command labels.
 key	Ctrl	Ctrl
 key	Shift	Shift
@@ -2300,7 +2295,6 @@ key	Space	Szóköz
 	Expand all pages	Összes oldal kibontása
 	Remove page	Oldal eltávolítása
 	Remove {n} pages	{n} oldal eltávolítása
-
 # Shared panel docking
 	Reset panel layout	Panelelrendezés visszaállítása
 	Float panel	Panel lebegtetése
@@ -2310,7 +2304,6 @@ key	Space	Szóköz
 	Resize panel window	Panelablak átméretezése
 	Tools	Eszközök
 	Inspector	Tulajdonságvizsgáló
-
 # Architectural print controls (follow-up to #599).
 	PDF page: {size}	PDF-oldal: {size}
 	Match page at 100%	Papír illesztése az oldalhoz, 100%
@@ -2395,7 +2388,6 @@ animation effects	Off	Ki
 	Ink sensitivity	Tintaérzékenység
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	A keretben nem található aláírás. Húzza a keretet az aláírásra, vagy növelje a tintaérzékenységet.
 	Couldn't use the photo: {e}	A fénykép nem használható: {e}
-
 # PDF tab context menu (#1233)
 	Close Tab	Lap bezárása
 	Reopen Closed Tab	Bezárt lap újranyitása
@@ -2416,7 +2408,6 @@ animation effects	Off	Ki
 	Restore	Visszaállítás
 	Use system title bar	Rendszer címsorának használata
 	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Egyszerű címsor megjelenítése az ablakgombokkal a lapsáv helyett. A GNOME nem rajzol címsort az alkalmazásoknak, ezért ez nem követi a témáját.
-
 # Absolute local GoToR confirmation (#1364).
 	Allow	Engedélyezés
 	Only allow this if you trust the source document.	Csak akkor engedélyezze ezt, ha megbízik a forrásdokumentumban.
@@ -2428,7 +2419,6 @@ animation effects	Off	Ki
 	This document is trying to open a local file:	Ez a dokumentum egy helyi fájlt próbál megnyitni:
 	Move tag earlier	Címke korábbra helyezése
 	Move tag later	Címke későbbre helyezése
-
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	A(z) „{from}“ aláírt változatát (a {rev}. változatot) tekinti meg. Ez egy pillanatkép: az itteni módosítások nem érintik az eredetit.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	A(z) „{from}“ {rev}. változatát tekinti meg. Ez egy pillanatkép: az itteni módosítások nem érintik az eredetit.
@@ -2494,7 +2484,6 @@ animation effects	Off	Ki
 	Larger thumbnails	Nagyobb bélyegképek
 # Lines, connected lines and polygons reshaped by their ends and corners (M5).
 	Reshape comment	Megjegyzés alakjának módosítása
-
 # Prepare a form ▸ Text field table
 	Add text field table	Szövegmező-táblázat hozzáadása
 	Text field table	Szövegmező-táblázat
@@ -2514,3 +2503,10 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+	Open from cloud…	Megnyitás a felhőből…
+	Open local file…	Helyi fájl megnyitása…
+	Open from cloud	Megnyitás a felhőből
+	Save as to cloud…	Mentés másként a felhőbe…
+	Save as to cloud	Mentés másként a felhőbe
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ez a fájl megváltozott a lemezen. Töltsd újra az új változat megtekintéséhez; a nem mentett módosításaid elvesznek.
+	Mouse wheel scroll speed	Egérgörgő görgetési sebessége
