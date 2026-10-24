@@ -672,7 +672,13 @@ impl<'a> Device<'a> for TextDevice {
         } else {
             3
         };
-        let em = Rect::new(0.0, -200.0, advance, 800.0);
+        // A Type 3 glyph is boxed by its own bounds: its font size is nominal (bitmap fonts set at
+        // 58 pt draw glyphs 5 pt high), so the -200..800 em box would swallow the lines around it.
+        let (bottom, top) = match glyph {
+            Glyph::Type3(g) => g.vertical_bounds().unwrap_or((-200.0, 800.0)),
+            Glyph::Outline(_) => (-200.0, 800.0),
+        };
+        let em = Rect::new(0.0, bottom, advance, top);
         let corners = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
             [(em.x0, em.y1), (em.x0, em.y0), (em.x1, em.y0), (em.x1, em.y1)]
         } else {
@@ -3499,5 +3505,35 @@ mod tests {
         let expected = "Rückfragen für Überhitzungsschutz: können, weiß, Café";
         assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
         assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
+    }
+
+    /// A Type 3 font set at 58 pt whose glyphs are 6 pt high (bitmap fonts do this: the font size
+    /// is nominal). The glyph box was the 1 em box, 58 pt high, so lines 8.4 pt apart overlapped
+    /// and their glyphs were mixed into one line.
+    #[test]
+    fn type3_lines_are_boxed_by_their_glyphs_not_by_the_font_size() {
+        let proc = "120 0 0 0 100 100 d1 0 0 100 100 re f";
+        let content = "BT /F1 58 Tf 1 0 0 1 10 60 Tm (ab) Tj 1 0 0 1 10 51.6 Tm (cd) Tj ET";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 0 0] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 97 /LastChar 100 /Widths [120 120 120 120]
+  /Encoding << /Differences [97 /a /b /c /d] >> /CharProcs << /a 6 0 R /b 6 0 R /c 6 0 R /d 6 0 R >> >> endobj
+6 0 obj << /Length {} >> stream
+{proc}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            proc.len()
+        );
+        let pdf = Pdf::new(std::sync::Arc::new(pdf.into_bytes())).unwrap();
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+        assert_eq!(text.plain_text(), "ab\ncd");
     }
 }
