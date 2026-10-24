@@ -707,7 +707,13 @@ fn interpret_window<'a>(
                 // 1. A Name that references an entry in the Resources/Properties dictionary
                 // 2. An inline dictionary with an OC key
 
-                let mcid = dict_or_stream(bdc.1).and_then(|(props, _)| props.get::<i32>(MCID));
+                // PdfCraft patch (53): the property list, inline or named in the resources'
+                // `/Properties` (ISO 32000-2 §14.6.2), read once for its MCID and `/ActualText`.
+                let props = dict_or_stream(bdc.1).map(|(props, _)| props.clone()).or_else(|| {
+                    let name = bdc.1.clone().into_name()?;
+                    resources.properties.get::<Dict<'_>>(name)
+                });
+                let mcid = props.as_ref().and_then(|props| props.get::<i32>(MCID));
 
                 let oc = bdc
                     .1
@@ -736,15 +742,17 @@ fn interpret_window<'a>(
 
                 device.begin_marked_content(bdc.0, mcid);
 
+                // PdfCraft patch (53): every nested content stream (forms, annotation appearances,
+                // soft masks, patterns, Type 3 glyphs) runs at a nesting depth above 0.
+                if let Some(mcid) = mcid
+                    && context.nesting_depth() == 0
+                {
+                    device.page_marked_content(mcid);
+                }
+
                 // PdfCraft patch (25): hand the device the sequence's `/ActualText`, from an inline
                 // property list or one named in the resources' `/Properties`.
-                let actual = dict_or_stream(bdc.1)
-                    .map(|(props, _)| props.clone())
-                    .or_else(|| {
-                        let name = bdc.1.clone().into_name()?;
-                        resources.properties.get::<Dict<'_>>(name)
-                    })
-                    .and_then(|props| props.get::<hayro_syntax::object::String<'_>>(ACTUAL_TEXT));
+                let actual = props.and_then(|props| props.get::<hayro_syntax::object::String<'_>>(ACTUAL_TEXT));
                 if let Some(text) = actual {
                     device.actual_text(text.as_bytes());
                 }
