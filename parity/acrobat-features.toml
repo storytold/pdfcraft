@@ -758,8 +758,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::soft_mask_without_group_colour_space_is_applied", "crates/render/src/raster.rs::a_multiply_highlight_inside_a_transparency_group_keeps_the_text"]
-notes = "via hayro bootstrap. A transparency group that is neither isolated nor knockout and is entered at full opacity, with no soft mask and Normal blending, is drawn straight onto the page, so a blend mode inside it (the Multiply of a highlight appearance written by other editors) sees the page content (#1968). Missing: a non-isolated group that needs a layer (partial opacity, a soft mask or a blend mode on the group itself) still composites its elements against a blank backdrop, and knockout groups are drawn as ordinary ones"
+evidence = ["crates/render/src/raster.rs::soft_mask_without_group_colour_space_is_applied", "crates/render/src/raster.rs::a_multiply_highlight_inside_a_transparency_group_keeps_the_text", "crates/render/tests/it/luminosity_group_space.rs::black_ink_in_a_device_cmyk_group_masks_fully_and_no_ink_shows_fully"]
+notes = "via hayro bootstrap. A luminosity soft mask whose group is in DeviceCMYK reads its flat CMYK colours and backdrop as their gray, 1 - min(1, 0.3 c + 0.59 m + 0.11 y + k) (ISO 32000-2 §11.5.3), so 100% K masks fully; CMYK images, shadings and tiling patterns inside such a mask still go through the display profile. A transparency group that is neither isolated nor knockout and is entered at full opacity, with no soft mask and Normal blending, is drawn straight onto the page, so a blend mode inside it (the Multiply of a highlight appearance written by other editors) sees the page content (#1968). Missing: a non-isolated group that needs a layer (partial opacity, a soft mask or a blend mode on the group itself) still composites its elements against a blank backdrop, and knockout groups are drawn as ordinary ones"
 
 [[feature]]
 id = "view.render-knockout"
