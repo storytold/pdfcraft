@@ -610,6 +610,45 @@ fn csv_exports_preserve_carriage_returns_in_names_and_values() {
     }
 }
 
+/// Export Data as CSV writes a name or value that a spreadsheet would run as a formula with a
+/// leading `'`, by the same rule as Merge Data Files, and Import Data gives it back unchanged.
+#[test]
+fn exported_csv_cells_never_start_a_formula_and_import_back_unchanged() {
+    for (name, value, expected) in [
+        ("Name", "=1+1", "Name\n'=1+1\n"),
+        ("Name", "@SUM(A1:A2)", "Name\n'@SUM(A1:A2)\n"),
+        ("Name", "+1 555 0100", "Name\n'+1 555 0100\n"),
+        ("Name", "-A1", "Name\n'-A1\n"),
+        ("Name", " =1+1", "Name\n' =1+1\n"),
+        ("Name", "\t=1+1", "Name\n\"'\t=1+1\"\n"),
+        ("Name", "\r=1+1", "Name\n\"'\r=1+1\"\n"),
+        ("Name", "=1,2", "Name\n\"'=1,2\"\n"),
+        ("Name", "'=1+1", "Name\n''=1+1\n"),
+        ("Name", "-12.5", "Name\n-12.5\n"),
+        ("Name", "+1", "Name\n+1\n"),
+        ("Name", "'-5", "Name\n'-5\n"),
+        ("Name", "'plain", "Name\n'plain\n"),
+        ("Name", "a=b", "Name\na=b\n"),
+        ("=Name", "Ada", "'=Name\nAda\n"),
+    ] {
+        let mut src = one_field();
+        let field = fields(&src)[0].obj;
+        src.update_dict(field, |d| d.set(b"T".to_vec(), PdfString::text(name))).unwrap();
+        set_value(&mut src, name, &FieldValue::Text(value.into())).unwrap();
+        let source = Arc::new(write_full(&src, &SaveOptions::default()).unwrap());
+        let src = Document::open(source.clone()).unwrap();
+        let csv = export_data(&src, Format::Csv);
+        assert_eq!(csv, expected, "{value:?}");
+
+        let mut dst = Document::open(source).unwrap();
+        set_value(&mut dst, name, &FieldValue::Text("replaced".into())).unwrap();
+        let report = import(&mut dst, csv.as_bytes()).unwrap();
+        assert_eq!(report.fields, 1, "{value:?}");
+        assert!(report.rejected.is_empty(), "{report:?}");
+        assert_eq!(values(&dst), [(name.to_string(), vec![value.to_string()])]);
+    }
+}
+
 /// #1321: the text export of a one-field form has no tab to tell it from CSV, so a comma in the
 /// value used to split it and only the text before the comma was imported.
 #[test]
