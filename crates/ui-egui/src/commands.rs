@@ -113,6 +113,7 @@ impl PdfCraftApp {
         }
     }
 
+    /// Run a registered command by id without the outer panic guard.
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -787,6 +788,7 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
 }
 
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
+/// Draw a menu of registered commands for a named section (File, Edit, Pages, View).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     for spec in commands::menu(menu) {
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
