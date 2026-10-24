@@ -120,6 +120,16 @@ the app logs the failure and continues using the original preferences folder.
 The existing PrintCraft-to-PdfCraft migration runs first. macOS, Windows and portable
 copies retain their current preferences locations.
 
+## Docker image
+
+`Dockerfile`, `.dockerignore` and `packaging/web/nginx.conf` at the repository root build a
+local image of the web app (`docker build -t pdfcraft-web:local .`). The recipe is
+**community-maintained** and not built in CI; see
+[../packaging/web/README.md](../packaging/web/README.md#docker) for the build/run workflow, build
+arguments and a reverse-proxy example. The build needs Docker only: it runs
+`trunk build --release --locked` in a `rust:slim-bookworm` builder stage with Trunk installed
+and checksum-verified, and serves the result from NGINX as the `nginx` user on port 8080.
+
 ## Environment variables
 
 | Variable | Effect |

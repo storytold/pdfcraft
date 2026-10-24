@@ -12,6 +12,74 @@ static site in `pdfcraft-web-<version>/`:
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
+## Docker
+
+> The Docker recipe (`Dockerfile`, `.dockerignore`, `packaging/web/nginx.conf`) is
+> **community-maintained**: it is not built in CI or used for releases, so it can lag behind the
+> official web build above. Fixes are welcome.
+
+From the repository root (Docker is the only build prerequisite):
+
+```sh
+docker build --load -t pdfcraft-web:local .
+docker run -d --name pdfcraft-web --restart unless-stopped \
+  -p 8080:8080 pdfcraft-web:local
+```
+
+Open **http://localhost:8080/**. The multi-stage `Dockerfile` builds the existing Rust/Wasm
+app with Trunk, then copies only the static site into NGINX. The runtime runs as the `nginx`
+user on port **8080**, with a `/healthz` endpoint and Docker health check. It serves
+precompressed gzip assets, the Wasm MIME type, immutable hashed assets, and an HTML page that
+revalidates after deployments. No Rust installation, Node.js, database, GPU passthrough, or
+document volume is needed on the host.
+
+The first build downloads Rust dependencies and Trunk's Wasm tools and can take several
+minutes. Subsequent builds reuse Cargo caches. The builder supports Linux amd64 and arm64;
+the default Rust version is the stable release CI used when the `Dockerfile` was last updated
+(CI and releases always use the latest stable), and Trunk is pinned to the release workflow's
+`trunk-version`. `RUST_VERSION`, `TRUNK_VERSION`, and `NGINX_VERSION` can be overridden with
+`--build-arg`. To confirm a Rust tag exists for your architecture before building (a missing
+tag fails the build early), check `docker manifest inspect rust:<version>-slim-bookworm`.
+To stamp the About dialog with a label instead of "dev build", pass
+`--build-arg PDFCRAFT_BUILD_LABEL=docker`; the build then reports `0.9.0 (docker)`. The web
+build does not embed the optional `craft-fonts` checkout.
+
+The Docker build runs one Cargo build job (the default, `--build-arg CARGO_BUILD_JOBS=1`) to
+keep peak memory low. The workspace's `[profile.release]` already sets `lto = "thin"` and
+`codegen-units = 1`, and `index.html`'s `data-wasm-opt="z"` makes Trunk run `wasm-opt -Oz`, so
+the image needs no profile overrides. Its Wasm size may differ from the release-zip figure
+above; NGINX has no per-file size cap. `--build-arg CARGO_BUILD_JOBS=4` enables more concurrent
+compilation on larger builders. A compiler killed with `SIGKILL`/`cannot allocate memory` means
+the Docker/Podman VM needs more memory or swap.
+
+For a public deployment, put an HTTPS reverse proxy or your hosting platform's TLS endpoint
+in front of container port 8080. With a reverse proxy on the same host, bind only loopback
+(`-p 127.0.0.1:8080:8080`); with a proxy container, connect both through a Docker network.
+HTTPS enables WebGPU and browser clipboard APIs. If hosting under `/pdfcraft/`, redirect
+`/pdfcraft` to `/pdfcraft/` and strip that prefix when proxying to the container. Relative
+asset URLs then work without rebuilding. For example, in an existing HTTPS NGINX server:
+
+```nginx
+location = /pdfcraft { return 301 /pdfcraft/$is_args$args; }
+location /pdfcraft/ {
+    proxy_pass http://127.0.0.1:8080/;
+}
+```
+
+The front proxy must also keep signed document URLs out of its own logs: log the normalized
+URI without the query string (or the path only) and log no referrers, or `?file=<signed URL>`
+is retained at the proxy even though the container's log is sanitized. The app's own documents
+stay in the browser; the only long-lived values are cache headers, which carry no document
+content.
+
+Reading and editing run on the visitor's device. Open uses the browser file picker; Save and
+Export download files. Preferences use browser localStorage. There is no server-side document
+storage, desktop TCP control server, or web autosave/crash recovery; save/download work before
+closing or reloading the page. A browser with WebGPU or WebGL2 is required; `?webgl` forces the
+fallback when troubleshooting.
+
+To verify the browser deployment, open a PDF and save it.
+
 ## Any path works
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/pdfcraft-web/Trunk.toml`),
