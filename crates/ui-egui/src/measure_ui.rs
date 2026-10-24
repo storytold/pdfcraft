@@ -196,7 +196,7 @@ pub(crate) fn page_input(
         let v = info.user_to_view(p[0] as f32, p[1] as f32);
         xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph)
     };
-    let pos = ui.input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p));
+    let pos = cx.ptr.within(xf.rect);
     let mut hover = None;
     let mut snap = None;
     if let Some(pos) = pos {

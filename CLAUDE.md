@@ -21,6 +21,7 @@ PdfCraft is a clean-room, open-source, Rust-native PDF application targeting Ado
   - See `plan/README.md` §Clean-room and `plan/adr/0001`.
 - **Privacy.** When observing Acrobat, use synthetic fixtures only. Never capture the Home view, recent files or account info. Capture by window id (`plan/acrobat/tools/`). Never commit Acrobat outputs, corpus files or personal data.
 - **Layering.** Nothing below L7 depends on egui/winit/eframe/rfd (`plan/architecture.md` §3). `cos`/`filters`/`crypt`/`arlington` stay standalone.
+- **Page input.** Page modules read `PagePointer` (`crates/ui-egui/src/page_pointer.rs`), never egui's raw pointer state (`hover_pos`, `interact_pos`, `latest_pos`, `press_origin`, button reads); `page_pointer::tests::page_modules_read_the_pointer_only_through_page_pointer` enforces it.
 - **Fidelity.** The PDF object graph is the model. Preserve unknown data. Saves are incremental unless a full rewrite is required. Never silently drop or repair data without recording it.
 - **Never panic.** Every PDF, script, MCP call, settings file and keystroke is untrusted input, and none of it may crash the app or lose the user's work. This outranks feature work. Return `Result` (the crate's error enum) and propagate with `?`, or fall back leniently and record it. In non-test code:
   - No `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!` unless it is provably infallible, with a comment saying why.

@@ -1,6 +1,9 @@
-//! State-based waits for native preparation, which completes between UI frames.
+//! State-based waits for native preparation, which completes between UI frames, and pointer
+//! input in the frames the platform delivers it in ([`input`]).
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
+
+pub mod input;
 
 /// Step frames until `ready` holds or 30 seconds pass, and say whether it held. For background work
 /// (a worker-thread open, page text arriving) that a test then asserts on itself: a frame count is

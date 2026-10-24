@@ -2172,6 +2172,9 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
         app.open_bytes("markup.pdf", None, pdf).expect("opens synthetic markup");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
+        // Small enough to show the whole page in every rotation: a point hovered below the window
+        // is not over the page.
+        app.set_option("zoom", "100").unwrap();
         app.views[0].rotation = view_rotation;
         app
     });
@@ -2193,7 +2196,9 @@ fn hover_markup_at(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
             pw: page.width,
             ph: page.height,
         };
-        xf.user_rect(info, 0, [x, y, x, y]).center()
+        let p = xf.user_rect(info, 0, [x, y, x, y]).center();
+        assert!(v.viewport_rect().contains(p), "user point ({x}, {y}) is on screen, at {p:?}");
+        p
     };
     h.hover_at(p);
     h.run_steps(3);
