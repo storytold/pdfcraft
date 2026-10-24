@@ -4300,3 +4300,78 @@ fn comb_fields_show_their_cells() {
     let plain = saved_look(&doc, "d");
     assert!(!plain.contains(" m ") && plain.contains("(A) Tj"), "{plain}");
 }
+
+/// Three radio groups whose buttons have the on states given (`S`, `M` … or a repeated `Yes`):
+/// `free` (Radio), `plain` (Radio | NoToggleToOff) and `unison` (… | RadiosInUnison).
+fn radio_groups() -> Document {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 9 0 R 10 0 R 11 0 R 13 0 R 14 0 R 15 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 8 0 R 12 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),           // 4
+        "<< /FT /Btn /T (free) /Ff 32768 /V /Off /Kids [6 0 R 7 0 R] >>".into(),    // 5
+    ];
+    let kid = |parent: usize, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /AS /Off /Rect [{x} 700 {} 715] /P 3 0 R /AP << /N << /{state} 16 0 R /Off 17 0 R >> >> >>",
+            x + 15
+        )
+    };
+    objs.push(kid(5, 100, "S")); // 6
+    objs.push(kid(5, 200, "M")); // 7
+    objs.push("<< /FT /Btn /T (plain) /Ff 49152 /V /Off /Kids [9 0 R 10 0 R 11 0 R] >>".into()); // 8
+    objs.push(kid(8, 100, "Yes")); // 9
+    objs.push(kid(8, 200, "Yes")); // 10
+    objs.push(kid(8, 300, "No")); // 11
+    objs.push("<< /FT /Btn /T (unison) /Ff 33603584 /V /Off /Kids [13 0 R 14 0 R 15 0 R] >>".into()); // 12
+    objs.push(kid(12, 100, "Yes")); // 13
+    objs.push(kid(12, 200, "Yes")); // 14
+    objs.push(kid(12, 300, "No")); // 15
+    objs.push("<< /Length 0 >>\nstream\n\nendstream".into()); // 16
+    objs.push("<< /Length 0 >>\nstream\n\nendstream".into()); // 17
+    document(&objs)
+}
+
+/// Which widgets of field `name` are on, and its value.
+fn on_widgets(doc: &Document, name: &str) -> (Vec<bool>, Vec<String>) {
+    let all = fields(doc);
+    let f = field(&all, name);
+    ((0..f.widgets.len()).map(|i| f.widget_on(i)).collect(), f.value.clone())
+}
+
+/// ISO 32000-2 Table 229, RadiosInUnison: "If clear, the buttons are mutually exclusive"; and
+/// §12.7.5.2.3: without it "at most one radio button in a field shall be set at a time". Two
+/// buttons sharing the on state `Yes` both show `/V /Yes`: their `/AS` alone says which is on,
+/// and it survives a save.
+#[test]
+fn radio_buttons_sharing_an_on_state_are_exclusive_unless_in_unison() {
+    let mut doc = radio_groups();
+    set_value(&mut doc, "plain", &FieldValue::Widget(0)).unwrap();
+    assert_eq!(on_widgets(&doc, "plain"), (vec![true, false, false], vec!["Yes".to_string()]), "only the clicked button");
+    set_value(&mut doc, "plain", &FieldValue::Widget(1)).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(on_widgets(&doc, "plain"), (vec![false, true, false], vec!["Yes".to_string()]), "the other Yes, after a save");
+    // Setting the value by its name keeps the button already on.
+    set_value(&mut doc, "plain", &FieldValue::Radio(Some("Yes".into()))).unwrap();
+    assert_eq!(on_widgets(&doc, "plain").0, [false, true, false]);
+    set_value(&mut doc, "plain", &FieldValue::Widget(2)).unwrap();
+    assert_eq!(on_widgets(&doc, "plain"), (vec![false, false, true], vec!["No".to_string()]));
+    // From another state, the name turns on the first button that has it.
+    set_value(&mut doc, "plain", &FieldValue::Radio(Some("Yes".into()))).unwrap();
+    assert_eq!(on_widgets(&doc, "plain").0, [true, false, false]);
+    // NoToggleToOff still keeps one on.
+    assert!(matches!(set_value(&mut doc, "plain", &FieldValue::Radio(None)), Err(FormError::Invalid(_))));
+    // RadiosInUnison: the buttons sharing the state turn on and off together.
+    set_value(&mut doc, "unison", &FieldValue::Widget(1)).unwrap();
+    assert_eq!(on_widgets(&doc, "unison"), (vec![true, true, false], vec!["Yes".to_string()]));
+    set_value(&mut doc, "unison", &FieldValue::Widget(2)).unwrap();
+    assert_eq!(on_widgets(&doc, "unison").0, [false, false, true]);
+    // Without NoToggleToOff the group can be cleared.
+    set_value(&mut doc, "free", &FieldValue::Widget(0)).unwrap();
+    assert_eq!(on_widgets(&doc, "free"), (vec![true, false], vec!["S".to_string()]));
+    set_value(&mut doc, "free", &FieldValue::Radio(None)).unwrap();
+    assert_eq!(on_widgets(&doc, "free"), (vec![false, false], vec![]));
+    // A widget that isn't there, or a field that isn't a button, is refused.
+    assert!(matches!(set_value(&mut doc, "free", &FieldValue::Widget(9)), Err(FormError::Invalid(_))));
+    assert!(matches!(set_value(&mut doc, "free", &FieldValue::Widget(usize::MAX)), Err(FormError::Invalid(_))));
+}
