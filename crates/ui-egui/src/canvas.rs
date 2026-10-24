@@ -570,6 +570,8 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Dynamic Zoom: (page under initial press, press origin on screen, initial zoom level when drag started).
+    pub dynamic_zoom: Option<(usize, Pos2, f32)>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -849,6 +851,7 @@ impl DocView {
             panel_drag: None,
             marquee: None,
             marquee_done: None,
+            dynamic_zoom: None,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -2447,6 +2450,7 @@ impl PageXform {
     }
 }
 
+/// Handle global viewport keyboard shortcuts (zoom, rotation, history, find, Escape).
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -2519,6 +2523,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
+        view.dynamic_zoom = None;
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
         } else if view.selection.is_some() {
@@ -3024,6 +3029,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     };
     let prefs = &app.comment_prefs;
@@ -3407,6 +3413,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
                 crate::zoom_snap::page_input(ui, &resp, &xf, i, view);
+            }
+            if tool == QuickTool::DynamicZoom {
+                crate::zoom_snap::dynamic_zoom_input(ui, &resp, &xf, i, view);
             }
             if tool == QuickTool::EnhanceCamera {
                 crate::camera_ui::page_input(ui, &resp, &xf, i, view, can_modify);

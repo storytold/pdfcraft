@@ -252,6 +252,8 @@ pub enum QuickTool {
     },
     /// View ▸ Zoom ▸ Marquee Zoom.
     MarqueeZoom,
+    /// View ▸ Zoom ▸ Dynamic Zoom.
+    DynamicZoom,
     /// Edit ▸ Take a Snapshot.
     Snapshot,
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
@@ -2865,6 +2867,7 @@ impl PdfCraftApp {
                     "link" => QuickTool::Link,
                     "sign" => QuickTool::SignArea { certify: false },
                     "marquee-zoom" => QuickTool::MarqueeZoom,
+                    "dynamic-zoom" => QuickTool::DynamicZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
                     "certify" => QuickTool::SignArea { certify: true },

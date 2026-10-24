@@ -653,6 +653,7 @@ impl Host for crate::PdfCraftApp {
         self.request_quit(ctx)
     }
 
+    /// Return the full JSON state of the application for headless UI automation.
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -720,6 +721,7 @@ impl Host for crate::PdfCraftApp {
                 crate::QuickTool::SignArea { certify: false } => "sign".to_string(),
                 crate::QuickTool::SignArea { certify: true } => "certify".to_string(),
                 crate::QuickTool::MarqueeZoom => "marquee-zoom".to_string(),
+                crate::QuickTool::DynamicZoom => "dynamic-zoom".to_string(),
                 crate::QuickTool::Snapshot => "snapshot".to_string(),
                 crate::QuickTool::ColumnSelect => "column-select".to_string(),
                 crate::QuickTool::Stamp(k) => format!("stamp-{}", k.name().trim_start_matches("PC").to_ascii_lowercase()),
