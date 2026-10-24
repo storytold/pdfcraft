@@ -1,0 +1,88 @@
+# Vendor patch gate — keep the patch ledger and the patched sources honest.
+#
+# The vendored crates under vendor/ are excluded from the workspace, so the
+# main matrix never runs them and nothing verifies vendor/README.md. Two jobs:
+#
+#   ledger      — every cited regression test resolves, versions match manifests,
+#                every [patch.crates-io] crate is in the ledger (cheap, stdlib)
+#   vendor-tests — the vendored crates' OWN unit suites: the "Test" column of
+#                the ledger is a claim about tests that must actually run
+#
+# winit and egui-wgpu are compiled only here: their suites need live X11/Wayland
+# sessions, real IMEs or a real GPU (the ledger marks those tests accordingly).
+
+name: vendor-patches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vendor/**'
+      - 'Cargo.toml'
+      - 'scripts/check-vendor-ledger.py'
+      - '.github/workflows/vendor-patches.yml'
+  pull_request:
+    paths:
+      - 'vendor/**'
+      - 'Cargo.toml'
+      - 'scripts/check-vendor-ledger.py'
+      - '.github/workflows/vendor-patches.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    name: vendor ledger (ledger ↔ sources)
+    continue-on-error: true # TODO(ratchet): remove at gate graduation review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ledger check
+        run: |
+          python3 scripts/test-check-vendor-ledger.py
+          python3 scripts/check-vendor-ledger.py
+
+  vendor-tests:
+    name: vendor tests (${{ matrix.crate }})
+    continue-on-error: true # TODO(ratchet): remove at gate graduation review
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [hayro, hayro-interpret, hayro-syntax, hayro-jbig2, lopdf, vello_common]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vendor-${{ matrix.crate }}
+      - name: Unit tests (${{ matrix.crate }})
+        run: cargo test --manifest-path vendor/${{ matrix.crate }}/Cargo.toml --lib
+
+  vendor-compile:
+    name: vendor compile-only (winit, egui-wgpu)
+    continue-on-error: true # TODO(ratchet): remove at gate graduation review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [winit, egui-wgpu]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vendor-${{ matrix.crate }}
+      - name: Check (${{ matrix.crate }})
+        run: cargo check --manifest-path vendor/${{ matrix.crate }}/Cargo.toml
