@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use super::*;
 
+mod ungroup;
+
 /// A minimal `n`-page document; page `i` shows "Page i+1".
 pub(crate) fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];

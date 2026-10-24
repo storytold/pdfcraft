@@ -4,6 +4,7 @@
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (gap 6: #2662 redaction audit counts a cover over one word of a long line; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-18 · **Change:** minor (gap 3: grouped Form artwork can be ungrouped; gap 16: picture and page menus share one popup; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 12: reading order is scored, not just word F1) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (M1: raw-deflate fallback preserves decoding-limit errors; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -101,6 +102,13 @@ update the numbers.
   semantic grouping on every untagged PDF remain open. Replacing one line or paragraph no longer
   removes a distinct neighbour whose glyph box overlaps (#1316); a second drawing on the same
   baseline is still replaced. Estimates are unchanged.
+- **Fork progress (2026-10-18, partial):** pages drawn as one Form XObject (CAD exports such as
+  WSCAD) selected as one page-sized group; Ungroup (context menu, double-click, `image_edit`
+  `ungroup`) now puts a form's content on the page as §8.10.1 paints it, so its paragraphs and
+  pictures can be edited one by one. Still partial: Acrobat edits inside forms without
+  ungrouping; transparency groups whose blending would change, tagged forms and other
+  default colour spaces stay grouped; vector paths are still not selectable (`edit.vector-edit`).
+  `edit.form-content-editing` is partial. Estimates are unchanged.
 
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
   needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
@@ -331,7 +339,10 @@ update the numbers.
 - **Missing:** moving several selected objects across pages (same-page moves shipped, #844), single-key tool accelerators,
   rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
   pop-ups that can be moved, connector lines, customisable quick tools; shortcut display and tool-mode bugs (#746, #721), macOS window controls
-  (#789).
+  (#789). In Edit text & images the picture menu and the page menu draw into one popup over each
+  other (the picture menu's first items lie under the page menu's Copy and Comments panel), and a
+  menu item that lies over another page's picture or group is taken by that page (Delete does
+  nothing there); found 2026-10-17, present before the Ungroup change, not fixed.
 - **Estimate:** 30–60 h. **Doc:** [ui-parity.md](ui-parity.md).
 
 ### 17. Certificate security and other protect gaps
@@ -402,6 +413,7 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-18 | minor | Gap 3: Ungroup for grouped Form artwork (`edit.form-content-editing`, partial). Gap 16: the shared picture/page menu popup in Edit text & images (pre-existing, not fixed). Estimates unchanged. |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

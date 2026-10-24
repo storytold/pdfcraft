@@ -1028,6 +1028,8 @@ mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub mod ungroup;
+pub use ungroup::ungroup_form;
 pub mod bidi;
 pub mod indic;
 mod linebreak;

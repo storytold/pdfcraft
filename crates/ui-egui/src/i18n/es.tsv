@@ -1994,6 +1994,8 @@ action wizard	Start	Iniciar
 	Rotate image	Girar imagen
 	Flip image	Voltear imagen
 	Delete image	Eliminar imagen
+	Ungroup	Desagrupar
+	Ungroup artwork	Desagrupar ilustración
 	Add header & footer	Añadir encabezado y pie de página
 	Update header & footer	Actualizar encabezado y pie de página
 	Update watermark	Actualizar marca de agua

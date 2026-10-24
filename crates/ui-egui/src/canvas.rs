@@ -542,6 +542,9 @@ pub struct DocView {
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
+    /// Edit text & images: the last press on grouped artwork (time, position, image), so two
+    /// presses in quick succession ungroup it even when egui reports the second as a drag start.
+    pub(crate) group_press: Option<(f64, Pos2, usize)>,
     /// Select tool: the picture clicked, to copy in its original format.
     pub picked_image: Option<crate::image_pick::PickedImage>,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
@@ -824,6 +827,7 @@ impl DocView {
             edit_images: HashMap::new(),
             objects: Default::default(),
             image_selection: None,
+            group_press: None,
             picked_image: None,
             block_drag: None,
             pending_action: None,

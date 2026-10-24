@@ -1938,6 +1938,8 @@ action wizard	Start	Inicia
 	Rotate image	Gira la imatge
 	Flip image	Inverteix la imatge
 	Delete image	Suprimeix la imatge
+	Ungroup	Desagrupa
+	Ungroup artwork	Desagrupa els gràfics
 	Add header & footer	Afegeix capçalera i peu de pàgina
 	Update header & footer	Actualitza la capçalera i el peu de pàgina
 	Update watermark	Actualitza la marca d'aigua

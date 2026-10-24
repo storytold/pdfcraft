@@ -90,6 +90,8 @@ pub enum ImageEdit {
     },
     /// Show only this box of it (user space), the pixels staying where they are.
     Crop([f64; 4]),
+    /// Grouped Form artwork only: put its content on the page as separate objects (Ungroup).
+    Ungroup,
     /// Draw this image file (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) in its place.
     Replace {
         name: String,
@@ -2227,6 +2229,7 @@ impl Edit {
                 ImageEdit::Flip { .. } => "Flip image",
                 ImageEdit::Replace { .. } => "Replace image",
                 ImageEdit::Delete => "Delete image",
+                ImageEdit::Ungroup => "Ungroup artwork",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
@@ -2803,6 +2806,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 }
                 ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
+                ImageEdit::Ungroup => return Ok(pdfcraft_edit::ungroup_form(doc, *page, *index)?),
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }
