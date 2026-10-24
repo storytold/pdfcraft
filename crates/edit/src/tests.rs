@@ -6697,6 +6697,225 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
     );
 }
 
+/// #3803: Tesseract and PDFium write invisible (`3 Tr`) OCR layers in a `/Glyphless` CIDFontType2
+/// whose `/ToUnicode` and `/W` cover Latin text while `/CIDToGIDMap` maps every CID to GID 1 (a
+/// solid rectangle). Rewriting such text as visible (`0 Tr`) must substitute a real font rather
+/// than drawing the replacement in `/Glyphless` rectangles.
+#[test]
+fn editing_glyphless_ocr_text_substitutes_a_visible_font() {
+    let mut one_glyph_ttf = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(one_glyph_ttf[4..6].try_into().unwrap()) as usize;
+    let loca_rec = (0..count).map(|i| 12 + i * 16).find(|i| &one_glyph_ttf[*i..*i + 4] == b"loca").unwrap();
+    let loca_off = u32::from_be_bytes(one_glyph_ttf[loca_rec + 8..loca_rec + 12].try_into().unwrap()) as usize;
+    let loca_len = u32::from_be_bytes(one_glyph_ttf[loca_rec + 12..loca_rec + 16].try_into().unwrap()) as usize;
+    one_glyph_ttf[loca_off..loca_off + 8].fill(0);
+    for chunk in one_glyph_ttf[loca_off + 8..loca_off + loca_len].as_chunks_mut::<4>().0 {
+        *chunk = 4u32.to_be_bytes();
+    }
+
+    let make_page = |content: &str, base: &str| {
+        let mut doc = text_page(content);
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+        let cid_to_gid = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 1].repeat(256))));
+        let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <00FF> <0000> endbfrange";
+        let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap)));
+        let descriptor = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("FontDescriptor")),
+            (b"FontName".to_vec(), Object::name(base)),
+            (b"Flags".to_vec(), Object::Int(5)),
+            (b"FontBBox".to_vec(), Object::Array([0, -207, 500, 718].map(Object::Int).to_vec())),
+            (b"Ascent".to_vec(), Object::Int(718)),
+            (b"Descent".to_vec(), Object::Int(-207)),
+            (b"FontFile2".to_vec(), Object::Ref(program)),
+        ]);
+        let cid_font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+            (b"BaseFont".to_vec(), Object::name(base)),
+            (b"CIDToGIDMap".to_vec(), Object::Ref(cid_to_gid)),
+            (b"DW".to_vec(), Object::Int(500)),
+            (b"W".to_vec(), Object::Array(vec![Object::Int(32), Object::Array(vec![Object::Int(285)])])),
+            (b"FontDescriptor".to_vec(), Object::Dict(descriptor)),
+        ]);
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type0")),
+            (b"BaseFont".to_vec(), Object::name(base)),
+            (b"Encoding".to_vec(), Object::name("Identity-H")),
+            (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid_font)])),
+            (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        ]);
+        let p = pdfcraft_model::pages(&doc)[0].obj;
+        let fonts = Dict::from_iter([(b"F0".to_vec(), Object::Dict(font))]);
+        doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+        doc
+    };
+
+    // Single-line OCR paragraph (rewrite_block_from path) and replace_line path.
+    let single = "BT 3 Tr 0.055 Tw -0.581 Tc 100 Tz /F0 15.75 Tf 1 0 0 1 114.75 568.8 Tm \
+                  [<0044> -27 <0065> -23 <0020> -22 <006B> -29 <0069> -28 <006E> -27 <0064> -29 <0065> -23 <0072> -28 <0065> -23 <006E>] TJ ET";
+    for base in ["Glyphless", "CustomOCR"] {
+        let mut doc = make_page(single, base);
+        assert!(text::text_editor_fonts(&doc, 0).unwrap().is_empty(), "{base} must not be loaded into the inline editor");
+        let before = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].text, "De kinderen");
+        assert!(before[0].invisible);
+
+        let edit = text::replace_block(&mut doc, 0, 0, "De Kinderen").unwrap();
+        assert_eq!(edit.substituted.as_deref(), Some("Helvetica"), "{base} must substitute Helvetica instead of drawing in /F0");
+        let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].text, "De Kinderen");
+        assert!(!after[0].invisible, "the edited OCR paragraph is now visible");
+        assert_eq!(after[0].base_font, "Helvetica");
+
+        let mut line_doc = make_page(single, base);
+        let line_edit = text::replace_line(&mut line_doc, 0, 0, "De Kinderen").unwrap();
+        assert_eq!(line_edit.substituted.as_deref(), Some("Helvetica"), "{base} replace_line must also substitute");
+        assert_eq!(text::text_lines(&reopen(&line_doc), 0).unwrap()[0].base_font, "Helvetica");
+    }
+
+    // Multi-run OCR phrase on one row with slightly different OCR font sizes (rewrite_styled_block
+    // path): both runs switch to the visible substitute font and keep calibrated widths without
+    // stretching spaces to 200%.
+    let multi_run = "BT 3 Tr /F0 15.75 Tf 1 0 0 1 114.75 568.8 Tm <004400650020006B0069006E0064006500720065006E> Tj ET \
+                     BT 3 Tr /F0 15.5 Tf 1 0 0 1 205.0 568.8 Tm <006B0075006E006E0065006E> Tj ET";
+    let mut doc = make_page(multi_run, "Glyphless");
+    let before_lines = text::text_lines(&doc, 0).unwrap();
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].lines.len(), 2, "two runs on one OCR row");
+    let edit = text::replace_block(&mut doc, 0, 0, "De kinderen Kunnen").unwrap();
+    assert_eq!(edit.substituted.as_deref(), Some("Helvetica"));
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["De kinderen", "Kunnen"]);
+    for line in &lines {
+        assert_eq!(line.base_font, "Helvetica", "every run must use the visible substitute font: {line:?}");
+    }
+    let old_w = before_lines[0].rect[2] - before_lines[0].rect[0];
+    let new_w = lines[0].rect[2] - lines[0].rect[0];
+    assert!((new_w - old_w).abs() < 5.0, "calibrated first run keeps its width ({old_w} -> {new_w}): {lines:?}");
+    assert!(lines[1].rect[0] >= lines[0].rect[2] - 1.0, "calibrated first run does not stretch into the second: {lines:?}");
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert!(!blocks[0].invisible, "the whole rewritten paragraph is visible");
+
+    // High WinAnsi characters on a glyphless OCR line also use the Helvetica substitute rather
+    // than /F0, and explicitly selecting the glyphless resource is refused.
+    let mut win_ansi_doc = make_page(single, "Glyphless");
+    let win_edit = text::replace_block(&mut win_ansi_doc, 0, 0, "De kinderen € — café").unwrap();
+    assert_eq!(win_edit.substituted.as_deref(), Some("Helvetica"));
+    assert_eq!(text::text_blocks(&reopen(&win_ansi_doc), 0).unwrap()[0].text, "De kinderen € — café");
+
+    let mut explicit = make_page(single, "Glyphless");
+    let explicit_err =
+        text::rewrite_block(&mut explicit, 0, 0, Some("De Kinderen"), &BlockStyle { resource: Some("F0".into()), ..Default::default() });
+    assert!(explicit_err.is_err(), "explicitly selecting a glyphless font resource must be refused");
+
+    // Legitimate whitespace-only subsets and 1-glyph subsets with intentional CID aliases remain
+    // exposed to the inline editor and accepted when explicitly selected as a resource.
+    let mut zero_glyph_ttf = one_glyph_ttf.clone();
+    zero_glyph_ttf[loca_off..loca_off + loca_len].fill(0);
+    let mut ws_doc = text_page("BT /F0 12 Tf 1 0 0 1 72 700 Tm <0001> Tj /WS 12 Tf ( ) Tj ET");
+    let ws_prog = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &zero_glyph_ttf)));
+    let ws_desc = Dict::from_iter([(b"FontName".to_vec(), Object::name("ABCDEF+SpaceOnly")), (b"FontFile2".to_vec(), Object::Ref(ws_prog))]);
+    let ws_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("TrueType")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+SpaceOnly")),
+        (b"Encoding".to_vec(), Object::name("WinAnsiEncoding")),
+        (b"FirstChar".to_vec(), Object::Int(32)),
+        (b"LastChar".to_vec(), Object::Int(32)),
+        (b"Widths".to_vec(), Object::Array(vec![Object::Int(250)])),
+        (b"FontDescriptor".to_vec(), Object::Dict(ws_desc)),
+    ]);
+    let alias_prog = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+    let alias_map = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 0, 0, 1, 0, 1, 0, 1])));
+    let alias_tu = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), b"2 beginbfchar <0001> <0041> <0002> <0061> endbfchar")));
+    let alias_desc = Dict::from_iter([(b"FontName".to_vec(), Object::name("ABCDEF+AliasOne")), (b"FontFile2".to_vec(), Object::Ref(alias_prog))]);
+    let alias_cid = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+AliasOne")),
+        (b"CIDToGIDMap".to_vec(), Object::Ref(alias_map)),
+        (b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600), Object::Int(600)])])),
+        (b"FontDescriptor".to_vec(), Object::Dict(alias_desc)),
+    ]);
+    let alias_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+AliasOne")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(alias_cid)])),
+        (b"ToUnicode".to_vec(), Object::Ref(alias_tu)),
+    ]);
+    let p = pdfcraft_model::pages(&ws_doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F0".to_vec(), Object::Dict(alias_font)), (b"WS".to_vec(), Object::Dict(ws_font))]);
+    ws_doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let editor_resources: Vec<_> = text::text_editor_fonts(&ws_doc, 0).unwrap().into_iter().map(|f| f.resource).collect();
+    assert!(editor_resources.contains(&"F0".to_string()) && editor_resources.contains(&"WS".to_string()), "{editor_resources:?}");
+    let mut ws_only = ws_doc.clone();
+    text::rewrite_block(&mut ws_only, 0, 0, Some(" "), &BlockStyle { resource: Some("WS".into()), ..Default::default() }).unwrap();
+    text::rewrite_block(&mut ws_doc, 0, 0, Some("Aa"), &BlockStyle { resource: Some("F0".into()), ..Default::default() }).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&ws_doc), 0).unwrap()[0].text, "Aa");
+}
+
+/// Same-face generated subsets share a source line; TJ adjustment must survive a style edit.
+#[test]
+fn split_subset_source_keeps_calibrated_advance() {
+    let mut doc = text_page("BT /A 12 Tf 72 700 Td [<01> -100] TJ /B 12 Tf <01> Tj ET BT /F1 13 Tf 1 0 0 1 85.2 700 Tm (X) Tj ET");
+    let mut fonts = Dict::new();
+    // AA sorts before B and encodes B too, but its unrelated face must not supply metrics.
+    for (name, unicode, face, width) in
+        [("A", "0041", "SyntheticSubset", 500), ("AA", "0042", "OtherFace", 900), ("B", "0042", "SyntheticSubset", 500)]
+    {
+        let cmap = format!("1 begincodespacerange <01> <FF> endcodespacerange 1 beginbfchar <01> <{unicode}> endbfchar");
+        let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+        let proc = doc.add(Object::Stream(Stream::flate(Dict::new(), b"500 0 d0 0 0 400 700 re f")));
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type3")),
+            (b"Name".to_vec(), Object::name("PCJapanese")),
+            (b"BaseFont".to_vec(), Object::name(face)),
+            (b"FontBBox".to_vec(), Object::Array([0, 0, 500, 700].map(Object::Int).to_vec())),
+            (b"FontMatrix".to_vec(), Object::Array([0.001, 0.0, 0.0, 0.001, 0.0, 0.0].map(Object::Real).to_vec())),
+            (b"FirstChar".to_vec(), Object::Int(1)),
+            (b"LastChar".to_vec(), Object::Int(1)),
+            (b"Widths".to_vec(), Object::Array(vec![Object::Int(width)])),
+            (
+                b"Encoding".to_vec(),
+                Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(vec![Object::Int(1), Object::name("g01")]))])),
+            ),
+            (b"CharProcs".to_vec(), Object::Dict(Dict::from_iter([(b"g01".to_vec(), Object::Ref(proc))]))),
+            (b"ToUnicode".to_vec(), Object::Ref(tu)),
+        ]);
+        fonts.set(name.as_bytes().to_vec(), Object::Dict(font));
+    }
+    fonts.set(
+        b"F1".to_vec(),
+        Object::Dict(Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type1")),
+            (b"BaseFont".to_vec(), Object::name("Helvetica")),
+        ])),
+    );
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before[0].text, "AB");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].lines.len(), 2);
+    let original_width = before[0].rect[2] - before[0].rect[0];
+    for (draft, factor) in [("ABX", 1.0), ("ABAX", 1.5)] {
+        let mut edited = doc.clone();
+        text::rewrite_block(&mut edited, 0, 0, Some(draft), &BlockStyle { color: Some([0.0, 0.0, 1.0]), ..Default::default() }).unwrap();
+        let after = text::text_lines(&reopen(&edited), 0).unwrap();
+        let width = after[0].rect[2] - after[0].rect[0];
+        assert!((width - original_width * factor).abs() < 0.01, "{draft}: original {original_width}, rewritten {width}; {after:?}");
+    }
+}
+
 /// Text set larger than the widest page PDF allows (14 400 pt) panicked when its paragraph was given
 /// a width: the width is clamped between the font size and 14 400 pt, and `f64::clamp` panics when
 /// its minimum is the larger. The width is now capped at 14 400 pt whatever the font size: from the

@@ -1,5 +1,9 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** patch (PR #3836: refreshed OCR font substitution and same-face Type3 calibration against upstream `9a0ec645`, preserving both upstream and PR regression tests; estimates unchanged).
+
+> **2026-10-21 · M7:** Coalesced same-face Type3 subsets retain measured TJ spacing during ordinary text edits; regression covers formatting-only edits, longer replacements, and unrelated-face metrics. The 197 edit-crate tests pass; no parity estimates changed.
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M8, #3205 follow-up: labelled Italian international phone numbers with a slash match whole; estimates unchanged)

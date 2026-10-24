@@ -721,16 +721,42 @@ pub(super) fn rewrite_styled_block(
     };
     let mut calibration = HashMap::new();
     for (index, source) in lines.iter().enumerate() {
-        if let Some(m) = metrics.get(&source.font) {
-            let nominal = source_width(
+        let font_name = metrics
+            .get(&source.font)
+            .filter(|m| source_encodes(m, &source.text))
+            .map(|_| &source.font)
+            .or_else(|| chars.iter().find(|c| c.1 == index && c.0 != '\n').map(|c| &c.2));
+        let width_in = |name: &str, m: &Metrics, text: &str| {
+            source_width(
                 m,
-                &source.text,
+                text,
                 source.origin.state.font.as_ref().map_or(1.0, |(_, s)| *s),
-                space_of(&source.font, m),
+                space_of(name, m),
                 source.origin.state.char_spacing,
                 source.origin.state.word_spacing,
-            ) * source.origin.state.scale
-                * across(source);
+            )
+        };
+        let nominal = font_name
+            .and_then(|name| metrics.get(name).filter(|m| source_encodes(m, &source.text)).map(|m| width_in(name, m, &source.text)))
+            .or_else(|| {
+                // Generated same-face subsets can form one source line even though no one
+                // subset encodes it all. Measure the ORIGINAL text, not the edited draft:
+                // adding characters must retain the source's spacing, not squeeze to its width.
+                // Shaped text has a separate authoritative advance below.
+                if source.face.is_none() || pdfcraft_fonts::source_shaping::required(&source.text) {
+                    return None;
+                }
+                let face = pdfcraft_fonts::embedding::face_key(&source.base_font);
+                source.text.chars().try_fold(0.0, |width, ch| {
+                    let text = ch.to_string();
+                    let (name, m) = metrics.get_key_value(&source.font).filter(|(_, m)| source_encodes(m, &text)).or_else(|| {
+                        metrics.iter().find(|(_, m)| pdfcraft_fonts::embedding::face_key(&m.base_font) == face && source_encodes(m, &text))
+                    })?;
+                    Some(width + width_in(name, m, &text))
+                })
+            });
+        if let Some(nominal) = nominal {
+            let nominal = nominal * source.origin.state.scale * across(source);
             let changed_face = style.resource.is_some() || overrides.get(&index).is_some_and(|r| r.family.is_some() || r.resource.is_some());
             let factor = if nominal > 0.0 && !changed_face { ((source.rect[2] - source.rect[0]) / nominal).clamp(0.5, 2.0) } else { 1.0 };
             calibration.insert(index, factor);
