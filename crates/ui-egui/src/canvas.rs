@@ -430,6 +430,9 @@ pub struct DocView {
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
+    /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
+    /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
+    pub interface: crate::viewer_prefs::TabInterface,
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
@@ -766,6 +769,7 @@ impl DocView {
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
+            interface: Default::default(),
             presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
@@ -920,6 +924,8 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        // What the document asked to hide, and what is hidden now (F8), belong to the tab.
+        fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);
@@ -1733,6 +1739,20 @@ impl DocView {
         }
         self.single_edges = None;
         true
+    }
+
+    /// The page (or spread) the view shows first, as `FitWindow` sizes the window to it
+    /// ([`crate::viewer_prefs::window_commands`]). `None` when there is no such page.
+    pub(crate) fn first_page_now(&self, info: &DocInfo) -> Option<crate::viewer_prefs::PageNow> {
+        let (w, h) = self.display_size(info.pages.get(self.current)?);
+        // Two-page view shows a spread, except a cover page on its own.
+        let spread = self.layout == PageLayout::TwoUp && !(self.cover && self.current == 0);
+        let (per_row, gap) = if spread { (2.0, self.page_gap()) } else { (1.0, 0.0) };
+        Some(crate::viewer_prefs::PageNow {
+            size: vec2(w * PT * per_row, h * PT),
+            margins: vec2(2.0 * SIDE + gap, 2.0 * MARGIN),
+            zoom: (self.fit == Fit::None).then_some(self.zoom),
+        })
     }
 
     /// Displayed page size in points for this view rotation.
@@ -3043,6 +3063,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Every scroll here asks for no animation. An animated area would still queue a zero-length
     // offset target for the next frame, which overwrites the jump a page turn just set.
     scroll = scroll.animated(false);
+    // A document that hides the window's interface (`HideWindowUI`) hides the scroll bars too;
+    // the wheel, keys and Hand tool still scroll.
+    if view.interface.hidden.window_ui {
+        scroll = scroll.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    }
     // A newly opened document starts at the top. eframe saves egui's memory with the settings
     // and document ids start again at 1 every launch, so the offset stored under this id can be
     // where an earlier session left another document.
@@ -4530,7 +4555,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
-    if app.mode != crate::Mode::Read && !app.full_screen {
+    // A document that hides the toolbars (`HideToolbar`) hides this one too.
+    if app.mode != crate::Mode::Read && !app.full_screen && !app.views.get(index).is_some_and(|v| v.interface.hidden.toolbar) {
         quick_bar(app, avail, ui);
     }
     if let Some((source, file, destination)) = remote_open {
