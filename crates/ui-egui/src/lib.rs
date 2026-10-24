@@ -523,6 +523,9 @@ pub type FailedInbox = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
 pub enum OsEvent {
     /// Open these files.
     Open(Vec<String>),
+    /// Add these files to the Combine files list, in this order, and show it: the file manager's
+    /// "Combine files" entry (#585). Nothing is combined until Combine is pressed.
+    Combine(Vec<String>),
     /// Quit (the Dock's Quit, logging out), asking about unsaved changes first.
     Quit,
 }
@@ -3489,6 +3492,7 @@ impl eframe::App for PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
+                OsEvent::Combine(paths) => self.combine_paths(&paths),
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }

@@ -2489,6 +2489,8 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click ▸ Quick Actions ▸ Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions ▸ Customize.	Finder から：ファイルを選択し、右クリック → クイックアクション → “Combine files in PdfCraft”。表示されない場合は、クイックアクション → カスタマイズで一度オンにしてください。
 	Attach a file…	ファイルを添付…
 	Delete attachment	添付ファイルを削除
 	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません

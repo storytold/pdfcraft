@@ -384,6 +384,22 @@ pub(crate) struct Incoming {
     pub open_doc: Option<pdfcraft_engine::DocId>,
 }
 
+/// One notice for every file `combine_paths` could not read, from `(name, error)` pairs: the
+/// names joined, and the errors (each once) joined. `None` when nothing failed.
+fn unreadable_notice(failed: &[(String, String)]) -> Option<(String, String)> {
+    if failed.is_empty() {
+        return None;
+    }
+    let names = failed.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+    let mut errors: Vec<&str> = Vec::new();
+    for (_, e) in failed {
+        if !errors.contains(&e.as_str()) {
+            errors.push(e);
+        }
+    }
+    Some((names, errors.join("; ")))
+}
+
 /// A new value for [`CombineFile::auth`]: counted for the whole run, outside the undo history.
 fn next_auth() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1233,6 +1249,18 @@ fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, files_hover
                 app.combine_add_folder(false);
             }
         });
+        // macOS lists the Finder Quick Action the app installs only after it is ticked once,
+        // and the app can't tick it (finder_combine::install), so say where it is.
+        if cfg!(target_os = "macos") {
+            ui.add_space(14.0);
+            ui.label(
+                egui::RichText::new(tl!(
+                    "From Finder: select files, then right-click ▸ Quick Actions ▸ Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions ▸ Customize."
+                ))
+                .color(t.text_faint)
+                .font(theme::regular(12.0)),
+            );
+        }
     });
 }
 
@@ -2542,6 +2570,30 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = recursive;
+    }
+
+    /// Add files named by the operating system or the command line (`--combine`, the file
+    /// manager's "Combine files" entry, #585) to the Combine files list, in the order given (a sorted list stays sorted), and
+    /// show it. Images and text files become PDFs as they join (#569). Nothing is combined until
+    /// Combine is pressed. A file that can't be read is said and left out; the others still join,
+    /// as one undo step.
+    pub fn combine_paths(&mut self, paths: &[String]) {
+        let mut incoming = Vec::new();
+        let mut failed: Vec<(String, String)> = Vec::new();
+        for path in paths.iter().map(std::path::Path::new) {
+            let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+                    incoming.push(Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
+                }
+                Err(e) => failed.push((name, e.to_string())),
+            }
+        }
+        if let Some((names, errors)) = unreadable_notice(&failed) {
+            self.notify_fmt("Couldn't read {name}: {e}", &[("name", &names), ("e", &errors)]);
+        }
+        self.stage_combine_with(incoming);
     }
 
     /// Add the PDFs, images and text files in `dir` to the Combine files list, as one undo step.

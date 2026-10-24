@@ -2495,6 +2495,8 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Από το Finder: επιλέξτε αρχεία, μετά δεξί κλικ > Γρήγορες ενέργειες > “Combine files in PdfCraft”. Δεν εμφανίζεται; Ενεργοποιήστε το μία φορά στο Γρήγορες ενέργειες > Προσαρμογή.
 	Attach a file…	Επισύναψη αρχείου…
 	Delete attachment	Διαγραφή συνημμένου
 	Attaching files is not available on the web yet	Η επισύναψη αρχείων δεν είναι ακόμη διαθέσιμη στον ιστό

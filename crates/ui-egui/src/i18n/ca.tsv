@@ -2781,6 +2781,7 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Des del Finder: selecciona els fitxers, fes clic amb el botó dret > Accions ràpides > Combine files in PdfCraft. No hi surt? Activa-ho una vegada a Accions ràpides > Personalitza.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
@@ -2792,3 +2793,4 @@ theme	Appearance	Aspecte
 	Attaching files is not available on the web yet	Encara no es poden adjuntar fitxers al web
 	Delete attachment	Elimina l'adjunt
 	Delete attachment {key}	Elimina l'adjunt {key}
+	From Finder: select files, then right-click ▸ Quick Actions ▸ Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions ▸ Customize.	Des del Finder: selecciona els fitxers, fes clic amb el botó dret > Accions ràpides > Combine files in PdfCraft. No hi surt? Activa-ho una vegada a Accions ràpides > Personalitza.

@@ -267,6 +267,27 @@ try {
 if ($modelFiles -lt 2) { throw "expected the OCR models (*.rten) in models\, found $modelFiles" }
 $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse''' 1
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
+# "Combine files in PdfCraft" (#585) on PDFs and on the image menu's pictures. Each verb sits in
+# its menu's own component, so it follows INSTALLPDFCONTEXTMENU / INSTALLIMAGECONTEXTMENU, is kept or
+# left out with that menu on update and is removed on uninstall. One process per selected file
+# (Document), each handing its file to the first: --combine "%1".
+$combineVerbs = @(,@('pdf', 'PdfcraftPdfContextMenu'))
+foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) { $combineVerbs += ,@($ext, 'PdfcraftImageContextMenu') }
+foreach ($pair in $combineVerbs) {
+  $ext = $pair[0]
+  $component = $pair[1]
+  $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.Combine'
+  $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
+  Assert-Equal $menu[0] 'Combine files in PdfCraft' "$ext Combine label"
+  Assert-Equal $menu[1] $component "$ext Combine component"
+  Assert-Equal $menu[2] '2' "$ext Combine HKLM root"
+  $selection = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MultiSelectModel''') 2
+  Assert-Equal $selection[0] 'Document' "$ext Combine selection"
+  Assert-Equal $selection[1] $component "$ext Combine selection component"
+  $command = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 2
+  Assert-Equal $command[0] '"[#PdfcraftExe]" --combine "%1"' "$ext Combine command"
+  Assert-Equal $command[1] $component "$ext Combine command component"
+}
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus with Combine files (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

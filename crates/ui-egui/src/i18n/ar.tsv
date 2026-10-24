@@ -2766,6 +2766,8 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click ▸ Quick Actions ▸ Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions ▸ Customize.	من Finder: حدّد الملفات، ثم انقر بزر الماوس الأيمن > الإجراءات السريعة > “Combine files in PdfCraft”. غير موجود؟ فعّله مرة واحدة من الإجراءات السريعة > تخصيص.
 	Attach a file…	إرفاق ملف…
 	Delete attachment	حذف المرفق
 	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد

@@ -2494,6 +2494,8 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	V Finderju: izberite datoteke, nato desni klik > Hitra dejanja > “Combine files in PdfCraft”. Ga ni? Enkrat ga vklopite v Hitra dejanja > Prilagodi.
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo
