@@ -12,7 +12,7 @@ use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageXform, SignTab};
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -140,7 +140,24 @@ pub(crate) enum FieldPointer {
     Owned,
 }
 
-/// Clicks on form widgets of one page.
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
+fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(&'a FormField, usize, &'a FormWidget)> {
+    f.widgets
+        .iter()
+        .enumerate()
+        .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+        .map(|(i, w)| (f, i, w))
+}
+
+/// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
+/// overlap, the one painted last is on top.
+pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Option<&'a str> {
+    tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
+}
+
+/// Clicks on form widgets of one page. The pointer is on the first widget under it in the form's
+/// order, except on a sign tab (`tabs`, with the signature field each one signs), which is drawn
+/// over every field and so is on its own field.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     ui: &egui::Ui,
@@ -149,18 +166,16 @@ pub(crate) fn page_input(
     page: usize,
     info: &DocInfo,
     form: &[FormField],
+    tabs: &[(&str, SignTab)],
     allowed: bool,
     view: &mut DocView,
 ) -> FieldPointer {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return FieldPointer::Away };
-    let hit = form.iter().find_map(|f| {
-        f.widgets
-            .iter()
-            .enumerate()
-            .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
-            .map(|(i, w)| (f, i, w))
-    });
+    // A tab lies inside its field's widget, so that widget is under the pointer too.
+    let on_tab = tab_under(tabs, p)
+        .and_then(|name| form.iter().filter(|f| f.name == name && f.kind == FormFieldKind::Signature).find_map(|f| widget_at(xf, info, page, f, p)));
+    let hit = on_tab.or_else(|| form.iter().find_map(|f| widget_at(xf, info, page, f, p)));
     let Some((f, wi, w)) = hit else { return FieldPointer::Away };
     // The field's tooltip (`/TU`), as Acrobat shows it on hover (#3854). ISO 32000-2 Table 226
     // makes it the name the user interface identifies the field by.
