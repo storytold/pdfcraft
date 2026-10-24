@@ -88,15 +88,18 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
     if readings == 1 {
         return all.remove(0);
     }
-    let mut hits: Vec<Range<usize>> = all.concat();
-    hits.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
-    let mut out: Vec<Range<usize>> = Vec::new();
-    for h in hits {
-        if out.last().is_none_or(|l| h.start >= l.end) && out.len() < limit {
-            out.push(h);
+    // A hit is left out where it overlaps one kept from another reading; one reading's hits are
+    // all kept, though two can share a glyph.
+    let mut hits: Vec<(Range<usize>, usize)> = all.into_iter().enumerate().flat_map(|(r, hits)| hits.into_iter().map(move |h| (h, r))).collect();
+    hits.sort_by_key(|(h, _)| (h.start, std::cmp::Reverse(h.end)));
+    let mut out: Vec<(Range<usize>, usize)> = Vec::new();
+    for (h, r) in hits {
+        let overlaps = out.iter().any(|(k, kr)| *kr != r && h.start < k.end && k.start < h.end);
+        if !overlaps && out.len() < limit {
+            out.push((h, r));
         }
     }
-    out
+    out.into_iter().map(|(h, _)| h).collect()
 }
 
 /// One glyph per entry of `text`, each on the line given in `lines`.
@@ -162,6 +165,10 @@ fn whole_word_rejection_keeps_overlapping_candidates() {
     // Accepted matches still do not overlap, even within one multi-character glyph.
     assert_eq!(page(&["aaaaa"]).find("aaa"), vec![0..1]);
     assert_eq!(page(&["aaaaa"]).find("aa"), vec![0..1, 0..1]);
+    // So does a page with a word divided at a line end, which is searched in three readings.
+    let divided = lined(&["\u{FB03}", " ", "exam", "-", "ple"], &[0, 0, 0, 0, 1]);
+    assert_eq!(divided.find("f"), vec![0..1, 0..1]);
+    assert_eq!(divided.find("example"), vec![2..5]);
 }
 
 #[test]

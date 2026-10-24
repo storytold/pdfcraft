@@ -6,7 +6,8 @@
 //! the end of a line is also found whole: where a line ends in a hyphen between two letters, the
 //! text is searched a second time without the hyphen and the line break ("example" finds
 //! "exam-" + "ple") and a third time with the hyphen but without the break ("exam-ple"). A hit in
-//! any reading counts; overlapping hits keep the one that starts first (the longer on a tie).
+//! any reading counts; where hits from different readings overlap, the one that starts first is kept
+//! (the longer on a tie).
 use super::{PageText, fold_case};
 use std::ops::Range;
 
@@ -79,18 +80,28 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
             *slot = matched;
         }
     }
-    let mut hits = Vec::new();
-    for &reading in readings {
-        hits.extend(search(&characters(page, &texts, &divided, reading), &needle, &prefix, whole_words, limit));
+    let mut hits: Vec<(Range<usize>, usize)> = Vec::new();
+    for (r, &reading) in readings.iter().enumerate() {
+        let found = search(&characters(page, &texts, &divided, reading), &needle, &prefix, whole_words, limit);
+        hits.extend(found.into_iter().map(|hit| (hit, r)));
     }
     if readings.len() == 1 {
-        return hits;
+        return hits.into_iter().map(|(hit, _)| hit).collect();
     }
-    // Each reading's hits are in order and apart; across readings, the earliest start wins.
-    hits.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    // Each reading's hits are in order and apart in its characters, though two can share a glyph
+    // ("f" twice in an "ffi" glyph); they are all kept. Across readings, the earliest start wins
+    // (the longer on a tie): a hit is left out where it overlaps one kept from another reading.
+    // The sort is stable, so the earlier reading wins an exact tie.
+    hits.sort_by(|a, b| a.0.start.cmp(&b.0.start).then(b.0.end.cmp(&a.0.end)));
+    // The furthest end of the hits kept from each reading. Hits come in order of start, so one
+    // overlaps an earlier kept hit exactly when it starts before that hit's end.
+    let mut ends = [0usize; 3];
     let mut kept: Vec<Range<usize>> = Vec::new();
-    for hit in hits {
-        if kept.last().is_none_or(|last| hit.start >= last.end) {
+    for (hit, r) in hits {
+        if ends.iter().enumerate().all(|(other, &end)| other == r || hit.start >= end) {
+            if let Some(end) = ends.get_mut(r) {
+                *end = (*end).max(hit.end);
+            }
             kept.push(hit);
             if kept.len() == limit {
                 break;
