@@ -40,6 +40,16 @@ pub struct Summary {
     pub points: Vec<[f32; 2]>,
 }
 
+/// A text box's `/Contents` as its appearance lays it out: not trimmed, as spaces at either end
+/// take room on a line (the box was sized with them).
+pub(crate) fn contents_as_drawn(doc: &Document, d: &Dict) -> String {
+    let Some(o) = d.get(b"Contents").map(|o| doc.resolve(o)) else { return String::new() };
+    match &*o {
+        Object::String(s) => s.to_text(),
+        _ => String::new(),
+    }
+}
+
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     let o = doc.resolve(d.get(key)?);
     let s = match &*o {

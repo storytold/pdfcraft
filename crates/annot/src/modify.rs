@@ -2,7 +2,7 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{line_endings_of, text_value};
+use super::info::{contents_as_drawn, line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
@@ -165,7 +165,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     let (_, r) = annot_ref(doc, page, index)?;
     let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
     let old = annot_dict(doc, r);
-    let was = (text_value(doc, &old, b"Contents").unwrap_or_default(), appearance::parse_da(&old).1);
+    let was = (contents_as_drawn(doc, &old), appearance::parse_da(&old).1);
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
@@ -223,7 +223,12 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str, was: Option<(&str, f64)>) -
     let w = tb[2] - tb[0];
     // Text on a turned page runs along the box's height: its width isn't the line's.
     let upright = d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) == 0;
-    let hug = upright && was.is_some_and(|(t, s)| w.is_finite() && fits_text(w, t, s, pad));
+    // A box made taller or shorter by hand doesn't fit its text either, whatever its width.
+    let hug = upright
+        && was.is_some_and(|(t, s)| {
+            let lines = appearance::wrap(t, s, (w - 2.0 * pad).max(1.0)).len();
+            w.is_finite() && fits_text(w, t, s, pad) && ((tb[3] - tb[1]).abs() - appearance::text_box_height(lines, s, pad)).abs() <= 1.5
+        });
     let w = if w.is_finite() && w >= 1.0 && !hug {
         w
     } else {
@@ -670,7 +675,7 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         rich_text(d);
         touch(d, meta);
     })?;
-    let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
+    let text = contents_as_drawn(doc, &annot_dict(doc, r));
     let result = match fitted_box(doc, r, &text, Some((text.as_str(), was_size))) {
         // A box that fit its text fits it at the new size, smaller as well as larger.
         Some((fit, true)) => apply_text_box(doc, r, fit, meta, false),

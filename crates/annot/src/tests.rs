@@ -2348,4 +2348,28 @@ fn a_text_box_that_fits_its_text_keeps_fitting_it() {
     let s = rect(&list(&doc, 0)[t]);
     assert_eq!((s[0], s[2]), (100.0, 260.0));
     assert!(s[1] <= r[1], "a box sized by hand never shrinks: {s:?} from {r:?}");
+    // Made taller by hand, its width still its text's: a new font size keeps that height too.
+    let f = fitted("Höhe", 12.0);
+    let shape = Shape::TextBox { rect: f, font_size: 12.0 };
+    let u = add_annotation(&mut doc, &NewAnnotation { contents: "Höhe".into(), ..new(0, shape) }, &meta("u")).unwrap();
+    set_rect(&mut doc, 0, u, [f[0], f[1] - 60.0, f[2], f[3]], &meta("")).unwrap();
+    set_font_size(&mut doc, 0, u, 10.0, &meta("")).unwrap();
+    let h = rect(&list(&doc, 0)[u]);
+    assert!(h[1] <= f[1] - 60.0 && h[3] == f[3], "the height made by hand stays: {h:?}");
+}
+
+/// Spaces at either end of a text box's text take room on its line: a box sized to "Hallo "
+/// fits that text, and takes the next text's width.
+#[test]
+fn a_text_box_sized_to_its_text_with_a_trailing_space_keeps_fitting_it() {
+    let mut doc = fixture();
+    let pad = 2.0 + 2.0;
+    let fitted = |text: &str| {
+        let w = appearance::text_box_width(text, 12.0, pad);
+        [100.0, 700.0 - appearance::text_box_height(1, 12.0, pad), 100.0 + w, 700.0]
+    };
+    let shape = Shape::TextBox { rect: fitted("Hallo "), font_size: 12.0 };
+    let v = add_annotation(&mut doc, &NewAnnotation { contents: "Hallo ".into(), ..new(0, shape) }, &meta("v")).unwrap();
+    set_contents(&mut doc, 0, v, "Hallo Welt, ok", &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 0)[v]), fitted("Hallo Welt, ok"), "it fit its text with the space");
 }
