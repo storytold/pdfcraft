@@ -938,6 +938,34 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     assert_eq!(doc.bytes.as_ref(), &original);
 }
 
+/// Windows: a saved attachment keeps the Mark-of-the-Web of the PDF it came from, and gets the
+/// Internet zone when that PDF has none or isn't a file (#3990).
+#[cfg(windows)]
+#[test]
+fn a_saved_attachment_carries_the_documents_zone() {
+    let dir = AttachmentDir::new();
+    let zone_of = |p: &std::path::Path| std::fs::read(format!("{}:Zone.Identifier", p.display())).ok();
+    let mail = dir.0.join("from mail.pdf");
+    std::fs::write(&mail, attachment_fixture()).unwrap();
+    let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://mail.example/invoice.pdf\r\n";
+    std::fs::write(format!("{}:Zone.Identifier", mail.display()), zone).unwrap();
+    let local = dir.0.join("local.pdf");
+    std::fs::write(&local, attachment_fixture()).unwrap();
+    let mut h = harness(&[]);
+    let opened = [(Some(&mail), zone), (Some(&local), pdfcraft_platform::zone::INTERNET_ZONE), (None, pdfcraft_platform::zone::INTERNET_ZONE)];
+    for (i, (path, expected)) in opened.into_iter().enumerate() {
+        h.state_mut().open_bytes(&format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
+        h.run_steps(2);
+        let id = h.state().views.last().unwrap().id;
+        let chosen = dir.0.join(format!("saved{i}.exe"));
+        h.state_mut().pick_override = Some(vec![chosen.to_string_lossy().into_owned()]);
+        h.state_mut().attachment_action(id, 0, false);
+        h.run_steps(2);
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
+        assert_eq!(zone_of(&chosen).as_deref(), Some(expected.as_bytes()), "document {i}");
+    }
+}
+
 /// Every file under `dir`, recursively, sorted.
 fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();

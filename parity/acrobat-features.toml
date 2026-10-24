@@ -1310,8 +1310,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/render/src/inspect.rs::attachments_of_both_kinds_are_listed_and_extracted"]
-notes = ""
+evidence = ["crates/render/src/inspect.rs::attachments_of_both_kinds_are_listed_and_extracted", "crates/ui-egui/tests/it/pickers.rs::a_saved_attachment_carries_the_documents_zone"]
+notes = "On Windows a saved attachment keeps the Mark-of-the-Web (Zone.Identifier) of the PDF it came from, or gets the Internet zone when the PDF has none (#3990)."
 
 [[feature]]
 id = "view.layers-panel"

@@ -1594,6 +1594,8 @@ impl PdfCraftApp {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = d.path.clone();
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
@@ -1608,7 +1610,12 @@ impl PdfCraftApp {
                     pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
                     None,
                     move |app, path| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
-                        Ok(()) => app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
+                        Ok(()) => {
+                            // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
+                            // effort: a volume without alternate data streams can't carry it.
+                            let _ = pdfcraft_platform::zone::mark_from(&path, source.as_deref().map(std::path::Path::new));
+                            app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())])
+                        }
                         Err(e) => app.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
                     },
                 );
