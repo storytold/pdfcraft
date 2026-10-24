@@ -88,6 +88,12 @@ impl From<pdfcraft_engine::EditError> for ToolError {
     }
 }
 
+impl From<pdfcraft_fonts::GlyphError> for ToolError {
+    fn from(e: pdfcraft_fonts::GlyphError) -> Self {
+        failed(e)
+    }
+}
+
 /// Default and maximum resolution for `page_render`.
 const DEFAULT_DPI: f64 = 96.0;
 const MAX_DPI: f64 = 600.0;
@@ -1416,7 +1422,7 @@ impl Automation {
                                 && self.root.as_ref().is_none_or(|r| e.path.starts_with(r))
                         });
                         if let Some(entry) = found {
-                            let _ = pdfcraft_fonts::set_active_thai_font_entry(entry);
+                            pdfcraft_fonts::set_active_thai_font_entry(entry)?;
                             hf.font_name = Some(entry.file_name.clone());
                         } else {
                             return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\", \"Courier\", or an installed Thai font, not {font:?}")));

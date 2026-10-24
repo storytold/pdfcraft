@@ -54,6 +54,18 @@ pub enum GlyphError {
     TooComplex,
 }
 
+impl std::fmt::Display for GlyphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoFont => f.write_str("font not available"),
+            Self::Missing => f.write_str("glyph missing in font"),
+            Self::TooComplex => f.write_str("glyph outline too complex"),
+        }
+    }
+}
+
+impl std::error::Error for GlyphError {}
+
 struct Flatten {
     contours: Vec<Vec<[f64; 2]>>,
     cur: Vec<[f64; 2]>,

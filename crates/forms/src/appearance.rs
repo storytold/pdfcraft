@@ -888,7 +888,7 @@ fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[St
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
-    let thai_font_res_name = if font_name == "Thai" { "T3Thai" } else { "Thai" };
+    let thai_font_res_name = "T3Thai";
     let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str, size: f64| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
