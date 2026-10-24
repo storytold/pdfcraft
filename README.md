@@ -485,6 +485,11 @@ didn't have a menu yet (0.6.0 and earlier for the PDF menu, 0.2.1 and earlier fo
 adds it, as a first install would. Use the MSI for your architecture. Per-user installation
 overrides are not supported.
 
+To install somewhere other than Program Files, change the folder on the welcome screen
+(type it, or Browse…) or pass it on the command line: `INSTALLFOLDER="D:\Apps\PdfCraft"`. It is
+still an all-users installation. An upgrade keeps the folder the installed version uses unless
+the command line gives another one.
+
 **Pin the checksum, not just the version.** Release candidates of a version share its MSI version
 (MSI versions are numbers only, so 1.2.3-rc.1 and 1.2.3 are both 1.2.3), and the installer lets an
 MSI of the same version replace the installed one without asking. Two different `0.7.1` MSIs can't

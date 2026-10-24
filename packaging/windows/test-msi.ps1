@@ -239,6 +239,66 @@ $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INST
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
 
+# Install folder (#1139): Program Files by default; the welcome dialog's "Install to" row (a PathEdit,
+# and Browse… into a native folder browser) or INSTALLFOLDER=<path> on the command line puts it
+# elsewhere, still per machine. Secure, so the UI choice reaches the elevated install; recorded in
+# HKLM at install and read back by AppSearch before the old version is removed, so an update keeps
+# the folder unless the command line gives one.
+$folderDir = Read-Row 'SELECT `Directory_Parent` FROM `Directory` WHERE `Directory` = ''INSTALLFOLDER''' 1
+Assert-Equal $folderDir[0] 'ProgramFiles6432Folder' 'Install folder default parent'
+if (($secure[0] -split ';') -notcontains 'INSTALLFOLDER') { throw "INSTALLFOLDER is not secure: '$($secure[0])'" }
+$folderReg = Read-Row 'SELECT `Root`, `Value`, `Component_` FROM `Registry` WHERE `Key` = ''Software\PdfCraft'' AND `Name` = ''InstallFolder''' 3
+Assert-Equal $folderReg[0] '2' 'Install folder record HKLM root'
+Assert-Equal $folderReg[1] '[INSTALLFOLDER]' 'Install folder record value'
+Assert-Equal $folderReg[2] 'PdfcraftApp' 'Install folder record component'
+$folderSearch = Read-Row 'SELECT `Root`, `Key`, `Name`, `Type` FROM `RegLocator`, `AppSearch` WHERE `AppSearch`.`Signature_` = `RegLocator`.`Signature_` AND `AppSearch`.`Property` = ''EXISTINGINSTALLFOLDER''' 4
+Assert-Equal $folderSearch[0] '2' 'Install folder search HKLM root'
+Assert-Equal $folderSearch[1] 'Software\PdfCraft' 'Install folder search key'
+Assert-Equal $folderSearch[2] 'InstallFolder' 'Install folder search name'
+Assert-Equal ([int] $folderSearch[3]) $(if ($view64) { 18 } else { 2 }) 'Install folder search type'
+$folderAction = Read-Row 'SELECT `Action`, `Target` FROM `CustomAction` WHERE `Source` = ''INSTALLFOLDER''' 2
+Assert-Equal $folderAction[1] '[EXISTINGINSTALLFOLDER]' 'Install folder restored from the record'
+foreach ($sequence in @('InstallUISequence', 'InstallExecuteSequence')) {
+  $set = Read-Row ('SELECT `Condition`, `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''' + $folderAction[0] + '''') 2
+  $appSearch = Read-Row ('SELECT `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''AppSearch''') 1
+  $costFinalize = Read-Row ('SELECT `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''CostFinalize''') 1
+  if ([int] $set[1] -le [int] $appSearch[0] -or [int] $set[1] -ge [int] $costFinalize[0]) {
+    throw "$sequence must restore the install folder after AppSearch and before CostFinalize"
+  }
+}
+$session = $null
+try {
+  $session = $Installer.OpenPackage((Resolve-Path -LiteralPath $Path).Path, 1)
+  foreach ($case in @(
+      @('first install', '', '', 0),
+      @('update, folder recorded', '', 'D:\Apps\PdfCraft', 1),
+      @('update, INSTALLFOLDER on the command line', 'E:\PdfCraft', 'D:\Apps\PdfCraft', 0))) {
+    $session.Property('INSTALLFOLDER') = $case[1]
+    $session.Property('EXISTINGINSTALLFOLDER') = $case[2]
+    Assert-Equal ($session.EvaluateCondition($set[0])) $case[3] "Install folder: $($case[0])"
+  }
+} finally {
+  if ($session) { [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($session) }
+}
+$installTo = Read-Row 'SELECT `Type`, `Property` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''InstallTo''' 2
+Assert-Equal $installTo[0] 'PathEdit' 'Welcome install-folder control'
+Assert-Equal $installTo[1] 'INSTALLFOLDER' 'Welcome install-folder property'
+$browse = Read-Row 'SELECT `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = ''InstallWelcome'' AND `Control_` = ''Browse''' 2
+Assert-Equal $browse[0] 'SpawnDialog' 'Welcome Browse event'
+Assert-Equal $browse[1] 'BrowseFolder' 'Welcome Browse dialog'
+$setPath = Read-Row 'SELECT `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''InstallWelcome'' AND `Control_` = ''Install'' AND `Event` = ''SetTargetPath'' AND `Argument` = ''INSTALLFOLDER''' 1
+$endWelcome = Read-Row 'SELECT `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''InstallWelcome'' AND `Control_` = ''Install'' AND `Event` = ''EndDialog''' 1
+if ([int] $setPath[0] -ge [int] $endWelcome[0]) { throw 'Install must set the install folder before closing the welcome dialog' }
+foreach ($control in @('DirectoryCombo', 'DirectoryList', 'PathEdit')) {
+  $row = Read-Row ('SELECT `Type`, `Property` FROM `Control` WHERE `Dialog_` = ''BrowseFolder'' AND `Control` = ''' + $control + '''') 2
+  Assert-Equal $row[0] $control "Browse $control control"
+  Assert-Equal $row[1] 'INSTALLFOLDER' "Browse $control property"
+}
+$browseOk = Read-Row 'SELECT `Argument` FROM `ControlEvent` WHERE `Dialog_` = ''BrowseFolder'' AND `Control_` = ''OK'' AND `Event` = ''SetTargetPath''' 1
+Assert-Equal $browseOk[0] 'INSTALLFOLDER' 'Browse OK sets the folder'
+$browseCancel = Read-Row 'SELECT `Event` FROM `ControlEvent` WHERE `Dialog_` = ''BrowseFolder'' AND `Control_` = ''Cancel'' AND `Event` = ''Reset''' 1
+Assert-Equal $browseCancel[0] 'Reset' 'Browse Cancel puts the folder back'
+
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.
 foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('InstallFailed', '-3'))) {
@@ -269,4 +329,4 @@ $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), install folder (welcome row, browse dialog, kept on update), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

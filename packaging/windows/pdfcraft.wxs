@@ -4,7 +4,8 @@
 
     wix build pdfcraft.wxs installer-ui.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d ModelsDir=... -d IconPath=... -o out.msi
 
-  Per-machine install into Program Files, a Start Menu shortcut, a desktop shortcut (on by default,
+  Per-machine install into Program Files (or the folder chosen in the welcome dialog or given as
+  INSTALLFOLDER, #1139), a Start Menu shortcut, a desktop shortcut (on by default,
   optional, and an update keeps it only if it is still there), an App Paths entry, PdfCraft registered as a PDF handler (offered under "Open with"
   and in Default apps, never forced as the default), "Edit with PdfCraft" on PDF files'
   right-click menu and "Create PDF with PdfCraft…" on image files' right-click menu (both on by
@@ -77,6 +78,19 @@
     </Property>
     <SetProperty Id="INSTALLIMAGECONTEXTMENU" Value="1" After="AppSearch" Sequence="first"
         Condition="NOT INSTALLIMAGECONTEXTMENU AND (NOT IMAGECONTEXTMENURELEASE OR EXISTINGIMAGECONTEXTMENU)" />
+    <!-- Install folder (#1139): Program Files by default; the welcome dialog's "Install to" row
+         (with Browse…) or INSTALLFOLDER=<path> on the command line puts it elsewhere, still for
+         all users (per-user installation is ruled out above, #305). Secure, so the folder chosen
+         in the (unelevated) UI reaches the elevated install. An update keeps the installed
+         version's folder: it is remembered in HKLM at install and read back before the old
+         version is removed, like the shortcut and menu choices. A value given on the command
+         line wins. -->
+    <Property Id="INSTALLFOLDER" Secure="yes" />
+    <Property Id="EXISTINGINSTALLFOLDER">
+      <RegistrySearch Id="InstallFolderSearch" Root="HKLM" Key="Software\PdfCraft" Name="InstallFolder" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLFOLDER" Value="[EXISTINGINSTALLFOLDER]" After="AppSearch" Sequence="first"
+        Condition="NOT INSTALLFOLDER AND EXISTINGINSTALLFOLDER" />
     <UIRef Id="PdfcraftInstallerUI" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
@@ -99,6 +113,8 @@
         <File Id="PdfcraftExe" Source="$(var.BinDir)\pdfcraft.exe" KeyPath="yes" />
 
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft.exe" Value="[#PdfcraftExe]" Type="string" />
+        <!-- Where this version went, for the next update to install into the same folder (#1139). -->
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
 
         <!-- PDF files (#107): PdfCraft is offered under "Open with" and in Settings ▸ Default
              apps, through Windows' Default Programs registration (a ProgID, OpenWithProgids,
