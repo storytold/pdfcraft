@@ -1099,13 +1099,25 @@ impl Automation {
             }
         };
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        let linearize = a.opt_bool("linearize")?.unwrap_or(false);
+        let full = a.opt_bool("full")?;
+        if linearize && full == Some(false) {
+            return Err(ToolError::InvalidArgs("linearize is a full rewrite: leave out full, or pass true".into()));
+        }
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
-        let full = a.opt_bool("full")?.unwrap_or(!same_file);
+        let full = linearize || full.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
         if flatten_fill_sign {
             self.apply(a, Edit::FlattenFillSign)?;
         }
-        let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
+        let bytes = if linearize {
+            self.session.save_linearized_bytes(id)
+        } else if full {
+            self.session.save_full_bytes(id)
+        } else {
+            self.session.save_bytes(id)
+        }
+        .map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
@@ -1285,6 +1297,7 @@ impl Automation {
             ("lzw_to_flate", &mut settings.lzw_to_flate),
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
+            ("fast_web_view", &mut settings.fast_web_view),
         ] {
             if let Some(b) = a.opt_bool(key)? {
                 *flag = b;
@@ -2628,6 +2641,8 @@ fn info(d: &Document) -> Value {
         "document": summary(d),
         "pdf_version": i.pdf_version,
         "file_size": i.file_size,
+        // Fast Web View: the file as last opened or saved is linearized (a later update ends it).
+        "linearized": pdfcraft_cos::is_linearized(&d.saved_bytes()),
         "title": i.title, "author": i.author, "subject": i.subject, "keywords": i.keywords,
         // Custom document properties (Document Properties ▸ Custom): /Info entries beyond the
         // ones the spec names, set and cleared with doc_set_info.

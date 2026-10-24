@@ -4483,19 +4483,29 @@ impl Session {
 
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
     pub fn save_full_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
+        self.rewrite_bytes(id, false)
+    }
+
+    /// Fast Web View: a linearized full rewrite (ISO 32000-2 Annex F). Signed documents are refused.
+    pub fn save_linearized_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
+        self.rewrite_bytes(id, true)
+    }
+
+    fn rewrite_bytes(&self, id: DocId, linearize: bool) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if doc.is_signed() {
             return Err(EditError::Signed);
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), linearize, ..SaveOptions::default() };
         let cos = writable(&editor.cos)?;
         guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 
-    /// Check that `bytes`, from [`Self::save_bytes`] or [`Self::save_full_bytes`], reopen as this
-    /// document before they are written (#1698): [`Self::mark_saved`] only finds out after the
-    /// file has been replaced. Same error as `mark_saved`.
+    /// Check that `bytes`, from [`Self::save_bytes`], [`Self::save_full_bytes`] or
+    /// [`Self::save_linearized_bytes`], reopen as this document before they are written (#1698):
+    /// [`Self::mark_saved`] only finds out after the file has been replaced. Same error as
+    /// `mark_saved`.
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };

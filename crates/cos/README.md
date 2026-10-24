@@ -72,6 +72,19 @@ garbage-collecting path. By default (`SaveOptions::object_streams`) it packs non
 into compressed object streams with a cross-reference stream (PDF 1.5+); turning that off writes a
 classic table any reader accepts.
 
+`SaveOptions::linearize` makes `write_full` write a linearized file for Fast Web View (ISO 32000-2
+Annex F, `writer/linearize.rs`): the linearization dictionary, the first-page cross-reference
+section, the primary hint stream (page offset, shared object and outline tables), the first
+page's objects first and then each later page's. Inheritable page attributes move from the page
+tree onto the pages (a shared inherited dictionary or array stays one shared object), and all four
+encryption algorithms work. It uses classic tables and no object streams, so the file is larger
+than the default compressed save, and it refuses a page tree with no pages, a cycle or a page
+listed twice, and output of 4 GB or more. `write_incremental` never linearizes: an update appended
+to a linearized file keeps it valid but no longer linearized, as in any reader, and
+`is_linearized(bytes)` says which it is. `qpdf --check-linearization` finds no errors on
+synthetic files, encrypted ones included. The thumbnail hint table, the generic ones other than
+the outlines' and the overflow hint stream are not written (`core.linearization`, partial).
+
 Dictionaries keep their key order and streams keep their *encoded* bytes, so rewritten objects stay
 recognisable in a diff and byte-stable when re-serialized.
 
@@ -84,7 +97,6 @@ recognisable in a diff and byte-stable when re-serialized.
 
 - Streaming very large files within a memory budget (`ByteSource`, `core.lazy-loading`); files are
   read whole today.
-- Linearized output, Fast Web View (`core.linearization`, M11).
 - Structural validation against the Arlington model (`core.arlington-validation`), which will live
   in the reserved `arlington` crate.
 - Image codecs. `pdfcraft-filters` carries the non-image filters; DCT, JPX, JBIG2 and CCITT are

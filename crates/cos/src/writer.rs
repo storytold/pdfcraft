@@ -5,7 +5,8 @@
 //!   never modified, which keeps digital signatures over earlier revisions valid.
 //! * `write_full` writes only objects reachable from the trailer, renumbered densely, with a
 //!   cross-reference table or stream — the "Save As" / garbage-collecting path. Unknown trailer
-//!   entries are copied, including objects reachable only from them.
+//!   entries are copied, including objects reachable only from them. With
+//!   `SaveOptions::linearize` the rewrite is laid out for Fast Web View (`linearize`).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -14,6 +15,10 @@ use std::io::Write;
 use crate::CosError;
 use crate::document::{Document, ObjectReader};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
+
+mod linearize;
+
+pub use linearize::is_linearized;
 
 /// Serialize one object. Deterministic: same object → same bytes.
 pub fn serialize(o: &Object, out: &mut Vec<u8>) {
@@ -155,12 +160,17 @@ pub struct SaveOptions {
     pub id_seed: u64,
     /// Full saves: pack non-stream objects into compressed object streams with a cross-reference
     /// stream (PDF 1.5+, §7.5.7–7.5.8). Off writes a classic table that any reader accepts.
+    /// A linearized save always writes classic tables.
     pub object_streams: bool,
+    /// Full saves: linearize for Fast Web View (Annex F), so a reader fetching the file can show
+    /// the first page before the rest arrives. An incremental update is never linearized (it
+    /// would end a linearized file's linearization), so only rewrites honour this.
+    pub linearize: bool,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, linearize: false }
     }
 }
 
@@ -255,6 +265,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
+    if opts.linearize {
+        return linearize::write(doc, opts);
+    }
     // A full traversal must not fill the editor's shared caches (which undo snapshots also
     // own). Parsed objects and decoded object streams are temporary working data here.
     let mut reader = doc.object_reader();
@@ -266,18 +279,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut order: Vec<(ObjRef, bool)> = Vec::new();
     let mut queue: VecDeque<ObjRef> = VecDeque::new();
     let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
-    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
-        if let Some(r) = trailer_in.reference(key) {
-            queue.push_back(r);
-        }
-    }
-    // Unknown trailer entries are document data. Objects they alone reference must be written
-    // too, or a full rewrite would keep the key and drop its value.
-    for (key, value) in trailer_in.iter() {
-        if !trailer_key_rewritten(key) {
-            collect_refs(value, &mut |r| queue.push_back(r));
-        }
-    }
+    trailer_roots(&trailer_in, &mut |r| queue.push_back(r));
     while let Some(r) = queue.pop_front() {
         if map.contains_key(&r) {
             continue;
@@ -346,26 +348,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         }
     }
     batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
-    let mut trailer = Dict::new();
-    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
-        if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
-            trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
-        }
-    }
-    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
-        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
-    }
-    if let Some(id) = trailer_in.get(b"ID") {
-        trailer.set(b"ID".to_vec(), id.clone());
-    }
-    for (key, value) in trailer_in.iter() {
-        if !trailer_key_rewritten(key) {
-            trailer.set(key.clone(), renumber(value, &map));
-        }
-    }
-    if reader.document.output_security().0.is_none() {
-        ensure_id(&mut trailer, opts, reader.document.bytes());
-    }
+    let mut trailer = rewritten_trailer(&reader.document, &trailer_in, &map, opts);
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
     } else {
@@ -433,6 +416,48 @@ fn trailer_key_rewritten(key: &[u8]) -> bool {
         key,
         b"Size" | b"Prev" | b"XRefStm" | b"Type" | b"W" | b"Index" | b"Filter" | b"DecodeParms" | b"Length" | b"Root" | b"Info" | b"Encrypt" | b"ID"
     )
+}
+
+/// The references a full rewrite starts from: `/Root`, `/Info`, `/Encrypt`, and those in
+/// unknown trailer entries, which are document data — objects they alone reference must be
+/// written too, or a rewrite would keep the key and drop its value.
+fn trailer_roots(trailer: &Dict, f: &mut impl FnMut(ObjRef)) {
+    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
+        if let Some(r) = trailer.reference(key) {
+            f(r);
+        }
+    }
+    for (key, value) in trailer.iter() {
+        if !trailer_key_rewritten(key) {
+            collect_refs(value, f);
+        }
+    }
+}
+
+/// A full rewrite's trailer: `/Root`, `/Info` and `/Encrypt` renumbered (a direct `/Encrypt`
+/// copied), `/ID` kept or created, unknown entries copied with their references renumbered.
+fn rewritten_trailer(doc: &Document, trailer_in: &Dict, map: &HashMap<ObjRef, u32>, opts: &SaveOptions) -> Dict {
+    let mut trailer = Dict::new();
+    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
+        if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
+            trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
+        }
+    }
+    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
+        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
+    }
+    if let Some(id) = trailer_in.get(b"ID") {
+        trailer.set(b"ID".to_vec(), id.clone());
+    }
+    for (key, value) in trailer_in.iter() {
+        if !trailer_key_rewritten(key) {
+            trailer.set(key.clone(), renumber(value, map));
+        }
+    }
+    if doc.output_security().0.is_none() {
+        ensure_id(&mut trailer, opts, doc.bytes()); // an encrypted file's ID is part of its key
+    }
+    trailer
 }
 
 fn output_number(index: usize) -> Result<u32, CosError> {

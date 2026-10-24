@@ -866,6 +866,18 @@ fn full_save_is_readable_and_smaller_after_deletes() {
 }
 
 #[test]
+fn a_linearized_save_reopens_with_every_page() {
+    let (s, id) = session_with(3);
+    let bytes = s.save_linearized_bytes(id).unwrap();
+    assert!(pdfcraft_cos::is_linearized(&bytes));
+    let mut s2 = Session::new();
+    let id2 = s2.open("web.pdf", None, bytes, None).unwrap();
+    assert_eq!(page_texts(&s2, id2), ["Page 1", "Page 2", "Page 3"]);
+    let repairs = s2.get(id2).unwrap().repair_log();
+    assert!(repairs.is_empty(), "{repairs:?}");
+}
+
+#[test]
 fn layer_choices_survive_edits() {
     // No layers in the fixture: just make sure refresh keeps working with an empty list and
     // that unknown layers are rejected.
@@ -3765,6 +3777,7 @@ fn signing_saving_trusting_and_commenting_afterwards() {
     let sig = &doc.signatures[0];
     assert_eq!((sig.status, sig.page, sig.date.as_deref()), (SignatureStatus::Unknown, Some(1), Some("D:20270115080000Z")));
     assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
+    assert_eq!(s.save_linearized_bytes(id).unwrap_err(), EditError::Signed);
     // Trusting the signer makes it valid; a later comment is permitted.
     s.set_trusted_certificates(vec![digital_id.certificate.clone()]);
     assert_eq!(s.get(id).unwrap().signatures[0].status, SignatureStatus::Valid);

@@ -1016,6 +1016,32 @@ fn an_in_place_save_reports_a_required_rewrite_as_not_incremental() {
     }
 }
 
+/// Fast Web View: doc_save and doc_optimize write linearized files, and doc_info says whether the
+/// file as saved is linearized, which an incremental update appended later ends.
+#[test]
+fn saving_and_optimizing_for_fast_web_view() {
+    let dir = workdir("fast-web-view");
+    let is_linearized = |name: &str| pdfcraft_cos::is_linearized(&std::fs::read(dir.join(name)).unwrap());
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let info = |a: &mut Automation| ok(a, "doc_info", json!({ "doc": doc }))["linearized"].clone();
+    assert_eq!(info(&mut a), false);
+    let saved = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "web.pdf", "linearize": true }));
+    assert_eq!(saved["incremental"], false);
+    assert!(is_linearized("web.pdf"));
+    assert_eq!(info(&mut a), true);
+    // An edit saved in place is appended, and the file is no longer linearized.
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "Web" }));
+    assert_eq!(ok(&mut a, "doc_save", json!({ "doc": doc }))["incremental"], true);
+    assert!(!is_linearized("web.pdf"));
+    assert_eq!(info(&mut a), false);
+    assert!(matches!(err(&mut a, "doc_save", json!({ "doc": doc, "linearize": true, "full": false })), ToolError::InvalidArgs(_)));
+    // A linearized copy is written with classic tables, and the report says so.
+    assert_eq!(ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "fast.pdf", "fast_web_view": true }))["object_streams"], false);
+    assert_eq!(ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "plain.pdf" }))["object_streams"], true);
+    assert!(is_linearized("fast.pdf") && !is_linearized("plain.pdf"));
+}
+
 /// #1664 repairs the missing page tree on open. The former #1698 failure fixture now
 /// saves successfully, keeping its page and pixels through a full rewrite.
 #[test]

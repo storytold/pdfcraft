@@ -155,7 +155,8 @@ pub struct Settings {
     /// ASCIIHex layer from streams that have one.
     pub flate_unencoded: bool,
     /// Clean Up: pack non-stream objects into compressed object streams with a cross-reference
-    /// stream (PDF 1.5+, §7.5.7–7.5.8). Always off when `compatibility` is [`Compatibility::Pdf1_4`].
+    /// stream (PDF 1.5+, §7.5.7–7.5.8). Always off when `compatibility` is [`Compatibility::Pdf1_4`]
+    /// or with `fast_web_view`.
     pub object_streams: bool,
     /// Clean Up: decode LZW-compressed streams and store them with Flate instead.
     pub lzw_to_flate: bool,
@@ -163,13 +164,16 @@ pub struct Settings {
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
     pub remove_unreferenced_dests: bool,
+    /// Clean Up ▸ Optimize for fast web view: the engine writes the copy linearized.
+    pub fast_web_view: bool,
 }
 
 impl Settings {
     /// Whether `write_full` should pack non-stream objects into compressed object streams:
-    /// enabled when `object_streams` is set and the target version is not PDF 1.4 (§7.5.7).
+    /// enabled when `object_streams` is set, the target version is not PDF 1.4 (§7.5.7) and the
+    /// copy is not linearized (a linearized save writes classic tables).
     pub fn effective_object_streams(&self) -> bool {
-        self.object_streams && self.compatibility != Compatibility::Pdf1_4
+        self.object_streams && self.compatibility != Compatibility::Pdf1_4 && !self.fast_web_view
     }
 }
 
@@ -190,6 +194,8 @@ impl Default for Settings {
             lzw_to_flate: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
+            // Acrobat's preset turns it on; here Reduce File Size would then write larger, classic-table files.
+            fast_web_view: false,
         }
     }
 }

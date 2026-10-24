@@ -232,7 +232,7 @@ fn qpdf_agrees() {
 
 /// A new directory for oracle files, private to this user: an unpredictable name (`RandomState`
 /// is seeded by the operating system), created by this call or not at all.
-fn private_temp_dir(prefix: &str) -> std::path::PathBuf {
+pub(crate) fn private_temp_dir(prefix: &str) -> std::path::PathBuf {
     use std::hash::{BuildHasher, Hasher};
     let mut name = std::collections::hash_map::RandomState::new().build_hasher();
     name.write_u32(std::process::id());

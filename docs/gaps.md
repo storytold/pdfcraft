@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 22: linearized save works headlessly, no desktop control yet; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (gap 6 #3673: Character encoding CJK mapping routes corrected; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -54,7 +55,7 @@ update the numbers.
 | 19 | Preferences mostly missing | UI/UX | 15–25 | [ui-parity.md](ui-parity.md) |
 | 20 | Scanners, GPU page rendering, pen pressure, Read Out Loud | hardware | 25–50 | [hardware-parity.md](hardware-parity.md) |
 | 21 | Compare: filters by Acrobat's finer kinds of change, page ranges, scanned documents | feature | 8–16 | [target-app-parity.md](target-app-parity.md) |
-| 22 | PDF 2.0 extras, linearization, Arlington validation | spec | 20–35 | [pdf-spec-parity.md](pdf-spec-parity.md) |
+| 22 | PDF 2.0 extras, Fast Web View in the app, Arlington validation | spec | 20–35 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 23 | Local AI provider (summarize, ask, alt text, redaction suggestions) | AI | 20–40 | [target-app-parity.md](target-app-parity.md) |
 | 24 | Checklist not diffed against Acrobat's own menus | measurement | 4–8 | [target-app-parity.md](target-app-parity.md) |
 
@@ -372,11 +373,19 @@ update the numbers.
   offset, page ranges, scanned documents.
 - **Estimate:** 8–16 h. **Doc:** [target-app-parity.md](target-app-parity.md).
 
-### 22. PDF 2.0 extras, linearization, Arlington validation
+### 22. PDF 2.0 extras, Fast Web View in the app, Arlington validation
 
 - **Missing:** UTF-8 text strings, associated files (`/AF`), document parts, structure namespaces;
-  linearized save (Fast Web View); deterministic save; structural validation against the Arlington
-  model.
+  deterministic save; structural validation against the Arlington model; Fast Web View in the app
+  (see below).
+- **Linearized save is partial** (`core.linearization`): `cos` writes linearized full saves
+  (ISO 32000-2 Annex F, checked with `qpdf --check-linearization`, encrypted files included) and
+  `doc_save` with `linearize`, `doc_optimize` with `fast_web_view` and `doc_info` expose it
+  headlessly. Still missing: a desktop control (Save As option, Optimizer checkbox, Fast Web View
+  in Document Properties) and Acrobat's "Save As optimizes for Fast Web View" preference; object
+  streams (a linearized file is larger than our default compressed save); the thumbnail hint
+  table, the generic ones other than the outlines' and the overflow hint stream. Signed documents
+  are not linearized, as in Acrobat, since a full rewrite would invalidate the signatures.
 - **Estimate:** 20–35 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 23. Local AI provider
@@ -398,6 +407,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Gap 22: linearized save (Fast Web View) works headlessly through `doc_save`, `doc_optimize` and `doc_info` and is checked by `qpdf --check-linearization`; no desktop control, no object streams in linearized output. Estimates unchanged. |
 | 2026-10-19 | minor | Gap 2: a Type 0 font whose `/ToUnicode` is the name `/Identity-H` or `/Identity-V` (WSCAD) reads its codes as Unicode, so such pages have text to select, find and edit (hayro-interpret patch 44, `view.render-cid-fonts`). Estimates unchanged. |
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
