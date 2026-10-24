@@ -1966,7 +1966,7 @@ fn draw_flags(o: &Object) -> u32 {
 }
 
 /// Whether an annotation of `subtype` with `/F` `flags` keeps its size on the screen, as the
-/// renderer decides it (hayro-interpret patch 51): the NoZoom flag (bit 4) or a note, but never a
+/// renderer decides it (hayro-interpret patch 54): the NoZoom flag (bit 4) or a note, but never a
 /// form field or a link. A real `/F` is truncated, and one that isn't a `u32` counts as no flags.
 fn keeps_screen_size(subtype: &str, flags: Option<&Object>) -> bool {
     let f = match flags {

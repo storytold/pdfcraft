@@ -2309,7 +2309,7 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 }
 
 /// Whether the renderer keeps an annotation of `subtype` the same size on the screen whatever
-/// the zoom (ISO 32000-2 §12.5.3, hayro-interpret patch 51): the NoZoom flag, with `/F` read as
+/// the zoom (ISO 32000-2 §12.5.3, hayro-interpret patch 54): the NoZoom flag, with `/F` read as
 /// the renderer reads it (a real truncated, a value that isn't a `u32` no flags), or a note
 /// (`/Text`), which behaves as if it had the flag (§12.5.6.4). Never a form field or a link.
 fn keeps_screen_size(doc: &Document, d: &Dict, subtype: &str) -> bool {

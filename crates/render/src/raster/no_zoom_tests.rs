@@ -1,6 +1,6 @@
 //! The NoZoom annotation flag (ISO 32000-2 §12.5.3, Table 167 bit 4) and text annotations, which
 //! behave as if it were set (§12.5.6.4): on screen, at a `RenderRequest::magnification`, they keep
-//! their size, pinned at the upper-left corner of `/Rect` (hayro-interpret patch 51).
+//! their size, pinned at the upper-left corner of `/Rect` (hayro-interpret patch 54).
 
 use super::*;
 

@@ -728,7 +728,7 @@ fn is_markup(subtype: &str) -> bool {
 /// `magnification` (the view's zoom, 1.0 = 100%): `rect`, or for a comment that keeps its size on
 /// the screen ([`Annotation::no_zoom`]) `rect` scaled by `1/magnification` about its upper-left
 /// corner, which stays where it is on the page (ISO 32000-2 §12.5.3). The renderer draws it there
-/// (hayro-interpret patch 51). A magnification that isn't finite and greater than zero leaves
+/// (hayro-interpret patch 54). A magnification that isn't finite and greater than zero leaves
 /// `rect` as it is, as the renderer does.
 pub(crate) fn zoomed_rect(a: &Annotation, rect: [f64; 4], magnification: f32) -> [f64; 4] {
     let s = 1.0 / f64::from(magnification);
@@ -742,7 +742,7 @@ pub(crate) fn zoomed_rect(a: &Annotation, rect: [f64; 4], magnification: f32) ->
 /// Where the user-space box `bounds` (a text markup quadrilateral's) of `a` is drawn on a page
 /// shown at `magnification`: for a comment that keeps its size on the screen, scaled by
 /// `1/magnification` about the upper-left corner of `a`'s `/Rect`, as the renderer scales its
-/// appearance (hayro-interpret patch 51), and as it is otherwise. The guards are
+/// appearance (hayro-interpret patch 54), and as it is otherwise. The guards are
 /// [`zoomed_rect`]'s, and a scaled box that isn't finite leaves `bounds` as it is.
 pub(crate) fn zoomed_quad(a: &Annotation, bounds: [f64; 4], magnification: f32) -> [f64; 4] {
     let s = 1.0 / f64::from(magnification);
