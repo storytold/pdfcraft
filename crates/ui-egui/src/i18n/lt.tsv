@@ -2747,6 +2747,21 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	Add printer marks…	Pridėti spaudos žymes…
+	Remove printer marks	Pašalinti spaudos žymes
+	Marks	Žymės
+	All marks	Visos žymės
+	Trim marks	Apkirpimo žymės
+	Bleed marks	Užlaidos žymės
+	Registration marks	Sutapdinimo žymės
+	Colour bars	Spalvų juostos
+	Page information	Puslapio informacija
+	Line weight	Linijos storis
+	Widen the page to make room	Praplėsti puslapį, kad būtų vietos
+	Room on each side	Vieta kiekvienoje pusėje
+	The trim box is kept where it is, so the printed page cuts the same.	Apkirpimo rėmelis lieka vietoje, todėl atspausdintas puslapis kerpamas taip pat.
+	Printer marks added	Spaudos žymės pridėtos
+	printer marks	spaudos žymės
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

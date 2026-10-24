@@ -130,6 +130,7 @@ impl PdfCraftApp {
                         pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
                         pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
                         pdfcraft_engine::MarkKind::Background => tl!("background"),
+                        pdfcraft_engine::MarkKind::PrinterMarks => tl!("printer marks"),
                     };
                     crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
                 }
@@ -404,11 +405,13 @@ impl PdfCraftApp {
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
-            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
+            "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
+            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
                 let kind = match id {
                     "edit.header_footer.remove" => K::HeaderFooter,
                     "edit.watermark.remove" => K::Watermark,
+                    "prepress.marks.remove" => K::PrinterMarks,
                     _ => K::Background,
                 };
                 self.apply_edit(Edit::RemoveMarks { kind });

@@ -2488,6 +2488,21 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Add printer marks…	Nyomdai jelek hozzáadása…
+	Remove printer marks	Nyomdai jelek eltávolítása
+	Marks	Jelek
+	All marks	Minden jel
+	Trim marks	Vágójelek
+	Bleed marks	Kifutójelek
+	Registration marks	Illesztőjelek
+	Colour bars	Színcsíkok
+	Page information	Oldalinformáció
+	Line weight	Vonalvastagság
+	Widen the page to make room	Az oldal szélesítése, hogy legyen hely
+	Room on each side	Hely mindkét oldalon
+	The trim box is kept where it is, so the printed page cuts the same.	A vágókeret a helyén marad, így a nyomtatott oldal ugyanúgy vágható.
+	Printer marks added	Nyomdai jelek hozzáadva
+	printer marks	nyomdai jelek
 	Attach a file…	Fájl csatolása…
 	Delete attachment	Melléklet törlése
 	Attaching files is not available on the web yet	Fájlok csatolása a weben még nem érhető el

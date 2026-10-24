@@ -2402,6 +2402,21 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Add printer marks…	Добавить типографские метки…
+	Remove printer marks	Удалить типографские метки
+	Marks	Метки
+	All marks	Все метки
+	Trim marks	Метки обреза
+	Bleed marks	Метки выпуска под обрез
+	Registration marks	Приводные метки
+	Colour bars	Цветовые шкалы
+	Page information	Сведения о странице
+	Line weight	Толщина линии
+	Widen the page to make room	Расширить страницу, чтобы освободить место
+	Room on each side	Место с каждой стороны
+	The trim box is kept where it is, so the printed page cuts the same.	Рамка обреза остаётся на месте, поэтому напечатанная страница режется так же.
+	Printer marks added	Типографские метки добавлены
+	printer marks	типографские метки
 	Attach a file…	Прикрепить файл…
 	Delete attachment	Удалить вложение
 	Attaching files is not available on the web yet	Прикрепление файлов в веб-версии пока недоступно

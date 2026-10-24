@@ -2701,6 +2701,21 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Add printer marks…	Aggiungi segni di stampa…
+	Remove printer marks	Rimuovi segni di stampa
+	Marks	Segni
+	All marks	Tutti i segni
+	Trim marks	Segni di rifilo
+	Bleed marks	Segni di abbondanza
+	Registration marks	Segni di registro
+	Colour bars	Barre colore
+	Page information	Informazioni pagina
+	Line weight	Spessore linea
+	Widen the page to make room	Allarga la pagina per fare spazio
+	Room on each side	Spazio su ogni lato
+	The trim box is kept where it is, so the printed page cuts the same.	Il riquadro di rifilo resta dov'è, così la pagina stampata si taglia allo stesso modo.
+	Printer marks added	Segni di stampa aggiunti
+	printer marks	segni di stampa
 	Attach a file…	Allega un file…
 	Delete attachment	Elimina allegato
 	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web

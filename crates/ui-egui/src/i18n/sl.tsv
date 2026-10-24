@@ -2494,6 +2494,21 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+	Add printer marks…	Dodaj tiskarske oznake…
+	Remove printer marks	Odstrani tiskarske oznake
+	Marks	Oznake
+	All marks	Vse oznake
+	Trim marks	Oznake za obrez
+	Bleed marks	Oznake za dodatek za obrez
+	Registration marks	Oznake za poravnavo
+	Colour bars	Barvne lestvice
+	Page information	Podatki o strani
+	Line weight	Debelina črte
+	Widen the page to make room	Razširi stran, da bo prostor
+	Room on each side	Prostor na vsaki strani
+	The trim box is kept where it is, so the printed page cuts the same.	Okvir obreza ostane, kjer je, zato se natisnjena stran reže enako.
+	Printer marks added	Tiskarske oznake so dodane
+	printer marks	tiskarske oznake
 	Attach a file…	Priloži datoteko…
 	Delete attachment	Izbriši prilogo
 	Attaching files is not available on the web yet	Prilaganje datotek na spletu še ni na voljo

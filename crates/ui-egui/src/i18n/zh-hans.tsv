@@ -2453,6 +2453,21 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Add printer marks…	添加打印标记…
+	Remove printer marks	移除打印标记
+	Marks	标记
+	All marks	所有标记
+	Trim marks	裁切标记
+	Bleed marks	出血标记
+	Registration marks	套准标记
+	Colour bars	色条
+	Page information	页面信息
+	Line weight	线条粗细
+	Widen the page to make room	加宽页面以留出空间
+	Room on each side	每侧空间
+	The trim box is kept where it is, so the printed page cuts the same.	裁切框保持不变，打印页面的裁切位置相同。
+	Printer marks added	已添加打印标记
+	printer marks	打印标记
 	Attach a file…	附加文件…
 	Delete attachment	删除附件
 	Attaching files is not available on the web yet	网页版尚不支持附加文件

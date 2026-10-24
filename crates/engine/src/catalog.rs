@@ -411,7 +411,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Preflight", "file-check", "preflight.run", Planned("M11")),
                 item("Convert colors", "palette", "prepress.convert_colors", Planned("M11")),
                 item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
-                item("Add printer marks", "ruler", "prepress.marks", Planned("M11")),
+                item("Add printer marks", "ruler", "prepress.marks", Ready),
                 item("Fix hairlines", "minus", "prepress.hairlines", Planned("M11")),
             ],
         }],

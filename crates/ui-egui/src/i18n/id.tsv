@@ -2758,6 +2758,21 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Add printer marks…	Tambahkan tanda printer…
+	All marks	Semua tanda
+	Bleed marks	Tanda bleed
+	Colour bars	Bilah warna
+	Line weight	Ketebalan garis
+	Marks	Tanda
+	Page information	Informasi halaman
+	Printer marks added	Tanda printer ditambahkan
+	Registration marks	Tanda registrasi
+	Remove printer marks	Hapus tanda printer
+	Room on each side	Ruang di setiap sisi
+	The trim box is kept where it is, so the printed page cuts the same.	Kotak pangkas tetap di tempatnya, sehingga halaman cetak terpotong sama persis.
+	Trim marks	Tanda pangkas
+	Widen the page to make room	Lebarkan halaman untuk memberi ruang
+	printer marks	tanda printer
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

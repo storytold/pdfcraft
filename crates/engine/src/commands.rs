@@ -376,6 +376,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
     c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
+    c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),

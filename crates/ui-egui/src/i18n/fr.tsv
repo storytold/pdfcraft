@@ -2489,6 +2489,21 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Add printer marks…	Ajouter des repères d'impression…
+	Remove printer marks	Supprimer les repères d'impression
+	Marks	Repères
+	All marks	Tous les repères
+	Trim marks	Traits de coupe
+	Bleed marks	Repères de fond perdu
+	Registration marks	Repères de montage
+	Colour bars	Gammes de couleurs
+	Page information	Informations sur la page
+	Line weight	Épaisseur de trait
+	Widen the page to make room	Élargir la page pour faire de la place
+	Room on each side	Marge de chaque côté
+	The trim box is kept where it is, so the printed page cuts the same.	La zone de rognage reste en place : la page imprimée se coupe de la même façon.
+	Printer marks added	Repères d'impression ajoutés
+	printer marks	repères d'impression
 	Attach a file…	Joindre un fichier…
 	Delete attachment	Supprimer la pièce jointe
 	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web

@@ -2781,6 +2781,21 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Add printer marks…	Afegeix marques d'impressora…
+	All marks	Totes les marques
+	Bleed marks	Marques de sang
+	Colour bars	Barres de color
+	Line weight	Gruix de línia
+	Marks	Marques
+	Page information	Informació de la pàgina
+	Printer marks added	S'han afegit les marques d'impressora
+	Registration marks	Marques de registre
+	Remove printer marks	Elimina les marques d'impressora
+	Room on each side	Espai a cada costat
+	The trim box is kept where it is, so the printed page cuts the same.	El quadre de retall es manté on és, de manera que la pàgina impresa es talla igual.
+	Trim marks	Marques de retall
+	Widen the page to make room	Amplia la pàgina per fer-hi lloc
+	printer marks	marques d'impressora
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

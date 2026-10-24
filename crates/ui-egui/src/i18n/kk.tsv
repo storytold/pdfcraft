@@ -2487,6 +2487,21 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Add printer marks…	Басып шығару белгілерін қосу…
+	Remove printer marks	Басып шығару белгілерін алып тастау
+	Marks	Белгілер
+	All marks	Барлық белгілер
+	Trim marks	Кесу белгілері
+	Bleed marks	Шығыңқы жиек белгілері
+	Registration marks	Тіркеу белгілері
+	Colour bars	Түс жолақтары
+	Page information	Бет туралы ақпарат
+	Line weight	Сызық қалыңдығы
+	Widen the page to make room	Орын босату үшін бетті кеңейту
+	Room on each side	Әр жақтағы орын
+	The trim box is kept where it is, so the printed page cuts the same.	Кесу жақтауы орнында қалады, сондықтан басылған бет сол күйінде кесіледі.
+	Printer marks added	Басып шығару белгілері қосылды
+	printer marks	басып шығару белгілері
 	Attach a file…	Файл тіркеу…
 	Delete attachment	Тіркемені жою
 	Attaching files is not available on the web yet	Вебте файл тіркеу әзірге қолжетімсіз

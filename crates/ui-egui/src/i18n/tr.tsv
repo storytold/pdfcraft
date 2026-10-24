@@ -2485,6 +2485,21 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Add printer marks…	Yazıcı işaretleri ekle…
+	Remove printer marks	Yazıcı işaretlerini kaldır
+	Marks	İşaretler
+	All marks	Tüm işaretler
+	Trim marks	Kesim işaretleri
+	Bleed marks	Taşma payı işaretleri
+	Registration marks	Hizalama işaretleri
+	Colour bars	Renk çubukları
+	Page information	Sayfa bilgisi
+	Line weight	Çizgi kalınlığı
+	Widen the page to make room	Yer açmak için sayfayı genişlet
+	Room on each side	Her kenarda boşluk
+	The trim box is kept where it is, so the printed page cuts the same.	Kesim kutusu yerinde kalır, böylece basılan sayfa aynı şekilde kesilir.
+	Printer marks added	Yazıcı işaretleri eklendi
+	printer marks	yazıcı işaretleri
 	Attach a file…	Dosya ekle…
 	Delete attachment	Eki sil
 	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor
