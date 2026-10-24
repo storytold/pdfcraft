@@ -2713,3 +2713,4 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Courier ناتوانێت «{c}» ({code}) لە پیشاندەرەکانی تری PDF بکێشێت. Helvetica یان Times هەڵبژێرە.

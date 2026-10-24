@@ -726,7 +726,13 @@ pub(crate) fn undrawable(c: char) -> EditError {
 
 /// The wording of the refusal for text with `c`, which the standard fonts can't draw.
 pub fn undrawable_message(c: char) -> String {
-    format!("the standard fonts can't draw \"{c}\" (U+{:04X}); only Western European characters can be added as text for now", u32::from(c))
+    format!("the standard fonts can't draw \"{c}\" (U+{:04X})", u32::from(c))
+}
+
+/// The wording of the refusal for Courier text with `c`, a letter Helvetica and Times draw but
+/// Acrobat's stand-in for Courier doesn't (review on #3076).
+pub fn courier_undrawable_message(c: char) -> String {
+    format!("Courier can't draw \"{c}\" (U+{:04X}) in other PDF viewers; Helvetica and Times can", u32::from(c))
 }
 
 fn text_op(x: f64, y: f64, text: &str) -> Vec<u8> {

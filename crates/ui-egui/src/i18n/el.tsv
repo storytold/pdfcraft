@@ -2521,3 +2521,4 @@ animation effects	Off	Ανενεργά
 	field names can't contain a period: {name}	τα ονόματα πεδίων δεν μπορούν να περιέχουν τελεία: {name}
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Η Courier δεν μπορεί να εμφανίσει τον χαρακτήρα «{c}» ({code}) σε άλλα προγράμματα προβολής PDF. Επιλέξτε Helvetica ή Times.

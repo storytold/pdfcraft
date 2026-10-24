@@ -657,6 +657,24 @@ fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
     assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
 }
 
+/// #2098: Croatian, Polish and Czech letters typed into Add text are added to the page. Only
+/// š ž (in WinAnsi) were; with č ć đ ł ő ť the box stayed open and the text never reached the page.
+#[test]
+fn typing_central_european_letters_commits_to_page() {
+    for sample in ["čćžšđ ČĆĐ", "Łódź gęślą", "Ďáblice ťuk Győr"] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(2);
+        let p = at(&h, 40.0, 100.0);
+        click(&mut h, p);
+        h.event(egui::Event::Text(sample.into()));
+        h.run_steps(3);
+        let p = at(&h, 40.0, 200.0);
+        click(&mut h, p);
+        assert_eq!(texts(&h), [sample]);
+    }
+}
+
 /// Format text is laid out as Acrobat's: alignment from its flyout, style buttons by name, and
 /// the controls PdfCraft can't apply yet present but disabled.
 /// Format text lines its rows up (#3037): the size list is centred beside the colour swatch and

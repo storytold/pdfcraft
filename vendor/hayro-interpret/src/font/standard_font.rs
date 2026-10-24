@@ -478,6 +478,34 @@ impl StandardKind {
                 (b.center().x - a.center().x + slant, dy)
             }
             Place::Ogonek => (b.x1 - a.x1, 0.0),
+            Place::Same => return Some(path),
+            Place::Stroke => {
+                // Across the ascender, halfway between the x-height and the top, ending a
+                // little past the stem (the stem of d is its right edge).
+                let x_top = outline("x")
+                    .filter(|x| !x.elements().is_empty())
+                    .map_or(b.y1 * 0.7, |x| x.bounding_box().y1);
+                let y = x_top + (b.y1 - x_top) * 0.5;
+                (b.x1 + a.width() * 0.12 - a.x1, y - a.center().y)
+            }
+            Place::Apostrophe => {
+                // A caron written as an apostrophe: after the stem of L (Ľ); otherwise ending at
+                // the letter's standard advance (ď ľ ť, so it doesn't run into the next letter),
+                // its top at the ascender.
+                let ascender = outline("l")
+                    .filter(|l| !l.elements().is_empty())
+                    .map_or(b.y1, |l| l.bounding_box().y1);
+                let x = if base == "L" {
+                    b.x0 + b.width() * 0.45
+                } else {
+                    let advance = self
+                        .code_to_ps_name(code)
+                        .and_then(|n| self.base_font.get_width(n))
+                        .map_or(b.x1 + a.width(), f64::from);
+                    (advance - a.width() * 1.05).max(b.x1 - a.width() * 0.5)
+                };
+                (x - a.x0, b.y1.max(ascender) - a.y1)
+            }
             Place::Above => {
                 let x_top = outline("x")
                     .filter(|x| !x.elements().is_empty())
@@ -612,6 +640,12 @@ enum Place {
     Ogonek,
     /// The font's comma, smaller, under the letter (the stand-ins have no `commaaccent`).
     CommaBelow,
+    /// PdfCraft patch: the base letter's own outline under another name (Đ is drawn as Ð).
+    Same,
+    /// PdfCraft patch: a bar across the ascender (đ).
+    Stroke,
+    /// PdfCraft patch: an apostrophe-shaped caron after the letter (ď ľ ť) or its stem (Ľ).
+    Apostrophe,
 }
 
 /// PdfCraft patch: the stand-ins for the standard fonts (PDFium's Foxit fonts) carry only the
@@ -622,9 +656,8 @@ enum Place {
 /// as Type 1 `seac` composites and the composites of the standard-14 AFM files are built.
 /// The comma-below letters of Romanian (ș ț) and Latvian (ķ ļ ņ ŗ Ģ) are the base letter and the
 /// font's comma, since the stand-ins have no `commaaccent` either; without them a form laid out
-/// from its XFA template drew Romanian ș as a blank and ț with a cedilla. Letters whose accent
-/// isn't a plain one (ď ľ ť, whose caron is an apostrophe beside the letter, and ģ, whose comma
-/// is turned and above it) aren't here.
+/// from its XFA template drew Romanian ș as a blank and ț with a cedilla. ď ľ Ľ ť take an
+/// apostrophe-shaped caron, đ a bar and Đ is Ð. ģ, whose comma is turned and above it, isn't here.
 const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Amacron", "A", "macron", Place::Above),
     ("amacron", "a", "macron", Place::Above),
@@ -641,6 +674,9 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Ccaron", "C", "caron", Place::Above),
     ("ccaron", "c", "caron", Place::Above),
     ("Dcaron", "D", "caron", Place::Above),
+    ("dcaron", "d", "quoteright", Place::Apostrophe),
+    ("Dcroat", "Eth", "Eth", Place::Same),
+    ("dcroat", "d", "macron", Place::Stroke),
     ("Emacron", "E", "macron", Place::Above),
     ("emacron", "e", "macron", Place::Above),
     ("Ebreve", "E", "breve", Place::Above),
@@ -676,6 +712,8 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("lacute", "l", "acute", Place::Above),
     ("Lcommaaccent", "L", "comma", Place::CommaBelow),
     ("lcommaaccent", "l", "comma", Place::CommaBelow),
+    ("Lcaron", "L", "quoteright", Place::Apostrophe),
+    ("lcaron", "l", "quoteright", Place::Apostrophe),
     ("Nacute", "N", "acute", Place::Above),
     ("nacute", "n", "acute", Place::Above),
     ("Ncommaaccent", "N", "comma", Place::CommaBelow),
@@ -707,6 +745,7 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Tcommaaccent", "T", "comma", Place::CommaBelow),
     ("tcommaaccent", "t", "comma", Place::CommaBelow),
     ("Tcaron", "T", "caron", Place::Above),
+    ("tcaron", "t", "quoteright", Place::Apostrophe),
     ("Utilde", "U", "tilde", Place::Above),
     ("utilde", "u", "tilde", Place::Above),
     ("Umacron", "U", "macron", Place::Above),

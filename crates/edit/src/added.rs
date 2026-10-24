@@ -72,7 +72,7 @@ impl Family {
     /// `italic` matters: the item is written out as the oblique/italic face (see [`Family::base_font`]),
     /// whose published widths differ from the upright face (Times-Italic `A` is 611, Times-Roman 722).
     pub fn width(self, s: &str, size: f64, bold: bool, italic: bool) -> f64 {
-        self.std14(bold, italic).text_width(s, size)
+        self.std14(bold, italic).latin_text_width(s, size)
     }
 
     /// The standard-14 face this family means at the given style.
@@ -330,7 +330,8 @@ fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
-/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
+/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and the extra
+/// Latin letters of the standard fonts (`pdfcraft_fonts::latin_drawable`, #2098), and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
@@ -349,9 +350,18 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         return Some(c);
     }
     if !shaped_by_a_face(t) {
+        // Acrobat's stand-in for Courier has no glyphs for the extra letters (it draws boxes,
+        // seen in Acrobat Pro, review on #3076), so Courier keeps refusing them.
+        if t.family == Family::Courier
+            && let Some(c) = t.text.chars().find(|c| pdfcraft_fonts::extra_letter(*c).is_some())
+        {
+            return Some(c);
+        }
         // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
         // that is also how `draw` redraws an existing item, so it's checked that way.
-        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
+        // The extra letters need codes of their own in one encoding for the whole item; a text
+        // that leaves too few would have the last of them written as `?` (review on #3076).
+        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_latin).or_else(|| pdfcraft_fonts::LatinEncoding::first_without_code(&t.text));
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl)| {
@@ -764,12 +774,39 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
     match c {
         Content::Text(t) => {
             let base = t.family.base_font(t.bold, t.italic);
-            let name = font_name(base);
+            // Central European letters (č ć đ ł ő …) the standard fonts have but WinAnsi has no
+            // code for get codes of their own in `/Differences` (#2098). Text that also needs a
+            // shaping face keeps plain WinAnsi for its Latin runs (see `first_undrawable`).
+            let latin = pdfcraft_fonts::LatinEncoding::for_text(&t.text).filter(|_| t.family != Family::Courier);
+            let name = match &latin {
+                Some(e) => format!("{}L{}", font_name(base), e.tag()),
+                None => font_name(base),
+            };
             let mut font = Dict::new();
             font.set(b"Type".to_vec(), Object::name("Font"));
             font.set(b"Subtype".to_vec(), Object::name("Type1"));
             font.set(b"BaseFont".to_vec(), Object::name(base));
-            if t.family != Family::Courier || !t.text.is_ascii() {
+            if let Some(e) = &latin {
+                let mut differences = Vec::new();
+                for (code, glyph) in e.differences() {
+                    differences.push(Object::Int(i64::from(code)));
+                    differences.push(Object::name(glyph));
+                }
+                let mut encoding = Dict::new();
+                encoding.set(b"Type".to_vec(), Object::name("Encoding"));
+                encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+                encoding.set(b"Differences".to_vec(), Object::Array(differences));
+                font.set(b"Encoding".to_vec(), Object::Dict(encoding));
+                // Widths and text by code: Acrobat takes neither from the /Differences glyph
+                // names, so it drew the letters on top of one another and copied them without
+                // their accents (review on #3076).
+                font.set(b"FirstChar".to_vec(), Object::Int(0));
+                font.set(b"LastChar".to_vec(), Object::Int(255));
+                let face = t.family.std14(t.bold, t.italic);
+                font.set(b"Widths".to_vec(), Object::Array(e.widths(face).into_iter().map(Object::Real).collect()));
+                let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), e.to_unicode().as_bytes())));
+                font.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+            } else if t.family != Family::Courier || !t.text.is_ascii() {
                 font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
             }
             let mut fonts = Dict::new();
@@ -803,7 +840,7 @@ fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing:
                 let tw =
                     if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
                 out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
-                out.extend(literal(&win_ansi(line)));
+                out.extend(literal(&latin.as_ref().map_or_else(|| win_ansi(line), |e| e.encode(line))));
                 out.extend_from_slice(b" Tj\n");
             }
             out.extend_from_slice(b"ET\n");
@@ -1022,6 +1059,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 first_undrawable(t)
             };
             if let Some(c) = undrawable {
+                if t.family == Family::Courier && pdfcraft_fonts::extra_letter(c).is_some() {
+                    return Err(EditError::Invalid(crate::courier_undrawable_message(c)));
+                }
                 return Err(crate::undrawable(c));
             }
         }
