@@ -2642,6 +2642,10 @@ impl BlockKey {
     /// Two boxes are the same box within this many points.
     const TOLERANCE: f64 = 0.01;
 
+    pub fn new(text: String, rect: [f64; 4]) -> Self {
+        Self { text, rect }
+    }
+
     pub fn of(block: &TextBlock) -> Self {
         Self { text: block.text.clone(), rect: block.rect }
     }

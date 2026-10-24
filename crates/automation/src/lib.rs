@@ -833,6 +833,7 @@ impl Automation {
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
+            "page_add_qr" => self.page_add_qr(&a)?,
             "content_update" => self.content_update(&a)?,
             "content_delete" => self.content_delete(&a)?,
             "content_copy" => self.content_copy(&a)?,

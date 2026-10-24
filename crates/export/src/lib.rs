@@ -11,9 +11,11 @@
 use std::collections::HashMap;
 
 mod pptx;
+mod xlsx;
 mod zip;
 
 pub use pptx::pptx;
+pub use xlsx::xlsx;
 pub use zip::Zip;
 
 /// A paragraph of a page.
@@ -373,18 +375,101 @@ fn items(pages: &[Page]) -> Vec<Item<'_>> {
             out.push(Item::PageBreak);
         }
         let (tables, consumed) = tables(&p.blocks);
-        // Blocks and images by their top edge, top to bottom.
-        let mut parts: Vec<(f64, f64, Item)> = p
+
+        // Detect 2-column layouts for true paragraph flow
+        let mid_x = p.width * 0.5;
+        let non_table_blocks: Vec<&Block> = p
             .blocks
             .iter()
             .enumerate()
-            .filter(|(bi, _)| !consumed.get(*bi).copied().unwrap_or(false))
-            .map(|(_, b)| (b.rect[3], b.rect[0], Item::Para(b, level(b, body))))
+            .filter(|(bi, _)| !consumed.get(*bi).copied().unwrap_or(false) && !p.blocks[*bi].text.trim().is_empty())
+            .map(|(_, b)| b)
             .collect();
-        parts.extend(tables.into_iter().map(|t| (t.rect[3], t.rect[0], Item::Table(t))));
-        parts.extend(p.images.iter().map(|im| (im.rect[3], im.rect[0], Item::Img(im))));
-        parts.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
-        out.extend(parts.into_iter().map(|x| x.2));
+
+        let is_multi_column = if p.width > 300.0 && non_table_blocks.len() >= 6 {
+            let left: Vec<&Block> = non_table_blocks.iter().copied().filter(|b| b.rect[2] <= mid_x + 15.0).collect();
+            let right: Vec<&Block> = non_table_blocks.iter().copied().filter(|b| b.rect[0] >= mid_x - 15.0).collect();
+            let cross_count = non_table_blocks.iter().filter(|b| b.rect[0] < mid_x - 15.0 && b.rect[2] > mid_x + 15.0).count();
+            // A paragraph-sized block, rather than a label or a value.
+            let paragraph = |b: &Block| b.rect[2] - b.rect[0] >= p.width * 0.18;
+            // Real columns run side by side over the same vertical span...
+            let extent =
+                |v: &[&Block]| v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), b| (lo.min(b.rect[1]), hi.max(b.rect[3])));
+            let (left_lo, left_hi) = extent(&left);
+            let (right_lo, right_hi) = extent(&right);
+            let (overlap, shortest) = if left.is_empty() || right.is_empty() {
+                (0.0, 0.0)
+            } else {
+                (
+                    (left_hi.min(right_hi) - left_lo.max(right_lo)).max(0.0),
+                    (left_hi - left_lo).min(right_hi - right_lo),
+                )
+            };
+            // ... whereas a label/value form pairs each left block with a right block on the same
+            // baseline. Text that is paired row by row is not two columns.
+            let paired = left.iter().filter(|l| right.iter().any(|r| (l.rect[3] - r.rect[3]).abs() <= 6.0)).count();
+            left.len() >= 3
+                && right.len() >= 3
+                && cross_count <= 2
+                && left.iter().filter(|b| paragraph(b)).count() >= 2
+                && right.iter().filter(|b| paragraph(b)).count() >= 2
+                && shortest > 0.0
+                && overlap >= shortest * 0.5
+                && paired * 2 < left.len()
+        } else {
+            false
+        };
+
+        if is_multi_column {
+            // Reconstruct reading order: Top spanning headers -> Left Column -> Right Column -> Bottom spanning footers
+            let mut top_headers = Vec::new();
+            let mut left_col = Vec::new();
+            let mut right_col = Vec::new();
+            let mut bottom_footers = Vec::new();
+
+            for (bi, b) in p.blocks.iter().enumerate() {
+                if consumed.get(bi).copied().unwrap_or(false) || b.text.trim().is_empty() {
+                    continue;
+                }
+                let item = Item::Para(b, level(b, body));
+                if b.rect[0] < mid_x - 15.0 && b.rect[2] > mid_x + 15.0 {
+                    if b.rect[1] > p.height * 0.5 {
+                        top_headers.push((b.rect[3], b.rect[0], item));
+                    } else {
+                        bottom_footers.push((b.rect[3], b.rect[0], item));
+                    }
+                } else if b.rect[2] <= mid_x + 15.0 {
+                    left_col.push((b.rect[3], b.rect[0], item));
+                } else {
+                    right_col.push((b.rect[3], b.rect[0], item));
+                }
+            }
+
+            top_headers.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+            left_col.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+            right_col.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+            bottom_footers.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+
+            out.extend(top_headers.into_iter().map(|x| x.2));
+            out.extend(left_col.into_iter().map(|x| x.2));
+            out.extend(right_col.into_iter().map(|x| x.2));
+            out.extend(tables.into_iter().map(Item::Table));
+            out.extend(p.images.iter().map(Item::Img));
+            out.extend(bottom_footers.into_iter().map(|x| x.2));
+        } else {
+            // Blocks and images by their top edge, top to bottom.
+            let mut parts: Vec<(f64, f64, Item)> = p
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(bi, _)| !consumed.get(*bi).copied().unwrap_or(false))
+                .map(|(_, b)| (b.rect[3], b.rect[0], Item::Para(b, level(b, body))))
+                .collect();
+            parts.extend(tables.into_iter().map(|t| (t.rect[3], t.rect[0], Item::Table(t))));
+            parts.extend(p.images.iter().map(|im| (im.rect[3], im.rect[0], Item::Img(im))));
+            parts.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
+            out.extend(parts.into_iter().map(|x| x.2));
+        }
     }
     out
 }
@@ -514,23 +599,34 @@ fn docx_table(t: &Table) -> String {
     let mut edges = t.cols.clone();
     edges.push(t.rect[2]);
     let widths: Vec<i64> = edges.windows(2).map(|w| ((w[1] - w[0]).max(20.0) * 20.0).round().clamp(60.0, 31680.0) as i64).collect();
-    let mut s = String::from("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>");
+    let mut s = String::from("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/>");
+    s.push_str("<w:tblBorders>");
     for edge in ["top", "left", "bottom", "right", "insideH", "insideV"] {
         s.push_str(&format!("<w:{edge} w:val=\"nil\"/>"));
     }
-    s.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
+    s.push_str("</w:tblBorders>");
+    // Explicit cell margins (padding): top 100dxa (5pt), left 140dxa (7pt), bottom 100dxa (5pt), right 140dxa (7pt).
+    // CT_TblPr orders tblCellMar after tblBorders; Word treats the file as corrupt otherwise.
+    s.push_str("<w:tblCellMar><w:top w:w=\"100\" w:type=\"dxa\"/><w:left w:w=\"140\" w:type=\"dxa\"/><w:bottom w:w=\"100\" w:type=\"dxa\"/><w:right w:w=\"140\" w:type=\"dxa\"/></w:tblCellMar>");
+    s.push_str("</w:tblPr><w:tblGrid>");
     for w in &widths {
         s.push_str(&format!("<w:gridCol w:w=\"{w}\"/>"));
     }
     s.push_str("</w:tblGrid>");
-    for row in &t.rows {
+    for (row_idx, row) in t.rows.iter().enumerate() {
+        let is_header = row_idx == 0;
         s.push_str("<w:tr>");
+        if is_header {
+            s.push_str("<w:trPr><w:tblHeader/></w:trPr>");
+        }
         let mut column = 0usize;
         for c in row {
             let span = if c.span > 1 { format!("<w:gridSpan w:val=\"{}\"/>", c.span) } else { String::new() };
             let w: i64 = widths.iter().skip(column).take(c.span).sum();
+            let is_num = crate::xlsx::parse_numeric(&c.text).is_some();
+            let jc = if is_num { "<w:pPr><w:jc w:val=\"right\"/></w:pPr>" } else { "" };
             s.push_str(&format!(
-                "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
+                "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{jc}{}</w:p></w:tc>",
                 run_xml(&c.text, c.size, c.bold, c.italic, c.color)
             ));
             column = column.saturating_add(c.span);

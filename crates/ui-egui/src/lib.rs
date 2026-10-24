@@ -35,6 +35,7 @@ mod actions_ui;
 mod appearance;
 mod calc_order_ui;
 pub mod canvas;
+pub mod canvas_selection;
 mod chrome;
 mod combine_grid;
 mod image_pick;
@@ -80,6 +81,7 @@ pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod autoscroll;
+pub mod barcode_hud;
 mod bidi;
 pub mod bulk_fields;
 mod dialogs;
@@ -110,6 +112,7 @@ mod pickers;
 pub mod prepare;
 mod print_ui;
 mod signature_drag;
+pub mod symbol_palette;
 pub mod units;
 mod web_print;
 mod word_count_ui;
@@ -159,7 +162,7 @@ mod open_worker_tests;
 
 use pdfcraft_engine::{DocId, Session};
 
-pub use canvas::{DocView, RasterMemory};
+pub use canvas::{DocView, RasterMemory, ReadingBgState};
 pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
@@ -224,6 +227,8 @@ pub enum RightPanel {
 pub enum QuickTool {
     Select,
     Hand,
+    /// Click a barcode or QR code on the page to open its HUD.
+    QrBarcode,
     /// A commenting tool (Add comments).
     Comment(comments::CommentTool),
     Measure(measure_ui::Tool),
@@ -657,6 +662,8 @@ pub struct PdfCraftApp {
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
+    /// Session-persistent eye-strain reading background preference and tint settings.
+    pub reading_bg: ReadingBgState,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.
     #[cfg(target_os = "linux")]
     desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,
@@ -1093,6 +1100,7 @@ impl PdfCraftApp {
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
+            reading_bg: Default::default(),
             #[cfg(target_os = "linux")]
             desktop_theme: None,
             #[cfg(target_os = "linux")]
@@ -1325,6 +1333,7 @@ impl PdfCraftApp {
                 M::FitHeight => view.fit = canvas::Fit::Height,
             }
         }
+
         if v.page > 0 && v.page < pages {
             view.go_to_page(v.page);
         }
@@ -2475,10 +2484,15 @@ impl PdfCraftApp {
     /// paragraph's text removed with no editor over it.
     pub(crate) fn put_down_edit_text(&mut self) {
         self.quick_tool = QuickTool::Select;
-        if let Some(ed) = self.active.and_then(|i| self.views.get_mut(i)).and_then(|v| v.line_editor.take())
-            && let Some(edit) = edit_text_ui::finished_edit(ed)
+        if let Some(i) = self.active
+            && let Some(view) = self.views.get_mut(i)
+            && let Some(ed) = view.line_editor.take()
         {
-            self.apply_edit(edit);
+            let reflow = view.reflow_paragraphs;
+            let blocks = view.edit_lines.get(&ed.page).map(|(_, b)| b.as_slice());
+            if let Some(edit) = edit_text_ui::finished_edit(ed, reflow, blocks) {
+                self.apply_edit(edit);
+            }
         }
     }
 
@@ -3051,6 +3065,7 @@ impl PdfCraftApp {
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
+                    "qr-barcode" => QuickTool::QrBarcode,
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;

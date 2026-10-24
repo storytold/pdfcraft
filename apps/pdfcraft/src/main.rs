@@ -41,6 +41,7 @@ mod reopen;
 mod settings;
 mod single_instance;
 mod text_scale;
+pub mod typographic_export;
 mod updates;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
@@ -358,6 +359,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
     if renderer == eframe::Renderer::Wgpu {
+        native.wgpu_options.surface.desired_maximum_frame_latency = Some(1);
         configure_gpu(&mut native);
     }
     native

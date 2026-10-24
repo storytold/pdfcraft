@@ -410,10 +410,11 @@ fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
     targets.dedup();
     let mut edits: Vec<Edit> = targets
         .into_iter()
-        .map(|t| match t.kind {
-            ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() },
-            ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete },
-            ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        .filter_map(|t| match t.kind {
+            ObjectKind::Text => Some(Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() }),
+            ObjectKind::Image => Some(Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete }),
+            ObjectKind::Added => Some(Edit::DeleteContent { page, index: t.index }),
+            ObjectKind::VectorLine => None,
         })
         .collect();
     if edits.len() > 1 {

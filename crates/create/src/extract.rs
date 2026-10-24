@@ -126,7 +126,10 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h).or_else(|| stencil_mask(doc, s, w, h)) };
     let key = if mask { None } else { colour_key(doc, s) };
+    // A mask that cannot be decoded is dropped: the image exports without transparency, rather
+    // than failing the whole page.
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
+    // Decode arrays: only inversion ([1 0] per component) is honoured, the common case.
     let inverted = (jpeg || mask)
         && s.dict
             .get(b"Decode")
@@ -363,6 +366,13 @@ impl Space {
 const MAX_LOOKUP: usize = 64 << 10;
 
 fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
+    space_bounded(doc, cs, 0)
+}
+
+fn space_bounded(doc: &Document, cs: Option<&Object>, depth: usize) -> Result<Space, String> {
+    if depth > 4 {
+        return Err("colour space nesting exceeded maximum depth".into());
+    }
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
     let unsupported = |n: &[u8]| Err(format!("{} images can't be exported yet", String::from_utf8_lossy(n)));
@@ -396,7 +406,10 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 if nested {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
-                let base = space(doc, a.get(1))?;
+                let base = space_bounded(doc, a.get(1), depth + 1)?;
+                if matches!(base, Space::Indexed(..)) {
+                    return Err("nested indexed colour spaces aren't valid".into());
+                }
                 let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),

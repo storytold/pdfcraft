@@ -567,7 +567,11 @@ impl PdfCraftApp {
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.content.draft.clone(), view.content.select_added, view.line_editor.clone());
         let added = view.content.finish_draft(doc.added());
-        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
+        let reflow = view.reflow_paragraphs;
+        let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(|ed| {
+            let blocks = doc.text_blocks(ed.page);
+            crate::edit_text_ui::finished_edit(ed, reflow, Some(&blocks))
+        });
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
         if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
@@ -1038,7 +1042,10 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::AddImage { page, .. }
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
-        | Edit::ReplaceImage { page, .. } => Some(*page),
+        | Edit::ReplaceImage { page, .. }
+        | Edit::UpdateLineEndpoints { page, .. }
+        | Edit::SetLineProperties { page, .. } => Some(*page),
+        Edit::Batch { edits, .. } => edits.first().and_then(content_page),
         _ => None,
     }
 }
@@ -1231,6 +1238,86 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
     let (first, rest) = path.split_first()?;
     let item = items.get(*first)?;
     if rest.is_empty() { Some(item) } else { bookmark_at(&item.children, rest) }
+}
+
+/// Line Properties panel for vector line editing.
+pub fn line_properties_panel(
+    ui: &mut egui::Ui,
+    view: &mut crate::canvas::DocView,
+) {
+    if !view.vector_edit_mode {
+        return;
+    }
+    let Some(sel) = &view.canvas_selection.selected else {
+        return;
+    };
+    if sel.kind != crate::canvas_selection::SelectableKind::VectorLine || !view.canvas_selection.multi_selected.is_empty() {
+        return;
+    }
+
+    let page = sel.page;
+    let target = pdfcraft_engine::ObjectTarget {
+        kind: pdfcraft_engine::ObjectKind::VectorLine,
+        index: sel.index,
+    };
+
+    ui.group(|ui| {
+        ui.heading("Line Properties");
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Color:");
+            egui::color_picker::color_edit_button_rgb(ui, &mut view.line_properties.color);
+        });
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Width:");
+            ui.add(egui::Slider::new(&mut view.line_properties.width, 0.5..=20.0).step_by(0.5).suffix(" pt"));
+        });
+        ui.add_space(4.0);
+
+        let dash_labels = ["Solid", "Dotted", "Dashed"];
+        let current_dash = dash_labels.get(view.line_properties.dash_idx).copied().unwrap_or(dash_labels[0]);
+        egui::ComboBox::from_label("Dash")
+            .selected_text(current_dash)
+            .show_ui(ui, |ui| {
+                for (idx, label) in dash_labels.iter().enumerate() {
+                    ui.selectable_value(&mut view.line_properties.dash_idx, idx, *label);
+                }
+            });
+        ui.add_space(4.0);
+        ui.add(crate::widgets::checkbox(&mut view.extend_perpendicular_lines, "Extend touching lines (Excel grid)"));
+        ui.add_space(6.0);
+
+        if ui.button(tl!("Apply")).clicked() {
+            let color = Some([
+                view.line_properties.color[0] as f64,
+                view.line_properties.color[1] as f64,
+                view.line_properties.color[2] as f64,
+            ]);
+            let width = Some(view.line_properties.width);
+            let dash = match view.line_properties.dash_idx {
+                1 => Some(vec![3.0, 3.0]),
+                2 => Some(vec![6.0, 3.0]),
+                _ => Some(vec![]),
+            };
+            view.pending_edit = Some(pdfcraft_engine::Edit::SetLineProperties {
+                page,
+                target,
+                color,
+                width,
+                dash,
+            });
+            view.line_properties.last_error = None;
+            ui.ctx().request_repaint();
+        }
+
+        if let Some(err) = &view.line_properties.last_error {
+            ui.add_space(4.0);
+            ui.colored_label(egui::Color32::from_rgb(220, 50, 50), err);
+        }
+    });
 }
 
 #[cfg(test)]

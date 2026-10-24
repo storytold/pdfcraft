@@ -1,5 +1,6 @@
 [package]
 name = "pdfcraft"
+authors = ["Sandeep Sheoran <livesheoranece@gmail.com>"]
 description = "PdfCraft desktop app"
 version.workspace = true
 edition.workspace = true
@@ -25,6 +26,7 @@ serde_json = { workspace = true }
 log = { workspace = true }
 # The log timestamp goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
+pdf-typographic-converter = { version = "0.1.0", path = "../../pdfcraft-typographic-converter" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited

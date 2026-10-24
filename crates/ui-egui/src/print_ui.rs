@@ -673,11 +673,17 @@ impl PdfCraftApp {
                 }
             };
             // The receiver may be gone (the app quit): nothing to report to then.
-            let result = spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
-                let _ = tx.send(JobNews::Sent(sent, sheets));
-                repaint();
-            });
-            let _ = tx.send(JobNews::Done(result.map_err(|e| e.to_string())));
+            let spool_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
+                    let _ = tx.send(JobNews::Sent(sent, sheets));
+                    repaint();
+                })
+            }));
+            let done_news = match spool_result {
+                Ok(result) => JobNews::Done(result.map_err(|e| e.to_string())),
+                Err(_) => JobNews::Done(Err("printing failed: printer spooler or driver encountered a critical fault".into())),
+            };
+            let _ = tx.send(done_news);
             repaint();
         });
         self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });

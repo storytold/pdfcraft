@@ -1441,7 +1441,17 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(d.allows_printing() && d.allows_modification() && d.allows_assembly(), "only copying is withheld");
     assert_eq!(d.check_copying(), Err(EditError::NotPermitted("copying text and images")));
     assert!(d.page_image_file(0, 0).unwrap_err().contains("don't allow copying"));
-    let extracting = ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"];
+    let extracting = [
+        "edit.snapshot",
+        "export.image",
+        "export.text",
+        "export.docx",
+        "export.xlsx",
+        "export.pptx",
+        "export.html",
+        "export.rtf",
+        "export.all_images",
+    ];
     let enabled = |s: &Session, id, c| commands::is_enabled(commands::command(c).unwrap(), s, Some(id));
     for c in extracting {
         assert!(!enabled(&s, id, c), "{c} is disabled");
@@ -4995,6 +5005,9 @@ fn exporting_office_files_keeps_images() {
     assert_eq!(d.export_pages()[0].images.len(), 1);
     let docx = d.export_office(compare::OfficeFormat::Docx);
     assert!(docx.windows(16).any(|w| w == b"word/media/image"));
+    let xlsx = d.export_office(compare::OfficeFormat::Xlsx);
+    assert!(xlsx.starts_with(b"PK\x03\x04"));
+    assert!(xlsx.windows(15).any(|w| w == b"xl/workbook.xml"));
     let pptx = d.export_office(compare::OfficeFormat::Pptx);
     assert!(pptx.windows(15).any(|w| w == b"ppt/media/image"));
     if let Ok(dir) = std::env::var("PDFCRAFT_EXPORT_DIR") {

@@ -519,6 +519,10 @@ fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// Edit a PDF ▸ Format text: for the selected added text (one undoable change), or the style
 /// new text gets.
 fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if let Some((i, _)) = app.active_ids() {
+        let view = &mut app.views[i];
+        crate::editing::line_properties_panel(ui, view);
+    }
     // Editing a paragraph of existing text: its formatting, applied as it changes.
     if let Some((i, _)) = app.active_ids()
         && let Some(ed) = app.views[i].line_editor.clone()
@@ -535,6 +539,8 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .collect();
         let shown = ed.font_shown(&sources);
         let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
+        ui.add_space(6.0);
+        ui.add(crate::widgets::checkbox(&mut app.views[i].reflow_paragraphs, "Reflow paragraphs below"));
         let mut changed = out.changed;
         match out.font {
             Some(FontChoice::KeepSource) => {

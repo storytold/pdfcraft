@@ -188,13 +188,28 @@ impl<'a> FlexArrayIter<'a> {
     #[allow(clippy::should_implement_trait)]
     /// Try reading the next item as a specific object from the array.
     pub fn next<T: ObjectLike<'a>>(&mut self) -> Option<T> {
-        self.reader.skip_white_spaces_and_comments();
-
-        if !self.reader.at_end() {
-            return match self.reader.read_with_context::<MaybeRef<T>>(&self.ctx)? {
-                MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
-                MaybeRef::NotRef(i) => Some(i),
-            };
+        // PdfCraft patch: (#2660) Skip unresolvable or mismatched array elements rather than
+        // aborting iteration early (which truncated /Kids, /Contents, and annotation arrays).
+        while !self.reader.at_end() {
+            self.reader.skip_white_spaces_and_comments();
+            if self.reader.at_end() {
+                break;
+            }
+            let prev_offset = self.reader.offset;
+            if let Some(item) = self.reader.read_with_context::<MaybeRef<T>>(&self.ctx) {
+                let resolved = match item {
+                    MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
+                    MaybeRef::NotRef(i) => Some(i),
+                };
+                if let Some(val) = resolved {
+                    return Some(val);
+                }
+            }
+            if self.reader.offset == prev_offset {
+                if self.reader.read_with_context::<MaybeRef<Object<'a>>>(&self.ctx).is_none() {
+                    let _ = self.reader.read_byte();
+                }
+            }
         }
 
         None

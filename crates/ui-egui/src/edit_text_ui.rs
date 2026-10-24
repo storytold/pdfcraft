@@ -230,17 +230,19 @@ pub struct LineEditor {
     pub block: usize,
     pub text: String,
     original: String,
-    rect: Rect,
+    pub rect: Rect,
     /// The original PDF rectangle, in user space. It is converted again each frame so the editor
     /// stays attached while the page is zoomed, scrolled, or rotated.
-    source_rect: [f32; 4],
+    pub source_rect: [f32; 4],
     multiline: bool,
     source: Option<(pdfcraft_engine::TextBlock, Vec<pdfcraft_engine::TextLine>)>,
     pub(crate) fonts: BTreeMap<String, String>,
     /// The draft extends outside the source container; its frame follows the live draft bounds.
     pub overflow: bool,
+    /// Measured height of the editor's text galley in screen coordinates.
+    pub measured_h: f32,
     /// The initial source container width in screen pixels.
-    max_width: f32,
+    pub max_width: f32,
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     /// Take the keyboard focus on the next frame.
@@ -445,8 +447,7 @@ fn contrast(a: Color32, b: Color32) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// The inline editor's background for text drawn in `text`: white, or a dark box when the text
-/// reads better on that (white or pale text, which would vanish on white).
+/// The inline editor's fallback contrast calculator for text drawn in `text`.
 pub(crate) fn editor_fill(text: Color32) -> Color32 {
     if contrast(text, Color32::WHITE) >= contrast(text, DARK_EDITOR_FILL) { Color32::WHITE } else { DARK_EDITOR_FILL }
 }
@@ -1191,6 +1192,7 @@ fn open_editor(
         source: Some((l.clone(), source_lines)),
         fonts: install_source_fonts(ui.ctx(), doc, page),
         overflow: false,
+        measured_h: b.height(),
         max_width,
         size: (l.size as f32 * scale).clamp(8.0, 72.0),
         focus: true,
@@ -1395,9 +1397,14 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
 
 fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    // An unchanged PDF row already has an authoritative line break. Do not rewrap it
-    // because font rounding or a fallback face measures a fraction of a pixel wider.
-    job.wrap.max_width = if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width };
+    // An unchanged PDF row or single-line text already has an authoritative line break or flows horizontally.
+    // Do not wrap single-line entries down onto adjacent rows.
+    let is_single_line = !ed.multiline && !text.contains('\n');
+    job.wrap.max_width = if (is_single_line && width.is_infinite()) || (text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0) {
+        f32::INFINITY
+    } else {
+        width
+    };
     if let Some((block, lines)) = &ed.source {
         let lefts: Vec<_> = block.rows.iter().filter_map(|r| r.first().and_then(|i| lines.get(*i)).map(|l| l.rect[0])).collect();
         let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1619,21 +1626,32 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // extent: single rows grow toward the page edge, paragraphs rewrap at their
             // source width, and the visible frame grows/shrinks vertically with their rows.
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
-            let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+            let is_single_line = !ed.multiline && !ed.text.contains('\n');
+            let width = if ed.has_changes() || is_single_line {
                 let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
                 let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
-                natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
+                let max_avail = (xf.rect.right() - ed.rect.left() - 10.0 * scale).max(ed.rect.width());
+                natural.max(ed.size * 0.4).min(max_avail).max(ed.rect.width())
             } else {
                 ed.rect.width().max(1.0)
             };
-            ui.set_width(width);
             let measured = editor_galley(ui, ed, &ed.text, scale, width);
+            let edit_width = width.max(measured.rect.width());
+            ed.measured_h = measured.rect.height();
+            ui.set_width(edit_width);
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
-            let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
+            let visible = Rect::from_min_size(ed.rect.min, egui::vec2(edit_width, measured.rect.height().max(1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
-            let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
+            let live = if let Some(bounds) = draft_rect {
+                if (bounds.width() - visible.width()).abs() < 2.0 && (bounds.height() - visible.height()).abs() < 2.0 {
+                    bounds
+                } else {
+                    bounds.union(visible)
+                }
+            } else {
+                visible
+            };
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
@@ -1655,6 +1673,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             let cover = ui.painter().add(egui::Shape::Noop);
             let unchanged = !ed.has_changes();
             egui::Frame::NONE.show(ui, |ui| {
+                // Translucent Acrobat-blue selection highlight, zero black selection boxes
+                ui.visuals_mut().selection.bg_fill = Color32::from_rgba_unmultiplied(0x14, 0x73, 0xE6, 80);
                 // A textless PDF preview, or the page itself, keeps its real background through
                 // the transparent editor. The temporary opaque cover uses the shared caret-contrast rule.
                 ui.visuals_mut().text_cursor.stroke.color = if background_ready || unchanged {
@@ -1662,7 +1682,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 } else {
                     caret_color_on(fill)
                 };
-                let rows = 1;
+                let rows = measured.rows.len().max(ed.text.lines().count()).max(1);
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                     let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
@@ -1675,8 +1695,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .layouter(&mut layouter)
                     .text_color(text_color)
                     .frame(egui::Frame::NONE)
-                    .desired_width(width)
+                    .desired_width(edit_width)
                     .desired_rows(rows)
+                    .clip_text(false)
                     .show(ui);
                 if ed.has_changes() {
                     if background_ready {
@@ -1722,21 +1743,70 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 return None;
             }
             view.applied_editor = Some(ed.clone());
-            finished_edit(ed)
+            let blocks = view.edit_lines.get(&ed.page).map(|(_, b)| b.as_slice());
+            finished_edit(ed, view.reflow_paragraphs, blocks)
         }
         None => None,
     }
 }
 
 /// The edit a closed paragraph editor applies, or `None` when nothing in it changed.
-pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
-    let style = ed.style();
-    (ed.text != ed.original || style != pdfcraft_engine::BlockStyle::default()).then_some(Edit::EditTextBlock {
+pub(crate) fn finished_edit(ed: LineEditor, reflow: bool, page_blocks: Option<&[pdfcraft_engine::TextBlock]>) -> Option<Edit> {
+    let mut style = ed.style();
+    let current_user_w = (ed.source_rect[2] - ed.source_rect[0]).abs() as f64;
+    if current_user_w > 1.0 && style.width.is_none()
+        && let Some((block, _)) = &ed.source
+    {
+        let orig_w = (block.rect[2] - block.rect[0]).abs();
+        if (current_user_w - orig_w).abs() > 1.0 {
+            style.width = Some(current_user_w);
+        }
+    }
+    let text_changed = ed.text != ed.original;
+    let style_changed = style != pdfcraft_engine::BlockStyle::default();
+    if !text_changed && !style_changed {
+        return None;
+    }
+
+    let edit = Edit::EditTextBlock {
         page: ed.page,
         block: ed.block,
         text: ed.text,
         style,
-    })
+    };
+
+    if reflow && let Some(blocks) = page_blocks {
+        let delta_h = (ed.measured_h - ed.rect.height()) as f64;
+        let scale = ((ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01)) as f64;
+        let delta_user_h = delta_h / scale;
+        if delta_user_h.abs() > 2.0 {
+            let threshold_y = ed.source_rect[1] as f64 + 4.0;
+            let mut targets = Vec::new();
+            for (idx, b) in blocks.iter().enumerate() {
+                if idx != ed.block && b.rect[3] <= threshold_y {
+                    targets.push(pdfcraft_engine::ObjectTarget {
+                        kind: pdfcraft_engine::ObjectKind::Text,
+                        index: idx,
+                    });
+                }
+            }
+            if !targets.is_empty() {
+                return Some(Edit::Batch {
+                    label: "Edit text and reflow paragraphs".into(),
+                    edits: vec![
+                        edit,
+                        Edit::MoveObjects {
+                            page: ed.page,
+                            objects: targets,
+                            offset: [0.0, -delta_user_h],
+                        },
+                    ],
+                });
+            }
+        }
+    }
+
+    Some(edit)
 }
 
 /// Caret colour that stays visible on a field filled with `fill`: black on light fills, white on dark ones.
@@ -1801,6 +1871,7 @@ mod tests {
             family_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
+            measured_h: 0.0,
         };
         (app, ed)
     }
@@ -1959,5 +2030,58 @@ mod tests {
         assert_eq!(caret_color_on(Color32::from_rgb(0xFF, 0xFF, 0xF4)), Color32::BLACK);
         assert_eq!(caret_color_on(Color32::BLACK), Color32::WHITE);
         assert_eq!(caret_color_on(DARK_EDITOR_FILL), Color32::WHITE);
+    }
+
+    #[test]
+    fn test_finished_edit_with_and_without_reflow() {
+        let (_app, mut ed) = preview_app();
+        ed.text = "Expanded line 1\nLine 2\nLine 3".into();
+        ed.rect = Rect::from_min_max(Pos2::new(50.0, 100.0), Pos2::new(250.0, 150.0));
+        ed.source_rect = [50.0, 100.0, 250.0, 150.0];
+        ed.measured_h = 90.0;
+
+        let other_block_above = pdfcraft_engine::TextBlock {
+            text: "Above".into(),
+            rect: [50.0, 160.0, 250.0, 200.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Above".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let other_block_below = pdfcraft_engine::TextBlock {
+            text: "Below".into(),
+            rect: [50.0, 20.0, 250.0, 80.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Below".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let page_blocks = vec![other_block_above, other_block_below];
+
+        // 1. When reflow is OFF: returns single Edit::EditTextBlock
+        let no_reflow_edit = finished_edit(ed.clone(), false, Some(&page_blocks));
+        assert!(matches!(no_reflow_edit, Some(Edit::EditTextBlock { .. })));
+
+        // 2. When reflow is ON: returns Edit::Batch with Edit::EditTextBlock and Edit::MoveObjects for block below
+        let reflow_edit = finished_edit(ed, true, Some(&page_blocks));
+        assert!(matches!(reflow_edit, Some(Edit::Batch { ref edits, .. }) if edits.len() == 2));
+        if let Some(Edit::Batch { edits, .. }) = reflow_edit {
+            assert!(matches!(edits[0], Edit::EditTextBlock { .. }));
+            assert!(matches!(&edits[1], Edit::MoveObjects { objects, .. } if objects.len() == 1 && objects[0].index == 1));
+        }
     }
 }

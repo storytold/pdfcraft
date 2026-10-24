@@ -1528,7 +1528,6 @@ impl<'a> Device<'a> for Renderer {
         };
         self.ctx.set_paint_transform(Affine::IDENTITY);
         self.ctx.set_aliasing_threshold(Some(1));
-
         match image {
             hayro_interpret::Image::Stencil(s) => {
                 s.with_stencil(

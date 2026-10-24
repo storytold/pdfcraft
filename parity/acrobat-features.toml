@@ -7061,11 +7061,11 @@ title = "Export to Excel (.xlsx) with table detection"
 area = "J"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["export.xlsx"]
+tools = ["doc_export_office"]
+evidence = ["crates/export/src/xlsx.rs::test_xlsx_package_generation", "crates/export/src/xlsx.rs::test_col_name_mapping", "crates/export/src/xlsx.rs::test_numeric_parsing", "crates/automation/tests/automation.rs::exporting_to_word_html_and_rtf", "crates/engine/src/tests.rs::exporting_office_files_keeps_images"]
+notes = "Full OpenXML SpreadsheetML workbook generation (.xlsx) with table and spatial grid reconstruction, cell formatting, column widths, merge cells, and numeric parsing."
 
 [[feature]]
 id = "create.export-pptx"

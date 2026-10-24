@@ -547,6 +547,10 @@ fn decryption_key_rev1234(
     permissions: u32,
     id: &[u8],
 ) -> Result<Vec<u8>, DecryptionError> {
+    // PdfCraft patch: (#1769) Algorithm 2 standard security key length must be between 5 and 16 bytes (40 to 128 bits).
+    if !(5..=16).contains(&byte_length) {
+        return Err(InvalidEncryption);
+    }
     let mut md5_input = vec![];
 
     // (PDFDocEncoding: see `legacy_passwords`, PdfCraft patch.)

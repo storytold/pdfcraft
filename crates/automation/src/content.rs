@@ -136,6 +136,26 @@ impl Automation {
         Ok(out)
     }
 
+    pub(crate) fn page_add_qr(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let ph = self.doc(a)?.info.pages.get(page).map(|p| p.height as f64).ok_or_else(|| bad("the page no longer exists"))?;
+        let text = a.str("text")?;
+        if text.trim().is_empty() {
+            return Err(bad("text must not be empty"));
+        }
+        let rect = rect_arg(a, "rect")?.map(|r| to_display(r, ph));
+        let matrix = pdfcraft_engine::qr::QrCode::encode_text(text).map_err(|e| failed(e.to_string()))?;
+        let png_bytes = matrix.to_png_bytes(8, 4).map_err(|e| failed(e.to_string()))?;
+        let mut out = self.apply(a, Edit::AddImage { page, rect, name: "QRCode.png".into(), bytes: std::sync::Arc::new(png_bytes) })?;
+        let doc = self.doc(a)?;
+        let mine: Vec<_> = doc.added().iter().filter(|x| x.page == page).collect();
+        out["index"] = json!(mine.len());
+        out["rect"] = json!(mine.last().map(|x| to_view(x.content.rect(), ph)));
+        out["qr_version"] = json!(matrix.size.saturating_sub(17) / 4);
+        out["qr_modules"] = json!(matrix.size);
+        Ok(out)
+    }
+
     fn item(&self, a: &Args) -> Result<(usize, usize, AddedContent, f64)> {
         let page = self.page(a)?;
         let doc = self.doc(a)?;

@@ -2,7 +2,7 @@
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
-use crate::canvas::{DocView, Fit, PageLayout};
+use crate::canvas::{DocView, Fit, PageBackground, PageLayout};
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
 
@@ -566,14 +566,13 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             v.set_zoom(1.0);
                         }
                         if widgets::menu_item(ui, tl!("Zoom to page level"), &key(PAGE_LEVEL)).clicked() {
-                            v.fit = Fit::Page;
+                            v.set_fit(Fit::Page);
                         }
                         if widgets::menu_item(ui, tl!("Fit to width"), &key(FIT_WIDTH)).clicked() {
-                            v.fit = Fit::Width;
+                            v.set_fit(Fit::Width);
                         }
                         if widgets::menu_item(ui, tl!("Fit to height"), "").clicked() {
-                            v.fit = Fit::Height;
-                            v.goto = Some((v.current, 0.0));
+                            v.set_fit(Fit::Height);
                         }
                         if widgets::menu_item(ui, tl!("Fit visible"), &crate::commands::command_shortcut_label(&ctx, "view.fit_visible")).clicked() {
                             ui.close();
@@ -658,6 +657,9 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             // Page navigation cluster at the bottom (as in Acrobat's rail). It is a panel of its own so
             // that in a short window the buttons above scroll instead of running into it (#3282).
+            let (bg_mode, bg_picker_open) = (app.reading_bg.mode, app.reading_bg.picker_open);
+            let mut cycle_bg = false;
+            let mut toggle_picker = false;
             let view = &mut app.views[index];
             let mut page_display = None;
             egui::Panel::bottom("rail-nav").frame(egui::Frame::NONE).show_separator_line(false).resizable(false).show(ui, |ui| {
@@ -689,6 +691,20 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if icons::button(ui, fit_icon, 32.0, false, tl!("Toggle fit page / fit width")).clicked() {
                         view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
                         view.goto = Some((view.current, 0.0));
+                    }
+                    if ui.available_height() >= 220.0 {
+                        let bg_tip = format!("Page background: {} (click to cycle)", bg_mode.label());
+                        let bg_active = bg_mode != PageBackground::Default;
+                        if icons::button(ui, bg_mode.icon(), 32.0, bg_active, &bg_tip).clicked() {
+                            cycle_bg = true;
+                            ui.ctx().request_repaint();
+                        }
+                        if bg_active {
+                            let swatch_tip = "Background color & tint settings";
+                            if icons::button(ui, "palette", 30.0, bg_picker_open, swatch_tip).clicked() {
+                                toggle_picker = true;
+                            }
+                        }
                     }
                     let id = egui::Id::new("zoom-input");
                     let draft = id.with("draft");
@@ -807,8 +823,76 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
             });
+            if cycle_bg {
+                app.reading_bg.mode = app.reading_bg.mode.next();
+                // A preset carries its own tint; the manual picker below still overrides it.
+                app.reading_bg.color = match app.reading_bg.mode {
+                    PageBackground::Light => Color32::from_rgb(0xF5, 0xF2, 0xEB),
+                    PageBackground::Dark => Color32::from_rgb(0x1E, 0x1E, 0x1E),
+                    PageBackground::Default => app.reading_bg.color,
+                };
+            }
+            if toggle_picker {
+                app.reading_bg.picker_open = !app.reading_bg.picker_open;
+            }
             if let Some(id) = page_display {
                 app.execute(id);
+            }
+
+            if app.reading_bg.picker_open {
+                let reading_bg = &mut app.reading_bg;
+                let mut open = reading_bg.picker_open;
+                egui::Window::new("Page Background & Tint").open(&mut open).resizable(false).collapsible(false).default_width(260.0).show(
+                    ui.ctx(),
+                    |ui| {
+                        ui.label(egui::RichText::new("Tint Strength").font(theme::semibold(12.0)));
+                        let mut percent = (reading_bg.tint_strength * 100.0).round();
+                        if ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%").step_by(1.0)).changed() {
+                            reading_bg.tint_strength = (percent / 100.0).clamp(0.0, 1.0);
+                            if reading_bg.mode == PageBackground::Default {
+                                reading_bg.mode = PageBackground::Dark;
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Preset Swatches").font(theme::semibold(12.0)));
+                        let presets = [
+                            ("White", Color32::WHITE),
+                            ("Warm Sepia", Color32::from_rgb(250, 240, 215)),
+                            ("Grey", Color32::from_rgb(160, 160, 160)),
+                            ("Dark Grey", Color32::from_rgb(0x1E, 0x1E, 0x1E)),
+                            ("Pure Black", Color32::BLACK),
+                        ];
+                        ui.horizontal(|ui| {
+                            for (name, color) in presets {
+                                let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                                let is_selected = reading_bg.color == color;
+                                let stroke = if is_selected {
+                                    Stroke::new(2.0, Color32::from_rgb(0x3B, 0x82, 0xF6))
+                                } else {
+                                    Stroke::new(1.0, Color32::from_gray(100))
+                                };
+                                ui.painter().rect(rect, CornerRadius::same(4), color, stroke, egui::StrokeKind::Inside);
+                                if resp.on_hover_text(name).clicked() {
+                                    reading_bg.color = color;
+                                    if reading_bg.mode == PageBackground::Default {
+                                        reading_bg.mode = PageBackground::Dark;
+                                    }
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Custom Color").font(theme::semibold(12.0)));
+                        if egui::color_picker::color_picker_color32(ui, &mut reading_bg.color, egui::color_picker::Alpha::Opaque) {
+                            if reading_bg.mode == PageBackground::Default {
+                                reading_bg.mode = PageBackground::Dark;
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                    },
+                );
+                app.reading_bg.picker_open = open;
             }
         });
 }
