@@ -744,7 +744,7 @@ pub struct PdfCraftApp {
     pub toast: Option<(String, f64)>,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
-    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
+    /// Set when the desktop leaves the window frame to the app (X11, the BSDs, or GNOME on Wayland): the tab strip
     /// carries these window buttons and the window's edges resize it.
     pub window_controls: Option<window_controls::Layout>,
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back

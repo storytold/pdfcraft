@@ -4,7 +4,8 @@
 //! (KDE, Sway, Hyprland, COSMIC). GNOME doesn't: it leaves the frame to the app, and winit then
 //! drew an imitation of GNOME's. Without that protocol PdfCraft turns winit's frame off and draws
 //! a header bar like GNOME's own apps (`pdfcraft_ui_egui::window_controls`), with the window
-//! buttons GNOME's `button-layout` names. X11 window managers always draw the frame.
+//! buttons GNOME's `button-layout` names. X11 and the BSDs draw the header bar too, so the window
+//! buttons sit in the tab strip as in Acrobat; the window manager's frame is not painted above it.
 //!
 //! `PDFCRAFT_TITLEBAR=app` or `=system` overrides the choice.
 
@@ -15,7 +16,7 @@ pub(crate) fn app_drawn() -> Option<Layout> {
     let drawn = match std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) {
         Some("app") => true,
         Some("system") => false,
-        _ => compositor_leaves_frame_to_app(),
+        _ => desktop_leaves_frame_to_app(),
     };
     drawn.then(button_layout)
 }
@@ -33,13 +34,16 @@ fn button_layout() -> Layout {
     Layout::default()
 }
 
-/// Whether this is a Wayland session whose compositor draws no frames.
+/// Whether the session gives no server-side frame: X11 and the BSDs, or a Wayland compositor
+/// that draws none (GNOME).
 #[cfg(target_os = "linux")]
-fn compositor_leaves_frame_to_app() -> bool {
+fn desktop_leaves_frame_to_app() -> bool {
     use wayland_client::Connection;
     use wayland_client::globals::registry_queue_init;
-    // No Wayland compositor: X11, whose window manager draws the frame (winit falls back to it).
-    let Ok(conn) = Connection::connect_to_env() else { return false };
+    // No Wayland compositor: X11 (or a bare console). PdfCraft draws the header bar so its window
+    // buttons sit in the tab strip, as in Acrobat; `PDFCRAFT_TITLEBAR=system` brings the window
+    // manager's frame back.
+    let Ok(conn) = Connection::connect_to_env() else { return true };
     let Ok((globals, _queue)) = registry_queue_init::<Registry>(&conn) else { return false };
     let offered = globals.contents().with_list(|list| list.iter().any(|g| g.interface == "zxdg_decoration_manager_v1"));
     if !offered {
@@ -48,9 +52,11 @@ fn compositor_leaves_frame_to_app() -> bool {
     !offered
 }
 
+/// The BSDs run X11 desktops, so they get the header bar as well. Wayland detection is Linux-only
+/// (the `wayland-client` dependency), and `PDFCRAFT_TITLEBAR=system` still restores the frame.
 #[cfg(not(target_os = "linux"))]
-fn compositor_leaves_frame_to_app() -> bool {
-    false
+fn desktop_leaves_frame_to_app() -> bool {
+    cfg!(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))
 }
 
 #[cfg(target_os = "linux")]

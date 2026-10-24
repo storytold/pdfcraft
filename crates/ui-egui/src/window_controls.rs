@@ -4,8 +4,9 @@
 //! `zxdg_decoration_manager_v1`), so winit drew its own imitation frame. Instead the app turns the
 //! frame off and the tab strip becomes the header bar, as in GNOME's own apps: it carries the
 //! minimize, maximize and close buttons in the desktop's order (GNOME's `button-layout`), and
-//! thin zones along the window's edges resize it. Desktops with server-side decorations (KDE,
-//! Sway, Hyprland, X11) keep their own frame and never get here.
+//! thin zones along the window's edges resize it. X11 and the BSDs do the same, so the window
+//! buttons sit in the tab strip as in Acrobat. Desktops with server-side decorations (KDE, Sway,
+//! Hyprland) keep their own frame and never get here; `PDFCRAFT_TITLEBAR=system` does the same.
 
 use crate::theme::Tokens;
 use egui::viewport::ResizeDirection;
