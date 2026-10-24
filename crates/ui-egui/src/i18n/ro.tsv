@@ -2792,3 +2792,8 @@ theme	Appearance	Aspect
 	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
 	Delete attachment	Ștergere atașament
 	Delete attachment {key}	Ștergere atașament {key}
+	Ink	Cerneală
+	Dark ink	Cerneală închisă
+	Light ink	Cerneală deschisă
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nu a fost găsită nicio semnătură. Reglează sensibilitatea la cerneală sau păstrează imaginea originală.
+	Signature cleanup stopped unexpectedly.	Curățarea semnăturii s-a oprit în mod neașteptat.

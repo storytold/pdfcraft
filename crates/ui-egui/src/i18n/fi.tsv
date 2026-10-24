@@ -2801,3 +2801,8 @@ theme	Appearance	Teema
 	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
 	Delete attachment	Poista liite
 	Delete attachment {key}	Poista liite {key}
+	Ink	Muste
+	Dark ink	Tumma muste
+	Light ink	Vaalea muste
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Allekirjoitusta ei löytynyt. Säädä musteen herkkyyttä tai säilytä alkuperäinen kuva.
+	Signature cleanup stopped unexpectedly.	Allekirjoituksen puhdistus keskeytyi odottamatta.

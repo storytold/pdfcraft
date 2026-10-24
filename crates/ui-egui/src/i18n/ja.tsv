@@ -2531,3 +2531,8 @@ animation effects	Off	オフ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
+	Ink	インク
+	Dark ink	濃いインク
+	Light ink	明るいインク
+	No signature was found. Adjust the ink sensitivity or keep the original image.	署名が見つかりません。インクの感度を調整するか、元の画像を保持してください。
+	Signature cleanup stopped unexpectedly.	署名のクリーンアップが予期せず停止しました。

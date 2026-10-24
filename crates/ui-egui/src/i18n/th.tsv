@@ -2694,3 +2694,8 @@ theme	Appearance	ลักษณะที่ปรากฏ
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	คืนค่ามุมมองล่าสุด (หน้า การซูม และการแสดงหน้า) เมื่อเปิดเอกสารอีกครั้ง
+	Ink	หมึก
+	Dark ink	หมึกสีเข้ม
+	Light ink	หมึกสีอ่อน
+	No signature was found. Adjust the ink sensitivity or keep the original image.	ไม่พบลายเซ็น ปรับความไวของหมึกหรือเก็บภาพต้นฉบับไว้
+	Signature cleanup stopped unexpectedly.	การล้างลายเซ็นหยุดทำงานโดยไม่คาดคิด

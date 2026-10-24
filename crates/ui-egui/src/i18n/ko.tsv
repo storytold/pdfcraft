@@ -2768,3 +2768,8 @@ theme	Appearance	모양
 	Attaching files is not available on the web yet	웹에서는 아직 파일을 첨부할 수 없습니다
 	Delete attachment	첨부 파일 삭제
 	Delete attachment {key}	첨부 파일 {key} 삭제
+	Ink	잉크
+	Dark ink	어두운 잉크
+	Light ink	밝은 잉크
+	No signature was found. Adjust the ink sensitivity or keep the original image.	서명을 찾을 수 없습니다. 잉크 감도를 조정하거나 원본 이미지를 유지하세요.
+	Signature cleanup stopped unexpectedly.	서명 정리가 예기치 않게 중단되었습니다.

@@ -2440,3 +2440,8 @@ animation effects	Off	ఆఫ్
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
+	Ink	సిరా
+	Dark ink	ముదురు సిరా
+	Light ink	లేత సిరా
+	No signature was found. Adjust the ink sensitivity or keep the original image.	సంతకం కనుగొనబడలేదు. సిరా సున్నితత్వాన్ని సర్దుబాటు చేయండి లేదా అసలు చిత్రాన్ని ఉంచండి.
+	Signature cleanup stopped unexpectedly.	సంతకం శుభ్రపరిచే ప్రక్రియ అనుకోకుండా ఆగిపోయింది.

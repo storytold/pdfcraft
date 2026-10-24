@@ -2553,3 +2553,8 @@ animation effects	Off	Вимкнено
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
+	Ink	Чорнило
+	Dark ink	Темне чорнило
+	Light ink	Світле чорнило
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Підпис не знайдено. Налаштуйте чутливість до чорнила або збережіть початкове зображення.
+	Signature cleanup stopped unexpectedly.	Очищення підпису несподівано зупинилося.

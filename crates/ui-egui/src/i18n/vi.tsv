@@ -2798,3 +2798,8 @@ key	Space	Space
 
 # AI-assisted additions for restoring the last view (#1767) (2026-10-16); not reviewed by a native speaker.
 	Restore the last view (page, zoom and page display) when a document is opened again	Khôi phục chế độ xem gần nhất (trang, thu phóng và hiển thị trang) khi mở lại tài liệu
+	Ink	Mực
+	Dark ink	Mực tối
+	Light ink	Mực sáng
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Không tìm thấy chữ ký. Hãy điều chỉnh độ nhạy mực hoặc giữ ảnh gốc.
+	Signature cleanup stopped unexpectedly.	Quá trình làm sạch chữ ký đã dừng đột ngột.

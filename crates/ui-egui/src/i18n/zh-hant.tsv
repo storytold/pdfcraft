@@ -2481,3 +2481,8 @@ animation effects	Off	關
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
+	Ink	墨跡
+	Dark ink	深色墨跡
+	Light ink	淺色墨跡
+	No signature was found. Adjust the ink sensitivity or keep the original image.	找不到簽名。請調整墨跡靈敏度或保留原始影像。
+	Signature cleanup stopped unexpectedly.	簽名清理意外停止。

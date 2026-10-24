@@ -2439,3 +2439,8 @@ animation effects	Off	ປິດ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້
+	Ink	ນ້ຳມຶກ
+	Dark ink	ນ້ຳມຶກສີເຂັ້ມ
+	Light ink	ນ້ຳມຶກສີອ່ອນ
+	No signature was found. Adjust the ink sensitivity or keep the original image.	ບໍ່ພົບລາຍເຊັນ. ປັບຄວາມໄວຕໍ່ນ້ຳມຶກ ຫຼືເກັບຮູບພາບຕົ້ນສະບັບໄວ້.
+	Signature cleanup stopped unexpectedly.	ການລ້າງລາຍເຊັນຢຸດໂດຍບໍ່ຄາດຄິດ.

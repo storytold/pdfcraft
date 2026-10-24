@@ -2,6 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (M5, PR #2164: rebased signature background cleanup onto current main, retaining reviewed alpha handling, worker error localization and upstream signature-pad undo; estimates unchanged)
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M8, #3205 follow-up: labelled Italian international phone numbers with a slash match whole; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
@@ -202,6 +203,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-24 (M14, #4253):** The annotation quick bar remembers Keep tool selected across restarts, including unpinning. Old and malformed settings keep safe defaults; the opt-in UI control channel reads and changes the same preference. Estimates unchanged.
 
 - **2026-10-23 (M7, #4280):** Edit text names each standard stand-in font after its face (`PCEdTimesBold`, ...) instead of one shared `PCEdHelv`. Rewriting a bold paragraph whose subset lacks an accent no longer repoints the paragraphs set earlier in a regular stand-in at Times-Bold, and the editor's frame stays on the paragraph being edited. Pages saved by older builds keep their shared name and are not repaired. Estimates unchanged.
+
+- 2026-10-24 — M5 / PR #2164: refreshed signature cleanup on upstream main; retained ink extraction, reversible imports, UI-thread error localization and drawn-stroke undo. Updated test evidence paths and all current catalogs. The remaining Image/Scan worker limitation is web-only; both desktop tabs already use workers.
 - **2026-10-23 (M8, #3205 follow-up):** Phone-pattern redaction matches complete labelled Italian geographic numbers such as `Tel. +39 0426/123456`, with synthetic matcher and mark/apply/save/reopen coverage; unlabelled international slash numbers remain unsupported.
 - **2026-10-23 (M7, #2636 partial):** A new `PasteContent` edit pastes an added text box or image copied in the same document or another, keeping its style, picture, turns, flips and crop, as one undo step; `content_copy` drives it headlessly. A paste lands beside earlier copies (18 pt steps) and stays on the page. A pasted image reuses its picture object in its own document and after the first paste into another; there a colour profile is dropped and CMYK colours stored losslessly are turned to RGB. The desktop keys and menus follow in separate PRs. Estimates unchanged.
 - **2026-10-23 (M11, optimizer resolution):** Image downsampling includes each page's `/UserUnit` scale, preserving images already below the physical resolution threshold, including shared nested forms.

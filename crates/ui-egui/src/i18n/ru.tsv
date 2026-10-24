@@ -2444,3 +2444,8 @@ animation effects	Off	Выкл
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня
+	Ink	Чернила
+	Dark ink	Тёмные чернила
+	Light ink	Светлые чернила
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Подпись не найдена. Настройте чувствительность к чернилам или сохраните исходное изображение.
+	Signature cleanup stopped unexpectedly.	Очистка подписи неожиданно остановилась.

@@ -2532,3 +2532,8 @@ animation effects	Off	Aus
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Heute
+	Ink	Tinte
+	Dark ink	Dunkle Tinte
+	Light ink	Helle Tinte
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Keine Unterschrift gefunden. Passen Sie die Tintenempfindlichkeit an oder behalten Sie das Originalbild.
+	Signature cleanup stopped unexpectedly.	Die Bereinigung der Unterschrift wurde unerwartet beendet.

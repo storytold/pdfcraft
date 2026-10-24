@@ -2627,3 +2627,8 @@ animation effects	Off	Wyłączone
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj
+	Ink	Atrament
+	Dark ink	Ciemny atrament
+	Light ink	Jasny atrament
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nie znaleziono podpisu. Dostosuj czułość na atrament lub zachowaj oryginalny obraz.
+	Signature cleanup stopped unexpectedly.	Czyszczenie podpisu zostało nieoczekiwanie przerwane.

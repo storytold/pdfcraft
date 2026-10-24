@@ -2494,3 +2494,8 @@ animation effects	Off	Изключени
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Днес
+	Ink	Мастило
+	Dark ink	Тъмно мастило
+	Light ink	Светло мастило
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Не е намерен подпис. Регулирайте чувствителността към мастилото или запазете оригиналното изображение.
+	Signature cleanup stopped unexpectedly.	Почистването на подписа спря неочаквано.

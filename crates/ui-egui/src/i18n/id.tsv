@@ -2769,3 +2769,8 @@ theme	Appearance	Tampilan
 	Attaching files is not available on the web yet	Melampirkan file belum tersedia di web
 	Delete attachment	Hapus lampiran
 	Delete attachment {key}	Hapus lampiran {key}
+	Ink	Tinta
+	Dark ink	Tinta gelap
+	Light ink	Tinta terang
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Tidak ditemukan tanda tangan. Sesuaikan sensitivitas tinta atau pertahankan gambar asli.
+	Signature cleanup stopped unexpectedly.	Pembersihan tanda tangan berhenti secara tidak terduga.

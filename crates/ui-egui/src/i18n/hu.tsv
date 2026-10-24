@@ -2530,3 +2530,8 @@ animation effects	Off	Ki
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
+	Ink	Tinta
+	Dark ink	Sötét tinta
+	Light ink	Világos tinta
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nem található aláírás. Módosítsa a tintaérzékenységet, vagy tartsa meg az eredeti képet.
+	Signature cleanup stopped unexpectedly.	Az aláírás tisztítása váratlanul leállt.

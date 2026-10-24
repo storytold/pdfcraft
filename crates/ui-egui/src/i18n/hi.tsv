@@ -2768,3 +2768,8 @@ theme	Appearance	स्वरूप
 	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
 	Delete attachment	अनुलग्नक हटाएँ
 	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+	Ink	स्याही
+	Dark ink	गहरी स्याही
+	Light ink	हल्की स्याही
+	No signature was found. Adjust the ink sensitivity or keep the original image.	कोई हस्ताक्षर नहीं मिला। स्याही की संवेदनशीलता समायोजित करें या मूल छवि रखें।
+	Signature cleanup stopped unexpectedly.	हस्ताक्षर की सफ़ाई अचानक रुक गई।

@@ -2816,3 +2816,8 @@ theme	Appearance	Aparência
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoje
+	Ink	Tinta
+	Dark ink	Tinta escura
+	Light ink	Tinta clara
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nenhuma assinatura foi encontrada. Ajuste a sensibilidade da tinta ou mantenha a imagem original.
+	Signature cleanup stopped unexpectedly.	A limpeza da assinatura foi interrompida inesperadamente.

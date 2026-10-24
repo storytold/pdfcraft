@@ -2854,3 +2854,8 @@ theme	Appearance	Aspecto
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoy
+	Ink	Tinta
+	Dark ink	Tinta oscura
+	Light ink	Tinta clara
+	No signature was found. Adjust the ink sensitivity or keep the original image.	No se encontró ninguna firma. Ajusta la sensibilidad de la tinta o conserva la imagen original.
+	Signature cleanup stopped unexpectedly.	La limpieza de la firma se detuvo inesperadamente.

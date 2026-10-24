@@ -2518,3 +2518,8 @@ animation effects	Off	Joaktiv
 	Attaching files is not available on the web yet	Bashkëngjitja e skedarëve nuk është ende e disponueshme në ueb
 	Delete attachment	Fshi bashkëngjitjen
 	Delete attachment {key}	Fshi bashkëngjitjen {key}
+	Ink	Bojë
+	Dark ink	Bojë e errët
+	Light ink	Bojë e çelët
+	No signature was found. Adjust the ink sensitivity or keep the original image.	Nuk u gjet asnjë nënshkrim. Rregullo ndjeshmërinë ndaj bojës ose mbaj imazhin origjinal.
+	Signature cleanup stopped unexpectedly.	Pastrimi i nënshkrimit u ndërpre papritur.

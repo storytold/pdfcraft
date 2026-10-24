@@ -562,6 +562,75 @@ fn browse_image(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
     h.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
     h.get_by_label("Browse…").click();
     h.run_steps(3);
+    if h.state().signature_draft.image_import.is_some() {
+        settle_image(h);
+    }
+}
+
+fn settle_image(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..100 {
+        h.run_steps(2);
+        let draft = &h.state().signature_draft;
+        if draft.saved().is_some() || draft.image_import.as_ref().is_some_and(|d| d.problem.is_some()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("image cleanup did not finish");
+}
+
+/// Image import previews transparent ink, restores the original and places an undoable signature.
+#[test]
+fn image_signature_cleanup_removes_haze_and_can_restore_the_original() {
+    let _gpu = gpu();
+    let path = std::env::temp_dir().join(format!("pdfcraft-signature-haze-{}.png", std::process::id()));
+    let mut rgba = image::RgbaImage::from_pixel(200, 80, image::Rgba([0, 0, 128, 5]));
+    for y in 25..55 {
+        for x in 30..170 {
+            if !(28..52).contains(&y) || !(33..167).contains(&x) {
+                rgba.put_pixel(x, y, image::Rgba([10, 10, 10, 220]));
+            }
+        }
+    }
+    rgba.save(&path).unwrap();
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    h.get_by_label("Image").click();
+    h.run_steps(2);
+    browse_image(&mut h, &path);
+    let wait = |h: &mut Harness<'static, PdfCraftApp>| {
+        for _ in 0..100 {
+            h.run_steps(2);
+            if h.state().signature_draft.saved().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("cleanup did not finish: {:?}", h.state().signature_draft);
+    };
+    wait(&mut h);
+    let cleaned = h.state().signature_draft.image.clone().unwrap();
+    assert_eq!(cleaned.rgba()[3], 0);
+    h.get_by_label("Remove background").click();
+    wait(&mut h);
+    assert_eq!(h.state().signature_draft.image.as_ref().unwrap().rgba()[3], 5, "restore source alpha");
+    h.get_by_label("Remove background").click();
+    wait(&mut h);
+    assert_eq!(h.state().signature_draft.image.as_ref().unwrap(), &cleaned, "recompute from source, not previous output");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/signature-cleanup-dialog.png")).unwrap();
+    }
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    click(&mut h, 40.0, 200.0);
+    assert_eq!(items(&h).len(), 1);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.image_signature_preview(0, 0).unwrap().unwrap().image, cleaned);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert!(items(&h).is_empty());
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -1696,7 +1765,8 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     h.state_mut().signature_draft.image = None;
     h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped("photo.png".into(), std::fs::read(&photo).unwrap())));
     h.run_steps(3);
-    assert!(h.state().signature_draft.image.is_some(), "the Image tab takes the picture as it is");
+    settle_image(&mut h);
+    assert!(h.state().signature_draft.image.is_some(), "the Image tab cleans the imported picture");
     h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped("broken.png".into(), b"broken".to_vec())));
     h.run_steps(3);
     assert!(h.state().signature_draft.image.is_some(), "an invalid file keeps the previous draft");

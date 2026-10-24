@@ -2723,3 +2723,8 @@ certificate	Version	وەشان
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ
+	Ink	مەرەکەب
+	Dark ink	مەرەکەبی تاریک
+	Light ink	مەرەکەبی ڕوون
+	No signature was found. Adjust the ink sensitivity or keep the original image.	هیچ واژۆیەک نەدۆزرایەوە. هەستیاریی مەرەکەب ڕێک بخە یان وێنە ڕەسەنەکە بهێڵەرەوە.
+	Signature cleanup stopped unexpectedly.	پاککردنەوەی واژۆکە بە چاوەڕواننەکراوی وەستا.
