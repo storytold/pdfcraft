@@ -6,7 +6,8 @@
 //! longer met its full-height text mask, and the text came out as a faint ghost.
 //!
 //! 16-bit data with an odd byte count, cut short mid-sample or followed by a stray byte, is
-//! drawn too (patch 68): the odd byte was read as half a sample, and the page failed to render.
+//! drawn too (patch 68): the odd byte reads as a 0 sample. Its pair was read past the end of
+//! the data, and the page failed to render.
 
 use super::{image_cache_pdf, render_first_page, rgb_at};
 
@@ -110,8 +111,8 @@ fn a_short_soft_mask_masks_only_the_rows_it_has() {
 }
 
 /// A 16-bit image whose data stops halfway through a sample is drawn, the incomplete sample
-/// missing like the rows after it, as an incomplete 1-, 2- or 4-bit sample is (patch 68).
-/// Reading the sample's second byte past the end of the data panicked, and the page failed.
+/// reading as 0 like the padding after it, as an incomplete 1-, 2- or 4-bit sample does (patch
+/// 68). Reading the sample's second byte past the end of the data panicked, and the page failed.
 #[test]
 fn a_16_bit_image_whose_data_ends_mid_sample_is_drawn() {
     let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 16 /Length 5 >>";
@@ -127,6 +128,16 @@ fn a_16_bit_image_with_a_stray_byte_after_its_data_is_drawn() {
     let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 16 /Length 9 >>";
     let objects: [(&str, &[u8]); 1] = [(image, &[0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0xff, 0xff, b'\n'])];
     assert_eq!(rows(&objects), ["black", "white", "black", "white"]);
+}
+
+/// A 16-bit image whose only data is half a sample is drawn: the incomplete sample reads as 0
+/// and the rest is padded, as a 1-, 2- or 4-bit image with any data at all is drawn. With the
+/// half sample dropped, the image had no data left and was left out.
+#[test]
+fn a_16_bit_image_with_only_half_a_sample_is_drawn() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 16 /Length 1 >>";
+    let objects: [(&str, &[u8]); 1] = [(image, &[0xff])];
+    assert_eq!(rows(&objects), ["black"; 4]);
 }
 
 /// An image with no data at all is still left out, not drawn as a block of padding.
