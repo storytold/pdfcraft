@@ -21,12 +21,13 @@ pub(crate) fn date_letters(picture: &str) -> Option<String> {
 
 /// The date letters of `f`'s data picture, when it holds a whole date. A data picture without a
 /// year, a month or a day can't hold the date the field shows, so such a field's data keeps
-/// ISO dates.
+/// ISO dates. Both numeric and named months can supply the month; a weekday cannot supply
+/// the day of month.
 pub(crate) fn data_date_letters(f: &Field) -> Option<String> {
     let letters = f.data_picture.as_deref().and_then(date_letters)?;
     let tokens = date_tokens(&letters);
     let has = |any: &[&str]| tokens.iter().any(|t| any.contains(&t.as_str()));
-    (has(&["yyyy", "yy"]) && has(&["mm", "m"]) && has(&["dd", "d"])).then_some(letters)
+    (has(&["yyyy", "yy"]) && has(&["mmmm", "mmm", "mm", "m"]) && has(&["dd", "d"])).then_some(letters)
 }
 
 /// A date as the data holds it, written in `data_pattern` (the field's data picture), read as
