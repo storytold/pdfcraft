@@ -2,7 +2,7 @@
 //! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
 
 use egui::{Align, Layout};
-use pdfcraft_engine::js::{JsOutput, Panel, Request};
+use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Panel, Request};
 use pdfcraft_engine::{DocId, Edit};
 
 use crate::theme::{self, Tokens};
@@ -20,6 +20,21 @@ pub struct JsConsole {
 pub struct DocJsDraft {
     pub name: String,
     pub script: String,
+}
+
+/// Most form script messages that wait for the toast; past it, more are left out and counted, and
+/// the toast says how many once the rest have been shown. One run shows at most this many (the
+/// script engine's own limit), so only runs in quick succession reach it.
+const MAX_WAITING_MESSAGES: usize = 100;
+
+/// The icon a script message's toast shows for `icon`.
+pub(crate) fn message_icon(icon: MessageIcon) -> &'static str {
+    match icon {
+        MessageIcon::Error => "circle-x",
+        MessageIcon::Warning => "triangle-alert",
+        MessageIcon::Question => "circle-help",
+        MessageIcon::Status => "info",
+    }
 }
 
 /// What the user is told when a form's scripts were turned off: in a toast as it happens, then
@@ -84,9 +99,45 @@ impl PdfCraftApp {
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
         }
-        if let Some(a) = out.alerts.last() {
-            self.notify(a.clone());
+        self.show_script_messages(out.alerts);
+    }
+
+    /// Show form script messages `messages` in order, each in the toast with its title and icon.
+    /// The first takes the toast at once when it is free; otherwise it waits, like the rest, for
+    /// what the toast shows (another message, or a notice such as the run's own submit request)
+    /// to go ([`Self::next_script_message`]).
+    pub fn show_script_messages(&mut self, messages: Vec<Message>) {
+        let room = MAX_WAITING_MESSAGES.saturating_sub(self.script_messages.len());
+        let left_out = u64::try_from(messages.len().saturating_sub(room)).unwrap_or(u64::MAX);
+        self.script_messages_dropped = self.script_messages_dropped.saturating_add(left_out);
+        self.script_messages.extend(messages.into_iter().take(room));
+        if self.toast.is_none() {
+            self.next_script_message();
         }
+    }
+
+    /// Put the next waiting script message in the toast, or, once none waits, a notice of how many
+    /// the queue had no room for. False when there is neither.
+    pub fn next_script_message(&mut self) -> bool {
+        let Some(m) = self.script_messages.pop_front() else {
+            // Every message the queue held has been shown: say how many it had no room for.
+            if self.script_messages_dropped == 0 {
+                return false;
+            }
+            let n = std::mem::take(&mut self.script_messages_dropped);
+            self.notify(crate::i18n::trn(
+                crate::i18n::current(),
+                n,
+                "{n} more message from the form's scripts was left out.",
+                "{n} more messages from the form's scripts were left out.",
+            ));
+            // Kept with the toast until it has been shown its time (the toast's own expiry).
+            self.toast_dropped = n;
+            return true;
+        };
+        self.toast = Some((m.text.clone(), 0.0));
+        self.toast_script = Some(m);
+        true
     }
 
     /// Run a push button's JavaScript (its Mouse Up action).

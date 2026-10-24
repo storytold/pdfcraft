@@ -742,6 +742,17 @@ pub struct PdfCraftApp {
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
     pub toast: Option<(String, f64)>,
+    /// The form script message the toast shows now, if it shows one: drawn with its title and
+    /// icon (#4293).
+    pub toast_script: Option<pdfcraft_engine::js::Message>,
+    /// Form script messages waiting for the toast, in the order the scripts showed them: each
+    /// takes the toast when the one before it is gone, so every one is seen (#4294).
+    pub script_messages: std::collections::VecDeque<pdfcraft_engine::js::Message>,
+    /// Form script messages the waiting queue had no room for, since the toast last said how many.
+    pub script_messages_dropped: u64,
+    /// The left-out count the toast is saying now ([`Self::next_script_message`]): put back to be
+    /// said again if another notice replaces the toast before it has been shown its time.
+    pub toast_dropped: u64,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
     /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
@@ -1077,6 +1088,7 @@ pub enum OpenOutcome {
 }
 
 impl PdfCraftApp {
+    /// The app with no documents open and its settings at their defaults.
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -1148,6 +1160,10 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             toast: None,
+            toast_script: None,
+            script_messages: std::collections::VecDeque::new(),
+            script_messages_dropped: 0,
+            toast_dropped: 0,
             integrated_titlebar: false,
             window_controls: None,
             system_title_bar: false,
@@ -2309,8 +2325,13 @@ impl PdfCraftApp {
         }
     }
 
+    /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting
+    /// show after it.
     pub fn notify(&mut self, msg: impl Into<String>) {
+        // A left-out count it replaces is said again once the toast is free.
+        self.script_messages_dropped = self.script_messages_dropped.saturating_add(std::mem::take(&mut self.toast_dropped));
         self.toast = Some((msg.into(), 0.0));
+        self.toast_script = None;
     }
 
     /// Notify with a static message in the UI language.

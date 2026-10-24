@@ -12,11 +12,11 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::Limits;
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
     reset_names, resolve_som, run_within,
 };
+use crate::{Limits, Message, MessageButtons, MessageIcon};
 
 /// Deepest nesting the parser follows.
 const MAX_PARSE_DEPTH: usize = 64;
@@ -1457,13 +1457,21 @@ impl Interp<'_> {
         Ok(out)
     }
 
+    /// Call `method` on `base` (`$host`, a form object, an instance manager…) with `args`.
     fn method(&mut self, base: Val, method: &str, args: &[Expr]) -> R<Val> {
         let m = method.to_ascii_lowercase();
         match base {
             Val::Host => match m.as_str() {
                 "messagebox" => {
-                    let t = self.arg_str(args, 0)?;
-                    self.h.push(XfaEffect::MessageBox(t));
+                    // `$host.messageBox(message, title, icon, buttons)`; a missing number is 0,
+                    // the default icon and buttons.
+                    let text = self.arg_str(args, 0)?;
+                    let title = Some(self.arg_str(args, 1)?).filter(|t| !t.is_empty());
+                    let icon = MessageIcon::from_code(Some(self.arg_num(args, 2)?));
+                    let buttons = MessageButtons::from_code(Some(self.arg_num(args, 3)?));
+                    self.h.push(XfaEffect::MessageBox(Message { text, title, icon, buttons }));
+                    // Always OK for now: the viewer can't ask the user and run the script on
+                    // with the answer yet (#4291).
                     Ok(Val::Num(1.0))
                 }
                 "resetdata" => {

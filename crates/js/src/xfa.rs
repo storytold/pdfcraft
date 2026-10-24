@@ -15,7 +15,7 @@ use boa_engine::object::builtins::{JsArray, JsProxy};
 use boa_engine::property::Attribute;
 use boa_engine::{Context, JsObject, JsResult, JsString, JsValue, NativeFunction, Source, js_string};
 
-use crate::{Limits, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, scand, text};
+use crate::{Limits, Message, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, scand, text};
 
 /// What kind of template object a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +112,8 @@ pub enum XfaEffect {
     RemoveInstance {
         som: String,
     },
-    MessageBox(String),
+    /// `xfa.host.messageBox(…)`, or `app.alert(…)` in an XFA form's script.
+    MessageBox(Message),
     /// `xfa.host.resetData()`: the named fields, or every field when empty.
     ResetData(Vec<String>),
     /// `app.execMenuItem("ShowHide…")`: show or hide a side panel.
@@ -219,7 +220,8 @@ fn payload(e: &XfaEffect) -> usize {
             som.len().saturating_add(s.len())
         }
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
-        XfaEffect::MessageBox(s) | XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
+        XfaEffect::MessageBox(m) => m.bytes(),
+        XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
         XfaEffect::Print | XfaEffect::SaveAs | XfaEffect::Beep | XfaEffect::Recalculate | XfaEffect::Relayout | XfaEffect::ShowPanel(_) => 0,
     }
@@ -366,7 +368,7 @@ impl XHost {
     /// `e` with its text cut to the lengths an effect keeps.
     fn clip_effect(&mut self, e: XfaEffect) -> XfaEffect {
         match e {
-            XfaEffect::MessageBox(m) => XfaEffect::MessageBox(clip(m)),
+            XfaEffect::MessageBox(m) => XfaEffect::MessageBox(Message { text: clip(m.text), title: m.title.map(clip), ..m }),
             XfaEffect::LaunchUrl(u) => XfaEffect::LaunchUrl(clip(u)),
             XfaEffect::SetFocus(s) => XfaEffect::SetFocus(clip(s)),
             XfaEffect::ResetData(names) => XfaEffect::ResetData(names.into_iter().map(clip).collect()),
@@ -1133,17 +1135,28 @@ fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<JsValue> {
 
 // ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
 
-/// Records effect `e` on the host, as [`XHost::push`] does.
+/// Records effect `e` on the host, against the run's limits, as [`XHost::push`] does.
 fn effect(ctx: &mut Context, e: XfaEffect) -> JsResult<()> {
     host(ctx)?.borrow_mut().push(e);
     Ok(())
 }
 
-/// `xfa.host.messageBox(message)`: records the message, cut to [`MAX_LINE`] characters, and
-/// returns 1.
+/// `xfa.host.messageBox(message, title, icon, buttons)`: records the message with its title,
+/// icon and buttons, its text and title cut to [`MAX_LINE`] characters, and returns 1.
 fn message_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = clip(text(&arg(args, 0), ctx)?);
+    let m = crate::message_box_message(args, ctx)?;
     effect(ctx, XfaEffect::MessageBox(m))?;
+    // Always OK for now: the viewer can't ask the user and run the script on with the answer
+    // yet (#4291).
+    Ok(JsValue::from(1.0))
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)` in an XFA form's script: the same message box, its
+/// arguments in `app.alert`'s order (or one object with those keys).
+fn app_alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let m = crate::alert_message(args, ctx)?;
+    effect(ctx, XfaEffect::MessageBox(m))?;
+    // The OK button, as for `messageBox` (#4291).
     Ok(JsValue::from(1.0))
 }
 
@@ -1335,7 +1348,7 @@ fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize) ->
     ctx.register_global_property(js_string!("event"), ev, rw)?;
     ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
     let app = ObjectInitializer::new(ctx)
-        .function(NativeFunction::from_fn_ptr(message_box), js_string!("alert"), 4)
+        .function(NativeFunction::from_fn_ptr(app_alert), js_string!("alert"), 4)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 1)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(goto_url), js_string!("launchURL"), 2)

@@ -148,6 +148,111 @@ pub struct DocInfo {
     pub xfa: bool,
 }
 
+/// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
+/// icon, numbered 0 to 3 in the JavaScript for Acrobat API Reference and the XFA
+/// specification alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageIcon {
+    /// 0, the default.
+    #[default]
+    Error,
+    /// 1.
+    Warning,
+    /// 2.
+    Question,
+    /// 3.
+    Status,
+}
+
+impl MessageIcon {
+    /// The icon numbered `code`; a missing, fractional or out-of-range number is the default.
+    pub fn from_code(code: Option<f64>) -> MessageIcon {
+        match whole_code(code) {
+            Some(1) => MessageIcon::Warning,
+            Some(2) => MessageIcon::Question,
+            Some(3) => MessageIcon::Status,
+            _ => MessageIcon::Error,
+        }
+    }
+
+    /// A stable name for tools and logs: `error`, `warning`, `question` or `status`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageIcon::Error => "error",
+            MessageIcon::Warning => "warning",
+            MessageIcon::Question => "question",
+            MessageIcon::Status => "status",
+        }
+    }
+}
+
+/// The buttons a script's message offers: `app.alert`'s `nType` and `xfa.host.messageBox`'s
+/// buttons, numbered 0 to 3 in both references.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageButtons {
+    /// 0, the default.
+    #[default]
+    Ok,
+    /// 1.
+    OkCancel,
+    /// 2.
+    YesNo,
+    /// 3.
+    YesNoCancel,
+}
+
+impl MessageButtons {
+    /// The buttons numbered `code`; a missing, fractional or out-of-range number is the default.
+    pub fn from_code(code: Option<f64>) -> MessageButtons {
+        match whole_code(code) {
+            Some(1) => MessageButtons::OkCancel,
+            Some(2) => MessageButtons::YesNo,
+            Some(3) => MessageButtons::YesNoCancel,
+            _ => MessageButtons::Ok,
+        }
+    }
+
+    /// A stable name for tools and logs: `ok`, `ok_cancel`, `yes_no` or `yes_no_cancel`.
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageButtons::Ok => "ok",
+            MessageButtons::OkCancel => "ok_cancel",
+            MessageButtons::YesNo => "yes_no",
+            MessageButtons::YesNoCancel => "yes_no_cancel",
+        }
+    }
+}
+
+/// `code` as one of the numbers 0 to 3 the references define, when it is exactly one.
+fn whole_code(code: Option<f64>) -> Option<u8> {
+    let c = code.filter(|c| c.is_finite() && c.fract() == 0.0 && (0.0..=3.0).contains(c))?;
+    // In 0..=3 and whole, so the cast is exact.
+    Some(c as u8)
+}
+
+/// A message a script showed (`app.alert`, `xfa.host.messageBox`), with the title, icon and
+/// buttons it asked for. Its text and title are cut to a message's length.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    /// The dialog's title, when the script gave one.
+    pub title: Option<String>,
+    pub icon: MessageIcon,
+    pub buttons: MessageButtons,
+}
+
+impl Message {
+    /// A message with only text: no title, the default icon and an OK button.
+    pub fn plain(text: impl Into<String>) -> Message {
+        Message { text: text.into(), ..Default::default() }
+    }
+
+    /// Bytes of text the message holds, charged to a run's budget.
+    pub(crate) fn bytes(&self) -> usize {
+        self.text.len().saturating_add(self.title.as_ref().map_or(0, String::len))
+    }
+}
+
 /// Something a script asked the viewer to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
@@ -206,7 +311,8 @@ pub struct Outcome {
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
-    pub alerts: Vec<String>,
+    /// The messages the script showed, in order.
+    pub alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// The script's error (syntax error, exception, or a limit reached), if it failed.
@@ -234,7 +340,7 @@ impl Default for Limits {
 struct Host {
     fields: Arc<Vec<FieldState>>,
     changed: BTreeSet<usize>,
-    alerts: Vec<String>,
+    alerts: Vec<Message>,
     console: Vec<String>,
     requests: Vec<Request>,
     doc: DocInfo,
@@ -259,10 +365,12 @@ impl Host {
         }
     }
 
-    fn alert(&mut self, m: String) {
+    /// Keep message `m`, its text and title charged to the run's byte budget, up to
+    /// [`xfa::MAX_ALERTS`] messages.
+    fn alert(&mut self, m: Message) {
         if self.alerts.len() >= xfa::MAX_ALERTS {
             self.dropped = self.dropped.saturating_add(1);
-        } else if self.room(m.len()) {
+        } else if self.room(m.bytes()) {
             self.alerts.push(m);
         }
     }
@@ -650,21 +758,76 @@ fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
 
 /// A message argument: a string, or an object with `cMsg`, cut to a message's length.
 fn message(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<String> {
-    match v.as_object() {
-        Some(o) if !o.is_array() && !o.is_callable() => {
+    match named_params(v, key, ctx)? {
+        Some(o) => {
             let m = o.get(JsString::from(key), ctx)?;
             text_line(&m, ctx)
         }
-        _ => text_line(v, ctx),
+        None => text_line(v, ctx),
     }
 }
 
-/// `app.alert(cMsg)`: records the message, given as a string or as an object with `cMsg`, and
-/// returns 1 (the OK button).
+/// `v` as a method's single object of named parameters: an object (not an array or function)
+/// that has `key`, the parameter every such call names. Any other value, a `new String(…)` or a
+/// caught `Error` included, is the first positional argument, read as text.
+fn named_params(v: &JsValue, key: &str, ctx: &mut Context) -> JsResult<Option<JsObject>> {
+    match v.as_object() {
+        Some(o) if !o.is_array() && !o.is_callable() && o.has_property(JsString::from(key), ctx)? => Ok(Some(o.clone())),
+        _ => Ok(None),
+    }
+}
+
+/// A message's title: `v` as text cut to a message's length, `None` when it is missing or empty.
+fn title(v: &JsValue, ctx: &mut Context) -> JsResult<Option<String>> {
+    Ok(Some(text_line(v, ctx)?).filter(|t| !t.is_empty()))
+}
+
+/// An icon or buttons number: `v` as a number, `None` when it is missing or isn't one (a value
+/// that can't be converted counts as missing, so a bad argument never stops the message).
+fn code(v: &JsValue, ctx: &mut Context) -> Option<f64> {
+    if v.is_undefined() || v.is_null() {
+        return None;
+    }
+    v.to_number(ctx).ok()
+}
+
+/// `app.alert`'s message: `(cMsg, nIcon, nType, cTitle)`, or one object with those keys (as
+/// the JavaScript for Acrobat API Reference allows for every method with named parameters).
+pub(crate) fn alert_message(args: &[JsValue], ctx: &mut Context) -> JsResult<Message> {
+    let first = arg(args, 0);
+    let (text, icon, buttons, t) = match named_params(&first, "cMsg", ctx)? {
+        Some(o) => {
+            let get = |k: &str, ctx: &mut Context| o.get(JsString::from(k), ctx);
+            (get("cMsg", ctx)?, get("nIcon", ctx)?, get("nType", ctx)?, get("cTitle", ctx)?)
+        }
+        None => (first, arg(args, 1), arg(args, 2), arg(args, 3)),
+    };
+    Ok(Message {
+        text: text_line(&text, ctx)?,
+        title: title(&t, ctx)?,
+        icon: MessageIcon::from_code(code(&icon, ctx)),
+        buttons: MessageButtons::from_code(code(&buttons, ctx)),
+    })
+}
+
+/// `xfa.host.messageBox`'s message: `(message, title, icon, buttons)`, as the XFA
+/// specification orders them.
+pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResult<Message> {
+    Ok(Message {
+        text: text_line(&arg(args, 0), ctx)?,
+        title: title(&arg(args, 1), ctx)?,
+        icon: MessageIcon::from_code(code(&arg(args, 2), ctx)),
+        buttons: MessageButtons::from_code(code(&arg(args, 3), ctx)),
+    })
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)`: records the message with its title, icon and buttons,
+/// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let m = message(&arg(args, 0), "cMsg", ctx)?;
+    let m = alert_message(args, ctx)?;
     host(ctx)?.borrow_mut().alert(m);
-    // The OK button.
+    // Always the OK button for now: the viewer can't ask the user and run the script on with
+    // the answer yet (#4291).
     Ok(JsValue::from(1))
 }
 
