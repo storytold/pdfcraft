@@ -246,7 +246,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         used.sort_unstable();
         used.dedup();
         let mut edges: Vec<f64> = used.iter().filter_map(|&i| col_of.get(i).copied().flatten()).filter_map(|ci| cols.get(ci)).map(|c| c.0).collect();
-        edges.sort_by(|a, b| a.total_cmp(b));
+        edges.sort_by(f64::total_cmp);
         edges.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         let ncols = edges.len();
         let ok = (ncols >= 3 || (ncols == 2 && run.len() >= 3)) && ncols <= MAX_COLS;
@@ -313,7 +313,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     let run_edges = |run: &[Vec<(usize, usize)>]| -> Vec<f64> {
         let mut es: Vec<f64> =
             run.iter().flatten().filter_map(|(_, i)| col_of.get(*i).copied().flatten()).filter_map(|ci| cols.get(ci)).map(|c| c.0).collect();
-        es.sort_by(|a, b| a.total_cmp(b));
+        es.sort_by(f64::total_cmp);
         es.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         es
     };

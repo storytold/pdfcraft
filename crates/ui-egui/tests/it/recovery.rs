@@ -43,7 +43,9 @@ fn store(tag: &str) -> RecoveryStore {
 
 /// Snapshot files (the PDF and its sidecar), not the running instances' lock files.
 fn files_in(s: &RecoveryStore) -> usize {
-    std::fs::read_dir(s.dir()).map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) != Some("lock")).count()).unwrap_or(0)
+    std::fs::read_dir(s.dir())
+        .map(|d| d.flatten().filter(|e| e.path().extension().and_then(std::ffi::OsStr::to_str) != Some("lock")).count())
+        .unwrap_or(0)
 }
 
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).

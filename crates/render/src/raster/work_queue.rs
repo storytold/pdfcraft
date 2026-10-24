@@ -220,7 +220,7 @@ impl WorkQueue {
             }
             // The parser validity token can change independently of this queue. Bound the
             // wait so failed generations are released even while the consumer is paused.
-            state = self.changed.wait_timeout(state, Duration::from_millis(25)).unwrap_or_else(|p| p.into_inner()).0;
+            state = self.changed.wait_timeout(state, Duration::from_millis(25)).unwrap_or_else(std::sync::PoisonError::into_inner).0;
         }
     }
 

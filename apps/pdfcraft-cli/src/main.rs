@@ -644,7 +644,7 @@ fn render(args: &[String]) -> Result<(), CliError> {
     let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("96"))?;
     let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
     // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
-    let format = match Path::new(out).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+    let format = match Path::new(out).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).as_deref() {
         Some("png") => Some(ImageFormat::Png),
         Some("jpg" | "jpeg") => Some(ImageFormat::Jpeg { quality: 90 }),
         Some("tif" | "tiff") => Some(ImageFormat::Tiff),
@@ -779,7 +779,7 @@ fn collect(paths: &[&str]) -> Vec<PathBuf> {
             if let Ok(rd) = std::fs::read_dir(&p) {
                 stack.extend(rd.flatten().map(|e| e.path()));
             }
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        } else if p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
             out.push(p);
         }
     }

@@ -213,7 +213,7 @@ fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str, usize) -> String, embed
                 .filter_map(|c| match c {
                     '\r' | '\n' | '\t' | '\u{2028}' | '\u{2029}' | '\u{2009}' | '\u{202F}' | '\u{3000}' => Some(' '),
                     '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => None,
-                    '\u{2011}' | '\u{2010}' | '\u{2012}' | '\u{2013}' => Some('-'),
+                    '\u{2010}'..='\u{2013}' => Some('-'),
                     '\u{2018}' | '\u{2019}' => Some('\''),
                     _ => Some(c),
                 })

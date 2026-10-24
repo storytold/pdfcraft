@@ -657,22 +657,21 @@ impl PdfCraftApp {
                 }
             });
             return;
-        } else {
-            match self.session.extract(id, &pages) {
-                Ok(bytes) => {
-                    let message = if pages.len() == 1 {
-                        tl!("Extracted 1 page").to_string()
-                    } else {
-                        crate::i18n::fmt(tl!("Extracted {n} pages"), &[("n", &pages.len().to_string())])
-                    };
-                    // Save As offers the tab's name, so a name typed in the dialog is kept.
-                    let name = if renamed { format!("{base}.pdf") } else { format!("{stem} (extract).pdf") };
-                    self.open_created(&name, bytes, &message)
-                }
-                Err(e) => {
-                    self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
-                    return;
-                }
+        }
+        match self.session.extract(id, &pages) {
+            Ok(bytes) => {
+                let message = if pages.len() == 1 {
+                    tl!("Extracted 1 page").to_string()
+                } else {
+                    crate::i18n::fmt(tl!("Extracted {n} pages"), &[("n", &pages.len().to_string())])
+                };
+                // Save As offers the tab's name, so a name typed in the dialog is kept.
+                let name = if renamed { format!("{base}.pdf") } else { format!("{stem} (extract).pdf") };
+                self.open_created(&name, bytes, &message)
+            }
+            Err(e) => {
+                self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
+                return;
             }
         }
         if opts.delete {

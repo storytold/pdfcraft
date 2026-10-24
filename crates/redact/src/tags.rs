@@ -108,7 +108,7 @@ pub(crate) fn touched(doc: &Document, resources: &Dict, before: &[u8], after: &[
     let mut changed = HashSet::new();
     let mut empty = HashSet::new();
     let mut budget = MAX_COMPARED;
-    let len = |ranges: &[Range<usize>]| ranges.iter().map(|r| r.len()).fold(0usize, usize::saturating_add);
+    let len = |ranges: &[Range<usize>]| ranges.iter().map(Range::len).fold(0usize, usize::saturating_add);
     for (id, (old, _)) in &b.ids {
         match a.ids.get(id) {
             Some((new, draws)) => {

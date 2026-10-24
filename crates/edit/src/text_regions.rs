@@ -166,8 +166,8 @@ fn opens_with_marker(text: &str) -> bool {
     if !first.is_ascii_digit() && !first.is_ascii_alphabetic() {
         return false;
     }
-    let digits = text.chars().take_while(|c| c.is_ascii_digit()).count();
-    let letters = text.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    let letters = text.chars().take_while(char::is_ascii_alphabetic).count();
     // Both runs are ASCII characters, so their length in characters is their length in bytes:
     // the slice below starts on a character boundary.
     let rest = if digits > 0 {
@@ -178,7 +178,7 @@ fn opens_with_marker(text: &str) -> bool {
         return false;
     };
     let mut after = rest.chars();
-    matches!(after.next(), Some('.' | ')')) && after.next().is_none_or(|c| c.is_whitespace())
+    matches!(after.next(), Some('.' | ')')) && after.next().is_none_or(char::is_whitespace)
 }
 
 /// A row that opens with a list marker opens its own item: joining it to the row above is what

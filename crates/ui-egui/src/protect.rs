@@ -56,8 +56,8 @@ impl ProtectDraft {
 /// A rough password strength, as Acrobat's meter shows (Weak / Medium / Strong).
 pub fn strength(pw: &str) -> (&'static str, Color32) {
     let classes = [
-        pw.chars().any(|c| c.is_lowercase()),
-        pw.chars().any(|c| c.is_uppercase()),
+        pw.chars().any(char::is_lowercase),
+        pw.chars().any(char::is_uppercase),
         pw.chars().any(|c| c.is_ascii_digit()),
         pw.chars().any(|c| !c.is_alphanumeric()),
     ]

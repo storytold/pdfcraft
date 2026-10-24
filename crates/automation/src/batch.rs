@@ -58,7 +58,7 @@ impl<'a> Recipe<'a> {
     }
 
     fn accepts(&self, path: &Path) -> bool {
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+        let extension = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
         extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
     }
 
@@ -70,7 +70,7 @@ impl<'a> Recipe<'a> {
         if input.len() as u64 > MAX_INPUT {
             return Err(failed("input exceeds 512 MiB"));
         }
-        let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| failed("input name is not UTF-8"))?;
+        let name = path.file_name().and_then(std::ffi::OsStr::to_str).ok_or_else(|| failed("input name is not UTF-8"))?;
         let mut bytes = Arc::new(input);
         let mut log = Vec::new();
         for step in &self.steps {

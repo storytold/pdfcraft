@@ -1692,7 +1692,7 @@ fn outline_with(items: &[&str]) -> Document {
         format!("<< /Type /Outlines /First 5 0 R /Count {} >>", items.len()),
         "<< /Type /Page /Parent 2 0 R >>".into(),
     ];
-    b.extend(items.iter().map(|s| s.to_string()));
+    b.extend(items.iter().map(ToString::to_string));
     open(build(&b, "/Root 1 0 R"))
 }
 

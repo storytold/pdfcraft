@@ -145,7 +145,7 @@ pub fn write_atomically_with(
         return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "the file is read-only; save a copy with Save As"));
     }
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
+    let name = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("save");
     // A file that is replaced keeps its permissions (#1790) and group. Unix only: Windows is as before.
     #[cfg(unix)]
     let keep = std::fs::metadata(path).ok();

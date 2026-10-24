@@ -243,13 +243,7 @@ fn components(links: &[Vec<usize>]) -> Vec<usize> {
                 continue;
             }
             if low[v] == index[v] {
-                while let Some(w) = stack.pop() {
-                    on_stack[w] = false;
-                    component[w] = count;
-                    if w == v {
-                        break;
-                    }
-                }
+                pop_component(&mut stack, &mut on_stack, &mut component, v, count);
                 count += 1;
             }
             if let Some(&(parent, _)) = work.last() {
@@ -258,6 +252,16 @@ fn components(links: &[Vec<usize>]) -> Vec<usize> {
         }
     }
     component
+}
+
+fn pop_component(stack: &mut Vec<usize>, on_stack: &mut [bool], component: &mut [usize], v: usize, count: usize) {
+    while let Some(w) = stack.pop() {
+        on_stack[w] = false;
+        component[w] = count;
+        if w == v {
+            break;
+        }
+    }
 }
 
 /// Fix order: every node after the nodes it reads in other components, the earliest ready node

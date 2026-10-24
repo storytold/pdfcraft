@@ -380,7 +380,7 @@ fn table_doc(th: &str, extra: &[&str], kids: &str) -> Document {
         th.to_string(),
         "<< /S /TD >>".to_string(),
     ];
-    objs.extend(extra.iter().map(|s| s.to_string()));
+    objs.extend(extra.iter().map(ToString::to_string));
     pdf(&objs, "")
 }
 

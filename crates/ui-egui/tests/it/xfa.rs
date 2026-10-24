@@ -15,7 +15,7 @@ fn pdf(acroform: &str, extra: &str, objects: &[&str]) -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >>".into(),
         "<< /Length 0 >>\nstream\n\nendstream".into(),
     ];
-    objs.extend(objects.iter().map(|o| o.to_string()));
+    objs.extend(objects.iter().map(ToString::to_string));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {

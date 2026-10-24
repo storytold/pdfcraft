@@ -499,11 +499,11 @@ impl TextDevice {
             return;
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
-            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(char::is_control)));
             return;
         };
-        let originals = drawn.iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())).map(|d| (d.2.text.clone(), d.2.rect)).collect();
-        let at = if text.chars().all(|c| c.is_control()) {
+        let originals = drawn.iter().filter(|d| !d.2.text.chars().all(char::is_control)).map(|d| (d.2.text.clone(), d.2.rect)).collect();
+        let at = if text.chars().all(char::is_control) {
             None
         } else {
             self.glyphs.push(glyph);
@@ -594,7 +594,7 @@ impl TextDevice {
             let text = replacement.to_owned();
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
-            if !text.chars().all(|c| c.is_control()) {
+            if !text.chars().all(char::is_control) {
                 match merge(run, text) {
                     Some(glyph) => self.glyphs.push(glyph),
                     None => self.glyphs.extend_from_slice(run),
@@ -640,7 +640,7 @@ impl<'a> Device<'a> for TextDevice {
                 return;
             }
         };
-        if !replaced && text.chars().all(|c| c.is_control()) {
+        if !replaced && text.chars().all(char::is_control) {
             return;
         }
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em

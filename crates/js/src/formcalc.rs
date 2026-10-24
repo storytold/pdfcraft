@@ -123,7 +123,7 @@ fn lex(src: &str) -> Result<Vec<Token>, String> {
                 }
                 out.push(Token { tok: Tok::Str(s), line });
             }
-            c if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
+            c if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit)) => {
                 let start = i;
                 while i < chars.len() && (chars[i].is_ascii_digit() || (chars[i] == '.' && chars.get(i + 1) != Some(&'.'))) {
                     i += 1;
@@ -760,7 +760,7 @@ fn parse_num(s: &str) -> Option<f64> {
 }
 
 fn is_numeric_text(s: &str) -> bool {
-    s.trim().parse::<f64>().is_ok_and(|v| v.is_finite())
+    s.trim().parse::<f64>().is_ok_and(f64::is_finite)
 }
 
 // ── the evaluator ───────────────────────────────────────────────────────────────────────────
