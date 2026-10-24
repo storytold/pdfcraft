@@ -77,6 +77,9 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             allowed: true,
             hidden: false,
             redact_mark: ([0.0; 3], 1.0),
+            snap: None,
+            snap_comments: None,
+            snap_cycle: None,
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
     }
@@ -548,6 +551,9 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
         allowed: true,
         hidden: false,
         redact_mark: ([0.0; 3], 1.0),
+        snap: None,
+        snap_comments: None,
+        snap_cycle: None,
     };
     let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
     let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);
