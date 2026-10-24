@@ -2735,7 +2735,8 @@ impl PdfCraftApp {
                     }
                     "none" => None,
                     _ => Some(Dialog::About),
-                }
+                };
+                dialogs::discard_inactive_password_drafts(self);
             }
             ("tools", _) => self.all_tools_expanded = value != "collapsed",
             ("palette", _) => {
