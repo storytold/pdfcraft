@@ -113,21 +113,33 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
     }
 }
 
-/// Adwaita's look: a round wash of the text colour, stronger on hover and press, and a 16-point
+/// The colour a button takes under the pointer: macOS's yellow, green and red, a little darker
+/// while pressed.
+fn fill_color(button: Button, pressed: bool) -> Color32 {
+    let base = match button {
+        Button::Minimize => Color32::from_rgb(0xFE, 0xBC, 0x2E),
+        Button::Maximize => Color32::from_rgb(0x28, 0xC8, 0x40),
+        Button::Close => Color32::from_rgb(0xFF, 0x5F, 0x57),
+    };
+    if pressed { base.gamma_multiply(0.75) } else { base }
+}
+
+/// A round button, neutral until hovered and then macOS-coloured, with a 16-point
 /// symbolic glyph drawn with lines (no icon files).
 fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t: &Tokens, response: &egui::Response) {
-    let alpha = if response.is_pointer_button_down_on() {
-        0.28
-    } else if response.hovered() {
-        0.16
+    // At rest a neutral wash of the text colour; under the pointer the button takes macOS's
+    // traffic-light colour (a little darker while pressed) and its glyph turns dark to stay legible.
+    let hovered = response.hovered() || response.is_pointer_button_down_on();
+    if hovered {
+        let fill = fill_color(button, response.is_pointer_button_down_on());
+        painter.circle_filled(rect.center(), BUTTON / 2.0, fill);
     } else {
-        0.10
-    };
-    painter.circle_filled(rect.center(), BUTTON / 2.0, t.text.gamma_multiply(alpha));
+        painter.circle_filled(rect.center(), BUTTON / 2.0, t.text.gamma_multiply(0.10));
+    }
     if response.has_focus() {
         painter.circle_stroke(rect.center(), BUTTON / 2.0 - 0.5, Stroke::new(1.0, t.accent));
     }
-    let stroke = Stroke::new(1.25, t.text);
+    let stroke = Stroke::new(1.25, if hovered { Color32::from_black_alpha(190) } else { t.text });
     // The glyph's 16-point square, its corners on pixel centres so lines stay crisp.
     let c = rect.center();
     let at = |x: f32, y: f32| Pos2::new((c.x - 8.0 + x).round() + 0.5, (c.y - 8.0 + y).round() + 0.5);
@@ -233,7 +245,7 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Button, Layout, ResizeDirection, zones};
+    use super::{Button, Layout, ResizeDirection, fill_color, zones};
     use egui::{Pos2, Rect};
 
     #[test]
@@ -283,6 +295,24 @@ mod tests {
         // A window smaller than its corners gets empty (not inverted) edge zones.
         for (_, r) in super::zones(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), 5.0, 16.0) {
             assert!(r.width() >= 0.0 && r.height() >= 0.0);
+        }
+    }
+
+    #[test]
+    fn hovered_buttons_take_the_traffic_light_colours() {
+        use egui::Color32;
+        assert_eq!(fill_color(Button::Minimize, false), Color32::from_rgb(0xFE, 0xBC, 0x2E));
+        assert_eq!(fill_color(Button::Maximize, false), Color32::from_rgb(0x28, 0xC8, 0x40));
+        assert_eq!(fill_color(Button::Close, false), Color32::from_rgb(0xFF, 0x5F, 0x57));
+        // The three differ, and pressing darkens each one without changing its hue's dominant channel.
+        let all = [Button::Minimize, Button::Maximize, Button::Close];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(fill_color(*a, false), fill_color(*b, false));
+            }
+            let (up, down) = (fill_color(*a, false), fill_color(*a, true));
+            assert!(down.r() <= up.r() && down.g() <= up.g() && down.b() <= up.b());
+            assert_ne!(up, down);
         }
     }
 }
