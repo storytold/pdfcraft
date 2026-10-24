@@ -268,18 +268,6 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     close
 }
 
-/// The label for a [`pdfcraft_render::ReadingColors`] mode name (`mode_name`).
-fn reading_mode_label(mode: &str) -> &'static str {
-    match mode {
-        "black-on-white" => "Black on white",
-        "white-on-black" => "White on black",
-        "yellow-on-black" => "Yellow on black",
-        "green-on-black" => "Green on black",
-        "custom" => "Custom",
-        _ => "Off",
-    }
-}
-
 /// The height the Preferences dialog keeps below its scrolling settings for the OK row: the
 /// button, and the space above it.
 pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
@@ -354,6 +342,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add_space(8.0);
     crate::appearance::preferences_section(ui, app, t);
+    ui.add_space(8.0);
+    reading_colours_section(ui, app, t);
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tl!("Documents and view")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
@@ -438,66 +428,6 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
             .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
     }
-    ui.add_space(8.0);
-    // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
-    // remapped while rendering, and the page clears to the background colour. The preference
-    // is app-wide: every open document follows it, and documents open with it.
-    ui.label(egui::RichText::new(tl!("Reading colours")).font(theme::semibold(13.0)));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Replace document colours"));
-        let mode = app.reading_colors.mode_name();
-        egui::ComboBox::from_id_salt("reading-colors").selected_text(tl!(reading_mode_label(mode))).show_ui(ui, |ui| {
-            for (m, label) in [
-                ("off", "Off"),
-                ("black-on-white", "Black on white"),
-                ("white-on-black", "White on black"),
-                ("yellow-on-black", "Yellow on black"),
-                ("green-on-black", "Green on black"),
-                ("custom", "Custom"),
-            ] {
-                if ui.selectable_label(mode == m, tl!(label)).clicked() {
-                    match m {
-                        "off" => app.set_reading_colors(pdfcraft_render::ReadingColors::default()),
-                        "custom" => {
-                            // Custom starts from the colours already chosen, or black on white.
-                            let colors = app.reading_colors.params.map_or(pdfcraft_render::ReadingColors::BLACK_ON_WHITE, |params| {
-                                pdfcraft_render::ReadingColors { params: Some(params) }
-                            });
-                            app.set_reading_colors(colors);
-                        }
-                        // `parse` knows these names; a preset comes with its own flags.
-                        preset => {
-                            if let Ok(colors) = pdfcraft_render::ReadingColors::parse(preset, None, None, None, None) {
-                                app.set_reading_colors(colors);
-                            }
-                        }
-                    }
-                    ui.close();
-                }
-            }
-        });
-    });
-    if app.reading_colors.params.is_some() {
-        let mut changed = false;
-        if let Some(params) = app.reading_colors.params.as_mut() {
-            ui.horizontal(|ui| {
-                let text = ui.label(tl!("Text"));
-                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
-                let background = ui.label(tl!("Page background"));
-                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
-            });
-            if ui.add(crate::widgets::checkbox(&mut params.only_black, tl!("Only change the colour of black text or line art"))).changed() {
-                changed = true;
-            }
-            if ui.add(crate::widgets::checkbox(&mut params.line_art, tl!("Change the colour of line art as well as text"))).changed() {
-                changed = true;
-            }
-        }
-        if changed {
-            app.set_reading_colors(app.reading_colors);
-        }
-    }
-    ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
@@ -625,4 +555,73 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         .small()
         .color(t.text_muted),
     );
+}
+
+fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
+    // remapped while rendering, and the page clears to the background colour. The preference
+    // is app-wide: every open document follows it, and documents open with it.
+    ui.label(egui::RichText::new(tl!("Reading colours")).font(theme::semibold(13.0)));
+    let mode = app.reading_colors.mode_name();
+    ui.horizontal_wrapped(|ui| {
+        for (name, label, colors) in [
+            ("off", "Off", pdfcraft_render::ReadingColors::default()),
+            ("black-on-white", "Black on white", pdfcraft_render::ReadingColors::BLACK_ON_WHITE),
+            ("white-on-black", "White on black", pdfcraft_render::ReadingColors::WHITE_ON_BLACK),
+            ("yellow-on-black", "Yellow on black", pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
+            ("green-on-black", "Green on black", pdfcraft_render::ReadingColors::GREEN_ON_BLACK),
+        ] {
+            let params = colors.params.unwrap_or(pdfcraft_render::ReadingParams {
+                text: [0, 0, 0],
+                background: [255, 255, 255],
+                only_black: false,
+                line_art: true,
+            });
+            ui.vertical(|ui| {
+                ui.set_width(104.0);
+                let sample = egui::RichText::new("Aa").size(22.0).color(egui::Color32::from_rgb(params.text[0], params.text[1], params.text[2]));
+                let button = egui::Button::new(sample)
+                    .fill(egui::Color32::from_rgb(params.background[0], params.background[1], params.background[2]))
+                    .min_size(egui::vec2(94.0, 44.0))
+                    .stroke(egui::Stroke::new(if mode == name { 2.0 } else { 1.0 }, if mode == name { t.accent } else { t.border }));
+                let response = ui.add(button);
+                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, mode == name, tl!(label)));
+                if response.clicked() {
+                    app.set_reading_colors(colors);
+                }
+                ui.label(tl!(label));
+            });
+        }
+    });
+    ui.add_space(8.0);
+    if let Some(params) = app.reading_colors.params {
+        let text = egui::Color32::from_rgb(params.text[0], params.text[1], params.text[2]);
+        let background = egui::Color32::from_rgb(params.background[0], params.background[1], params.background[2]);
+        egui::Frame::new().fill(background).inner_margin(16.0).show(ui, |ui| {
+            ui.set_min_width((ui.available_width() - 32.0).max(0.0));
+            ui.label(egui::RichText::new(tl!("Reading colours")).size(18.0).color(text));
+            ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).color(text));
+        });
+    } else {
+        ui.label(tl!("Original"));
+    }
+    egui::CollapsingHeader::new(tl!("Custom")).default_open(mode == "custom").show(ui, |ui| {
+        let mut colors = if app.reading_colors.params.is_some() { app.reading_colors } else { pdfcraft_render::ReadingColors::BLACK_ON_WHITE };
+        let mut changed = false;
+        if let Some(params) = colors.params.as_mut() {
+            ui.horizontal(|ui| {
+                let text = ui.label(tl!("Text"));
+                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
+                let background = ui.label(tl!("Page background"));
+                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
+            });
+            changed |= ui.add(crate::widgets::checkbox(&mut params.only_black, tl!("Only change the colour of black text or line art"))).changed();
+            changed |= ui.add(crate::widgets::checkbox(&mut params.line_art, tl!("Change the colour of line art as well as text"))).changed();
+        }
+        if changed {
+            app.set_reading_colors(colors);
+        }
+    });
+    ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
+    ui.add_space(8.0);
 }
