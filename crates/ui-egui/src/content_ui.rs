@@ -66,8 +66,18 @@ pub struct TextDraft {
     /// Display space.
     pub rect: [f64; 4],
     pub text: String,
+    /// The box's formatting; its `text` is what the page has (empty for new text).
     pub style: AddedText,
     pub focus: bool,
+    /// The text the box's own Undo history starts from ([`crate::edit_text_ui::forget_typing_before`]).
+    pub typing_from: Option<String>,
+}
+
+impl TextDraft {
+    /// Typing the page doesn't have yet: Undo takes it back in the box before touching the document.
+    pub(crate) fn has_unapplied_typing(&self) -> bool {
+        self.text != self.style.text
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -394,7 +404,7 @@ pub(crate) fn page_input(
             let page_width = info.pages.get(page).map_or(f64::INFINITY, |p| p.width as f64);
             let rect = [at[0], at[1] - style.size * 1.2, (at[0] + 200.0).min(page_width), at[1]];
             style.rect = rect;
-            cv.draft = Some(TextDraft { page, index: None, rect, text: String::new(), style, focus: true });
+            cv.draft = Some(TextDraft { page, index: None, rect, text: String::new(), style, focus: true, typing_from: None });
             consumed = true;
             if typed.is_some() {
                 view.pending_edit = typed;
@@ -432,7 +442,7 @@ pub(crate) fn page_input(
         if let Some(edit) = cv.finish_draft(added) {
             view.pending_edit = Some(edit);
         }
-        cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true });
+        cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true, typing_from: None });
         cv.selected = Some((page, i));
         consumed = true;
         return consumed;
@@ -508,6 +518,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
 pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+    let doc_id = view.id;
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
     let zoom = xf.rect.width() / xf.pw.max(1.0);
@@ -583,6 +594,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 let job = spaced_job(text.as_str(), &font, Color32::from_rgb(cr, cg, cb), letter_spacing, wrap_width, halign);
                 ui.fonts_mut(|f| f.layout_job(job))
             };
+            let input = input_id();
+            crate::edit_text_ui::forget_typing_before(ui.ctx(), input, doc_id, &mut t.typing_from, &t.style.text);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let mut edit = egui::TextEdit::multiline(&mut t.text)
@@ -593,7 +606,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
                     .text_color(Color32::from_rgb(cr, cg, cb))
                     .hint_text(tl!("Type text"))
-                    .id_salt("added-text-edit");
+                    .id(input);
                 if letter_spacing != 0.0 {
                     edit = edit.layouter(&mut spaced);
                 }
@@ -653,10 +666,19 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
         Some(i) => {
             let (_, a) = on_page(added, d.page).into_iter().find(|(k, _)| *k == i)?;
             let AddedContent::Text(old) = &a.content else { return None };
+            // Unchanged is no edit, even for text saved with trailing spaces the trim would drop.
+            if *old == (AddedText { text: d.text.clone(), rect: d.rect, ..d.style.clone() }) {
+                return None;
+            }
             let updated = AddedText { text, rect: d.rect, ..d.style };
             (*old != updated).then_some(Edit::UpdateContent { page: d.page, index: i, content: AddedContent::Text(updated) })
         }
     }
+}
+
+/// The added-text box's text field.
+pub(crate) fn input_id() -> egui::Id {
+    egui::Id::new("added-text-input")
 }
 
 /// How to use the tools, under the Add content list.
