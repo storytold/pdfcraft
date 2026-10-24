@@ -110,7 +110,7 @@ fn images_are_measured_where_drawn_and_downsampled() {
     let b = stream(&doc, big);
     assert_eq!((b.dict.int(b"Width"), b.dict.int(b"Height"), b.dict.name(b"Filter")), (Some(300), Some(300), Some(&b"DCTDecode"[..])));
     let m = stream(&doc, masked);
-    let sm = stream(&doc, mask);
+    let sm = stream(&doc, m.dict.reference(b"SMask").unwrap());
     assert_eq!((m.dict.int(b"Width"), sm.dict.int(b"Width")), (Some(150), Some(150)), "the soft mask follows its image");
     assert_eq!(sm.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
     assert_eq!(stream(&doc, small).dict.int(b"Width"), Some(100));
@@ -129,6 +129,25 @@ fn images_are_measured_where_drawn_and_downsampled() {
     // Top-left image area (36..180 x 600..744 user → y from the top 48..192): drawn, not white.
     let i = ((100 * out.width + 100) * 4) as usize;
     assert_ne!(&out.rgba[i..i + 3], &[255, 255, 255]);
+}
+
+#[test]
+fn a_soft_mask_shared_with_an_image_that_is_not_resized_stays_as_it_was() {
+    let mut doc = Document::new_empty();
+    let mask = image(&mut doc, 800, 800, 1, false, None);
+    let big = image(&mut doc, 800, 800, 3, false, Some(mask));
+    let small = image(&mut doc, 800, 800, 3, false, Some(mask));
+    let mask_before = stream(&doc, mask);
+    // `big` is drawn at 800 ppi and is downsampled; `small` is drawn at 100 ppi and is left alone.
+    page(&mut doc, &[("A", big), ("B", small)], "q 72 0 0 72 36 36 cm /A Do Q q 576 0 0 576 36 200 cm /B Do Q");
+    optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, big).dict.int(b"Width"), Some(150));
+    let own = stream(&doc, big).dict.reference(b"SMask").unwrap();
+    assert_ne!(own, mask, "the resized image gets its own mask");
+    assert_eq!(stream(&doc, own).dict.int(b"Width"), Some(150));
+    assert_eq!(stream(&doc, small).dict.reference(b"SMask"), Some(mask));
+    let kept = stream(&doc, mask);
+    assert_eq!((kept.dict.int(b"Width"), kept.raw), (Some(800), mask_before.raw));
 }
 
 #[test]
