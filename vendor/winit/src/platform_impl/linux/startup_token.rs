@@ -7,12 +7,13 @@
 //! GNOME kept the busy cursor until its 15-second timeout and the window opened without focus.
 //!
 //! The first window the process creates without a token now takes the one in the environment.
-//! Later windows never do: the token is spent once a window has handed it back. The variable is
-//! left in the environment, unlike `reset_activation_token_env`, because changing the
-//! environment while other threads may read it is unsound, and an application can start
-//! threads before its first window.
+//! Later windows never do: the token is spent once a window has handed it back, or once the
+//! first window exists. A window that fails before handing it back releases it, so a retry
+//! still clears the busy cursor. The variable is left in the environment, unlike
+//! `reset_activation_token_env`, because changing the environment while other threads may read
+//! it is unsound, and an application can start threads before its first window.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::window::ActivationToken;
 
@@ -21,21 +22,68 @@ use crate::window::ActivationToken;
 /// fail window creation.
 const MAX_TOKEN_LEN: usize = 1024;
 
-static TAKEN: AtomicBool = AtomicBool::new(false);
+/// No window has claimed the launcher's token.
+const FREE: u8 = 0;
+/// A window being created holds it.
+const RESERVED: u8 = 1;
+/// A window has handed it back, or the first window exists.
+const SPENT: u8 = 2;
 
-/// The token for a window being created: `given` if there is one, else the environment's
-/// value of `var` for the process's first window.
-pub(crate) fn for_new_window(given: Option<ActivationToken>, var: &str) -> Option<ActivationToken> {
-    choose(given, &TAKEN, || std::env::var(var).ok())
+static STATE: AtomicU8 = AtomicU8::new(FREE);
+
+/// The launcher's token held by a window being created. Dropping it before it is committed or
+/// handed back releases the token for the next window.
+pub(crate) struct Reservation<'a> {
+    state: &'a AtomicU8,
+    held: bool,
 }
 
-fn choose(given: Option<ActivationToken>, taken: &AtomicBool, read: impl FnOnce() -> Option<String>) -> Option<ActivationToken> {
-    // The first window spends the launcher's token, whether or not it was given one.
-    let first = !taken.swap(true, Ordering::Relaxed);
-    if given.is_some() || !first {
-        return given;
+impl Reservation<'_> {
+    /// The window was created: later windows don't take the launcher's token.
+    pub(crate) fn commit(self) {
+        if self.held {
+            self.state.store(SPENT, Ordering::Relaxed);
+        }
     }
-    read().filter(|token| !token.is_empty() && token.len() <= MAX_TOKEN_LEN).map(ActivationToken::from_raw)
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            // Fails, leaving the token spent, once it was committed or handed back.
+            let _ = self.state.compare_exchange(RESERVED, FREE, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+}
+
+/// The token for a window being created: `given` if there is one, else the environment's
+/// value of `var` for the process's first window, with the reservation the caller commits
+/// once the window exists.
+pub(crate) fn for_new_window(given: Option<ActivationToken>, var: &str) -> (Option<ActivationToken>, Reservation<'static>) {
+    choose(given, &STATE, || std::env::var(var).ok())
+}
+
+/// A backend is handing a window's token back to the launcher or compositor: from here on the
+/// launcher's token is spent even if creating the window fails.
+pub(crate) fn handing_back() {
+    hand_back(&STATE);
+}
+
+fn hand_back(state: &AtomicU8) {
+    // Windows are created one at a time on the event loop's thread, so a reservation, if any,
+    // is this window's.
+    let _ = state.compare_exchange(RESERVED, SPENT, Ordering::Relaxed, Ordering::Relaxed);
+}
+
+fn choose(given: Option<ActivationToken>, state: &AtomicU8, read: impl FnOnce() -> Option<String>) -> (Option<ActivationToken>, Reservation<'_>) {
+    // The first window holds the launcher's token, whether or not it was given one.
+    let held = state.compare_exchange(FREE, RESERVED, Ordering::Relaxed, Ordering::Relaxed).is_ok();
+    let reservation = Reservation { state, held };
+    if given.is_some() || !held {
+        return (given, reservation);
+    }
+    let token = read().filter(|token| !token.is_empty() && token.len() <= MAX_TOKEN_LEN).map(ActivationToken::from_raw);
+    (token, reservation)
 }
 
 #[cfg(test)]
@@ -46,34 +94,80 @@ mod tests {
         Some(ActivationToken::from_raw(raw.to_owned()))
     }
 
+    fn created(state: &AtomicU8, given: Option<ActivationToken>, env: &str) -> Option<ActivationToken> {
+        let (token, reservation) = choose(given, state, || Some(env.to_owned()));
+        reservation.commit();
+        token
+    }
+
     #[test]
     fn the_first_window_takes_the_launchers_token() {
-        let taken = AtomicBool::new(false);
-        assert_eq!(choose(None, &taken, || Some("gnome-shell/PdfCraft/1234".into())), token("gnome-shell/PdfCraft/1234"));
+        let state = AtomicU8::new(FREE);
+        assert_eq!(created(&state, None, "gnome-shell/PdfCraft/1234"), token("gnome-shell/PdfCraft/1234"));
     }
 
     #[test]
     fn a_later_window_does_not_reuse_the_spent_token() {
-        let taken = AtomicBool::new(false);
-        assert!(choose(None, &taken, || Some("t".into())).is_some());
-        assert_eq!(choose(None, &taken, || Some("t".into())), None);
+        let state = AtomicU8::new(FREE);
+        assert!(created(&state, None, "t").is_some());
+        assert_eq!(created(&state, None, "t"), None);
     }
 
     #[test]
     fn a_given_token_wins_and_still_spends_the_launchers() {
-        let taken = AtomicBool::new(false);
-        assert_eq!(choose(token("mine"), &taken, || Some("env".into())), token("mine"));
-        assert_eq!(choose(None, &taken, || Some("env".into())), None);
-        assert_eq!(choose(token("again"), &taken, || Some("env".into())), token("again"));
+        let state = AtomicU8::new(FREE);
+        assert_eq!(created(&state, token("mine"), "env"), token("mine"));
+        assert_eq!(created(&state, None, "env"), None);
+        assert_eq!(created(&state, token("again"), "env"), token("again"));
+    }
+
+    #[test]
+    fn a_window_that_fails_before_handing_the_token_back_releases_it() {
+        let state = AtomicU8::new(FREE);
+        let (first, failed) = choose(None, &state, || Some("t".into()));
+        assert_eq!(first, token("t"));
+        drop(failed);
+        assert_eq!(created(&state, None, "t"), token("t"));
+        assert_eq!(created(&state, None, "t"), None);
+    }
+
+    #[test]
+    fn a_window_given_a_token_that_fails_early_releases_the_launchers() {
+        let state = AtomicU8::new(FREE);
+        drop(choose(token("mine"), &state, || Some("env".into())));
+        assert_eq!(created(&state, None, "env"), token("env"));
+    }
+
+    #[test]
+    fn a_window_that_fails_after_handing_the_token_back_spends_it() {
+        let state = AtomicU8::new(FREE);
+        let (first, failed) = choose(None, &state, || Some("t".into()));
+        assert_eq!(first, token("t"));
+        hand_back(&state);
+        drop(failed);
+        assert_eq!(created(&state, None, "t"), None);
+    }
+
+    #[test]
+    fn a_window_created_while_the_token_is_held_does_not_take_or_release_it() {
+        let state = AtomicU8::new(FREE);
+        let (first, holder) = choose(None, &state, || Some("t".into()));
+        assert_eq!(first, token("t"));
+        let (other, reservation) = choose(None, &state, || Some("t".into()));
+        assert_eq!(other, None);
+        drop(reservation);
+        assert_eq!(state.load(Ordering::Relaxed), RESERVED);
+        drop(holder);
+        assert_eq!(created(&state, None, "t"), token("t"));
     }
 
     #[test]
     fn a_missing_empty_or_oversized_token_is_ignored() {
-        assert_eq!(choose(None, &AtomicBool::new(false), || None), None);
-        assert_eq!(choose(None, &AtomicBool::new(false), || Some(String::new())), None);
+        assert_eq!(created(&AtomicU8::new(FREE), None, ""), None);
+        assert_eq!(choose(None, &AtomicU8::new(FREE), || None).0, None);
         let long = "x".repeat(MAX_TOKEN_LEN + 1);
-        assert_eq!(choose(None, &AtomicBool::new(false), || Some(long)), None);
+        assert_eq!(created(&AtomicU8::new(FREE), None, &long), None);
         let limit = "x".repeat(MAX_TOKEN_LEN);
-        assert!(choose(None, &AtomicBool::new(false), || Some(limit)).is_some());
+        assert!(created(&AtomicU8::new(FREE), None, &limit).is_some());
     }
 }
