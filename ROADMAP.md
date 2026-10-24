@@ -3,6 +3,7 @@
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
+> **Last reviewed:** 2026-10-18 | **Last updated:** 2026-10-18 | **Change:** minor (M5, #3213: flatten preserves annotation layer membership; saved/reopened checks pass; estimates unchanged)
 > **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M3, #3808: the Pages inspector has an independent 50–150% thumbnail size slider and buttons; selection and current-page following are retained, with headless ui.set coverage. Estimates unchanged.)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M11 #3507: image merging preserves content stream boundaries; estimates unchanged)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged)
@@ -193,6 +194,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
+- **2026-10-18 (M5, #3213):** Flatten preserves supported annotation layer membership around each appearance. Unsupported membership keeps the annotation and its replies. Saved/reopened regressions cover OCG and OCMD membership, shared appearances, and safe retention. Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
 
 - **2026-10-20 (M4, initial view):** Window and interface options read indirect boolean ViewerPreferences values. Synthetic regressions cover true/false, direct/indirect preference dictionaries and save/reopen; malformed entries retain false defaults. Estimates unchanged.
@@ -640,6 +642,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | M5 #3213: flatten preserves annotation layer membership; saved/reopened checks pass. Estimates unchanged. |
 | 2026-10-22 | minor | M4, #3916 partial: document edits and Undo/Redo cancel Organize drags. Pointer-release and save/reopen regressions check page order. Estimates unchanged. |
 | 2026-10-20 | minor | M4: initial-view window and interface options resolve indirect boolean ViewerPreferences values; synthetic true/false and save/reopen regressions retain defaults for malformed entries. Estimates unchanged. |
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |

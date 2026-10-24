@@ -4,6 +4,7 @@ mod automation;
 mod automation_roots;
 mod batch;
 mod button_caption;
+mod flatten_optional_content_3213;
 mod form_bulk;
 mod hostile_args;
 mod optimize_content_boundaries;
